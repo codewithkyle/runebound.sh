@@ -1,56 +1,59 @@
 # CLI Behavior Plan
 
-## Primary UX Rule
+## Primary UX Rules
 
 - No global command prefix is required.
-- Users type direct commands like `npc` and `npc create`.
+- Users type direct commands (for example `status`, `config show`, `start setup`).
+- All non-input output is rendered through structured output documents (`OutputDoc`) rather than ad hoc line styling.
+
+## Current Command Surface (MVP)
+
+- `status`
+- `config show`
+- `config test`
+- `help`
+- `start setup`
+- `setup help`
+- `history`, `history <n>`, `history clear`
+- `clear`, `clear --history`
+- `exit`
 
 ## Autocomplete and Typeahead
 
-### Trigger
+- Command metadata is sourced from `core/src/command_manifest.rs`.
+- Root and subcommand suggestions are manifest-driven.
+- `Tab` completes current suggestion.
+- Suggestions remain visible while refining input.
 
-- Typing `npc` then pressing `Tab` opens subcommand suggestions.
+## Parsing and Input Rules
 
-### Subcommand suggestions
-
-- `create`
-- `list`
-- `show`
-- `edit`
-- `refs`
-- `delete`
-
-### Completion behavior
-
-- `npc c` + `Tab` -> `npc create`
-- If multiple matches exist, cycle or list based on current UI mode.
-- Suggestions should remain visible while the user refines input.
-
-### Contextual suggestions
-
-- After `npc create `, suggest recent references such as `@vault/gods/mu laa.md`.
-- For `npc show` and `npc edit`, suggest known NPC ids/slugs.
-
-## Command Parsing
-
-- Commands are split by first token (`npc`) and subcommand token.
+- Parsing authority is backend-first (`core/src/command_parse.rs`).
 - Quoted strings are preserved as one argument.
-- Inline references with spaces in file names must be supported.
+- Markdown-wrapped command input is normalized before parse/execute:
+  - `` `help` `` -> `help`
+  - `` `config show` `` -> `config show`
 
-## Help and Errors
+## Help, Clickability, and UX Guarantees
 
-- Entering only `npc` shows concise inline help plus subcommand list.
-- Unknown subcommands return a short error and closest suggestion.
-- Validation errors should tell the user exactly what to fix.
+- All commands shown as actionable in output/help/history must be clickable and executable.
+- If a root command requires a subcommand, clicking the root should run its canonical help command.
+- Keyboard UX guarantees must remain stable unless intentionally changed:
+  - `Enter` submit
+  - `Tab` autocomplete
+  - `ArrowUp`/`ArrowDown` history recall
+  - `Ctrl+C` input clear
 
-## Display Conventions
+## Output Conventions
 
 - Keep output compact and scannable.
-- Show status line for long operations (indexing, generation, save).
-- On success, show saved file path and entity id.
+- Prefer explicit command references over sentence-guessing.
+- For long operations, show spinner/status blocks.
+- Keep command/help copy stable to reduce regressions.
 
-## Safety and Reliability
+## Maintenance Rules for Future Changes
 
-- Never overwrite files without explicit intent.
-- Confirm before destructive operations if behavior changes in future.
-- Maintain stable output formatting for predictable testing.
+- Any command add/remove/change must update all of:
+  - Clap command definitions
+  - command manifest (autocomplete + help metadata)
+  - output/help examples and clickable refs
+- Validate command changes with `make build` before closing work.

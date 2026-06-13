@@ -5,20 +5,19 @@
 - Do not assume vault location.
 - Do not assume Ollama host/port.
 - Provide a smooth first-time setup flow.
-- Store config in TOML with clear override precedence.
+- Store config in TOML at one global location.
 
-## Config Files and Precedence
+## Config File Location
 
 - Global config (machine-level):
   - Linux: `~/.config/runebound.sh/config.toml`
   - Windows: `%APPDATA%\\runebound.sh\\config.toml`
-- Workspace config (project-level override):
-  - `.runebound.sh/config.toml`
-- Precedence (highest to lowest):
-  - Command flags
-  - Workspace config
-  - Global config
-  - Built-in defaults
+- No workspace config is used.
+- Existing `.runebound.sh/config.toml` files are ignored.
+- Effective config precedence is:
+  - command flags (when applicable)
+  - global config
+  - built-in defaults
 
 ## First-Time Setup
 
@@ -41,32 +40,13 @@
 ## Command Surface (v1)
 
 - `config`
-  - Show concise help and effective summary.
+  - Show concise help for config subcommands.
 - `start setup`
-  - Run first-time setup wizard.
+  - Run first-time setup wizard and save global config.
 - `config show`
-  - Show effective merged config.
-- `config where`
-  - Show config file paths and existence status.
-- `config get <key>`
-  - Print one resolved value.
-- `config set <key> <value>`
-  - Write one value to selected scope.
-- `config unset <key>`
-  - Remove one key from selected scope.
+  - Show effective global config and config path.
 - `config test`
   - Full diagnostics and recommended fixes.
-- `config reset`
-  - Interactive reset/reinitialize for selected scope.
-
-## Scope Flags
-
-- Supported on write commands:
-  - `--global`
-  - `--workspace`
-- Default write behavior:
-  - If workspace config exists, write there.
-  - Otherwise write global config.
 
 ## Supported Keys (v1)
 
@@ -127,8 +107,13 @@ show_inline_help = true
 - Verify vault path exists/writable.
 - Verify Ollama endpoint reachable.
 - Verify configured model exists (warning-only if missing).
-- Explain effective merge source per key.
 - Validate permissions and path normalization.
 - Check recommended vault directories (`npcs/`, `.trash/npcs/`).
 - Check Ollama response timing and timeout suitability.
 - Provide explicit fix steps for each failure.
+
+## Non-Goals (Current MVP)
+
+- No workspace-level config overrides.
+- No multi-vault profile management.
+- No compatibility migration layer for old workspace config files.
