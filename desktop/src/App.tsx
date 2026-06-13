@@ -2,6 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
 import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
+import { OutputRenderer } from "./output/renderer";
+import type { OutputDoc } from "./output/types";
 import {
   getSetupState,
   probeOllama,
@@ -16,6 +18,7 @@ type HistoryEntry = {
   id: number;
   kind: EntryKind;
   text: string;
+  outputDoc?: OutputDoc | null;
 };
 
 type CommandResponse = {
@@ -24,6 +27,7 @@ type CommandResponse = {
   error?: string | null;
   exit_code: number;
   segments?: OutputSegment[];
+  output_doc?: OutputDoc | null;
 };
 
 type OutputSegment = {
@@ -138,13 +142,14 @@ export default function App() {
       });
   });
 
-  const appendEntry = (kind: EntryKind, text: string) => {
+  const appendEntry = (kind: EntryKind, text: string, outputDoc?: OutputDoc | null) => {
     setEntries((prev) => [
       ...prev,
       {
         id: prev.length > 0 ? prev[prev.length - 1].id + 1 : 1,
         kind,
-        text
+        text,
+        outputDoc: outputDoc ?? null
       }
     ]);
     queueMicrotask(() => {
@@ -157,7 +162,7 @@ export default function App() {
     });
   };
 
-  const appendEntryWithId = (kind: EntryKind, text: string): number => {
+  const appendEntryWithId = (kind: EntryKind, text: string, outputDoc?: OutputDoc | null): number => {
     let nextId = 1;
     setEntries((prev) => {
       nextId = prev.length > 0 ? prev[prev.length - 1].id + 1 : 1;
@@ -166,7 +171,8 @@ export default function App() {
         {
           id: nextId,
           kind,
-          text
+          text,
+          outputDoc: outputDoc ?? null
         }
       ];
     });
@@ -181,7 +187,7 @@ export default function App() {
     return nextId;
   };
 
-  const updateEntry = (id: number, kind: EntryKind, text: string) => {
+  const updateEntry = (id: number, kind: EntryKind, text: string, outputDoc?: OutputDoc | null) => {
     setEntries((prev) =>
       prev.map((entry) => {
         if (entry.id !== id) {
@@ -190,7 +196,8 @@ export default function App() {
         return {
           ...entry,
           kind,
-          text
+          text,
+          outputDoc: outputDoc ?? entry.outputDoc ?? null
         };
       })
     );
@@ -416,16 +423,16 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
-      const renderedOutput = segmentsToText(response.segments, response.output);
+      const rendered = responseToRenderableModel(response);
       if (response.ok) {
-        appendEntry("output", renderedOutput || "(ok)");
+        appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
         pushCommandHistory(raw);
       } else {
-        const errorText = response.error || renderedOutput || "command failed";
+        const errorText = response.error || rendered.text || "command failed";
         if (isBootstrapSetupMessage(errorText)) {
-          appendEntry("output", errorText);
+          appendEntry("output", errorText, rendered.outputDoc);
         } else {
-          appendEntry("error", errorText);
+          appendEntry("error", errorText, rendered.outputDoc);
         }
       }
     } catch (error) {
@@ -482,15 +489,15 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: "status" });
-      const renderedOutput = segmentsToText(response.segments, response.output);
+      const rendered = responseToRenderableModel(response);
       if (response.ok) {
-        appendEntry("output", renderedOutput || "(ok)");
+        appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
         return;
       }
 
-      const errorText = response.error || renderedOutput || "command failed";
+      const errorText = response.error || rendered.text || "command failed";
       if (isBootstrapSetupMessage(errorText)) {
-        appendEntry("output", errorText);
+        appendEntry("output", errorText, rendered.outputDoc);
         appendEntry(
           "info",
           "bootstrap tip: run config init --vault-path <path> --ollama-base-url <url> --model <name> then run status again."
@@ -995,36 +1002,48 @@ export default function App() {
           <For each={entries()}>
             {(entry) => (
               <div class={entryClass(entry.kind)}>
-                <For each={entry.text.split("\n")}>
-                  {(line, lineIndex) => (
-                    <Show
-                      when={
-                        (entry.kind === "output" || entry.kind === "banner") && !isHeadingLine(line)
-                          ? findClickableCommandInLine(line, inferUsagePrefix(entry.text, commandMeta()), commandMeta())
-                          : null
-                      }
-                      fallback={
-                        <div class={lineClass(entry.kind, lineIndex(), line)}>{line.length === 0 ? "\u00A0" : renderLine(entry.kind, line)}</div>
-                      }
-                    >
-                      {(match) => (
-                        <div class={lineClass(entry.kind, lineIndex(), line)}>
-                          <span>{line.slice(0, match().start)}</span>
-                          <button
-                            type="button"
-                            class="text-info underline bg-transparent border-0 p-0 m-0 cursor-pointer"
-                            onClick={() => {
-                              void runDisplayedCommand(match().command);
-                            }}
-                          >
-                            {displayClickableSegment(line.slice(match().start, match().end), match().command)}
-                          </button>
-                          <span>{line.slice(match().end)}</span>
-                        </div>
+                <Show
+                  when={entry.outputDoc && (entry.kind === "output" || entry.kind === "error")}
+                  fallback={
+                    <For each={entry.text.split("\n")}>
+                      {(line, lineIndex) => (
+                        <Show
+                          when={
+                            (entry.kind === "output" || entry.kind === "banner") && !isHeadingLine(line)
+                              ? findClickableCommandInLine(line, inferUsagePrefix(entry.text, commandMeta()), commandMeta())
+                              : null
+                          }
+                          fallback={
+                            <div class={lineClass(entry.kind, lineIndex(), line)}>{line.length === 0 ? "\u00A0" : renderLine(entry.kind, line)}</div>
+                          }
+                        >
+                          {(match) => (
+                            <div class={lineClass(entry.kind, lineIndex(), line)}>
+                              <span>{line.slice(0, match().start)}</span>
+                              <button
+                                type="button"
+                                class="text-info underline bg-transparent border-0 p-0 m-0 cursor-pointer"
+                                onClick={() => {
+                                  void runDisplayedCommand(match().command);
+                                }}
+                              >
+                                {displayClickableSegment(line.slice(match().start, match().end), match().command)}
+                              </button>
+                              <span>{line.slice(match().end)}</span>
+                            </div>
+                          )}
+                        </Show>
                       )}
-                    </Show>
-                  )}
-                </For>
+                    </For>
+                  }
+                >
+                  <OutputRenderer
+                    doc={entry.outputDoc as OutputDoc}
+                    onRunCommand={(cmd) => {
+                      void runDisplayedCommand(cmd);
+                    }}
+                  />
+                </Show>
               </div>
             )}
           </For>
@@ -1143,6 +1162,13 @@ function segmentsToText(segments: OutputSegment[] | undefined, fallback: string)
   }
 
   return segments.map((segment) => segment.text).join("\n");
+}
+
+function responseToRenderableModel(response: CommandResponse): { text: string; outputDoc: OutputDoc | null } {
+  return {
+    text: segmentsToText(response.segments, response.output),
+    outputDoc: response.output_doc ?? null
+  };
 }
 
 function entryClass(kind: EntryKind): string {

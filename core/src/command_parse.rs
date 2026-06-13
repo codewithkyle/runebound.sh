@@ -41,6 +41,18 @@ pub fn parse_command_input(input: &str) -> ParseResult {
     parse_command_input_with_manifest(input, &manifest)
 }
 
+pub fn normalize_command_input(input: &str) -> String {
+    let trimmed = input.trim();
+    if trimmed.len() >= 2 && trimmed.starts_with('`') && trimmed.ends_with('`') {
+        let inner = &trimmed[1..trimmed.len() - 1];
+        if !inner.contains('`') {
+            return inner.trim().to_string();
+        }
+    }
+
+    input.to_string()
+}
+
 pub fn normalize_alias_tokens(tokens: &[String], manifest: &CommandManifest) -> Vec<String> {
     for alias in &manifest.aliases {
         if tokens.len() == alias.from.len()
@@ -57,9 +69,13 @@ pub fn normalize_alias_tokens(tokens: &[String], manifest: &CommandManifest) -> 
 }
 
 pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest) -> ParseResult {
-    let ends_with_space = input.chars().last().is_some_and(char::is_whitespace);
+    let normalized_input = normalize_command_input(input);
+    let ends_with_space = normalized_input
+        .chars()
+        .last()
+        .is_some_and(char::is_whitespace);
 
-    let raw_tokens = match shell_words::split(input) {
+    let raw_tokens = match shell_words::split(&normalized_input) {
         Ok(tokens) => tokens,
         Err(err) => {
             return ParseResult {
@@ -194,7 +210,7 @@ fn find_command<'a>(manifest: &'a CommandManifest, name: &str) -> Option<&'a Com
 
 #[cfg(test)]
 mod tests {
-    use super::parse_command_input;
+    use super::{normalize_command_input, parse_command_input};
 
     #[test]
     fn parses_quoted_arguments() {
@@ -216,5 +232,26 @@ mod tests {
         let parsed = parse_command_input("config nope");
         assert!(!parsed.valid);
         assert_eq!(parsed.diagnostics[0].code, "unknown_subcommand");
+    }
+
+    #[test]
+    fn normalizes_markdown_wrapped_help_command() {
+        assert_eq!(normalize_command_input("`help`"), "help");
+        let parsed = parse_command_input("`help`");
+        assert!(parsed.valid);
+        assert_eq!(parsed.normalized_tokens, vec!["help"]);
+    }
+
+    #[test]
+    fn normalizes_markdown_wrapped_multi_token_command() {
+        assert_eq!(normalize_command_input("  `config show`  "), "config show");
+        let parsed = parse_command_input("  `config show`  ");
+        assert!(parsed.valid);
+        assert_eq!(parsed.normalized_tokens, vec!["config", "show"]);
+    }
+
+    #[test]
+    fn does_not_unwrap_malformed_nested_backticks() {
+        assert_eq!(normalize_command_input("``help``"), "``help``");
     }
 }

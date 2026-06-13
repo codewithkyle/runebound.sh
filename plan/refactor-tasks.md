@@ -19,24 +19,24 @@ This checklist turns `plan/refactor.md` into concrete implementation work.
 
 ### 1.1 Add new output types
 
-- [ ] Create a new module: `core/src/output.rs`.
-- [ ] Define serializable types:
+- [x] Create a new module: `core/src/output.rs`.
+- [x] Define serializable types:
   - `OutputDoc`
   - `OutputBlock`
   - `InlineNode`
   - `StatusTone`
   - `SpinnerState`
-- [ ] Re-export module in `core/src/lib.rs`.
+- [x] Re-export module in `core/src/lib.rs`.
 
 ### 1.2 Extend command response contract
 
-- [ ] Add `output_doc: Option<OutputDoc>` to `CommandResponse` in `core/src/command.rs`.
-- [ ] Keep existing fields (`output`, `error`, `segments`) untouched for compatibility.
-- [ ] Ensure successful and error responses can set `output_doc`.
+- [x] Add `output_doc: Option<OutputDoc>` to `CommandResponse` in `core/src/command.rs`.
+- [x] Keep existing fields (`output`, `error`, `segments`) untouched for compatibility.
+- [x] Ensure successful and error responses can set `output_doc`.
 
 ### 1.3 Builder utilities
 
-- [ ] Add helper constructors in `core/src/output.rs` (or `core/src/output_builders.rs`):
+- [x] Add helper constructors in `core/src/output.rs` (or `core/src/output_builders.rs`):
   - `doc()`
   - `heading(level, text)`
   - `paragraph_text(text)`
@@ -45,15 +45,15 @@ This checklist turns `plan/refactor.md` into concrete implementation work.
   - `code_block(language, text)`
   - `status(tone, text)`
   - `command_ref(label, command)`
-- [ ] Add tests for JSON serialization of these nodes.
+- [x] Add tests for JSON serialization of these nodes.
 
 ## Phase 2 - Command Output Migration (Rust)
 
 ### 2.1 High-impact commands first
 
-- [ ] Update `execute_status` to produce structured `OutputDoc` while preserving plain `output` string.
-- [ ] Update `config test` and `config doctor` formatting output with semantic blocks.
-- [ ] Update first-time setup-required message to include explicit command refs (not plain suggestion text only).
+- [x] Update `execute_status` to produce structured `OutputDoc` while preserving plain `output` string.
+- [x] Update `config test` and `config doctor` formatting output with semantic blocks.
+- [x] Update first-time setup-required message to include explicit command refs (not plain suggestion text only).
 
 ### 2.2 Error path migration
 
@@ -67,17 +67,17 @@ This checklist turns `plan/refactor.md` into concrete implementation work.
 
 ## Phase 3 - Tauri Bridge and TypeScript Contract
 
-- [ ] Update Tauri command response typing at boundary (`desktop/src-tauri/src/main.rs` already serializes `CommandResponse`; verify compile + serde).
-- [ ] Add TS types for `OutputDoc` and related node enums in `desktop/src/command/parser-client.ts` (or new `desktop/src/output/types.ts`).
-- [ ] Update `CommandResponse` type in `desktop/src/App.tsx` to include `output_doc?: OutputDoc | null`.
+- [x] Update Tauri command response typing at boundary (`desktop/src-tauri/src/main.rs` already serializes `CommandResponse`; verify compile + serde).
+- [x] Add TS types for `OutputDoc` and related node enums in `desktop/src/command/parser-client.ts` (or new `desktop/src/output/types.ts`).
+- [x] Update `CommandResponse` type in `desktop/src/App.tsx` to include `output_doc?: OutputDoc | null`.
 
 ## Phase 4 - Frontend Renderer Extraction
 
 ### 4.1 Extract renderer modules
 
-- [ ] Create `desktop/src/output/types.ts` for typed output models.
-- [ ] Create `desktop/src/output/renderer.tsx` for pure rendering from `OutputDoc`.
-- [ ] Create `desktop/src/output/theme.ts` for semantic class mapping:
+- [x] Create `desktop/src/output/types.ts` for typed output models.
+- [x] Create `desktop/src/output/renderer.tsx` for pure rendering from `OutputDoc`.
+- [x] Create `desktop/src/output/theme.ts` for semantic class mapping:
   - error (red)
   - info/helper (blue)
   - spinner (purple glyph + white text)
@@ -85,26 +85,26 @@ This checklist turns `plan/refactor.md` into concrete implementation work.
 
 ### 4.2 Integrate renderer
 
-- [ ] In `App.tsx`, render `output_doc` when present.
-- [ ] Keep legacy line-based rendering as fallback while migration is incomplete.
-- [ ] Add a clear adapter boundary: `responseToRenderableModel(response)`.
+- [x] In `App.tsx`, render `output_doc` when present.
+- [x] Keep legacy line-based rendering as fallback while migration is incomplete.
+- [x] Add a clear adapter boundary: `responseToRenderableModel(response)`.
 
 ## Phase 5 - Remove Heuristic Command Guessing
 
-- [ ] Stop using regex-based command extraction for migrated outputs:
+- [x] Stop using regex-based command extraction for migrated outputs:
   - deprecate `findClickableCommandInLine` path for `output_doc` entries
-- [ ] Use only explicit `CommandRef` inline nodes for click-to-run when `output_doc` exists.
-- [ ] Retain heuristic parser only for legacy fallback path during migration.
+- [x] Use only explicit `CommandRef` inline nodes for click-to-run when `output_doc` exists.
+- [x] Retain heuristic parser only for legacy fallback path during migration.
 
 ## Phase 6 - Input Normalization and Parsing Authority
 
 ### 6.1 Input normalization
 
-- [ ] Add a shared normalization function in Rust (preferred) for user command lines:
+- [x] Add a shared normalization function in Rust (preferred) for user command lines:
   - unwrap `` `command` `` when entire input is wrapped
   - ignore surrounding whitespace
   - preserve quoted args content
-- [ ] Call normalization before parse and execute.
+- [x] Call normalization before parse and execute.
 
 ### 6.2 Remove duplicated frontend validation
 
@@ -124,8 +124,8 @@ This checklist turns `plan/refactor.md` into concrete implementation work.
 
 ### 8.1 Rust tests
 
-- [ ] Add unit tests for output builders and node serialization.
-- [ ] Add parse normalization tests for:
+- [x] Add unit tests for output builders and node serialization.
+- [x] Add parse normalization tests for:
   - `` `help` ``
   - `` `config show` ``
   - malformed wrapping cases
@@ -143,9 +143,9 @@ This checklist turns `plan/refactor.md` into concrete implementation work.
 
 ### 8.3 Integration checks
 
-- [ ] Verify command execution still works from keyboard input and click-to-run.
-- [ ] Verify startup status check renders correctly with and without setup.
-- [ ] Verify history commands and clear behavior remain unchanged.
+- [x] Verify command execution still works from keyboard input and click-to-run.
+- [x] Verify startup status check renders correctly with and without setup.
+- [x] Verify history commands and clear behavior remain unchanged.
 
 ## Phase 9 - Cleanup
 

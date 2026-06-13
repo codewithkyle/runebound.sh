@@ -359,6 +359,7 @@ dependencies = [
  "dirs",
  "reqwest",
  "serde",
+ "serde_json",
  "shell-words",
  "sqlx",
  "tokio",

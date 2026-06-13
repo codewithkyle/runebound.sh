@@ -76,6 +76,69 @@ body {
   transform: translateY(1px);
 }
 
+.rb-status {
+  white-space: pre-wrap;
+}
+
+.rb-status-error {
+  color: var(--color-error);
+}
+
+.rb-status-warning {
+  color: var(--color-warning);
+}
+
+.rb-status-success {
+  color: var(--color-success);
+}
+
+.rb-status-info {
+  color: var(--color-info);
+}
+
+.rb-spinner {
+  white-space: pre-wrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+
+.rb-spinner-running {
+  color: #ffffff;
+  background: transparent;
+}
+
+.rb-spinner-dot {
+  color: var(--gb-purple-bright);
+}
+
+.rb-spinner-success {
+  color: var(--color-success);
+}
+
+.rb-spinner-error {
+  color: var(--color-error);
+}
+
+.rb-command-ref {
+  color: var(--color-info);
+  text-decoration: underline;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  font: inherit;
+}
+
+.rb-code-block {
+  margin: 0;
+  padding: 2px 8px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  white-space: pre-wrap;
+}
+
 input,
 textarea,
 button,
