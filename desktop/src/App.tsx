@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
 import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
+import { resolveEntity, searchEntities, type EntityDetails, type EntitySuggestion } from "./entity/client";
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
@@ -55,6 +56,14 @@ type NpcDraft = {
   race: string;
   sex: "male" | "female";
   location: string;
+};
+
+type SuggestionViewItem = SuggestionItem & {
+  helperText?: "command" | "npc" | "location";
+};
+
+type EntitySuggestionItem = SuggestionViewItem & {
+  helperText: "npc" | "location";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -111,23 +120,29 @@ export default function App() {
   const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
   const [selectedModel, setSelectedModel] = createSignal("");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
+  const [entitySuggestions, setEntitySuggestions] = createSignal<EntitySuggestionItem[]>([]);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
   const suggestionList = createMemo(() => {
     if (command().trim().length === 0 || running() || suggestionsDismissed()) {
-      return [] as SuggestionItem[];
+      return [] as SuggestionViewItem[];
     }
 
-    const suggestions = buildAutocompleteSuggestions(command(), manifest(), parsedInput());
+    const commandSuggestions: SuggestionViewItem[] = buildAutocompleteSuggestions(command(), manifest(), parsedInput()).map((item) => ({
+      ...item,
+      helperText: "command"
+    }));
     if (!npcDraft()) {
-      return suggestions.filter((item) => {
+      const filtered = commandSuggestions.filter((item) => {
         const completion = item.completion.trim().toLowerCase();
         const label = item.label.trim().toLowerCase();
         return completion !== "npc" && !completion.startsWith("npc ") && label !== "npc" && !label.startsWith("npc ");
       });
+      return [...filtered, ...entitySuggestions()];
     }
-    return suggestions;
+
+    return [...commandSuggestions, ...entitySuggestions()];
   });
 
   createEffect(() => {
@@ -144,6 +159,7 @@ export default function App() {
   let outputRef: HTMLDivElement | undefined;
   let inputRef: HTMLInputElement | undefined;
   let parseGeneration = 0;
+  let entitySuggestionGeneration = 0;
 
   createEffect(() => {
     const currentCommand = command();
@@ -166,6 +182,34 @@ export default function App() {
       .catch(() => {
         if (parseGeneration === generation) {
           setParsedInput(null);
+        }
+      });
+  });
+
+  createEffect(() => {
+    const raw = command();
+    const query = raw.trim();
+    const meta = commandMeta();
+
+    if (!query || startsWithKnownCommandRoot(query, meta)) {
+      setEntitySuggestions([]);
+      return;
+    }
+
+    const generation = entitySuggestionGeneration + 1;
+    entitySuggestionGeneration = generation;
+
+    void searchEntities(query, 6)
+      .then((results) => {
+        if (entitySuggestionGeneration !== generation) {
+          return;
+        }
+
+        setEntitySuggestions(results.map(toEntitySuggestionItem));
+      })
+      .catch(() => {
+        if (entitySuggestionGeneration === generation) {
+          setEntitySuggestions([]);
         }
       });
   });
@@ -523,6 +567,20 @@ export default function App() {
         pushCommandHistory(raw);
       }
       return;
+    }
+
+    const trimmedRaw = raw.trim();
+    if (trimmedRaw.length > 0 && !startsWithKnownCommandRoot(trimmedRaw, commandMeta())) {
+      try {
+        const entity = await resolveEntity(trimmedRaw);
+        if (entity) {
+          appendEntry("output", entity.name, entityDetailsDoc(entity));
+          pushCommandHistory(raw);
+          return;
+        }
+      } catch {
+        // ignore resolution failures and continue to normal command execution
+      }
     }
 
     setRunning(true);
@@ -1351,18 +1409,22 @@ export default function App() {
         <div class="w-full max-w-[960px] mx-auto">
           <div class="mb-[2px]">
             <Show when={suggestionList().length > 0}>
-              <div class="bg-surface px-3 py-[2px]">
+              <div class="bg-surface py-[2px]">
                 <For each={suggestionList().slice(0, 8)}>
                   {(suggestion, index) => {
                     return (
                       <div
+                        class="px-3 flex items-center justify-between gap-3"
                         classList={{
                           "text-accent": index() === activeSuggestionIndex(),
                           "bg-surface2": index() === activeSuggestionIndex(),
                           "text-text": index() !== activeSuggestionIndex()
                         }}
                       >
-                        {suggestion.label}
+                        <span>{suggestion.label}</span>
+                        <Show when={suggestion.helperText}>
+                          <span class="text-muted text-xs">{suggestion.helperText}</span>
+                        </Show>
                       </div>
                     );
                   }}
@@ -1560,6 +1622,67 @@ function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
   }
 
   return false;
+}
+
+function startsWithKnownCommandRoot(input: string, meta: InlineCommandMeta): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  const first = trimmed.split(/\s+/)[0].toLowerCase();
+  return meta.commandMap.has(first);
+}
+
+function toEntitySuggestionItem(entity: EntitySuggestion): EntitySuggestionItem {
+  return {
+    label: entity.name,
+    completion: entity.name,
+    helperText: entity.entity_type
+  };
+}
+
+function titleCaseSex(value: string): string {
+  const lowered = value.toLowerCase();
+  if (lowered === "male") {
+    return "Male";
+  }
+  if (lowered === "female") {
+    return "Female";
+  }
+  return value;
+}
+
+function entityDetailsDoc(entity: EntityDetails): OutputDoc {
+  if (entity.entity_type === "npc") {
+    return {
+      blocks: [
+        {
+          kind: "entity_card",
+          title: entity.name,
+          rows: [
+            { label: "Race:", value: entity.race ?? "Unknown" },
+            { label: "Gender:", value: titleCaseSex(entity.sex ?? "Unknown") },
+            { label: "Location:", value: entity.location ?? "Unknown" }
+          ]
+        }
+      ]
+    };
+  }
+
+  return {
+    blocks: [
+      {
+        kind: "entity_card",
+        title: entity.name,
+        rows: [
+          { label: "Type:", value: "Location" },
+          { label: "Slug:", value: entity.slug },
+          { label: "Path:", value: entity.vault_path }
+        ]
+      }
+    ]
+  };
 }
 
 function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {

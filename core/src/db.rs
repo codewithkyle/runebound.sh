@@ -36,6 +36,85 @@ pub struct NpcRow {
     pub updated_at: String,
 }
 
+pub async fn search_npcs_by_name(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<NpcRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, race, sex, location, vault_path, created_at, updated_at
+         FROM npcs
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search npcs by name")?;
+
+    rows.into_iter().map(row_to_npc).collect()
+}
+
+pub async fn search_locations_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<LocationRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, created_at, updated_at
+         FROM locations
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search locations by name")?;
+
+    rows.into_iter().map(row_to_location).collect()
+}
+
+pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, race, sex, location, vault_path, created_at, updated_at
+         FROM npcs
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find npc by name or slug")?;
+
+    row.map(row_to_npc).transpose()
+}
+
+pub async fn find_location_by_name_or_slug(
+    pool: &SqlitePool,
+    input: &str,
+) -> Result<Option<LocationRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, created_at, updated_at
+         FROM locations
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find location by name or slug")?;
+
+    row.map(row_to_location).transpose()
+}
+
 pub async fn init_database() -> Result<Database> {
     let path = default_database_path()?;
     init_database_at_path(&path).await

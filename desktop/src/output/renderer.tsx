@@ -40,6 +40,24 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
     return <div class={statusClass(block.tone)}>{block.text}</div>;
   }
 
+  if (block.kind === "entity_card") {
+    return (
+      <div class="rb-entity-card">
+        <div class="rb-entity-card-header rb-on-fg">{block.title}</div>
+        <div class="rb-entity-card-body">
+          <For each={block.rows}>
+            {(row) => (
+              <div class="rb-entity-row">
+                <span class="rb-entity-label">{row.label}</span>
+                <span>{row.value}</span>
+              </div>
+            )}
+          </For>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div class={spinnerClass(block.state)}>
       <span class="rb-spinner-dot">{spinnerGlyph(block.state, block.text)}</span>

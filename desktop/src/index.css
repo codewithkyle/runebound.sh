@@ -145,6 +145,33 @@ body {
   white-space: pre-wrap;
 }
 
+.rb-entity-card {
+}
+
+.rb-entity-card-header {
+  background: var(--color-text);
+  color: var(--color-bg);
+  padding: 2px 8px;
+}
+
+.rb-entity-card-body {
+  background: var(--color-surface);
+  padding: 6px 8px;
+  display: grid;
+  gap: 2px;
+}
+
+.rb-entity-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+}
+
+.rb-entity-label {
+  color: var(--color-muted);
+  min-width: 84px;
+}
+
 input,
 textarea,
 button,

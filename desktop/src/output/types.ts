@@ -30,7 +30,17 @@ export type OutputBlock =
       kind: "spinner";
       state: SpinnerState;
       text: string;
+    }
+  | {
+      kind: "entity_card";
+      title: string;
+      rows: EntityCardRow[];
     };
+
+export type EntityCardRow = {
+  label: string;
+  value: string;
+};
 
 export type InlineNode =
   | {

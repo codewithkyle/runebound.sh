@@ -90,6 +90,31 @@ struct EnsureLocationResult {
     created_record: bool,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum EntityType {
+    Npc,
+    Location,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EntitySuggestion {
+    entity_type: EntityType,
+    name: String,
+    slug: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct EntityDetails {
+    entity_type: EntityType,
+    name: String,
+    slug: String,
+    race: Option<String>,
+    sex: Option<String>,
+    location: Option<String>,
+    vault_path: String,
+}
+
 struct AppState {
     workspace_root: PathBuf,
 }
@@ -639,6 +664,83 @@ async fn save_npc_draft(
 }
 
 #[tauri::command]
+async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<EntitySuggestion>, String> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let limit = i64::from(limit.unwrap_or(8)).clamp(1, 20);
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+
+    let npcs = db::search_npcs_by_name(&database.pool, trimmed, limit)
+        .await
+        .map_err(|err| err.to_string())?;
+    let locations = db::search_locations_by_name(&database.pool, trimmed, limit)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let mut items: Vec<EntitySuggestion> = npcs
+        .into_iter()
+        .map(|npc| EntitySuggestion {
+            entity_type: EntityType::Npc,
+            name: npc.name,
+            slug: npc.slug,
+        })
+        .chain(locations.into_iter().map(|location| EntitySuggestion {
+            entity_type: EntityType::Location,
+            name: location.name,
+            slug: location.slug,
+        }))
+        .collect();
+
+    items.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    items.truncate(limit as usize);
+    Ok(items)
+}
+
+#[tauri::command]
+async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    if let Some(npc) = db::find_npc_by_name_or_slug(&database.pool, trimmed)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok(Some(EntityDetails {
+            entity_type: EntityType::Npc,
+            name: npc.name,
+            slug: npc.slug,
+            race: Some(npc.race),
+            sex: Some(npc.sex),
+            location: Some(npc.location),
+            vault_path: npc.vault_path,
+        }));
+    }
+
+    if let Some(location) = db::find_location_by_name_or_slug(&database.pool, trimmed)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok(Some(EntityDetails {
+            entity_type: EntityType::Location,
+            name: location.name,
+            slug: location.slug,
+            race: None,
+            sex: None,
+            location: None,
+            vault_path: location.vault_path,
+        }));
+    }
+
+    Ok(None)
+}
+
+#[tauri::command]
 fn get_command_manifest() -> CommandManifest {
     command_manifest()
 }
@@ -667,6 +769,8 @@ fn main() {
             generate_npc_seed,
             ensure_location_exists,
             save_npc_draft,
+            search_entities,
+            resolve_entity,
             get_command_manifest,
             parse_command_input,
             exit_app
