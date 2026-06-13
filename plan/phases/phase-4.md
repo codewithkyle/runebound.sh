@@ -85,18 +85,18 @@ Implement typeahead and autocomplete in the desktop fake CLI for the initial com
 
 ## Phase 4 Checklist
 
-- [ ] Command metadata source created and documented
-- [ ] Suggestion engine implemented for top-level commands
-- [ ] Suggestion engine implemented for `config` subcommands
-- [ ] Suggestion engine supports prefix filtering
-- [ ] Suggestion UI rendered in desktop app
-- [ ] Active suggestion highlight implemented
-- [ ] `Tab` apply completion implemented
-- [ ] `Shift+Tab` reverse cycling implemented
-- [ ] Arrow key suggestion navigation implemented
-- [ ] `Esc` closes suggestions implemented
-- [ ] Existing input behaviors (`Enter`, `Ctrl+C`, focus capture) still pass
-- [ ] Manual keyboard interaction pass completed
+- [x] Command metadata source created and documented
+- [x] Suggestion engine implemented for top-level commands
+- [x] Suggestion engine implemented for `config` subcommands
+- [x] Suggestion engine supports prefix filtering
+- [x] Suggestion UI rendered in desktop app
+- [x] Active suggestion highlight implemented
+- [x] `Tab` apply completion implemented
+- [x] `Shift+Tab` reverse cycling implemented
+- [x] Arrow key suggestion navigation implemented
+- [x] `Esc` closes suggestions implemented
+- [x] Existing input behaviors (`Enter`, `Ctrl+C`, focus capture) still pass
+- [x] Manual keyboard interaction pass completed
 
 ## Exit Criteria
 

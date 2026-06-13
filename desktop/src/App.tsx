@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { For, createSignal, onMount } from "solid-js";
+import { For, Show, createMemo, createSignal, onMount } from "solid-js";
 
 type EntryKind = "input" | "output" | "error" | "info";
 
@@ -16,6 +16,16 @@ type CommandResponse = {
   exit_code: number;
 };
 
+type SuggestionItem = {
+  label: string;
+  completion: string;
+};
+
+const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help"];
+const CONFIG_SUBCOMMANDS = ["init", "show", "test", "doctor"];
+const NPC_SUBCOMMANDS = ["create", "list", "show", "edit", "refs", "delete"];
+const CONFIG_INIT_FLAGS = ["--vault-path", "--ollama-base-url", "--model", "--global", "--workspace", "--skip-test"];
+
 export default function App() {
   const [entries, setEntries] = createSignal<HistoryEntry[]>([
     {
@@ -26,6 +36,14 @@ export default function App() {
   ]);
   const [command, setCommand] = createSignal("");
   const [running, setRunning] = createSignal(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
+
+  const suggestionList = createMemo(() => {
+    if (command().trim().length === 0 || running()) {
+      return [] as SuggestionItem[];
+    }
+    return buildSuggestions(command());
+  });
 
   let outputRef: HTMLDivElement | undefined;
   let inputRef: HTMLInputElement | undefined;
@@ -56,6 +74,7 @@ export default function App() {
 
     appendEntry("info", "^C");
     setCommand("");
+    setActiveSuggestionIndex(0);
     inputRef?.focus();
   };
 
@@ -67,6 +86,7 @@ export default function App() {
 
     appendEntry("input", `> ${raw}`);
     setCommand("");
+    setActiveSuggestionIndex(0);
     setRunning(true);
 
     try {
@@ -133,6 +153,18 @@ export default function App() {
 
       <section class="shrink-0 pb-[2px]">
         <div class="w-full max-w-[960px] mx-auto">
+          <div class="mb-[2px]">
+            <Show when={suggestionList().length > 0}>
+              <div class="bg-surface px-3 py-[2px]">
+                <For each={suggestionList().slice(0, 8)}>
+                  {(suggestion, index) => {
+                    const active = index() === activeSuggestionIndex();
+                    return <div class={active ? "text-accent" : "text-text"}>{suggestion.label}</div>;
+                  }}
+                </For>
+              </div>
+            </Show>
+          </div>
           <form
             onSubmit={(event) => {
               event.preventDefault();
@@ -146,13 +178,47 @@ export default function App() {
                 class="w-full bg-transparent p-0 text-text focus:outline-none"
                 type="text"
                 value={command()}
-                onInput={(event) => setCommand(event.currentTarget.value)}
+                onInput={(event) => {
+                  setCommand(event.currentTarget.value);
+                  setActiveSuggestionIndex(0);
+                }}
                 onKeyDown={(event) => {
                   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
                     if (command()) {
                       event.preventDefault();
                       clearCommand();
                     }
+                    return;
+                  }
+
+                  const suggestions = suggestionList();
+                  if (event.key === "ArrowDown" && suggestions.length > 0) {
+                    event.preventDefault();
+                    setActiveSuggestionIndex((previous) => (previous + 1) % suggestions.length);
+                    return;
+                  }
+
+                  if (event.key === "ArrowUp" && suggestions.length > 0) {
+                    event.preventDefault();
+                    setActiveSuggestionIndex((previous) => (previous - 1 + suggestions.length) % suggestions.length);
+                    return;
+                  }
+
+                  if (event.key === "Tab") {
+                    event.preventDefault();
+
+                    if (suggestions.length === 0) {
+                      return;
+                    }
+
+                    if (event.shiftKey) {
+                      setActiveSuggestionIndex((previous) => (previous - 1 + suggestions.length) % suggestions.length);
+                      return;
+                    }
+
+                    const next = suggestions[Math.min(activeSuggestionIndex(), suggestions.length - 1)];
+                    setCommand(next.completion);
+                    setActiveSuggestionIndex(0);
                   }
                 }}
               />
@@ -176,6 +242,82 @@ function entryClass(kind: EntryKind): string {
     return `${base} text-info`;
   }
   return `${base} text-text`;
+}
+
+function buildSuggestions(input: string): SuggestionItem[] {
+  const raw = input;
+  const trimmed = raw.trim();
+  const lowered = trimmed.toLowerCase();
+  const endsWithSpace = raw.endsWith(" ");
+  const tokens = trimmed.length === 0 ? [] : trimmed.split(/\s+/);
+  const loweredTokens = lowered.length === 0 ? [] : lowered.split(/\s+/);
+
+  if (tokens.length === 0) {
+    return [];
+  }
+
+  if (tokens.length === 1 && !endsWithSpace) {
+    const prefix = loweredTokens[0];
+    return TOP_LEVEL_COMMANDS.filter((item) => item.startsWith(prefix)).map((label) => ({
+      label,
+      completion: `${label} `
+    }));
+  }
+
+  const root = loweredTokens[0];
+  if (root === "config") {
+    return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, CONFIG_SUBCOMMANDS, {
+      init: CONFIG_INIT_FLAGS
+    });
+  }
+
+  if (root === "npc") {
+    return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, NPC_SUBCOMMANDS, {});
+  }
+
+  return [];
+}
+
+function buildSubcommandSuggestions(
+  raw: string,
+  tokens: string[],
+  loweredTokens: string[],
+  endsWithSpace: boolean,
+  subcommands: string[],
+  flagsBySubcommand: Record<string, string[]>
+): SuggestionItem[] {
+  if (tokens.length === 1 && endsWithSpace) {
+    return subcommands.map((subcommand) => ({
+      label: `${tokens[0]} ${subcommand}`,
+      completion: `${tokens[0]} ${subcommand} `
+    }));
+  }
+
+  if (tokens.length === 2 && !endsWithSpace) {
+    const prefix = loweredTokens[1];
+    return subcommands
+      .filter((subcommand) => subcommand.startsWith(prefix))
+      .map((subcommand) => ({
+        label: `${tokens[0]} ${subcommand}`,
+        completion: `${tokens[0]} ${subcommand} `
+      }));
+  }
+
+  const subcommand = loweredTokens[1];
+  const flags = flagsBySubcommand[subcommand] ?? [];
+  if (flags.length === 0) {
+    return [];
+  }
+
+  const currentToken = endsWithSpace ? "" : tokens[tokens.length - 1];
+  const base = raw.slice(0, raw.length - currentToken.length);
+
+  return flags
+    .filter((flag) => flag.startsWith(currentToken))
+    .map((flag) => ({
+      label: `${tokens[0]} ${subcommand} ${flag}`,
+      completion: `${base}${flag} `
+    }));
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
