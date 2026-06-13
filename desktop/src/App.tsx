@@ -2,7 +2,14 @@ import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
 import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
-import { resolveEntity, searchEntities, type EntityDetails, type EntitySuggestion } from "./entity/client";
+import {
+  resolveEntity,
+  saveLocationDraft,
+  searchEntities,
+  type EntityDetails,
+  type EntitySuggestion,
+  type SaveLocationDraftInput
+} from "./entity/client";
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
@@ -55,7 +62,17 @@ type NpcDraft = {
   name: string;
   race: string;
   sex: "male" | "female";
+  age: string;
+  height: string;
+  weightLbs: string;
   location: string;
+};
+
+type LocationDraft = {
+  id: string;
+  name: string;
+  slug: string;
+  vault_path: string;
 };
 
 type SuggestionViewItem = SuggestionItem & {
@@ -119,7 +136,9 @@ export default function App() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = createSignal("http://127.0.0.1:11434");
   const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
   const [selectedModel, setSelectedModel] = createSignal("");
+  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
+  const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
   const [entitySuggestions, setEntitySuggestions] = createSignal<EntitySuggestionItem[]>([]);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
@@ -133,16 +152,34 @@ export default function App() {
       ...item,
       helperText: "command"
     }));
-    if (!npcDraft()) {
-      const filtered = commandSuggestions.filter((item) => {
-        const completion = item.completion.trim().toLowerCase();
-        const label = item.label.trim().toLowerCase();
-        return completion !== "npc" && !completion.startsWith("npc ") && label !== "npc" && !label.startsWith("npc ");
-      });
-      return [...filtered, ...entitySuggestions()];
-    }
+    const mode = editorMode();
+    const filtered = commandSuggestions.filter((item) => {
+      const completion = item.completion.trim().toLowerCase();
+      const label = item.label.trim().toLowerCase();
 
-    return [...commandSuggestions, ...entitySuggestions()];
+      if (mode !== "npc") {
+        if (completion === "npc" || completion.startsWith("npc ") || label === "npc" || label.startsWith("npc ")) {
+          return false;
+        }
+        if (completion === "reroll" || label === "reroll") {
+          return false;
+        }
+      }
+
+      if (mode !== "location") {
+        if (completion === "location" || completion.startsWith("location ") || label === "location" || label.startsWith("location ")) {
+          return false;
+        }
+      }
+
+      if (mode === "none" && (completion === "cancel" || label === "cancel")) {
+        return false;
+      }
+
+      return true;
+    });
+
+    return [...filtered, ...entitySuggestions()];
   });
 
   createEffect(() => {
@@ -190,8 +227,17 @@ export default function App() {
     const raw = command();
     const query = raw.trim();
     const meta = commandMeta();
+    const lowered = query.toLowerCase();
 
-    if (!query || startsWithKnownCommandRoot(query, meta)) {
+    const isLoadContext = lowered === "load" || lowered.startsWith("load ");
+    const searchQuery = isLoadContext ? query.slice(4).trim() : query;
+
+    if (!query || (!isLoadContext && startsWithKnownCommandRoot(query, meta))) {
+      setEntitySuggestions([]);
+      return;
+    }
+
+    if (!searchQuery) {
       setEntitySuggestions([]);
       return;
     }
@@ -199,13 +245,13 @@ export default function App() {
     const generation = entitySuggestionGeneration + 1;
     entitySuggestionGeneration = generation;
 
-    void searchEntities(query, 6)
+    void searchEntities(searchQuery, 6)
       .then((results) => {
         if (entitySuggestionGeneration !== generation) {
           return;
         }
 
-        setEntitySuggestions(results.map(toEntitySuggestionItem));
+        setEntitySuggestions(results.map((result) => toEntitySuggestionItem(result, isLoadContext)));
       })
       .catch(() => {
         if (entitySuggestionGeneration === generation) {
@@ -512,6 +558,14 @@ export default function App() {
         return;
       }
 
+      if (locationDraft()) {
+        const locationSave = await runLocationEditorCommand("save");
+        if (locationSave.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
       appendEntry("info", "nothing to save right now.");
       pushCommandHistory(raw);
       return;
@@ -548,9 +602,47 @@ export default function App() {
         return;
       }
 
+      if (locationDraft()) {
+        const locationCancel = await runLocationEditorCommand("cancel");
+        if (locationCancel.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
       appendEntry("info", "nothing to cancel right now.");
       pushCommandHistory(raw);
       return;
+    }
+
+    const loadMatch = raw.trim().match(/^load\s+(.+)$/i);
+    if (loweredRaw === "load") {
+      appendEntry("info", "usage: load <npc-or-location-name>");
+      pushCommandHistory(raw);
+      return;
+    }
+    if (loadMatch) {
+      const target = loadMatch[1].trim();
+      if (!target) {
+        appendEntry("info", "usage: load <npc-or-location-name>");
+        pushCommandHistory(raw);
+        return;
+      }
+
+      try {
+        const entity = await resolveEntity(target);
+        if (!entity) {
+          appendEntry("info", `no npc or location found for: ${target}`);
+          pushCommandHistory(raw);
+          return;
+        }
+        loadEntityIntoEditor(entity);
+        pushCommandHistory(raw);
+        return;
+      } catch (error) {
+        appendEntry("error", String(error));
+        return;
+      }
     }
 
     const onboarding = await runOnboardingCommand(raw);
@@ -564,6 +656,14 @@ export default function App() {
     const npcEditor = await runNpcEditorCommand(raw);
     if (npcEditor.handled) {
       if (npcEditor.recordHistory) {
+        pushCommandHistory(raw);
+      }
+      return;
+    }
+
+    const locationEditor = await runLocationEditorCommand(raw);
+    if (locationEditor.handled) {
+      if (locationEditor.recordHistory) {
         pushCommandHistory(raw);
       }
       return;
@@ -680,6 +780,9 @@ export default function App() {
     name: seed.name.trim(),
     race: seed.race.trim(),
     sex: seed.sex,
+    age: normalizeUnknown(seed.age),
+    height: normalizeUnknown(seed.height),
+    weightLbs: normalizeUnknown(seed.weight_lbs),
     location: "Unknown"
   });
 
@@ -703,18 +806,63 @@ export default function App() {
   };
 
   const appendNpcSummary = (draft: NpcDraft) => {
+    appendEntry("output", draft.name, npcDraftDoc(draft));
+  };
+
+  const appendLocationSummary = (draft: LocationDraft) => {
     appendEntry(
       "output",
       [
-        "## Active NPC draft",
+        "## Active Location draft",
         `name: ${draft.name}`,
-        `race: ${draft.race}`,
-        `sex: ${draft.sex}`,
-        `location: ${draft.location}`,
+        `slug: ${draft.slug}`,
+        `path: ${draft.vault_path}`,
         "",
-        "Use `save` to persist this NPC, or `reroll` to generate again."
+        "Use save to persist this location."
       ].join("\n")
     );
+  };
+
+  const loadEntityIntoEditor = (entity: EntityDetails) => {
+    if (entity.entity_type === "npc") {
+      const sex = entity.sex?.toLowerCase() === "female" ? "female" : "male";
+      setLocationDraft(null);
+      setNpcDraft({
+        id: entity.id,
+        name: entity.name,
+        race: normalizeUnknown(entity.race),
+        sex,
+        age: normalizeUnknown(entity.age),
+        height: normalizeUnknown(entity.height),
+        weightLbs: normalizeUnknown(entity.weight_lbs),
+        location: normalizeUnknown(entity.location)
+      });
+      setEditorMode("npc");
+      appendEntry("info", `loaded npc into editor: ${entity.name}`);
+      appendNpcSummary({
+        id: entity.id,
+        name: entity.name,
+        race: normalizeUnknown(entity.race),
+        sex,
+        age: normalizeUnknown(entity.age),
+        height: normalizeUnknown(entity.height),
+        weightLbs: normalizeUnknown(entity.weight_lbs),
+        location: normalizeUnknown(entity.location)
+      });
+      return;
+    }
+
+    const draft: LocationDraft = {
+      id: entity.id,
+      name: entity.name,
+      slug: entity.slug,
+      vault_path: entity.vault_path
+    };
+    setNpcDraft(null);
+    setLocationDraft(draft);
+    setEditorMode("location");
+    appendEntry("info", `loaded location into editor: ${entity.name}`);
+    appendLocationSummary(draft);
   };
 
   const runNpcEditorCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
@@ -737,7 +885,9 @@ export default function App() {
       try {
         const seed = await generateNpcSeed();
         const draft = makeNpcDraftFromSeed(seed);
+        setLocationDraft(null);
         setNpcDraft(draft);
+        setEditorMode("npc");
         updateEntry(spinnerId, "spinner", "OK generated npc draft");
         appendNpcSummary(draft);
         return { handled: true, ok: true, recordHistory: true };
@@ -772,6 +922,7 @@ export default function App() {
         return { handled: false, ok: false, recordHistory: false };
       }
       setNpcDraft(null);
+      setEditorMode("none");
       appendEntry("info", "npc draft discarded.");
       return { handled: true, ok: true, recordHistory: true };
     }
@@ -821,6 +972,12 @@ export default function App() {
       return { handled: true, ok: true, recordHistory: true };
     }
 
+    const malformedTravelMatch = trimmed.match(/^npc\s+travel\s+(.+)$/i);
+    if (malformedTravelMatch && !/^npc\s+travel\s+to\s+(.+)$/i.test(trimmed)) {
+      appendEntry("info", "usage: npc travel to <location>");
+      return { handled: true, ok: false, recordHistory: true };
+    }
+
     const travelMatch = trimmed.match(/^npc\s+travel\s+to\s+(.+)$/i);
     if (travelMatch && draft) {
       const locationName = travelMatch[1].trim();
@@ -867,7 +1024,10 @@ export default function App() {
           ...draft,
           name: seed.name.trim(),
           race: seed.race.trim(),
-          sex: seed.sex
+          sex: seed.sex,
+          age: normalizeUnknown(seed.age),
+          height: normalizeUnknown(seed.height),
+          weightLbs: normalizeUnknown(seed.weight_lbs)
         };
         setNpcDraft(next);
         updateEntry(spinnerId, "spinner", "OK generated npc draft");
@@ -884,7 +1044,16 @@ export default function App() {
 
     if ((lowered === "npc save" || lowered === "save") && draft) {
       try {
-        const result = await saveNpcDraft(draft);
+        const result = await saveNpcDraft({
+          id: draft.id,
+          name: draft.name,
+          race: draft.race,
+          sex: draft.sex,
+          age: normalizeUnknown(draft.age),
+          height: normalizeUnknown(draft.height),
+          weight_lbs: normalizeUnknown(draft.weightLbs),
+          location: normalizeUnknown(draft.location)
+        });
         appendEntry(
           "output",
           [
@@ -896,6 +1065,7 @@ export default function App() {
           ].join("\n")
         );
         setNpcDraft(null);
+        setEditorMode("none");
         appendEntry("info", "npc editor closed. run create npc to start another draft.");
         return { handled: true, ok: true, recordHistory: true };
       } catch (error) {
@@ -906,6 +1076,90 @@ export default function App() {
 
     if (isNpcCommand) {
       appendEntry("info", "unknown npc command.");
+      return { handled: true, ok: false, recordHistory: true };
+    }
+
+    return { handled: false, ok: false, recordHistory: false };
+  };
+
+  const runLocationEditorCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
+    const trimmed = raw.trim();
+    const lowered = trimmed.toLowerCase();
+
+    if (lowered === "location help" || lowered === "location --help") {
+      if (!locationDraft()) {
+        return { handled: false, ok: false, recordHistory: false };
+      }
+      appendEntry(
+        "output",
+        ["## Location editor commands", "location show", "location rename <name>", "save", "cancel"].join("\n")
+      );
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const draft = locationDraft();
+    const isLocationCommand = lowered.startsWith("location ");
+    if (!draft && isLocationCommand) {
+      return { handled: false, ok: false, recordHistory: false };
+    }
+
+    if (lowered === "location show" && draft) {
+      appendLocationSummary(draft);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if ((lowered === "location cancel" || lowered === "cancel") && draft) {
+      setLocationDraft(null);
+      setEditorMode("none");
+      appendEntry("info", "location draft discarded.");
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const renameMatch = trimmed.match(/^location\s+rename\s+(.+)$/i);
+    if (renameMatch && draft) {
+      const name = renameMatch[1].trim();
+      if (!name) {
+        appendEntry("info", "location name cannot be empty.");
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      const next = { ...draft, name };
+      setLocationDraft(next);
+      appendLocationSummary(next);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if ((lowered === "location save" || lowered === "save") && draft) {
+      const payload: SaveLocationDraftInput = {
+        id: draft.id,
+        name: draft.name,
+        slug: draft.slug,
+        vault_path: draft.vault_path
+      };
+
+      try {
+        const result = await saveLocationDraft(payload);
+        appendEntry(
+          "output",
+          [
+            "## Location saved",
+            `id: ${result.id}`,
+            `slug: ${result.slug}`,
+            `vault: ${result.vault_path}`,
+            `updated: ${result.updated_at}`
+          ].join("\n")
+        );
+        setLocationDraft(null);
+        setEditorMode("none");
+        appendEntry("info", "location editor closed.");
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("error", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if (isLocationCommand) {
+      appendEntry("info", "unknown location command.");
       return { handled: true, ok: false, recordHistory: true };
     }
 
@@ -1634,10 +1888,10 @@ function startsWithKnownCommandRoot(input: string, meta: InlineCommandMeta): boo
   return meta.commandMap.has(first);
 }
 
-function toEntitySuggestionItem(entity: EntitySuggestion): EntitySuggestionItem {
+function toEntitySuggestionItem(entity: EntitySuggestion, loadContext: boolean): EntitySuggestionItem {
   return {
     label: entity.name,
-    completion: entity.name,
+    completion: loadContext ? `load ${entity.name}` : entity.name,
     helperText: entity.entity_type
   };
 }
@@ -1653,6 +1907,43 @@ function titleCaseSex(value: string): string {
   return value;
 }
 
+function normalizeUnknown(value: string | null | undefined): string {
+  const normalized = (value ?? "").trim();
+  if (!normalized) {
+    return "Unknown";
+  }
+  return normalized;
+}
+
+function npcDraftDoc(draft: NpcDraft): OutputDoc {
+  return {
+    blocks: [
+      {
+        kind: "entity_card",
+        title: draft.name,
+        rows: [
+          { label: "Race:", value: normalizeUnknown(draft.race) },
+          { label: "Gender:", value: titleCaseSex(normalizeUnknown(draft.sex)) },
+          { label: "Age:", value: normalizeUnknown(draft.age) },
+          { label: "Height:", value: normalizeUnknown(draft.height) },
+          { label: "Weight:", value: `${normalizeUnknown(draft.weightLbs)} lbs` },
+          { label: "Location:", value: normalizeUnknown(draft.location) }
+        ]
+      },
+      {
+        kind: "paragraph",
+        inlines: [
+          { kind: "text", text: "Use " },
+          { kind: "command_ref", label: "save", command: "save" },
+          { kind: "text", text: " to persist this NPC, or " },
+          { kind: "command_ref", label: "reroll", command: "reroll" },
+          { kind: "text", text: " to generate again." }
+        ]
+      }
+    ]
+  };
+}
+
 function entityDetailsDoc(entity: EntityDetails): OutputDoc {
   if (entity.entity_type === "npc") {
     return {
@@ -1661,9 +1952,12 @@ function entityDetailsDoc(entity: EntityDetails): OutputDoc {
           kind: "entity_card",
           title: entity.name,
           rows: [
-            { label: "Race:", value: entity.race ?? "Unknown" },
-            { label: "Gender:", value: titleCaseSex(entity.sex ?? "Unknown") },
-            { label: "Location:", value: entity.location ?? "Unknown" }
+            { label: "Race:", value: normalizeUnknown(entity.race) },
+            { label: "Gender:", value: titleCaseSex(normalizeUnknown(entity.sex)) },
+            { label: "Age:", value: normalizeUnknown(entity.age) },
+            { label: "Height:", value: normalizeUnknown(entity.height) },
+            { label: "Weight:", value: `${normalizeUnknown(entity.weight_lbs)} lbs` },
+            { label: "Location:", value: normalizeUnknown(entity.location) }
           ]
         }
       ]

@@ -30,6 +30,9 @@ pub struct NpcRow {
     pub name: String,
     pub race: String,
     pub sex: String,
+    pub age: String,
+    pub height: String,
+    pub weight_lbs: String,
     pub location: String,
     pub vault_path: String,
     pub created_at: String,
@@ -39,7 +42,7 @@ pub struct NpcRow {
 pub async fn search_npcs_by_name(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<NpcRow>> {
     let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
     let rows = sqlx::query(
-        "SELECT id, slug, name, race, sex, location, vault_path, created_at, updated_at
+        "SELECT id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at
          FROM npcs
          WHERE lower(name) LIKE ?1
          ORDER BY name COLLATE NOCASE ASC
@@ -79,7 +82,7 @@ pub async fn search_locations_by_name(
 pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
-        "SELECT id, slug, name, race, sex, location, vault_path, created_at, updated_at
+        "SELECT id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at
          FROM npcs
          WHERE lower(name) = ?1 OR lower(slug) = ?2
          ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
@@ -181,6 +184,18 @@ pub async fn find_location_by_slug(pool: &SqlitePool, slug: &str) -> Result<Opti
     row.map(row_to_location).transpose()
 }
 
+pub async fn find_location_by_id(pool: &SqlitePool, id: &str) -> Result<Option<LocationRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, created_at, updated_at FROM locations WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query location by id")?;
+
+    row.map(row_to_location).transpose()
+}
+
 pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO locations (id, slug, name, vault_path, created_at, updated_at)
@@ -206,7 +221,7 @@ pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Resul
 
 pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, race, sex, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
+        "SELECT id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -218,13 +233,16 @@ pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow
 
 pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     sqlx::query(
-        "INSERT INTO npcs (id, slug, name, race, sex, location, vault_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+        "INSERT INTO npcs (id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
          ON CONFLICT(id) DO UPDATE SET
             slug = excluded.slug,
             name = excluded.name,
             race = excluded.race,
             sex = excluded.sex,
+            age = excluded.age,
+            height = excluded.height,
+            weight_lbs = excluded.weight_lbs,
             location = excluded.location,
             vault_path = excluded.vault_path,
             updated_at = excluded.updated_at",
@@ -234,6 +252,9 @@ pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     .bind(&npc.name)
     .bind(&npc.race)
     .bind(&npc.sex)
+    .bind(&npc.age)
+    .bind(&npc.height)
+    .bind(&npc.weight_lbs)
     .bind(&npc.location)
     .bind(&npc.vault_path)
     .bind(&npc.created_at)
@@ -347,6 +368,15 @@ fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
         name: row.try_get("name").context("npcs.name missing")?,
         race: row.try_get("race").context("npcs.race missing")?,
         sex: row.try_get("sex").context("npcs.sex missing")?,
+        age: row
+            .try_get("age")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        height: row
+            .try_get("height")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        weight_lbs: row
+            .try_get("weight_lbs")
+            .unwrap_or_else(|_| "Unknown".to_string()),
         location: row
             .try_get("location")
             .context("npcs.location missing")?,

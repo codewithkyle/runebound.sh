@@ -51,6 +51,9 @@ struct NpcSeed {
     name: String,
     race: String,
     sex: String,
+    age: String,
+    height: String,
+    weight_lbs: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -64,6 +67,9 @@ struct SaveNpcDraftInput {
     name: String,
     race: String,
     sex: String,
+    age: String,
+    height: String,
+    weight_lbs: String,
     location: String,
 }
 
@@ -106,13 +112,35 @@ struct EntitySuggestion {
 
 #[derive(Debug, Clone, Serialize)]
 struct EntityDetails {
+    id: String,
     entity_type: EntityType,
     name: String,
     slug: String,
     race: Option<String>,
     sex: Option<String>,
+    age: Option<String>,
+    height: Option<String>,
+    weight_lbs: Option<String>,
     location: Option<String>,
     vault_path: String,
+    created_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SaveLocationDraftInput {
+    id: String,
+    name: String,
+    slug: String,
+    vault_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SaveLocationDraftResult {
+    id: String,
+    slug: String,
+    vault_path: String,
+    created_at: String,
+    updated_at: String,
 }
 
 struct AppState {
@@ -138,6 +166,15 @@ fn normalize_sex(value: &str) -> Result<String, String> {
         Ok(normalized)
     } else {
         Err("sex must be one of: male, female".to_string())
+    }
+}
+
+fn normalize_unknown_text(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        "Unknown".to_string()
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -337,11 +374,14 @@ async fn generate_npc_seed(
 
     let schema = serde_json::json!({
         "type": "object",
-        "required": ["name", "race", "sex"],
+        "required": ["name", "race", "sex", "age", "height", "weight_lbs"],
         "properties": {
             "name": { "type": "string", "minLength": 1 },
             "race": { "type": "string", "minLength": 1 },
-            "sex": { "type": "string", "enum": ["male", "female"] }
+            "sex": { "type": "string", "enum": ["male", "female"] },
+            "age": { "type": "string", "minLength": 1 },
+            "height": { "type": "string", "minLength": 1 },
+            "weight_lbs": { "type": "string", "minLength": 1 }
         },
         "additionalProperties": false
     });
@@ -380,7 +420,7 @@ async fn generate_npc_seed(
                 {
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, sex. Avoid these recent seeds: {}.{}",
+                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, sex, age, height, weight_lbs. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Avoid these recent seeds: {}.{}",
                         recent_context,
                         repair_note,
                     )
@@ -420,6 +460,9 @@ async fn generate_npc_seed(
         seed.name = seed.name.trim().to_string();
         seed.race = seed.race.trim().to_string();
         seed.sex = normalize_sex(&seed.sex)?;
+        seed.age = normalize_unknown_text(&seed.age);
+        seed.height = normalize_unknown_text(&seed.height);
+        seed.weight_lbs = normalize_unknown_text(&seed.weight_lbs);
 
         if seed.name.is_empty() || seed.race.is_empty() {
             continue;
@@ -571,6 +614,9 @@ async fn save_npc_draft(
         return Err("npc race cannot be empty".to_string());
     }
     let sex = normalize_sex(&input.sex)?;
+    let age = normalize_unknown_text(&input.age);
+    let height = normalize_unknown_text(&input.height);
+    let weight_lbs = normalize_unknown_text(&input.weight_lbs);
     let location = if input.location.trim().is_empty() {
         UNKNOWN_LOCATION.to_string()
     } else {
@@ -617,6 +663,9 @@ async fn save_npc_draft(
         name: name.to_string(),
         race: race.to_string(),
         sex: sex.clone(),
+        age: age.clone(),
+        height: height.clone(),
+        weight_lbs: weight_lbs.clone(),
         location: location.clone(),
         created_at: created_at.clone(),
         updated_at: now.clone(),
@@ -633,6 +682,9 @@ async fn save_npc_draft(
         name: name.to_string(),
         race: race.to_string(),
         sex,
+        age,
+        height,
+        weight_lbs,
         location,
         vault_path: relative_path.clone(),
         created_at: created_at.clone(),
@@ -660,6 +712,98 @@ async fn save_npc_draft(
         vault_path: npc_row.vault_path,
         created_at: npc_row.created_at,
         updated_at: npc_row.updated_at,
+    })
+}
+
+#[tauri::command]
+async fn save_location_draft(
+    input: SaveLocationDraftInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<SaveLocationDraftResult, String> {
+    if input.id.trim().is_empty() {
+        return Err("location id cannot be empty".to_string());
+    }
+
+    let name = input.name.trim();
+    if name.is_empty() {
+        return Err("location name cannot be empty".to_string());
+    }
+
+    let slug = input.slug.trim();
+    if slug.is_empty() {
+        return Err("location slug cannot be empty".to_string());
+    }
+
+    let vault_path_relative = input.vault_path.trim();
+    if vault_path_relative.is_empty() {
+        return Err("location vault path cannot be empty".to_string());
+    }
+
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let vault_path = loaded
+        .effective
+        .vault
+        .path
+        .clone()
+        .ok_or_else(|| "vault.path is not configured".to_string())?;
+    let vault = Vault::new(vault_path);
+    vault.ensure_structure().map_err(|err| err.to_string())?;
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let now = now_timestamp();
+    let existing = db::find_location_by_id(&database.pool, input.id.trim())
+        .await
+        .map_err(|err| err.to_string())?;
+    let created_at = existing
+        .map(|location| location.created_at)
+        .unwrap_or_else(|| now.clone());
+
+    let markdown = render_location_markdown(&LocationFrontmatter {
+        doc_type: "location".to_string(),
+        id: input.id.trim().to_string(),
+        slug: slug.to_string(),
+        name: name.to_string(),
+        created_at: created_at.clone(),
+        updated_at: now.clone(),
+    })
+    .map_err(|err| err.to_string())?;
+
+    let relative_path = PathBuf::from(vault_path_relative);
+    vault
+        .write_relative(&relative_path, &markdown)
+        .map_err(|err| err.to_string())?;
+
+    let location_row = db::LocationRow {
+        id: input.id.trim().to_string(),
+        slug: slug.to_string(),
+        name: name.to_string(),
+        vault_path: vault_path_relative.to_string(),
+        created_at: created_at.clone(),
+        updated_at: now.clone(),
+    };
+
+    db::upsert_location(&database.pool, &location_row)
+        .await
+        .map_err(|err| err.to_string())?;
+    db::upsert_document_index(
+        &database.pool,
+        "location",
+        &location_row.slug,
+        Some(&location_row.name),
+        &location_row.vault_path,
+        &location_row.created_at,
+        &location_row.updated_at,
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+
+    Ok(SaveLocationDraftResult {
+        id: location_row.id,
+        slug: location_row.slug,
+        vault_path: location_row.vault_path,
+        created_at: location_row.created_at,
+        updated_at: location_row.updated_at,
     })
 }
 
@@ -712,13 +856,18 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
         .map_err(|err| err.to_string())?
     {
         return Ok(Some(EntityDetails {
+            id: npc.id,
             entity_type: EntityType::Npc,
             name: npc.name,
             slug: npc.slug,
             race: Some(npc.race),
             sex: Some(npc.sex),
+            age: Some(npc.age),
+            height: Some(npc.height),
+            weight_lbs: Some(npc.weight_lbs),
             location: Some(npc.location),
             vault_path: npc.vault_path,
+            created_at: Some(npc.created_at),
         }));
     }
 
@@ -727,13 +876,18 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
         .map_err(|err| err.to_string())?
     {
         return Ok(Some(EntityDetails {
+            id: location.id,
             entity_type: EntityType::Location,
             name: location.name,
             slug: location.slug,
             race: None,
             sex: None,
+            age: None,
+            height: None,
+            weight_lbs: None,
             location: None,
             vault_path: location.vault_path,
+            created_at: Some(location.created_at),
         }));
     }
 
@@ -769,6 +923,7 @@ fn main() {
             generate_npc_seed,
             ensure_location_exists,
             save_npc_draft,
+            save_location_draft,
             search_entities,
             resolve_entity,
             get_command_manifest,

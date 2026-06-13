@@ -72,6 +72,20 @@ function buildArgumentSuggestions(manifest: CommandManifest, parsed: ParseResult
   const subcommand = parsed.completion.subcommand
     ? command.subcommands.find((item) => item.name === parsed.completion.subcommand)
     : undefined;
+
+  if (command.name === "npc" && subcommand?.name === "travel") {
+    const normalized = parsed.normalized_tokens.map((token) => token.toLowerCase());
+    const hasTo = normalized.length >= 3 && normalized[2] === "to";
+    if (!hasTo) {
+      return [
+        {
+          label: "npc travel to",
+          completion: "npc travel to "
+        }
+      ];
+    }
+  }
+
   const options = subcommand ? subcommand.options : command.options;
   if (options.length === 0) {
     return [];

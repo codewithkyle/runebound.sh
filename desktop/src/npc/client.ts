@@ -4,6 +4,9 @@ export type NpcSeed = {
   name: string;
   race: string;
   sex: "male" | "female";
+  age: string;
+  height: string;
+  weight_lbs: string;
 };
 
 export type EnsureLocationResult = {
@@ -19,6 +22,9 @@ export type SaveNpcDraftInput = {
   name: string;
   race: string;
   sex: "male" | "female";
+  age: string;
+  height: string;
+  weight_lbs: string;
   location: string;
 };
 
