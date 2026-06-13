@@ -31,5 +31,16 @@ body,
 body {
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: "JetBrains Mono", "Fira Code", "Cascadia Mono", "Consolas", monospace;
+  font-family: "IBM Plex Mono", "JetBrains Mono", "Fira Code", "Cascadia Mono", "Consolas", monospace;
+  font-size: 16px;
+  line-height: 1.375;
+}
+
+input,
+textarea,
+button,
+pre {
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
 }

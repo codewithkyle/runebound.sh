@@ -1,3 +1,6 @@
+import "@fontsource/ibm-plex-mono/400.css";
+import "@fontsource/ibm-plex-mono/500.css";
+import "@fontsource/ibm-plex-mono/600.css";
 import { render } from "solid-js/web";
 import App from "./App";
 import "./index.css";

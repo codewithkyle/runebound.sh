@@ -16,14 +16,12 @@ type CommandResponse = {
   exit_code: number;
 };
 
-const COMMAND_HINTS = ["status", "config show", "config test", "config doctor", "config init --vault-path <path> --ollama-base-url <url> --model <name>"];
-
 export default function App() {
   const [entries, setEntries] = createSignal<HistoryEntry[]>([
     {
       id: 1,
       kind: "info",
-      text: "DND Assistant desktop shell ready. Try `status` or `config show`."
+      text: "DND Assistant ready."
     }
   ]);
   const [command, setCommand] = createSignal("");
@@ -43,9 +41,22 @@ export default function App() {
     ]);
     queueMicrotask(() => {
       if (outputRef) {
-        outputRef.scrollTop = outputRef.scrollHeight;
+        outputRef.scrollTo({
+          top: outputRef.scrollHeight,
+          behavior: "smooth"
+        });
       }
     });
+  };
+
+  const clearCommand = () => {
+    if (!command()) {
+      return;
+    }
+
+    appendEntry("info", "^C");
+    setCommand("");
+    inputRef?.focus();
   };
 
   const submitCommand = async () => {
@@ -75,71 +86,106 @@ export default function App() {
 
   onMount(() => {
     inputRef?.focus();
+
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      const ctrlOrMeta = event.ctrlKey || event.metaKey;
+
+      if (ctrlOrMeta && event.key.toLowerCase() === "c") {
+        if (command()) {
+          event.preventDefault();
+          clearCommand();
+        }
+        return;
+      }
+
+      if (isEditableTarget(event.target)) {
+        return;
+      }
+
+      if (event.key === "Enter") {
+        event.preventDefault();
+        void submitCommand();
+        return;
+      }
+
+      if (event.key.length === 1 && !event.altKey && !ctrlOrMeta) {
+        event.preventDefault();
+        inputRef?.focus();
+        setCommand((previous) => previous + event.key);
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
   });
 
   return (
-    <div class="h-screen bg-bg text-text font-mono flex flex-col">
-      <header class="border-b border-border px-4 py-3 bg-surface flex items-center justify-between">
-        <h1 class="text-accent text-sm tracking-wide uppercase">DND Assistant</h1>
-        <span class="text-muted text-xs">Gruvbox Dark</span>
-      </header>
-
-      <main ref={outputRef} class="flex-1 overflow-y-auto px-4 py-4 bg-bg">
-        <div class="space-y-3">
+    <div class="h-screen bg-bg text-text flex flex-col p-[8px]">
+      <main ref={outputRef} class="flex-1 overflow-y-auto py-[2px]">
+        <div class="w-full max-w-[960px] mx-auto space-y-2">
           <For each={entries()}>
-            {(entry) => (
-              <pre class={entryClass(entry.kind)}>{entry.text}</pre>
-            )}
+            {(entry) => <pre class={entryClass(entry.kind)}>{entry.text}</pre>}
           </For>
         </div>
       </main>
 
-      <section class="border-t border-border bg-surface px-4 py-3">
-        <div class="mb-2 flex flex-wrap gap-2">
-          <For each={COMMAND_HINTS}>
-            {(hint) => <span class="text-xs px-2 py-1 rounded bg-surface2 text-muted border border-border">{hint}</span>}
-          </For>
-        </div>
-
-        <form
-          class="flex items-center gap-2"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void submitCommand();
-          }}
-        >
-          <span class="text-accent">$</span>
-          <input
-            ref={inputRef}
-            class="flex-1 bg-surface2 border border-border rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-accent"
-            type="text"
-            placeholder="Type a command..."
-            value={command()}
-            onInput={(event) => setCommand(event.currentTarget.value)}
-          />
-          <button
-            type="submit"
-            disabled={running()}
-            class="px-3 py-2 rounded border border-border text-xs uppercase tracking-wide text-text bg-surface2 hover:bg-surface disabled:opacity-50"
+      <section class="shrink-0 pb-[2px]">
+        <div class="w-full max-w-[960px] mx-auto">
+          <form
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitCommand();
+            }}
           >
-            {running() ? "Running" : "Run"}
-          </button>
-        </form>
+            <div class="w-full bg-surface2 px-3 py-[2px] flex items-center gap-2">
+              <span class="text-accent">&gt;</span>
+              <input
+                ref={inputRef}
+                class="w-full bg-transparent p-0 text-text focus:outline-none"
+                type="text"
+                value={command()}
+                onInput={(event) => setCommand(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+                    if (command()) {
+                      event.preventDefault();
+                      clearCommand();
+                    }
+                  }
+                }}
+              />
+            </div>
+          </form>
+        </div>
       </section>
     </div>
   );
 }
 
 function entryClass(kind: EntryKind): string {
-  const base = "whitespace-pre-wrap break-words text-sm leading-6 rounded border px-3 py-2";
+  const base = "whitespace-pre-wrap break-words";
   if (kind === "input") {
-    return `${base} border-accent text-accent bg-surface`;
+    return `${base} text-accent bg-surface2 px-3 py-[2px]`;
   }
   if (kind === "error") {
-    return `${base} border-error text-error bg-surface`;
+    return `${base} text-error`;
   }
   if (kind === "info") {
-    return `${base} border-info text-info bg-surface`;
+    return `${base} text-info`;
   }
-  return `${base} border-border text-text bg-surface`;
+  return `${base} text-text`;
+}
+
+function isEditableTarget(target: EventTarget | null): boolean {
+  if (!(target instanceof HTMLElement)) {
+    return false;
+  }
+
+  if (target.isContentEditable) {
+    return true;
+  }
+
+  return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }

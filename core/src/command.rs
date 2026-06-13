@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Result, anyhow, bail};
+use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
@@ -14,7 +15,6 @@ use crate::vault::{Vault, is_path_writable};
 
 #[derive(Debug, Parser)]
 #[command(name = "dnd-assistant")]
-#[command(about = "D&D assistant command runner", long_about = None)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Command>,
@@ -83,7 +83,15 @@ pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<S
     let parsed_words = shell_words::split(input).map_err(|e| anyhow!("invalid command input: {e}"))?;
     argv.extend(parsed_words);
 
-    let cli = Cli::try_parse_from(argv).map_err(|e| anyhow!(e.to_string()))?;
+    let cli = match Cli::try_parse_from(argv) {
+        Ok(cli) => cli,
+        Err(err) => {
+            if err.kind() == ErrorKind::DisplayHelp || err.kind() == ErrorKind::DisplayVersion {
+                return Ok(strip_binary_name_from_help(&err.to_string()));
+            }
+            return Err(anyhow!(strip_binary_name_from_help(&err.to_string())));
+        }
+    };
     execute_parsed(workspace_root, cli).await
 }
 
@@ -250,4 +258,20 @@ fn format_report(title: &str, report: &CheckReport) -> String {
         out.push_str(&format!("- [{status}] {}: {}\n", item.name, item.detail));
     }
     out.trim_end().to_string()
+}
+
+fn strip_binary_name_from_help(text: &str) -> String {
+    let mut out = Vec::new();
+
+    for line in text.lines() {
+        if line.starts_with("Usage: dnd-assistant ") {
+            out.push(line.replacen("Usage: dnd-assistant ", "Usage: ", 1));
+        } else if line == "Usage: dnd-assistant" {
+            out.push("Usage:".to_string());
+        } else {
+            out.push(line.to_string());
+        }
+    }
+
+    out.join("\n")
 }
