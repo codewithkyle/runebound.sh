@@ -21,10 +21,14 @@ type SuggestionItem = {
   completion: string;
 };
 
-const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help"];
+const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help", "clear", "history"];
 const CONFIG_SUBCOMMANDS = ["init", "show", "test", "doctor"];
 const NPC_SUBCOMMANDS = ["create", "list", "show", "edit", "refs", "delete"];
 const CONFIG_INIT_FLAGS = ["--vault-path", "--ollama-base-url", "--model", "--global", "--workspace", "--skip-test"];
+const CLEAR_FLAGS = ["--history"];
+const HISTORY_SUBCOMMANDS = ["clear"];
+const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
+const MAX_COMMAND_HISTORY = 50;
 
 export default function App() {
   const [entries, setEntries] = createSignal<HistoryEntry[]>([
@@ -38,6 +42,9 @@ export default function App() {
   const [running, setRunning] = createSignal(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
+  const [commandHistory, setCommandHistory] = createSignal<string[]>([]);
+  const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
+  const [historyDraft, setHistoryDraft] = createSignal("");
 
   const suggestionList = createMemo(() => {
     if (command().trim().length === 0 || running() || suggestionsDismissed()) {
@@ -79,13 +86,197 @@ export default function App() {
     });
   };
 
+  const pushCommandHistory = (raw: string) => {
+    const value = raw.trim();
+    if (!value) {
+      return;
+    }
+
+    setCommandHistory((previous) => {
+      if (previous.length > 0 && previous[previous.length - 1] === value) {
+        return previous;
+      }
+
+      const next = [...previous, value];
+      if (next.length > MAX_COMMAND_HISTORY) {
+        return next.slice(next.length - MAX_COMMAND_HISTORY);
+      }
+      return next;
+    });
+  };
+
+  const resetHistoryNavigation = () => {
+    setHistoryCursor(null);
+    setHistoryDraft("");
+  };
+
+  const navigateHistoryUp = () => {
+    const history = commandHistory();
+    if (history.length === 0) {
+      return;
+    }
+
+    if (historyCursor() === null) {
+      setHistoryDraft(command());
+      const idx = history.length - 1;
+      setHistoryCursor(idx);
+      setCommand(history[idx]);
+      setActiveSuggestionIndex(0);
+      return;
+    }
+
+    const current = historyCursor() as number;
+    if (current > 0) {
+      const nextIdx = current - 1;
+      setHistoryCursor(nextIdx);
+      setCommand(history[nextIdx]);
+      setActiveSuggestionIndex(0);
+    }
+  };
+
+  const navigateHistoryDown = () => {
+    const history = commandHistory();
+    const cursor = historyCursor();
+    if (cursor === null || history.length === 0) {
+      return;
+    }
+
+    if (cursor < history.length - 1) {
+      const nextIdx = cursor + 1;
+      setHistoryCursor(nextIdx);
+      setCommand(history[nextIdx]);
+      setActiveSuggestionIndex(0);
+      return;
+    }
+
+    setHistoryCursor(null);
+    setCommand(historyDraft());
+    setHistoryDraft("");
+    setActiveSuggestionIndex(0);
+  };
+
+  const historyOutput = (limit: number): string => {
+    const history = commandHistory();
+    if (history.length === 0) {
+      return "(no history)";
+    }
+
+    const safeLimit = Math.max(1, Math.min(MAX_COMMAND_HISTORY, limit));
+    const start = Math.max(0, history.length - safeLimit);
+    return history
+      .slice(start)
+      .map((item, idx) => `${start + idx + 1}: ${item}`)
+      .join("\n");
+  };
+
+  const parseHistoryExpansion = (raw: string): { ok: true; command: string } | { ok: false; error: string } | null => {
+    const trimmed = raw.trim();
+    if (trimmed === "!!") {
+      const history = commandHistory();
+      if (history.length === 0) {
+        return { ok: false, error: "no command history available" };
+      }
+      return { ok: true, command: history[history.length - 1] };
+    }
+
+    const match = trimmed.match(/^!(\d+)$/);
+    if (!match) {
+      return null;
+    }
+
+    const index = Number.parseInt(match[1], 10);
+    const history = commandHistory();
+    if (Number.isNaN(index) || index < 1 || index > history.length) {
+      return { ok: false, error: `history index out of range: ${index}` };
+    }
+
+    return { ok: true, command: history[index - 1] };
+  };
+
+  const runBuiltInCommand = (raw: string): { handled: boolean; ok: boolean; recordHistory: boolean } => {
+    const tokens = raw.trim().split(/\s+/);
+    const head = tokens[0]?.toLowerCase();
+    if (!head) {
+      return { handled: true, ok: true, recordHistory: false };
+    }
+
+    if (head === "clear") {
+      if (tokens.length === 1) {
+        setEntries([]);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+      if (tokens.length === 2 && tokens[1] === "--history") {
+        setEntries([]);
+        setCommandHistory([]);
+        resetHistoryNavigation();
+        return { handled: true, ok: true, recordHistory: false };
+      }
+
+      appendEntry("error", "usage: clear [--history]");
+      return { handled: true, ok: false, recordHistory: false };
+    }
+
+    if (head === "history") {
+      if (tokens.length === 2 && tokens[1] === "clear") {
+        setEntries([]);
+        setCommandHistory([]);
+        resetHistoryNavigation();
+        return { handled: true, ok: true, recordHistory: false };
+      }
+
+      const limit = tokens.length > 1 ? Number.parseInt(tokens[1], 10) : 20;
+      if (tokens.length > 1 && (Number.isNaN(limit) || limit < 1)) {
+        appendEntry("error", "usage: history [limit|clear]");
+        return { handled: true, ok: false, recordHistory: false };
+      }
+      appendEntry("output", historyOutput(limit));
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    return { handled: false, ok: false, recordHistory: false };
+  };
+
+  const executeCommand = async (rawInput: string) => {
+    const expansion = parseHistoryExpansion(rawInput);
+    if (expansion && !expansion.ok) {
+      appendEntry("error", expansion.error);
+      return;
+    }
+
+    const raw = expansion && expansion.ok ? expansion.command : rawInput;
+    appendEntry("input", `> ${raw}`);
+
+    const builtIn = runBuiltInCommand(raw);
+    if (builtIn.handled) {
+      if (builtIn.ok && builtIn.recordHistory) {
+        pushCommandHistory(raw);
+      }
+      return;
+    }
+
+    setRunning(true);
+    try {
+      const response = await invoke<CommandResponse>("run_command", { input: raw });
+      if (response.ok) {
+        appendEntry("output", response.output || "(ok)");
+        pushCommandHistory(raw);
+      } else {
+        appendEntry("error", response.error || "command failed");
+      }
+    } catch (error) {
+      appendEntry("error", `invoke error: ${String(error)}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
   const clearCommand = () => {
     if (!command()) {
       return;
     }
 
-    appendEntry("info", "^C");
     setCommand("");
+    resetHistoryNavigation();
     setSuggestionsDismissed(false);
     setActiveSuggestionIndex(0);
     inputRef?.focus();
@@ -97,28 +288,32 @@ export default function App() {
       return;
     }
 
-    appendEntry("input", `> ${raw}`);
     setCommand("");
+    resetHistoryNavigation();
     setSuggestionsDismissed(false);
     setActiveSuggestionIndex(0);
-    setRunning(true);
-
-    try {
-      const response = await invoke<CommandResponse>("run_command", { input: raw });
-      if (response.ok) {
-        appendEntry("output", response.output || "(ok)");
-      } else {
-        appendEntry("error", response.error || "command failed");
-      }
-    } catch (error) {
-      appendEntry("error", `invoke error: ${String(error)}`);
-    } finally {
-      setRunning(false);
-      inputRef?.focus();
-    }
+    await executeCommand(raw);
+    inputRef?.focus();
   };
 
   onMount(() => {
+    try {
+      const serialized = window.localStorage.getItem(HISTORY_STORAGE_KEY);
+      if (serialized) {
+        const parsed = JSON.parse(serialized);
+        if (Array.isArray(parsed)) {
+          const cleaned = parsed
+            .filter((item) => typeof item === "string")
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+            .slice(-MAX_COMMAND_HISTORY);
+          setCommandHistory(cleaned);
+        }
+      }
+    } catch {
+      setCommandHistory([]);
+    }
+
     inputRef?.focus();
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
@@ -145,6 +340,7 @@ export default function App() {
       if (event.key.length === 1 && !event.altKey && !ctrlOrMeta) {
         event.preventDefault();
         inputRef?.focus();
+        resetHistoryNavigation();
         setSuggestionsDismissed(false);
         setCommand((previous) => previous + event.key);
       }
@@ -154,6 +350,15 @@ export default function App() {
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
     };
+  });
+
+  createEffect(() => {
+    const history = commandHistory();
+    try {
+      window.localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history));
+    } catch {
+      // ignore write failures
+    }
   });
 
   return (
@@ -204,6 +409,7 @@ export default function App() {
                 value={command()}
                 onInput={(event) => {
                   setCommand(event.currentTarget.value);
+                  resetHistoryNavigation();
                   setSuggestionsDismissed(false);
                   setActiveSuggestionIndex(0);
                 }}
@@ -223,6 +429,20 @@ export default function App() {
                   }
 
                   const suggestions = suggestionList();
+                  const shouldNavigateHistory = historyCursor() !== null || (command().trim().length === 0 && commandHistory().length > 0);
+
+                  if (event.key === "ArrowUp" && shouldNavigateHistory) {
+                    event.preventDefault();
+                    navigateHistoryUp();
+                    return;
+                  }
+
+                  if (event.key === "ArrowDown" && shouldNavigateHistory) {
+                    event.preventDefault();
+                    navigateHistoryDown();
+                    return;
+                  }
+
                   if (event.key === "ArrowDown" && suggestions.length > 1) {
                     event.preventDefault();
                     setActiveSuggestionIndex((previous) => (previous + 1) % suggestions.length);
@@ -299,6 +519,35 @@ function buildSuggestions(input: string): SuggestionItem[] {
 
   if (root === "npc") {
     return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, NPC_SUBCOMMANDS, {});
+  }
+
+  if (root === "clear") {
+    return buildFlagSuggestions(raw, tokens, endsWithSpace, CLEAR_FLAGS);
+  }
+
+  if (root === "history") {
+    return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, HISTORY_SUBCOMMANDS, {});
+  }
+
+  return [];
+}
+
+function buildFlagSuggestions(raw: string, tokens: string[], endsWithSpace: boolean, flags: string[]): SuggestionItem[] {
+  if (tokens.length === 1 && endsWithSpace) {
+    return flags.map((flag) => ({
+      label: `${tokens[0]} ${flag}`,
+      completion: `${tokens[0]} ${flag}`
+    }));
+  }
+
+  if (tokens.length === 2 && !endsWithSpace) {
+    const current = tokens[1].toLowerCase();
+    return flags
+      .filter((flag) => flag.startsWith(current))
+      .map((flag) => ({
+        label: `${tokens[0]} ${flag}`,
+        completion: `${tokens[0]} ${flag}`
+      }));
   }
 
   return [];
