@@ -449,7 +449,9 @@ export default function App() {
       return;
     }
 
-    if (raw.trim().toLowerCase() === "save") {
+    const loweredRaw = raw.trim().toLowerCase();
+
+    if (loweredRaw === "save") {
       if (onboardingActive()) {
         const onboardingSave = await runOnboardingCommand("save");
         if (onboardingSave.recordHistory) {
@@ -467,6 +469,42 @@ export default function App() {
       }
 
       appendEntry("info", "nothing to save right now.");
+      pushCommandHistory(raw);
+      return;
+    }
+
+    if (loweredRaw === "reroll") {
+      if (npcDraft()) {
+        const npcReroll = await runNpcEditorCommand("reroll");
+        if (npcReroll.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
+      appendEntry("info", "nothing to reroll right now.");
+      pushCommandHistory(raw);
+      return;
+    }
+
+    if (loweredRaw === "cancel") {
+      if (onboardingActive()) {
+        const onboardingCancel = await runOnboardingCommand("cancel setup");
+        if (onboardingCancel.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
+      if (npcDraft()) {
+        const npcCancel = await runNpcEditorCommand("cancel");
+        if (npcCancel.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
+      appendEntry("info", "nothing to cancel right now.");
       pushCommandHistory(raw);
       return;
     }
@@ -598,6 +636,8 @@ export default function App() {
         "npc set race <race>",
         "npc set sex <male|female>",
         "npc travel to <location>",
+        "reroll",
+        "cancel",
         "npc save",
         "npc cancel"
       ].join("\n")
@@ -614,7 +654,7 @@ export default function App() {
         `sex: ${draft.sex}`,
         `location: ${draft.location}`,
         "",
-        "Use save to persist this NPC."
+        "Use `save` to persist this NPC, or `reroll` to generate again."
       ].join("\n")
     );
   };
@@ -669,7 +709,7 @@ export default function App() {
       return { handled: true, ok: true, recordHistory: true };
     }
 
-    if (lowered === "npc cancel") {
+    if (lowered === "npc cancel" || lowered === "cancel") {
       if (!npcDraft()) {
         return { handled: false, ok: false, recordHistory: false };
       }
@@ -748,6 +788,39 @@ export default function App() {
       } catch (error) {
         appendEntry("error", String(error));
         return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if (lowered === "reroll" || lowered === "npc reroll") {
+      if (!draft) {
+        return { handled: false, ok: false, recordHistory: false };
+      }
+
+      const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} generating npc ...`);
+      let frame = 0;
+      const timer = window.setInterval(() => {
+        frame = (frame + 1) % SPINNER_FRAMES.length;
+        updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} generating npc ...`);
+      }, 100);
+
+      try {
+        const seed = await generateNpcSeed();
+        const next = {
+          ...draft,
+          name: seed.name.trim(),
+          race: seed.race.trim(),
+          sex: seed.sex
+        };
+        setNpcDraft(next);
+        updateEntry(spinnerId, "spinner", "OK generated npc draft");
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        updateEntry(spinnerId, "spinner", "FAILED npc generation");
+        appendEntry("error", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      } finally {
+        window.clearInterval(timer);
       }
     }
 

@@ -198,6 +198,52 @@ pub async fn upsert_document_index(
     Ok(())
 }
 
+pub async fn insert_generation(
+    pool: &SqlitePool,
+    entity_type: &str,
+    entity_id: Option<&str>,
+    prompt: &str,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO generations (entity_type, entity_id, prompt)
+         VALUES (?1, ?2, ?3)",
+    )
+    .bind(entity_type)
+    .bind(entity_id)
+    .bind(prompt)
+    .execute(pool)
+    .await
+    .context("failed to insert generation row")?;
+
+    Ok(())
+}
+
+pub async fn recent_generation_prompts(
+    pool: &SqlitePool,
+    entity_type: &str,
+    limit: i64,
+) -> Result<Vec<String>> {
+    let rows = sqlx::query(
+        "SELECT prompt
+         FROM generations
+         WHERE entity_type = ?1
+         ORDER BY id DESC
+         LIMIT ?2",
+    )
+    .bind(entity_type)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to query recent generations")?;
+
+    rows.into_iter()
+        .map(|row| {
+            row.try_get("prompt")
+                .context("generations.prompt missing")
+        })
+        .collect()
+}
+
 fn row_to_location(row: sqlx::sqlite::SqliteRow) -> Result<LocationRow> {
     Ok(LocationRow {
         id: row.try_get("id").context("locations.id missing")?,

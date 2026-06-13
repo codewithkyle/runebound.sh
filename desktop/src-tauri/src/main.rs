@@ -116,6 +116,34 @@ fn normalize_sex(value: &str) -> Result<String, String> {
     }
 }
 
+fn recent_name_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn parse_recent_npc_seeds(payloads: Vec<String>) -> Vec<NpcSeed> {
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<NpcSeed>(&payload).ok())
+        .collect()
+}
+
+fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+
+    let items: Vec<String> = seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.race, seed.sex))
+        .collect();
+    items.join("; ")
+}
+
 #[tauri::command]
 async fn run_command(
     input: String,
@@ -274,6 +302,14 @@ async fn generate_npc_seed(
         .filter(|value| !value.is_empty())
         .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let recent_payloads = db::recent_generation_prompts(&database.pool, "npc_seed", 20)
+        .await
+        .map_err(|err| err.to_string())?;
+    let recent_seeds = parse_recent_npc_seeds(recent_payloads);
+    let recent_names = recent_name_set(&recent_seeds);
+    let recent_context = describe_recent_npc_seeds(&recent_seeds);
+
     let schema = serde_json::json!({
         "type": "object",
         "required": ["name", "race", "sex"],
@@ -291,23 +327,37 @@ async fn generate_npc_seed(
         .build()
         .map_err(|err| err.to_string())?;
 
-    for attempt in 0..3 {
+    let mut seen_attempt_names = std::collections::HashSet::new();
+
+    for attempt in 0..5 {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_micros() as i64)
+            .unwrap_or(0);
+        let run_seed = (base_seed + i64::from(attempt)) as i32;
         let repair_note = if attempt == 0 {
             ""
         } else {
-            " Previous response was invalid JSON/schema. Return only valid JSON that matches the schema."
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
         };
 
         let payload = serde_json::json!({
             "model": model,
             "stream": false,
             "format": schema,
+            "options": {
+                "temperature": 1.1,
+                "top_p": 0.92,
+                "repeat_penalty": 1.15,
+                "seed": run_seed
+            },
             "messages": [
                 {
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Return only JSON with fields name, race, sex.{}",
-                        repair_note
+                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, sex. Avoid these recent seeds: {}.{}",
+                        recent_context,
+                        repair_note,
                     )
                 },
                 {
@@ -349,6 +399,17 @@ async fn generate_npc_seed(
         if seed.name.is_empty() || seed.race.is_empty() {
             continue;
         }
+
+        let normalized_name = seed.name.to_ascii_lowercase();
+        if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) {
+            continue;
+        }
+        seen_attempt_names.insert(normalized_name);
+
+        let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+        db::insert_generation(&database.pool, "npc_seed", None, &serialized_seed)
+            .await
+            .map_err(|err| err.to_string())?;
 
         return Ok(seed);
     }
