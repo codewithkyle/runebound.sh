@@ -3,7 +3,6 @@
 ## Scope Reviewed
 
 - `core/src/command.rs`
-- `tui/src/main.rs`
 - `desktop/src/App.tsx`
 - `desktop/src-tauri/src/main.rs`
 - Supporting config/health/vault/db paths where they affect command execution and rendering behavior
@@ -27,7 +26,7 @@
 #### Efficiency concerns
 
 - `execute_status`, health checks, and init flows repeatedly initialize DB and HTTP clients. This is acceptable for CLI process-per-run but suboptimal for long-lived desktop sessions.
-- Setup/init logic exists in two places (`core` non-interactive init and `tui` setup wizard path), increasing duplicate validation and I/O behavior.
+- Setup/init flow should remain centralized in `core` and surfaced through Tauri commands to avoid duplicate desktop logic.
 
 #### Extensibility concerns
 
@@ -108,7 +107,7 @@
 - Add parser outputs such as:
   - `ParsedCommand { root, subcommand, options, position_context, is_complete }`
   - parse diagnostics for friendly errors
-- Ensure frontend tokenization mirrors backend behavior (quotes/escaping) by sharing parser logic from Rust or exposing parse endpoint through Tauri.
+- Ensure frontend tokenization mirrors backend behavior (quotes/escaping) by sharing parser logic from Rust through Tauri parse endpoints.
 - Use AST context to drive autocomplete and click resolution, removing duplicated rule branches.
 
 ### C) Structured Output Model (replace regex-first rendering)
@@ -172,6 +171,6 @@
 ## Success Criteria for the Refactor
 
 - Adding a command in Rust updates desktop autocomplete/help/clickability without editing `App.tsx` rule tables.
-- Quoted/escaped command handling behaves identically across TUI and desktop.
+- Quoted/escaped command handling behaves identically between frontend input helpers and backend execution parser.
 - Output clickability does not depend on brittle regex patterns.
 - `App.tsx` no longer owns business logic for command grammar.

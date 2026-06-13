@@ -2,7 +2,7 @@
 
 ## Goals
 
-- Build a Rust-first DnD assistant with a terminal UI.
+- Build a Rust-first DnD assistant with a desktop fake CLI UI.
 - Use a local LLM with Ollama as the default provider.
 - Store canonical content as markdown files in an Obsidian vault.
 - Use SQLite as an index and query layer, not canonical storage.
@@ -13,16 +13,15 @@
 - Database: SQLite
 - Local model provider (v1): Ollama
 - Content format: TOML frontmatter + markdown body
-- Interface priority: TUI first, Tauri later
-- Command parsing: `clap` for subcommands/flags, invoked from TUI input (not only process args)
+- Interface priority: Tauri desktop fake CLI
+- Command parsing: `clap` subcommands/flags in `core`, invoked from desktop input via Tauri bridge
 
 ## Architecture
 
 ### Crates
 
 - `core`: domain models, vault I/O, indexing, LLM client, generation pipeline
-- `tui`: command line interaction, autocomplete, list/detail views
-- `tauri` (later): desktop shell that reuses `core`
+- `tauri`: desktop shell and web UI that reuses `core`
 
 ### Core modules
 
@@ -31,7 +30,7 @@
 - `index`: SQLite schema, migrations, lookup/search APIs
 - `llm`: provider abstraction + Ollama adapter
 - `npc`: prompt templates, create/edit logic, reference handling
-- `commands`: `clap` command definitions and parser entrypoints reusable by TUI (and later real CLI if needed)
+- `commands`: `clap` command definitions and parser entrypoints reusable by desktop runtime and future automation tasks
 
 ## Data Model Strategy
 
