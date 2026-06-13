@@ -68,6 +68,14 @@ body {
   margin: 2px 0;
 }
 
+.rb-spinner-glyph {
+  display: inline-block;
+  width: 1ch;
+  font-size: 1.2em;
+  line-height: 1;
+  transform: translateY(1px);
+}
+
 input,
 textarea,
 button,

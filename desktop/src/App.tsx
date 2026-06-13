@@ -10,7 +10,7 @@ import {
   type SetupScope
 } from "./onboarding/client";
 
-type EntryKind = "input" | "output" | "error" | "info" | "banner";
+type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
 
 type HistoryEntry = {
   id: number;
@@ -50,7 +50,7 @@ type CommandMatch = {
   command: string;
 };
 
-const SPINNER_FRAMES = ["|", "/", "-", "\\"];
+const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
 const MAX_COMMAND_HISTORY = 50;
@@ -209,23 +209,23 @@ export default function App() {
 
   const probeOllamaWithSpinner = async (baseUrl: string) => {
     const normalized = normalizeOllamaInput(baseUrl);
-    const spinnerId = appendEntryWithId("info", `${SPINNER_FRAMES[0]} checking Ollama at ${normalized} ...`);
+    const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} checking Ollama at ${normalized} ...`);
     let frame = 0;
     const timer = window.setInterval(() => {
       frame = (frame + 1) % SPINNER_FRAMES.length;
-      updateEntry(spinnerId, "info", `${SPINNER_FRAMES[frame]} checking Ollama at ${normalized} ...`);
+      updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} checking Ollama at ${normalized} ...`);
     }, 100);
 
     try {
       const result = await probeOllama(normalized, 15);
       if (result.ok) {
-        updateEntry(spinnerId, "info", `OK connected to Ollama at ${normalized}`);
+        updateEntry(spinnerId, "spinner", `OK connected to Ollama at ${normalized}`);
       } else {
-        updateEntry(spinnerId, "info", `FAILED to connect to Ollama at ${normalized}`);
+        updateEntry(spinnerId, "spinner", `FAILED to connect to Ollama at ${normalized}`);
       }
       return { normalized, result };
     } catch (error) {
-      updateEntry(spinnerId, "info", `FAILED to connect to Ollama at ${normalized}`);
+      updateEntry(spinnerId, "spinner", `FAILED to connect to Ollama at ${normalized}`);
       throw error;
     } finally {
       window.clearInterval(timer);
@@ -1004,7 +1004,7 @@ export default function App() {
                           : null
                       }
                       fallback={
-                        <div class={lineClass(entry.kind, lineIndex(), line)}>{line.length === 0 ? "\u00A0" : displayLine(line)}</div>
+                        <div class={lineClass(entry.kind, lineIndex(), line)}>{line.length === 0 ? "\u00A0" : renderLine(entry.kind, line)}</div>
                       }
                     >
                       {(match) => (
@@ -1159,7 +1159,26 @@ function entryClass(kind: EntryKind): string {
   if (kind === "banner") {
     return `${base} text-text`;
   }
+  if (kind === "spinner") {
+    return `${base} text-text`;
+  }
   return `${base} text-text`;
+}
+
+function renderLine(kind: EntryKind, line: string) {
+  if (kind === "spinner") {
+    const first = line.at(0) ?? "";
+    if (SPINNER_FRAMES.includes(first)) {
+      return (
+        <>
+          <span class="rb-spinner-glyph text-[#d3869b]">{first}</span>
+          <span>{line.slice(1)}</span>
+        </>
+      );
+    }
+  }
+
+  return displayLine(line);
 }
 
 function findClickableCommandInLine(line: string, usagePrefix: string | null, meta: InlineCommandMeta): CommandMatch | null {

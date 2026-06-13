@@ -122,7 +122,12 @@ pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<S
     let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
         Err(err) => {
-            if err.kind() == ErrorKind::DisplayHelp || err.kind() == ErrorKind::DisplayVersion {
+            if matches!(
+                err.kind(),
+                ErrorKind::DisplayHelp
+                    | ErrorKind::DisplayVersion
+                    | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
+            ) {
                 return Ok(strip_binary_name_from_help(&err.to_string()));
             }
             return Err(anyhow!(strip_binary_name_from_help(&err.to_string())));
@@ -223,9 +228,17 @@ async fn execute_status(workspace_root: &Path) -> Result<String> {
     let db = db::init_database().await?;
     db::health_check(&db.pool).await?;
 
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .unwrap_or_else(|| "(not set)".to_string());
+
     Ok(format!(
-        "ready\nvault: {}\ndatabase: {}",
+        "## System Status\nrunebound.sh is connected and ready to work.\n\nvault: {}\nollama endpoint: {}\nollama model: {}\ndatabase: {}",
         vault.root().display(),
+        config.ollama.base_url,
+        model,
         db.path.display()
     ))
 }
