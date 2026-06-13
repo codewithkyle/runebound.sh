@@ -27,7 +27,7 @@ type CommandMatch = {
   command: string;
 };
 
-const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help", "clear", "history"];
+const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help", "clear", "history", "exit"];
 const CONFIG_SUBCOMMANDS = ["init", "show", "test", "doctor", "help"];
 const NPC_SUBCOMMANDS = ["create", "list", "show", "edit", "refs", "delete", "help"];
 const CONFIG_INIT_FLAGS = ["--vault-path", "--ollama-base-url", "--model", "--global", "--workspace", "--skip-test"];
@@ -208,10 +208,15 @@ export default function App() {
     return { ok: true, command: history[index - 1] };
   };
 
-  const runBuiltInCommand = (raw: string): { handled: boolean; ok: boolean; recordHistory: boolean } => {
+  const runBuiltInCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
     const tokens = raw.trim().split(/\s+/);
     const head = tokens[0]?.toLowerCase();
     if (!head) {
+      return { handled: true, ok: true, recordHistory: false };
+    }
+
+    if (head === "exit") {
+      await invoke("exit_app");
       return { handled: true, ok: true, recordHistory: false };
     }
 
@@ -261,7 +266,7 @@ export default function App() {
     const raw = expansion && expansion.ok ? expansion.command : rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const builtIn = runBuiltInCommand(raw);
+    const builtIn = await runBuiltInCommand(raw);
     if (builtIn.handled) {
       if (builtIn.ok && builtIn.recordHistory) {
         pushCommandHistory(raw);
@@ -601,7 +606,7 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
     }
   }
 
-  const inlineTokenRegex = /\b(status|help|clear|history|config|npc)\b/gi;
+  const inlineTokenRegex = /\b(status|help|clear|history|config|npc|exit)\b/gi;
   let inlineMatch: RegExpExecArray | null;
   while ((inlineMatch = inlineTokenRegex.exec(line)) !== null) {
     const token = inlineMatch[1];
@@ -726,7 +731,7 @@ function isValidCommandLike(input: string): boolean {
   const lowered = tokens.map((token) => token.toLowerCase());
 
   if (lowered.length === 1) {
-    return ["status", "help", "clear", "history"].includes(lowered[0]);
+    return ["status", "help", "clear", "history", "exit"].includes(lowered[0]);
   }
 
   if (lowered[0] === "clear") {

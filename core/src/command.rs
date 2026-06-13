@@ -27,6 +27,7 @@ pub enum Command {
         command: ConfigCommand,
     },
     Status,
+    Exit,
 }
 
 #[derive(Debug, Subcommand)]
@@ -98,6 +99,7 @@ pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<S
 pub async fn execute_parsed(workspace_root: &Path, cli: Cli) -> Result<String> {
     match cli.command {
         Some(Command::Config { command }) => execute_config_command(workspace_root, command).await,
+        Some(Command::Exit) => Ok("exiting".to_string()),
         Some(Command::Status) | None => execute_status(workspace_root).await,
     }
 }
