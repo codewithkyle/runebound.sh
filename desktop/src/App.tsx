@@ -2,6 +2,13 @@ import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
 import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
+import {
+  getSetupState,
+  probeOllama,
+  saveOnboardingConfig,
+  validateVaultPath,
+  type SetupScope
+} from "./onboarding/client";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner";
 
@@ -43,6 +50,8 @@ type CommandMatch = {
   command: string;
 };
 
+const SPINNER_FRAMES = ["|", "/", "-", "\\"];
+
 const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
 const MAX_COMMAND_HISTORY = 50;
 
@@ -71,6 +80,13 @@ export default function App() {
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
   const [parsedInput, setParsedInput] = createSignal<ParseResult | null>(null);
+  const [onboardingActive, setOnboardingActive] = createSignal(false);
+  const [onboardingStep, setOnboardingStep] = createSignal(0);
+  const [vaultPath, setVaultPath] = createSignal("");
+  const [ollamaBaseUrl, setOllamaBaseUrl] = createSignal("http://127.0.0.1:11434");
+  const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
+  const [selectedModel, setSelectedModel] = createSignal("");
+  const [setupScope, setSetupScope] = createSignal<SetupScope>("workspace");
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
@@ -139,6 +155,81 @@ export default function App() {
         });
       }
     });
+  };
+
+  const appendEntryWithId = (kind: EntryKind, text: string): number => {
+    let nextId = 1;
+    setEntries((prev) => {
+      nextId = prev.length > 0 ? prev[prev.length - 1].id + 1 : 1;
+      return [
+        ...prev,
+        {
+          id: nextId,
+          kind,
+          text
+        }
+      ];
+    });
+    queueMicrotask(() => {
+      if (outputRef) {
+        outputRef.scrollTo({
+          top: outputRef.scrollHeight,
+          behavior: "smooth"
+        });
+      }
+    });
+    return nextId;
+  };
+
+  const updateEntry = (id: number, kind: EntryKind, text: string) => {
+    setEntries((prev) =>
+      prev.map((entry) => {
+        if (entry.id !== id) {
+          return entry;
+        }
+        return {
+          ...entry,
+          kind,
+          text
+        };
+      })
+    );
+  };
+
+  const normalizeOllamaInput = (value: string): string => {
+    const trimmed = value.trim();
+    if (!trimmed) {
+      return "";
+    }
+    if (trimmed.includes("://")) {
+      return trimmed;
+    }
+    return `http://${trimmed}`;
+  };
+
+  const probeOllamaWithSpinner = async (baseUrl: string) => {
+    const normalized = normalizeOllamaInput(baseUrl);
+    const spinnerId = appendEntryWithId("info", `${SPINNER_FRAMES[0]} checking Ollama at ${normalized} ...`);
+    let frame = 0;
+    const timer = window.setInterval(() => {
+      frame = (frame + 1) % SPINNER_FRAMES.length;
+      updateEntry(spinnerId, "info", `${SPINNER_FRAMES[frame]} checking Ollama at ${normalized} ...`);
+    }, 100);
+
+    try {
+      const result = await probeOllama(normalized, 15);
+      if (result.ok) {
+        updateEntry(spinnerId, "info", `OK connected to Ollama at ${normalized}`);
+      } else {
+        updateEntry(spinnerId, "info", `FAILED to connect to Ollama at ${normalized}`);
+      }
+      return { normalized, result };
+    } catch (error) {
+      updateEntry(spinnerId, "info", `FAILED to connect to Ollama at ${normalized}`);
+      throw error;
+    } finally {
+      window.clearInterval(timer);
+    }
   };
 
   const pushCommandHistory = (raw: string) => {
@@ -314,6 +405,14 @@ export default function App() {
       return;
     }
 
+    const onboarding = await runOnboardingCommand(raw);
+    if (onboarding.handled) {
+      if (onboarding.recordHistory) {
+        pushCommandHistory(raw);
+      }
+      return;
+    }
+
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
@@ -394,7 +493,7 @@ export default function App() {
         appendEntry("output", errorText);
         appendEntry(
           "info",
-          "bootstrap tip: run `config init --vault-path <path> --ollama-base-url <url> --model <name>` then run `status` again."
+          "bootstrap tip: run config init --vault-path <path> --ollama-base-url <url> --model <name> then run status again."
         );
       } else {
         appendEntry("error", errorText);
@@ -404,6 +503,398 @@ export default function App() {
     } finally {
       setRunning(false);
     }
+  };
+
+  const appendOnboardingIntro = () => {
+    appendEntry(
+      "output",
+      [
+        "## First-Time Setup",
+        "runebound.sh integrates with your Obsidian vault and a local Ollama model.",
+        "Type start setup to begin guided onboarding.",
+        "Type setup help to see available setup commands."
+      ].join("\n")
+    );
+  };
+
+  const appendOnboardingHelp = () => {
+    appendEntry(
+      "output",
+      [
+        "## Setup commands",
+        "start setup",
+        "set vault <path>",
+        "set ollama <url>",
+        "test ollama",
+        "set model <name>",
+        "use model <index>",
+        "scope workspace|global|auto",
+        "show setup",
+        "save setup",
+        "cancel setup"
+      ].join("\n")
+    );
+  };
+
+  const appendOnboardingSummary = () => {
+    appendEntry(
+      "output",
+      [
+        "## Current setup",
+        `vault: ${vaultPath() || "(not set)"}`,
+        `ollama: ${ollamaBaseUrl() || "(not set)"}`,
+        `model: ${selectedModel() || "(not set)"}`,
+        `scope: ${setupScope()}`
+      ].join("\n")
+    );
+  };
+
+  const startOnboardingFlow = () => {
+    setOnboardingStep(1);
+    appendEntry(
+      "output",
+      [
+        "## Step 1: Vault Path",
+        "runebound.sh needs your Obsidian vault directory so it can read and write your campaign content.",
+        "Enter your vault directory path and press Enter.",
+        "Example: /path/to/your/Obsidian/Vault"
+      ].join("\n")
+    );
+  };
+
+  const runOnboardingCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
+    const trimmed = raw.trim();
+    const lowered = trimmed.toLowerCase();
+
+    if (lowered === "start setup") {
+      if (!onboardingActive()) {
+        setOnboardingActive(true);
+      }
+      if (onboardingStep() === 0) {
+        startOnboardingFlow();
+      } else {
+        appendEntry("info", "setup already started. use show setup or continue with next step.");
+      }
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (lowered === "setup help") {
+      if (!onboardingActive()) {
+        setOnboardingActive(true);
+        setOnboardingStep(0);
+        appendOnboardingIntro();
+      }
+      appendOnboardingHelp();
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (!onboardingActive()) {
+      return { handled: false, ok: false, recordHistory: false };
+    }
+
+    if (lowered === "show setup") {
+      appendOnboardingSummary();
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (lowered === "cancel setup") {
+      setOnboardingActive(false);
+      setOnboardingStep(0);
+      appendEntry("info", "setup cancelled. run start setup anytime to continue.");
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const vaultMatch = trimmed.match(/^set\s+vault\s+(.+)$/i);
+    if (vaultMatch) {
+      const value = vaultMatch[1].trim();
+      try {
+        await validateVaultPath(value);
+        setVaultPath(value);
+        if (onboardingStep() < 2) {
+          setOnboardingStep(2);
+        }
+        appendEntry(
+          "output",
+          [
+            "## Step 2: Ollama server",
+            `vault set to: ${value}`,
+            "Enter your Ollama URL and press Enter.",
+            "Example: http://127.0.0.1:11434"
+          ].join("\n")
+        );
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("info", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    const ollamaMatch = trimmed.match(/^set\s+ollama\s+(.+)$/i);
+    if (ollamaMatch) {
+      const value = normalizeOllamaInput(ollamaMatch[1]);
+      setOllamaBaseUrl(value);
+      if (onboardingStep() < 2) {
+        setOnboardingStep(2);
+      }
+      appendEntry("output", `ollama URL set to: ${value}\nrun test ollama to verify connection.`);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (lowered === "test ollama") {
+      try {
+        const { normalized, result } = await probeOllamaWithSpinner(ollamaBaseUrl().trim());
+        setOllamaBaseUrl(normalized);
+        if (!result.ok) {
+          appendEntry("info", result.detail);
+          return { handled: true, ok: false, recordHistory: true };
+        }
+
+        setOllamaModels(result.models);
+        if (!selectedModel()) {
+          if (result.models.length > 0) {
+            setSelectedModel(result.models[0]);
+          }
+        }
+        setOnboardingStep(3);
+
+        const modelLines = result.models.length
+          ? result.models.map((model, index) => `${index + 1}: ${model}`)
+          : ["(no models returned)"];
+        appendEntry(
+          "output",
+          [
+            "## Step 3: Model",
+            result.detail,
+            "Enter a model name and press Enter.",
+            "Or enter a model number from the list below.",
+            ...modelLines
+          ].join("\n")
+        );
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("info", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    const useModelMatch = trimmed.match(/^use\s+model\s+(\d+)$/i);
+    if (useModelMatch) {
+      const index = Number.parseInt(useModelMatch[1], 10);
+      const models = ollamaModels();
+      if (Number.isNaN(index) || index < 1 || index > models.length) {
+        appendEntry("info", `model index out of range: ${useModelMatch[1]}`);
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      setSelectedModel(models[index - 1]);
+      if (onboardingStep() < 4) {
+        setOnboardingStep(4);
+      }
+      appendEntry(
+        "output",
+        [
+          `model selected: ${models[index - 1]}`,
+          "## Step 4: Save config",
+          "Enter scope: workspace, global, or auto."
+        ].join("\n")
+      );
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const setModelMatch = trimmed.match(/^set\s+model\s+(.+)$/i);
+    if (setModelMatch) {
+      const value = setModelMatch[1].trim();
+      if (!value) {
+        appendEntry("info", "model name cannot be empty");
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      setSelectedModel(value);
+      if (onboardingStep() < 4) {
+        setOnboardingStep(4);
+      }
+      appendEntry(
+        "output",
+        [
+          `model set to: ${value}`,
+          "## Step 4: Save config",
+          "Enter scope: workspace, global, or auto."
+        ].join("\n")
+      );
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const scopeMatch = trimmed.match(/^scope\s+(workspace|global|auto)$/i);
+    if (scopeMatch) {
+      const value = scopeMatch[1].toLowerCase() as SetupScope;
+      setSetupScope(value);
+      appendEntry("output", `scope set to: ${value}\nType save setup when ready.`);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (onboardingStep() === 1) {
+      if (!trimmed) {
+        appendEntry("info", "Enter a vault directory path to continue setup.");
+        return { handled: true, ok: false, recordHistory: false };
+      }
+
+      try {
+        await validateVaultPath(trimmed);
+        setVaultPath(trimmed);
+        if (onboardingStep() < 2) {
+          setOnboardingStep(2);
+        }
+        appendEntry(
+          "output",
+          [
+            "## Step 2: Ollama server",
+            `vault set to: ${trimmed}`,
+            "Enter your Ollama URL and press Enter.",
+            "Example: http://127.0.0.1:11434"
+          ].join("\n")
+        );
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("info", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if (onboardingStep() === 2) {
+      if (!trimmed) {
+        appendEntry("info", "Enter your Ollama URL to continue setup.");
+        return { handled: true, ok: false, recordHistory: false };
+      }
+
+      const normalized = normalizeOllamaInput(trimmed);
+      setOllamaBaseUrl(normalized);
+      try {
+        const { result } = await probeOllamaWithSpinner(normalized);
+        if (!result.ok) {
+          appendEntry("info", result.detail);
+          return { handled: true, ok: false, recordHistory: true };
+        }
+
+        setOllamaModels(result.models);
+        if (!selectedModel() && result.models.length > 0) {
+          setSelectedModel(result.models[0]);
+        }
+        setOnboardingStep(3);
+
+        const modelLines = result.models.length
+          ? result.models.map((model, index) => `${index + 1}: ${model}`)
+          : ["(no models returned)"];
+
+        appendEntry(
+          "output",
+          [
+            "## Step 3: Model",
+            result.detail,
+            "Enter a model name and press Enter.",
+            "Or enter a model number from the list below.",
+            ...modelLines
+          ].join("\n")
+        );
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("info", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if (onboardingStep() === 3) {
+      if (!trimmed) {
+        appendEntry("info", "Enter a model name or number to continue setup.");
+        return { handled: true, ok: false, recordHistory: false };
+      }
+
+      const index = Number.parseInt(trimmed, 10);
+      if (!Number.isNaN(index) && index >= 1 && index <= ollamaModels().length) {
+        const picked = ollamaModels()[index - 1];
+        setSelectedModel(picked);
+        setOnboardingStep(4);
+        appendEntry(
+          "output",
+          [
+            `model selected: ${picked}`,
+            "## Step 4: Save config",
+            "Enter scope: workspace, global, or auto."
+          ].join("\n")
+        );
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      setSelectedModel(trimmed);
+      setOnboardingStep(4);
+      appendEntry(
+        "output",
+        [
+          `model set to: ${trimmed}`,
+          "## Step 4: Save config",
+          "Enter scope: workspace, global, or auto."
+        ].join("\n")
+      );
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (onboardingStep() === 4) {
+      const rawScope = trimmed.toLowerCase();
+      if (rawScope === "workspace" || rawScope === "global" || rawScope === "auto") {
+        setSetupScope(rawScope as SetupScope);
+        appendEntry("output", `scope set to: ${rawScope}\nType save setup to finish.`);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+      if (rawScope === "save") {
+        const saveResult = await runOnboardingCommand("save setup");
+        return { handled: true, ok: saveResult.ok, recordHistory: true };
+      }
+    }
+
+    if (lowered === "save setup") {
+      if (!vaultPath().trim()) {
+        appendEntry("info", "vault path is missing. run set vault <path>." );
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      if (!ollamaBaseUrl().trim()) {
+        appendEntry("info", "ollama URL is missing. run set ollama <url>." );
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      if (!selectedModel().trim()) {
+        appendEntry("info", "model is missing. run set model <name> or use model <index>." );
+        return { handled: true, ok: false, recordHistory: true };
+      }
+
+      try {
+        const result = await saveOnboardingConfig({
+          vault_path: vaultPath().trim(),
+          ollama_base_url: ollamaBaseUrl().trim(),
+          model: selectedModel().trim(),
+          scope: setupScope()
+        });
+
+        appendEntry(
+          "output",
+          [
+            "## Onboarding complete",
+            `config saved: ${result.config_path}`,
+            `vault ready: ${result.vault_path}`,
+            `database ready: ${result.db_path}`
+          ].join("\n")
+        );
+        if (result.warnings.length > 0) {
+          appendEntry("info", `setup warnings:\n- ${result.warnings.join("\n- ")}`);
+        }
+
+        setOnboardingActive(false);
+        setOnboardingStep(0);
+        void runStartupStatusCheck();
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("info", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    appendEntry("info", "setup mode is active. use setup help to continue guided onboarding.");
+    return { handled: true, ok: false, recordHistory: true };
   };
 
   onMount(() => {
@@ -433,7 +924,24 @@ export default function App() {
     }
 
     inputRef?.focus();
-    void runStartupStatusCheck();
+    void getSetupState()
+      .then((setup) => {
+        setOllamaBaseUrl(setup.default_ollama_base_url || "http://127.0.0.1:11434");
+        if (setup.needs_setup) {
+          setOnboardingActive(true);
+          setOnboardingStep(0);
+          appendOnboardingIntro();
+          if (setup.issues.length > 0) {
+            appendEntry("info", `missing: ${setup.issues.join("; ")}`);
+          }
+          return;
+        }
+
+        void runStartupStatusCheck();
+      })
+      .catch(() => {
+        void runStartupStatusCheck();
+      });
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
@@ -558,6 +1066,7 @@ export default function App() {
                 ref={inputRef}
                 class="w-full bg-transparent p-0 text-text focus:outline-none"
                 type="text"
+                disabled={running()}
                 value={command()}
                 onInput={(event) => {
                   setCommand(event.currentTarget.value);
@@ -698,6 +1207,26 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null, me
         command: commandTarget
       };
     }
+  }
+
+  const startSetupMatch = line.match(/\bstart\s+setup\b/i);
+  if (startSetupMatch) {
+    const start = startSetupMatch.index ?? line.toLowerCase().indexOf("start setup");
+    return {
+      start,
+      end: start + startSetupMatch[0].length,
+      command: "start setup"
+    };
+  }
+
+  const setupHelpMatch = line.match(/\bsetup\s+help\b/i);
+  if (setupHelpMatch) {
+    const start = setupHelpMatch.index ?? line.toLowerCase().indexOf("setup help");
+    return {
+      start,
+      end: start + setupHelpMatch[0].length,
+      command: "setup help"
+    };
   }
 
   if (meta.commands.size > 0) {
@@ -841,6 +1370,10 @@ function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
     if (lowered.length === 2 && /^\d+$/.test(lowered[1])) {
       return true;
     }
+  }
+
+  if (root === "setup") {
+    return lowered.length === 2 && lowered[1] === "help";
   }
 
   if (lowered.length >= 2 && command.subcommands.has(lowered[1])) {

@@ -203,8 +203,8 @@ async fn execute_status(workspace_root: &Path) -> Result<String> {
              - global: {global_config_path}\n\
              - workspace: {workspace_config_path}\n\
              \n## Optional next steps\n\
-             - use `config init --workspace ...` to keep settings local to this project\n\
-             - run `config show` to verify saved values\n\
+             - use config init --workspace ... to keep settings local to this project\n\
+             - run config show to verify saved values\n\
              \n## Missing required values\n- {}",
             issues.join("\n- ")
         );
@@ -261,7 +261,7 @@ async fn execute_noninteractive_init(workspace_root: &Path, args: InitArgs) -> R
     let issues = required_issues(&config);
     if !issues.is_empty() {
         bail!(
-            "missing required config. provide flags like `--vault-path`, `--ollama-base-url`, `--model`\n- {}",
+            "missing required config. provide flags like --vault-path, --ollama-base-url, --model\n- {}",
             issues.join("\n- ")
         );
     }
