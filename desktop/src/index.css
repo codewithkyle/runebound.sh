@@ -103,20 +103,19 @@ body {
   gap: 0.4rem;
 }
 
-.rb-spinner-running {
-  color: #ffffff;
-  background: transparent;
-}
-
 .rb-spinner-dot {
   color: var(--gb-purple-bright);
 }
 
-.rb-spinner-success {
+.rb-spinner-text-running {
+  color: #ffffff;
+}
+
+.rb-spinner-text-success {
   color: var(--color-success);
 }
 
-.rb-spinner-error {
+.rb-spinner-text-error {
   color: var(--color-error);
 }
 

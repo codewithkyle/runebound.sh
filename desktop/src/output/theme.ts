@@ -15,12 +15,22 @@ export function statusClass(tone: StatusTone): string {
 
 export function spinnerClass(state: SpinnerState): string {
   if (state === "error") {
-    return "rb-spinner rb-spinner-error";
+    return "rb-spinner rb-spinner-state-error";
   }
   if (state === "success") {
-    return "rb-spinner rb-spinner-success";
+    return "rb-spinner rb-spinner-state-success";
   }
-  return "rb-spinner rb-spinner-running";
+  return "rb-spinner rb-spinner-state-running";
+}
+
+export function spinnerTextClass(state: SpinnerState): string {
+  if (state === "error") {
+    return "rb-spinner-text rb-spinner-text-error";
+  }
+  if (state === "success") {
+    return "rb-spinner-text rb-spinner-text-success";
+  }
+  return "rb-spinner-text rb-spinner-text-running";
 }
 
 export const commandRefClass = "rb-command-ref";

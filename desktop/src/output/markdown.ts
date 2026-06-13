@@ -21,11 +21,11 @@ export function parseOutputEntry(
 
   if (kind === "spinner") {
     const normalized = text.trim();
-    const cleaned = normalized.replace(/^[\u2800-\u28ff]\s*/, "");
-    const lowered = cleaned.toLowerCase();
+    const stateProbe = normalized.replace(/^[\u2800-\u28ff]\s*/, "");
+    const lowered = stateProbe.toLowerCase();
     const state = lowered.startsWith("ok") ? "success" : lowered.startsWith("failed") ? "error" : "running";
     return {
-      blocks: [{ kind: "spinner", state, text: cleaned }]
+      blocks: [{ kind: "spinner", state, text: normalized }]
     };
   }
 

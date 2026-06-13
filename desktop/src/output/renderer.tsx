@@ -1,6 +1,6 @@
 import { For, type JSX } from "solid-js";
-import { commandRefClass, spinnerClass, statusClass } from "./theme";
-import type { InlineNode, OutputBlock, OutputDoc } from "./types";
+import { commandRefClass, spinnerClass, spinnerTextClass, statusClass } from "./theme";
+import type { InlineNode, OutputBlock, OutputDoc, SpinnerState } from "./types";
 
 type OutputRendererProps = {
   doc: OutputDoc;
@@ -42,10 +42,33 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
 
   return (
     <div class={spinnerClass(block.state)}>
-      <span class="rb-spinner-dot">●</span>
-      <span>{block.text}</span>
+      <span class="rb-spinner-dot">{spinnerGlyph(block.state, block.text)}</span>
+      <span class={spinnerTextClass(block.state)}>{spinnerMessage(block.state, block.text)}</span>
     </div>
   );
+}
+
+function spinnerGlyph(state: SpinnerState, text: string): string {
+  if (state !== "running") {
+    return "●";
+  }
+
+  const trimmed = text.trimStart();
+  const first = trimmed.charAt(0);
+  if (first && /[\u2800-\u28ff]/.test(first)) {
+    return first;
+  }
+
+  return "⣾";
+}
+
+function spinnerMessage(state: SpinnerState, text: string): string {
+  if (state !== "running") {
+    return text;
+  }
+
+  const trimmed = text.trimStart();
+  return trimmed.replace(/^[\u2800-\u28ff]\s*/, "");
 }
 
 function renderInlines(inlines: InlineNode[], onRunCommand: (command: string) => void): JSX.Element {

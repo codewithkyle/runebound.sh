@@ -5,6 +5,7 @@ import { loadManifest, parseInput, type CommandManifest, type ParseResult } from
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
+import { ensureLocationExists, generateNpcSeed, saveNpcDraft, type NpcSeed } from "./npc/client";
 import {
   getSetupState,
   probeOllama,
@@ -46,6 +47,14 @@ type CommandSpecMeta = {
   subcommands: Set<string>;
   requiresSubcommand: boolean;
   canonicalHelpCommand: string | null;
+};
+
+type NpcDraft = {
+  id: string;
+  name: string;
+  race: string;
+  sex: "male" | "female";
+  location: string;
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -101,6 +110,7 @@ export default function App() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = createSignal("http://127.0.0.1:11434");
   const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
   const [selectedModel, setSelectedModel] = createSignal("");
+  const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
@@ -109,7 +119,15 @@ export default function App() {
       return [] as SuggestionItem[];
     }
 
-    return buildAutocompleteSuggestions(command(), manifest(), parsedInput());
+    const suggestions = buildAutocompleteSuggestions(command(), manifest(), parsedInput());
+    if (!npcDraft()) {
+      return suggestions.filter((item) => {
+        const completion = item.completion.trim().toLowerCase();
+        const label = item.label.trim().toLowerCase();
+        return completion !== "npc" && !completion.startsWith("npc ") && label !== "npc" && !label.startsWith("npc ");
+      });
+    }
+    return suggestions;
   });
 
   createEffect(() => {
@@ -431,9 +449,39 @@ export default function App() {
       return;
     }
 
+    if (raw.trim().toLowerCase() === "save") {
+      if (onboardingActive()) {
+        const onboardingSave = await runOnboardingCommand("save");
+        if (onboardingSave.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
+      if (npcDraft()) {
+        const npcSave = await runNpcEditorCommand("save");
+        if (npcSave.recordHistory) {
+          pushCommandHistory(raw);
+        }
+        return;
+      }
+
+      appendEntry("info", "nothing to save right now.");
+      pushCommandHistory(raw);
+      return;
+    }
+
     const onboarding = await runOnboardingCommand(raw);
     if (onboarding.handled) {
       if (onboarding.recordHistory) {
+        pushCommandHistory(raw);
+      }
+      return;
+    }
+
+    const npcEditor = await runNpcEditorCommand(raw);
+    if (npcEditor.handled) {
+      if (npcEditor.recordHistory) {
         pushCommandHistory(raw);
       }
       return;
@@ -531,6 +579,208 @@ export default function App() {
     }
   };
 
+  const makeNpcDraftFromSeed = (seed: NpcSeed): NpcDraft => ({
+    id: `npc_${Date.now()}`,
+    name: seed.name.trim(),
+    race: seed.race.trim(),
+    sex: seed.sex,
+    location: "Unknown"
+  });
+
+  const appendNpcHelp = () => {
+    appendEntry(
+      "output",
+      [
+        "## NPC editor commands",
+        "create npc",
+        "npc show",
+        "npc rename <name>",
+        "npc set race <race>",
+        "npc set sex <male|female>",
+        "npc travel to <location>",
+        "npc save",
+        "npc cancel"
+      ].join("\n")
+    );
+  };
+
+  const appendNpcSummary = (draft: NpcDraft) => {
+    appendEntry(
+      "output",
+      [
+        "## Active NPC draft",
+        `name: ${draft.name}`,
+        `race: ${draft.race}`,
+        `sex: ${draft.sex}`,
+        `location: ${draft.location}`,
+        "",
+        "Use save to persist this NPC."
+      ].join("\n")
+    );
+  };
+
+  const runNpcEditorCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
+    const trimmed = raw.trim();
+    const lowered = trimmed.toLowerCase();
+
+    if (lowered === "create help" || lowered === "create --help") {
+      appendEntry("output", ["## Create commands", "create npc"].join("\n"));
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (lowered === "create npc") {
+      const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} generating npc ...`);
+      let frame = 0;
+      const timer = window.setInterval(() => {
+        frame = (frame + 1) % SPINNER_FRAMES.length;
+        updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} generating npc ...`);
+      }, 100);
+
+      try {
+        const seed = await generateNpcSeed();
+        const draft = makeNpcDraftFromSeed(seed);
+        setNpcDraft(draft);
+        updateEntry(spinnerId, "spinner", "OK generated npc draft");
+        appendNpcSummary(draft);
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        updateEntry(spinnerId, "spinner", "FAILED npc generation");
+        appendEntry("error", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      } finally {
+        window.clearInterval(timer);
+      }
+    }
+
+    if (lowered === "npc help" || lowered === "npc --help") {
+      if (!npcDraft()) {
+        return { handled: false, ok: false, recordHistory: false };
+      }
+      appendNpcHelp();
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (lowered === "npc show") {
+      const draft = npcDraft();
+      if (!draft) {
+        return { handled: false, ok: false, recordHistory: false };
+      }
+      appendNpcSummary(draft);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    if (lowered === "npc cancel") {
+      if (!npcDraft()) {
+        return { handled: false, ok: false, recordHistory: false };
+      }
+      setNpcDraft(null);
+      appendEntry("info", "npc draft discarded.");
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const draft = npcDraft();
+    const isNpcCommand = lowered.startsWith("npc ");
+    if (!draft && isNpcCommand) {
+      return { handled: false, ok: false, recordHistory: false };
+    }
+
+    const renameMatch = trimmed.match(/^npc\s+rename\s+(.+)$/i);
+    if (renameMatch && draft) {
+      const name = renameMatch[1].trim();
+      if (!name) {
+        appendEntry("info", "npc name cannot be empty.");
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      const next = { ...draft, name };
+      setNpcDraft(next);
+      appendNpcSummary(next);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const setRaceMatch = trimmed.match(/^npc\s+set\s+race\s+(.+)$/i);
+    if (setRaceMatch && draft) {
+      const race = setRaceMatch[1].trim();
+      if (!race) {
+        appendEntry("info", "npc race cannot be empty.");
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      const next = { ...draft, race };
+      setNpcDraft(next);
+      appendNpcSummary(next);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const setSexMatch = trimmed.match(/^npc\s+set\s+sex\s+(.+)$/i);
+    if (setSexMatch && draft) {
+      const sexRaw = setSexMatch[1].trim().toLowerCase();
+      if (sexRaw !== "male" && sexRaw !== "female") {
+        appendEntry("info", "sex must be one of: male, female");
+        return { handled: true, ok: false, recordHistory: true };
+      }
+      const next = { ...draft, sex: sexRaw as "male" | "female" };
+      setNpcDraft(next);
+      appendNpcSummary(next);
+      return { handled: true, ok: true, recordHistory: true };
+    }
+
+    const travelMatch = trimmed.match(/^npc\s+travel\s+to\s+(.+)$/i);
+    if (travelMatch && draft) {
+      const locationName = travelMatch[1].trim();
+      if (!locationName) {
+        appendEntry("info", "location cannot be empty.");
+        return { handled: true, ok: false, recordHistory: true };
+      }
+
+      try {
+        const result = await ensureLocationExists(locationName);
+        const next = { ...draft, location: result.name || locationName };
+        setNpcDraft(next);
+
+        if (result.created_file || result.created_record) {
+          appendEntry(
+            "info",
+            `location bootstrap completed: file=${result.created_file ? "created" : "existing"}, record=${result.created_record ? "created" : "existing"}`
+          );
+        }
+
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("error", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if ((lowered === "npc save" || lowered === "save") && draft) {
+      try {
+        const result = await saveNpcDraft(draft);
+        appendEntry(
+          "output",
+          [
+            "## NPC saved",
+            `id: ${result.id}`,
+            `slug: ${result.slug}`,
+            `vault: ${result.vault_path}`,
+            `updated: ${result.updated_at}`
+          ].join("\n")
+        );
+        setNpcDraft(null);
+        appendEntry("info", "npc editor closed. run create npc to start another draft.");
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        appendEntry("error", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if (isNpcCommand) {
+      appendEntry("info", "unknown npc command.");
+      return { handled: true, ok: false, recordHistory: true };
+    }
+
+    return { handled: false, ok: false, recordHistory: false };
+  };
+
   const appendOnboardingIntro = () => {
     appendEntry(
       "output",
@@ -555,7 +805,7 @@ export default function App() {
         "set model <name>",
         "use model <index>",
         "show setup",
-        "save setup",
+        "save",
         "cancel setup"
       ].join("\n")
     );
@@ -718,7 +968,7 @@ export default function App() {
         [
           `model selected: ${models[index - 1]}`,
           "## Step 4: Save config",
-          "Type save setup to finish."
+          "Type save to finish."
         ].join("\n")
       );
       return { handled: true, ok: true, recordHistory: true };
@@ -740,7 +990,7 @@ export default function App() {
         [
           `model set to: ${value}`,
           "## Step 4: Save config",
-          "Type save setup to finish."
+          "Type save to finish."
         ].join("\n")
       );
       return { handled: true, ok: true, recordHistory: true };
@@ -832,7 +1082,7 @@ export default function App() {
           [
             `model selected: ${picked}`,
             "## Step 4: Save config",
-            "Type save setup to finish."
+            "Type save to finish."
           ].join("\n")
         );
         return { handled: true, ok: true, recordHistory: true };
@@ -845,7 +1095,7 @@ export default function App() {
         [
           `model set to: ${trimmed}`,
           "## Step 4: Save config",
-          "Type save setup to finish."
+          "Type save to finish."
         ].join("\n")
       );
       return { handled: true, ok: true, recordHistory: true };
@@ -854,12 +1104,12 @@ export default function App() {
     if (onboardingStep() === 4) {
       const loweredStepInput = trimmed.toLowerCase();
       if (loweredStepInput === "save") {
-        const saveResult = await runOnboardingCommand("save setup");
+        const saveResult = await runOnboardingCommand("save");
         return { handled: true, ok: saveResult.ok, recordHistory: true };
       }
     }
 
-    if (lowered === "save setup") {
+    if (lowered === "save" || lowered === "save setup") {
       if (!vaultPath().trim()) {
         appendEntry("info", "vault path is missing. run set vault <path>." );
         return { handled: true, ok: false, recordHistory: true };
