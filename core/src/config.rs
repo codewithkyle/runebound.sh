@@ -5,7 +5,6 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 const APP_DIR_NAME: &str = "runebound.sh";
-const WORKSPACE_DIR_NAME: &str = ".runebound.sh";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -48,21 +47,13 @@ pub struct UiConfig {
 #[derive(Debug, Clone)]
 pub struct ConfigPaths {
     pub global: PathBuf,
-    pub workspace: PathBuf,
 }
 
 #[derive(Debug, Clone)]
 pub struct LoadedConfig {
     pub effective: AppConfig,
     pub global_exists: bool,
-    pub workspace_exists: bool,
     pub paths: ConfigPaths,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum ConfigScope {
-    Global,
-    Workspace,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -136,35 +127,22 @@ pub fn load_effective(workspace_root: &Path) -> Result<LoadedConfig> {
 
     let mut config = AppConfig::default();
     let global_exists = paths.global.exists();
-    let workspace_exists = paths.workspace.exists();
 
     if global_exists {
         let partial = load_partial_file(&paths.global)?;
-        apply_partial(&mut config, partial);
-    }
-    if workspace_exists {
-        let partial = load_partial_file(&paths.workspace)?;
         apply_partial(&mut config, partial);
     }
 
     Ok(LoadedConfig {
         effective: config,
         global_exists,
-        workspace_exists,
         paths,
     })
 }
 
-pub fn save_config(
-    workspace_root: &Path,
-    scope: ConfigScope,
-    config: &AppConfig,
-) -> Result<PathBuf> {
+pub fn save_config(workspace_root: &Path, config: &AppConfig) -> Result<PathBuf> {
     let paths = config_paths(workspace_root)?;
-    let target = match scope {
-        ConfigScope::Global => paths.global,
-        ConfigScope::Workspace => paths.workspace,
-    };
+    let target = paths.global;
 
     if let Some(parent) = target.parent() {
         fs::create_dir_all(parent)
@@ -178,22 +156,13 @@ pub fn save_config(
     Ok(target)
 }
 
-pub fn determine_default_write_scope(loaded: &LoadedConfig) -> ConfigScope {
-    if loaded.workspace_exists {
-        ConfigScope::Workspace
-    } else {
-        ConfigScope::Global
-    }
-}
-
-pub fn config_paths(workspace_root: &Path) -> Result<ConfigPaths> {
+pub fn config_paths(_workspace_root: &Path) -> Result<ConfigPaths> {
     let config_base =
         dirs::config_dir().ok_or_else(|| anyhow!("unable to find config directory"))?;
 
     let global = config_base.join(APP_DIR_NAME).join("config.toml");
-    let workspace = workspace_root.join(WORKSPACE_DIR_NAME).join("config.toml");
 
-    Ok(ConfigPaths { global, workspace })
+    Ok(ConfigPaths { global })
 }
 
 pub fn required_issues(config: &AppConfig) -> Vec<String> {

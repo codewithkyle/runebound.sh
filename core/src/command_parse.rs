@@ -214,9 +214,9 @@ mod tests {
 
     #[test]
     fn parses_quoted_arguments() {
-        let parsed = parse_command_input("config init --vault-path \"/tmp/with space\"");
+        let parsed = parse_command_input("config show \"/tmp/with space\"");
         assert!(parsed.valid);
-        assert_eq!(parsed.raw_tokens[3], "/tmp/with space");
+        assert_eq!(parsed.raw_tokens[2], "/tmp/with space");
     }
 
     #[test]

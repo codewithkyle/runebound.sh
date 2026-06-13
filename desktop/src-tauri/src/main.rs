@@ -6,9 +6,7 @@ use std::time::Duration;
 use dnd_core::command::CommandResponse;
 use dnd_core::command_manifest::{CommandManifest, command_manifest};
 use dnd_core::command_parse::{ParseResult, parse_command_input as parse_shared_command_input};
-use dnd_core::config::{
-    ConfigScope, determine_default_write_scope, load_effective, required_issues, save_config,
-};
+use dnd_core::config::{load_effective, required_issues, save_config};
 use dnd_core::db;
 use dnd_core::health;
 use dnd_core::vault::{Vault, is_path_writable};
@@ -19,7 +17,6 @@ struct SetupState {
     needs_setup: bool,
     issues: Vec<String>,
     global_config_path: String,
-    workspace_config_path: String,
     default_ollama_base_url: String,
 }
 
@@ -31,19 +28,10 @@ struct OllamaProbeResult {
 }
 
 #[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum SetupScope {
-    Global,
-    Workspace,
-    Auto,
-}
-
-#[derive(Debug, Clone, Deserialize)]
 struct SaveOnboardingInput {
     vault_path: String,
     ollama_base_url: String,
     model: String,
-    scope: SetupScope,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,7 +76,6 @@ fn get_setup_state(state: tauri::State<'_, AppState>) -> Result<SetupState, Stri
         needs_setup: !issues.is_empty(),
         issues,
         global_config_path: loaded.paths.global.display().to_string(),
-        workspace_config_path: loaded.paths.workspace.display().to_string(),
         default_ollama_base_url: loaded.effective.ollama.base_url,
     })
 }
@@ -183,16 +170,7 @@ async fn save_onboarding_config(
         ));
     }
 
-    let scope = match input.scope {
-        SetupScope::Global => ConfigScope::Global,
-        SetupScope::Workspace => ConfigScope::Workspace,
-        SetupScope::Auto => determine_default_write_scope(
-            &load_effective(&state.workspace_root).map_err(|err| err.to_string())?,
-        ),
-    };
-
-    let config_path =
-        save_config(&state.workspace_root, scope, &config).map_err(|err| err.to_string())?;
+    let config_path = save_config(&state.workspace_root, &config).map_err(|err| err.to_string())?;
     let vault_path = config
         .vault
         .path

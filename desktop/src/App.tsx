@@ -9,8 +9,7 @@ import {
   getSetupState,
   probeOllama,
   saveOnboardingConfig,
-  validateVaultPath,
-  type SetupScope
+  validateVaultPath
 } from "./onboarding/client";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
@@ -102,7 +101,6 @@ export default function App() {
   const [ollamaBaseUrl, setOllamaBaseUrl] = createSignal("http://127.0.0.1:11434");
   const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
   const [selectedModel, setSelectedModel] = createSignal("");
-  const [setupScope, setSetupScope] = createSignal<SetupScope>("workspace");
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
@@ -521,7 +519,7 @@ export default function App() {
         appendEntry("output", errorText, rendered.outputDoc);
         appendEntry(
           "info",
-          "bootstrap tip: run config init --vault-path <path> --ollama-base-url <url> --model <name> then run status again."
+          "bootstrap tip: run start setup, complete onboarding, then run status again."
         );
       } else {
         appendEntry("error", errorText);
@@ -556,7 +554,6 @@ export default function App() {
         "test ollama",
         "set model <name>",
         "use model <index>",
-        "scope workspace|global|auto",
         "show setup",
         "save setup",
         "cancel setup"
@@ -571,8 +568,7 @@ export default function App() {
         "## Current setup",
         `vault: ${vaultPath() || "(not set)"}`,
         `ollama: ${ollamaBaseUrl() || "(not set)"}`,
-        `model: ${selectedModel() || "(not set)"}`,
-        `scope: ${setupScope()}`
+        `model: ${selectedModel() || "(not set)"}`
       ].join("\n")
     );
   };
@@ -722,7 +718,7 @@ export default function App() {
         [
           `model selected: ${models[index - 1]}`,
           "## Step 4: Save config",
-          "Enter scope: workspace, global, or auto."
+          "Type save setup to finish."
         ].join("\n")
       );
       return { handled: true, ok: true, recordHistory: true };
@@ -744,17 +740,9 @@ export default function App() {
         [
           `model set to: ${value}`,
           "## Step 4: Save config",
-          "Enter scope: workspace, global, or auto."
+          "Type save setup to finish."
         ].join("\n")
       );
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    const scopeMatch = trimmed.match(/^scope\s+(workspace|global|auto)$/i);
-    if (scopeMatch) {
-      const value = scopeMatch[1].toLowerCase() as SetupScope;
-      setSetupScope(value);
-      appendEntry("output", `scope set to: ${value}\nType save setup when ready.`);
       return { handled: true, ok: true, recordHistory: true };
     }
 
@@ -844,7 +832,7 @@ export default function App() {
           [
             `model selected: ${picked}`,
             "## Step 4: Save config",
-            "Enter scope: workspace, global, or auto."
+            "Type save setup to finish."
           ].join("\n")
         );
         return { handled: true, ok: true, recordHistory: true };
@@ -857,20 +845,15 @@ export default function App() {
         [
           `model set to: ${trimmed}`,
           "## Step 4: Save config",
-          "Enter scope: workspace, global, or auto."
+          "Type save setup to finish."
         ].join("\n")
       );
       return { handled: true, ok: true, recordHistory: true };
     }
 
     if (onboardingStep() === 4) {
-      const rawScope = trimmed.toLowerCase();
-      if (rawScope === "workspace" || rawScope === "global" || rawScope === "auto") {
-        setSetupScope(rawScope as SetupScope);
-        appendEntry("output", `scope set to: ${rawScope}\nType save setup to finish.`);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-      if (rawScope === "save") {
+      const loweredStepInput = trimmed.toLowerCase();
+      if (loweredStepInput === "save") {
         const saveResult = await runOnboardingCommand("save setup");
         return { handled: true, ok: saveResult.ok, recordHistory: true };
       }
@@ -894,8 +877,7 @@ export default function App() {
         const result = await saveOnboardingConfig({
           vault_path: vaultPath().trim(),
           ollama_base_url: ollamaBaseUrl().trim(),
-          model: selectedModel().trim(),
-          scope: setupScope()
+          model: selectedModel().trim()
         });
 
         appendEntry(

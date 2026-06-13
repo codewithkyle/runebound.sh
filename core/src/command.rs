@@ -1,23 +1,20 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Result, anyhow, bail};
 use clap::error::ErrorKind;
-use clap::{Args, Parser, Subcommand};
+use clap::{Parser, Subcommand};
 use serde::Serialize;
 
 use crate::command_manifest::command_manifest;
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
-use crate::config::{
-    ConfigScope, determine_default_write_scope, load_effective, required_issues, save_config,
-    validate_for_runtime,
-};
+use crate::config::{load_effective, required_issues, validate_for_runtime};
 use crate::db;
 use crate::health::{self, CheckReport};
 use crate::output::{
     InlineNode, OutputBlock, OutputDoc, StatusTone, command_ref, doc, heading, list,
     paragraph_text, paragraph_with_inlines, status, text_node,
 };
-use crate::vault::{Vault, is_path_writable};
+use crate::vault::Vault;
 
 #[derive(Debug, Parser)]
 #[command(name = "dnd-assistant")]
@@ -38,25 +35,8 @@ pub enum Command {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
-    Init(InitArgs),
     Show,
     Test,
-}
-
-#[derive(Debug, Clone, Args, Default)]
-pub struct InitArgs {
-    #[arg(long)]
-    pub global: bool,
-    #[arg(long)]
-    pub workspace: bool,
-    #[arg(long)]
-    pub skip_test: bool,
-    #[arg(long = "vault-path")]
-    pub vault_path: Option<String>,
-    #[arg(long = "ollama-base-url")]
-    pub ollama_base_url: Option<String>,
-    #[arg(long)]
-    pub model: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -179,17 +159,12 @@ async fn execute_config_command(
     command: ConfigCommand,
 ) -> Result<CommandOutput> {
     match command {
-        ConfigCommand::Init(args) => execute_noninteractive_init(workspace_root, args).await,
         ConfigCommand::Show => {
             let loaded = load_effective(workspace_root)?;
             let mut out = String::new();
             out.push_str(&format!(
                 "global config: {}\n",
                 loaded.paths.global.display()
-            ));
-            out.push_str(&format!(
-                "workspace config: {}\n",
-                loaded.paths.workspace.display()
             ));
             out.push('\n');
             out.push_str(&toml::to_string_pretty(&loaded.effective)?);
@@ -220,7 +195,6 @@ async fn execute_config_command(
 async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
     let loaded = load_effective(workspace_root)?;
     let global_config_path = loaded.paths.global.display().to_string();
-    let workspace_config_path = loaded.paths.workspace.display().to_string();
     let config = loaded.effective;
 
     let issues = required_issues(&config);
@@ -228,12 +202,11 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
         bail!(
             "## First-time setup required\n\
              \n## Bootstrap config\n\
-             config init --vault-path <path> --ollama-base-url <url> --model <name>\n\
+             start setup\n\
              \n## Config paths\n\
              - global: {global_config_path}\n\
-             - workspace: {workspace_config_path}\n\
              \n## Optional next steps\n\
-             - use config init --workspace ... to keep settings local to this project\n\
+             - run setup help to see guided setup commands\n\
              - run config show to verify saved values\n\
              \n## Missing required values\n- {}",
             issues.join("\n- ")
@@ -285,101 +258,6 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
     Ok(CommandOutput::with_doc(text, output_doc))
 }
 
-async fn execute_noninteractive_init(
-    workspace_root: &Path,
-    args: InitArgs,
-) -> Result<CommandOutput> {
-    if args.global && args.workspace {
-        bail!("choose only one scope: --global or --workspace");
-    }
-
-    let loaded = load_effective(workspace_root)?;
-    let mut config = loaded.effective;
-
-    if let Some(vault_path) = args.vault_path {
-        let path = PathBuf::from(vault_path);
-        if !path.exists() {
-            bail!("vault path does not exist: {}", path.display());
-        }
-        if !path.is_dir() {
-            bail!("vault path is not a directory: {}", path.display());
-        }
-        is_path_writable(&path)?;
-        config.vault.path = Some(path);
-    }
-
-    if let Some(ollama_base_url) = args.ollama_base_url {
-        config.ollama.base_url = ollama_base_url;
-    }
-
-    if let Some(model) = args.model {
-        config.ollama.model = Some(model);
-    }
-
-    let issues = required_issues(&config);
-    if !issues.is_empty() {
-        bail!(
-            "missing required config. provide flags like --vault-path, --ollama-base-url, --model\n- {}",
-            issues.join("\n- ")
-        );
-    }
-
-    let scope = if args.global {
-        ConfigScope::Global
-    } else if args.workspace {
-        ConfigScope::Workspace
-    } else {
-        determine_default_write_scope(&load_effective(workspace_root)?)
-    };
-
-    let path = save_config(workspace_root, scope, &config)?;
-
-    let vault_root = config
-        .vault
-        .path
-        .clone()
-        .ok_or_else(|| anyhow!("vault.path is not configured"))?;
-    let vault = Vault::new(vault_root);
-    vault.ensure_structure()?;
-    let db = db::init_database().await?;
-
-    let mut out = format!(
-        "config saved to {}\nvault initialized at {}\ndatabase ready at {}",
-        path.display(),
-        vault.root().display(),
-        db.path.display()
-    );
-
-    if !args.skip_test {
-        let report = health::run_quick_checks(&config).await;
-        out.push_str("\n\n");
-        out.push_str(&format_report("setup validation", &report));
-        if !report.is_ok() {
-            bail!("{out}\none or more checks failed");
-        }
-
-        let mut output_doc = doc();
-        output_doc.push(heading(2, "Config Initialized"));
-        output_doc.push(paragraph_text(format!(
-            "config saved to {}",
-            path.display()
-        )));
-        output_doc.push(paragraph_text(format!(
-            "vault initialized at {}",
-            vault.root().display()
-        )));
-        output_doc.push(paragraph_text(format!(
-            "database ready at {}",
-            db.path.display()
-        )));
-        output_doc.push(heading(2, "Setup Validation"));
-        output_doc.push(report_list_block(&report));
-        return Ok(CommandOutput::with_doc(out, output_doc));
-    }
-
-    Ok(CommandOutput::text(out))
-}
-
 fn format_report(title: &str, report: &CheckReport) -> String {
     let mut out = String::new();
     out.push_str(&format!("{title}:\n"));
@@ -416,15 +294,15 @@ fn output_doc_from_error_text(message: String) -> OutputDoc {
         output_doc.push(heading(2, "First-time setup required"));
         output_doc.push(heading(2, "Bootstrap config"));
         output_doc.push(paragraph_with_inlines(vec![command_ref(
-            "config init --vault-path <path> --ollama-base-url <url> --model <name>",
-            "config init --vault-path <path> --ollama-base-url <url> --model <name>",
+            "start setup",
+            "start setup",
         )]));
         output_doc.push(heading(2, "Optional next steps"));
         output_doc.push(list(vec![
             vec![
-                text_node("use "),
-                command_ref("config init --workspace", "config init --workspace"),
-                text_node(" ... to keep settings local to this project"),
+                text_node("run "),
+                command_ref("setup help", "setup help"),
+                text_node(" to see guided setup commands"),
             ],
             vec![
                 text_node("run "),

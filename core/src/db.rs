@@ -6,6 +6,7 @@ use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Row, SqlitePool};
 
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
+const APP_DIR_NAME: &str = "runebound.sh";
 
 pub struct Database {
     pub pool: SqlitePool,
@@ -63,5 +64,5 @@ pub fn default_database_path() -> Result<PathBuf> {
     let data_dir = dirs::data_local_dir()
         .or_else(dirs::data_dir)
         .ok_or_else(|| anyhow!("unable to resolve local data directory"))?;
-    Ok(data_dir.join("dnd-assistant").join("app.db"))
+    Ok(data_dir.join(APP_DIR_NAME).join("app.db"))
 }

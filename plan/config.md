@@ -24,7 +24,7 @@
 
 ### Trigger
 
-- If required config is missing or invalid, show startup guidance and suggest `config init` bootstrap commands.
+- If required config is missing or invalid, show startup guidance and suggest setup bootstrap commands.
 
 ### Wizard steps
 
@@ -36,13 +36,13 @@
 
 ### Setup command
 
-- `config init` runs setup manually at any time.
+- `start setup` runs setup manually at any time.
 
 ## Command Surface (v1)
 
 - `config`
   - Show concise help and effective summary.
-- `config init`
+- `start setup`
   - Run first-time setup wizard.
 - `config show`
   - Show effective merged config.

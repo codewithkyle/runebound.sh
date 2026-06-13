@@ -88,72 +88,9 @@ pub fn command_manifest() -> CommandManifest {
             },
             CommandSpec {
                 name: "config".to_string(),
-                summary: "Inspect, initialize, and validate configuration".to_string(),
-                examples: vec![
-                    "config show".to_string(),
-                    "config init --workspace".to_string(),
-                ],
+                summary: "Inspect and validate configuration".to_string(),
+                examples: vec!["config show".to_string(), "config test".to_string()],
                 subcommands: vec![
-                    SubcommandSpec {
-                        name: "init".to_string(),
-                        summary: "Initialize config values".to_string(),
-                        options: vec![
-                            OptionSpec {
-                                name: "--global".to_string(),
-                                short: None,
-                                takes_value: false,
-                                value_hint: None,
-                                summary: "Write to global scope".to_string(),
-                                completion: CompletionHint::None,
-                            },
-                            OptionSpec {
-                                name: "--workspace".to_string(),
-                                short: None,
-                                takes_value: false,
-                                value_hint: None,
-                                summary: "Write to workspace scope".to_string(),
-                                completion: CompletionHint::None,
-                            },
-                            OptionSpec {
-                                name: "--skip-test".to_string(),
-                                short: None,
-                                takes_value: false,
-                                value_hint: None,
-                                summary: "Skip setup validation checks".to_string(),
-                                completion: CompletionHint::None,
-                            },
-                            OptionSpec {
-                                name: "--vault-path".to_string(),
-                                short: None,
-                                takes_value: true,
-                                value_hint: Some(ValueHint::Path),
-                                summary: "Set Obsidian vault path".to_string(),
-                                completion: CompletionHint::DynamicProvider(
-                                    "vault_path".to_string(),
-                                ),
-                            },
-                            OptionSpec {
-                                name: "--ollama-base-url".to_string(),
-                                short: None,
-                                takes_value: true,
-                                value_hint: Some(ValueHint::Url),
-                                summary: "Set Ollama base URL".to_string(),
-                                completion: CompletionHint::None,
-                            },
-                            OptionSpec {
-                                name: "--model".to_string(),
-                                short: None,
-                                takes_value: true,
-                                value_hint: Some(ValueHint::Model),
-                                summary: "Set default model".to_string(),
-                                completion: CompletionHint::DynamicProvider(
-                                    "ollama_model".to_string(),
-                                ),
-                            },
-                        ],
-                        examples: vec!["config init --workspace --skip-test".to_string()],
-                        clap_managed: true,
-                    },
                     SubcommandSpec {
                         name: "show".to_string(),
                         summary: "Display effective config".to_string(),

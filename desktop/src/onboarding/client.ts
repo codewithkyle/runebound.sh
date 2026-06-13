@@ -4,7 +4,6 @@ export type SetupState = {
   needs_setup: boolean;
   issues: string[];
   global_config_path: string;
-  workspace_config_path: string;
   default_ollama_base_url: string;
 };
 
@@ -14,13 +13,10 @@ export type OllamaProbeResult = {
   models: string[];
 };
 
-export type SetupScope = "global" | "workspace" | "auto";
-
 export type SaveOnboardingInput = {
   vault_path: string;
   ollama_base_url: string;
   model: string;
-  scope: SetupScope;
 };
 
 export type SaveOnboardingResult = {
