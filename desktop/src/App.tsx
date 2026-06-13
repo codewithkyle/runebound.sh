@@ -21,14 +21,21 @@ type SuggestionItem = {
   completion: string;
 };
 
+type CommandMatch = {
+  start: number;
+  end: number;
+  command: string;
+};
+
 const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help", "clear", "history"];
-const CONFIG_SUBCOMMANDS = ["init", "show", "test", "doctor"];
-const NPC_SUBCOMMANDS = ["create", "list", "show", "edit", "refs", "delete"];
+const CONFIG_SUBCOMMANDS = ["init", "show", "test", "doctor", "help"];
+const NPC_SUBCOMMANDS = ["create", "list", "show", "edit", "refs", "delete", "help"];
 const CONFIG_INIT_FLAGS = ["--vault-path", "--ollama-base-url", "--model", "--global", "--workspace", "--skip-test"];
 const CLEAR_FLAGS = ["--history"];
 const HISTORY_SUBCOMMANDS = ["clear"];
 const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
 const MAX_COMMAND_HISTORY = 50;
+const SUBCOMMAND_ROOTS = ["config", "npc"];
 
 export default function App() {
   const [entries, setEntries] = createSignal<HistoryEntry[]>([
@@ -296,6 +303,19 @@ export default function App() {
     inputRef?.focus();
   };
 
+  const runDisplayedCommand = async (raw: string) => {
+    if (running()) {
+      return;
+    }
+
+    setCommand("");
+    resetHistoryNavigation();
+    setSuggestionsDismissed(false);
+    setActiveSuggestionIndex(0);
+    await executeCommand(raw);
+    inputRef?.focus();
+  };
+
   onMount(() => {
     try {
       const serialized = window.localStorage.getItem(HISTORY_STORAGE_KEY);
@@ -366,7 +386,38 @@ export default function App() {
       <main ref={outputRef} class="flex-1 overflow-y-auto py-[2px]">
         <div class="w-full max-w-[960px] mx-auto space-y-2">
           <For each={entries()}>
-            {(entry) => <pre class={entryClass(entry.kind)}>{entry.text}</pre>}
+            {(entry) => (
+              <div class={entryClass(entry.kind)}>
+                <For each={entry.text.split("\n")}>
+                  {(line, lineIndex) => (
+                    <Show
+                      when={
+                        entry.kind === "output"
+                          ? findClickableCommandInLine(line, inferUsagePrefix(entry.text))
+                          : null
+                      }
+                      fallback={<div>{line}</div>}
+                    >
+                      {(match) => (
+                        <div>
+                          <span>{line.slice(0, match().start)}</span>
+                          <button
+                            type="button"
+                            class="text-info underline bg-transparent border-0 p-0 m-0 cursor-pointer"
+                            onClick={() => {
+                              void runDisplayedCommand(match().command);
+                            }}
+                          >
+                            {line.slice(match().start, match().end)}
+                          </button>
+                          <span>{line.slice(match().end)}</span>
+                        </div>
+                      )}
+                    </Show>
+                  )}
+                </For>
+              </div>
+            )}
           </For>
         </div>
       </main>
@@ -488,6 +539,180 @@ function entryClass(kind: EntryKind): string {
     return `${base} text-info`;
   }
   return `${base} text-text`;
+}
+
+function findClickableCommandInLine(line: string, usagePrefix: string | null): CommandMatch | null {
+  const historyMatch = line.match(/^(\s*\d+:\s+)(.+?)\s*$/);
+  if (historyMatch) {
+    const prefix = historyMatch[1];
+    const candidate = historyMatch[2].trim();
+    const commandTarget = resolveClickableCommandTarget(candidate);
+    if (commandTarget) {
+      const start = prefix.length;
+      return {
+        start,
+        end: start + historyMatch[2].length,
+        command: commandTarget
+      };
+    }
+  }
+
+  const usageMatch = line.match(/^(\s*Usage:\s+)(.+?)\s*$/i);
+  if (usageMatch) {
+    const prefix = usageMatch[1];
+    const candidate = usageMatch[2].trim();
+    const commandTarget = resolveClickableCommandTarget(candidate);
+    if (commandTarget) {
+      const start = prefix.length;
+      return {
+        start,
+        end: start + usageMatch[2].length,
+        command: commandTarget
+      };
+    }
+  }
+
+  const commandTableMatch = line.match(/^(\s+)([a-z][a-z0-9-]*)(\s{2,}.*)?$/i);
+  if (commandTableMatch) {
+    const token = commandTableMatch[2].trim().toLowerCase();
+    const tokenStart = line.indexOf(commandTableMatch[2]);
+    if (tokenStart >= 0) {
+      if (usagePrefix && isValidSubcommandForRoot(usagePrefix, token)) {
+        return {
+          start: tokenStart,
+          end: tokenStart + commandTableMatch[2].length,
+          command: `${usagePrefix} ${token}`
+        };
+      }
+
+      const commandTarget = resolveClickableCommandTarget(token);
+      if (commandTarget) {
+        return {
+          start: tokenStart,
+          end: tokenStart + commandTableMatch[2].length,
+          command: commandTarget
+        };
+      }
+    }
+  }
+
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  const commandTarget = resolveClickableCommandTarget(trimmed);
+  if (commandTarget) {
+    const start = line.indexOf(trimmed);
+    if (start >= 0) {
+      return {
+        start,
+        end: start + trimmed.length,
+        command: commandTarget
+      };
+    }
+  }
+
+  return null;
+}
+
+function resolveClickableCommandTarget(candidate: string): string | null {
+  const trimmed = candidate.trim();
+  if (!trimmed) {
+    return null;
+  }
+
+  if (isValidCommandLike(trimmed)) {
+    return trimmed;
+  }
+
+  const lowered = trimmed.toLowerCase();
+  if (SUBCOMMAND_ROOTS.includes(lowered)) {
+    return `${lowered} --help`;
+  }
+
+  return null;
+}
+
+function inferUsagePrefix(output: string): string | null {
+  const usageLine = output
+    .split("\n")
+    .map((line) => line.trim())
+    .find((line) => line.toLowerCase().startsWith("usage:"));
+
+  if (!usageLine) {
+    return null;
+  }
+
+  const commandPart = usageLine.slice("usage:".length).trim();
+  const firstToken = commandPart.split(/\s+/)[0]?.toLowerCase();
+  if (!firstToken) {
+    return null;
+  }
+
+  return TOP_LEVEL_COMMANDS.includes(firstToken) ? firstToken : null;
+}
+
+function isValidSubcommandForRoot(root: string, subcommand: string): boolean {
+  if (root === "config") {
+    return CONFIG_SUBCOMMANDS.includes(subcommand);
+  }
+  if (root === "npc") {
+    return NPC_SUBCOMMANDS.includes(subcommand);
+  }
+  if (root === "history") {
+    return HISTORY_SUBCOMMANDS.includes(subcommand);
+  }
+  return false;
+}
+
+function isValidCommandLike(input: string): boolean {
+  const trimmed = input.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (trimmed === "!!") {
+    return true;
+  }
+  if (/^!\d+$/.test(trimmed)) {
+    return true;
+  }
+
+  const tokens = trimmed.split(/\s+/);
+  const lowered = tokens.map((token) => token.toLowerCase());
+
+  if (lowered.length === 1) {
+    return ["status", "help", "clear", "history"].includes(lowered[0]);
+  }
+
+  if (lowered[0] === "clear") {
+    return lowered.length === 2 && lowered[1] === "--history";
+  }
+
+  if (lowered[0] === "history") {
+    if (lowered.length === 2 && lowered[1] === "clear") {
+      return true;
+    }
+    return lowered.length === 2 && /^\d+$/.test(lowered[1]);
+  }
+
+  if (lowered[0] === "config") {
+    if (lowered.length < 2) {
+      return false;
+    }
+    const subcommand = lowered[1];
+    if (subcommand === "init") {
+      return true;
+    }
+    return ["show", "test", "doctor", "help"].includes(subcommand) && lowered.length === 2;
+  }
+
+  if (lowered[0] === "npc") {
+    return lowered.length >= 2 && NPC_SUBCOMMANDS.includes(lowered[1]);
+  }
+
+  return false;
 }
 
 function buildSuggestions(input: string): SuggestionItem[] {
