@@ -27,7 +27,7 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
   if (block.kind === "list") {
     return (
       <div>
-        <For each={block.items}>{(item) => <div>- {renderInlines(item, onRunCommand)}</div>}</For>
+        <For each={block.items}>{(item) => <div class="rb-list-item">- {renderInlines(item, onRunCommand)}</div>}</For>
       </div>
     );
   }

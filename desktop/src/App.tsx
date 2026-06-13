@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
 import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
+import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
 import {
@@ -48,12 +49,6 @@ type CommandSpecMeta = {
   canonicalHelpCommand: string | null;
 };
 
-type CommandMatch = {
-  start: number;
-  end: number;
-  command: string;
-};
-
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
 const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
@@ -72,7 +67,24 @@ export default function App() {
         "\n" +
         "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders.\n" +
         "\n" +
-        "Type help to see available commands.\n"
+        "Type help to see available commands.\n",
+      outputDoc: parseOutputEntry(
+        "banner",
+        "\n" +
+          "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
+          "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
+          "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝\n\n" +
+          "\n" +
+          "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders.\n" +
+          "\n" +
+          "Type help to see available commands.\n",
+        (candidate) => {
+          if (candidate.trim().toLowerCase() === "help") {
+            return "help";
+          }
+          return null;
+        }
+      )
     }
   ]);
   const [command, setCommand] = createSignal("");
@@ -149,7 +161,10 @@ export default function App() {
         id: prev.length > 0 ? prev[prev.length - 1].id + 1 : 1,
         kind,
         text,
-        outputDoc: outputDoc ?? null
+        outputDoc:
+          kind === "input"
+            ? null
+            : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
       }
     ]);
     queueMicrotask(() => {
@@ -172,7 +187,10 @@ export default function App() {
           id: nextId,
           kind,
           text,
-          outputDoc: outputDoc ?? null
+          outputDoc:
+            kind === "input"
+              ? null
+              : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
         }
       ];
     });
@@ -197,7 +215,10 @@ export default function App() {
           ...entry,
           kind,
           text,
-          outputDoc: outputDoc ?? entry.outputDoc ?? null
+          outputDoc:
+            kind === "input"
+              ? null
+              : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
         };
       })
     );
@@ -423,7 +444,7 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
-      const rendered = responseToRenderableModel(response);
+      const rendered = responseToRenderableModel(response, commandMeta());
       if (response.ok) {
         appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
         pushCommandHistory(raw);
@@ -489,7 +510,7 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: "status" });
-      const rendered = responseToRenderableModel(response);
+      const rendered = responseToRenderableModel(response, commandMeta());
       if (response.ok) {
         appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
         return;
@@ -1003,38 +1024,9 @@ export default function App() {
             {(entry) => (
               <div class={entryClass(entry.kind)}>
                 <Show
-                  when={entry.outputDoc && (entry.kind === "output" || entry.kind === "error")}
+                  when={entry.kind !== "input"}
                   fallback={
-                    <For each={entry.text.split("\n")}>
-                      {(line, lineIndex) => (
-                        <Show
-                          when={
-                            (entry.kind === "output" || entry.kind === "banner") && !isHeadingLine(line)
-                              ? findClickableCommandInLine(line, inferUsagePrefix(entry.text, commandMeta()), commandMeta())
-                              : null
-                          }
-                          fallback={
-                            <div class={lineClass(entry.kind, lineIndex(), line)}>{line.length === 0 ? "\u00A0" : renderLine(entry.kind, line)}</div>
-                          }
-                        >
-                          {(match) => (
-                            <div class={lineClass(entry.kind, lineIndex(), line)}>
-                              <span>{line.slice(0, match().start)}</span>
-                              <button
-                                type="button"
-                                class="text-info underline bg-transparent border-0 p-0 m-0 cursor-pointer"
-                                onClick={() => {
-                                  void runDisplayedCommand(match().command);
-                                }}
-                              >
-                                {displayClickableSegment(line.slice(match().start, match().end), match().command)}
-                              </button>
-                              <span>{line.slice(match().end)}</span>
-                            </div>
-                          )}
-                        </Show>
-                      )}
-                    </For>
+                    <div>{entry.text}</div>
                   }
                 >
                   <OutputRenderer
@@ -1164,10 +1156,11 @@ function segmentsToText(segments: OutputSegment[] | undefined, fallback: string)
   return segments.map((segment) => segment.text).join("\n");
 }
 
-function responseToRenderableModel(response: CommandResponse): { text: string; outputDoc: OutputDoc | null } {
+function responseToRenderableModel(response: CommandResponse, meta: InlineCommandMeta): { text: string; outputDoc: OutputDoc | null } {
+  const text = segmentsToText(response.segments, response.output);
   return {
-    text: segmentsToText(response.segments, response.output),
-    outputDoc: response.output_doc ?? null
+    text,
+    outputDoc: response.output_doc ?? parseOutputEntry(response.ok ? "output" : "error", text, (candidate) => resolveClickableCommandTarget(candidate, meta))
   };
 }
 
@@ -1191,150 +1184,6 @@ function entryClass(kind: EntryKind): string {
   return `${base} text-text`;
 }
 
-function renderLine(kind: EntryKind, line: string) {
-  if (kind === "spinner") {
-    const first = line.at(0) ?? "";
-    if (SPINNER_FRAMES.includes(first)) {
-      return (
-        <>
-          <span class="rb-spinner-glyph text-[#d3869b]">{first}</span>
-          <span>{line.slice(1)}</span>
-        </>
-      );
-    }
-  }
-
-  return displayLine(line);
-}
-
-function findClickableCommandInLine(line: string, usagePrefix: string | null, meta: InlineCommandMeta): CommandMatch | null {
-  const backtickMatch = line.match(/`([^`]+)`/);
-  if (backtickMatch) {
-    const candidate = backtickMatch[1].trim();
-    const commandTarget = resolveClickableCommandTarget(candidate, meta);
-    if (commandTarget) {
-      const tickStart = line.indexOf(`\`${backtickMatch[1]}\``);
-      if (tickStart >= 0) {
-        return {
-          start: tickStart,
-          end: tickStart + backtickMatch[1].length + 2,
-          command: commandTarget
-        };
-      }
-    }
-  }
-
-  const historyMatch = line.match(/^(\s*\d+:\s+)(.+?)\s*$/);
-  if (historyMatch) {
-    const prefix = historyMatch[1];
-    const candidate = historyMatch[2].trim();
-    const commandTarget = resolveClickableCommandTarget(candidate, meta);
-    if (commandTarget) {
-      const start = prefix.length;
-      return {
-        start,
-        end: start + historyMatch[2].length,
-        command: commandTarget
-      };
-    }
-  }
-
-  const usageMatch = line.match(/^(\s*Usage:\s+)(.+?)\s*$/i);
-  if (usageMatch) {
-    const prefix = usageMatch[1];
-    const candidate = usageMatch[2].trim();
-    const commandTarget = resolveClickableCommandTarget(candidate, meta);
-    if (commandTarget) {
-      const start = prefix.length;
-      return {
-        start,
-        end: start + usageMatch[2].length,
-        command: commandTarget
-      };
-    }
-  }
-
-  const startSetupMatch = line.match(/\bstart\s+setup\b/i);
-  if (startSetupMatch) {
-    const start = startSetupMatch.index ?? line.toLowerCase().indexOf("start setup");
-    return {
-      start,
-      end: start + startSetupMatch[0].length,
-      command: "start setup"
-    };
-  }
-
-  const setupHelpMatch = line.match(/\bsetup\s+help\b/i);
-  if (setupHelpMatch) {
-    const start = setupHelpMatch.index ?? line.toLowerCase().indexOf("setup help");
-    return {
-      start,
-      end: start + setupHelpMatch[0].length,
-      command: "setup help"
-    };
-  }
-
-  if (meta.commands.size > 0) {
-    const escaped = [...meta.commands].map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
-    const inlineTokenRegex = new RegExp(`\\b(${escaped})\\b`, "gi");
-    let inlineMatch: RegExpExecArray | null;
-    while ((inlineMatch = inlineTokenRegex.exec(line)) !== null) {
-      const token = inlineMatch[1];
-      const commandTarget = resolveClickableCommandTarget(token, meta);
-      if (commandTarget) {
-        return {
-          start: inlineMatch.index,
-          end: inlineMatch.index + token.length,
-          command: commandTarget
-        };
-      }
-    }
-  }
-
-  const commandTableMatch = line.match(/^(\s+)([a-z][a-z0-9-]*)(\s{2,}.*)?$/i);
-  if (commandTableMatch) {
-    const token = commandTableMatch[2].trim().toLowerCase();
-    const tokenStart = line.indexOf(commandTableMatch[2]);
-    if (tokenStart >= 0) {
-      if (usagePrefix && isValidSubcommandForRoot(usagePrefix, token, meta)) {
-        return {
-          start: tokenStart,
-          end: tokenStart + commandTableMatch[2].length,
-          command: `${usagePrefix} ${token}`
-        };
-      }
-
-      const commandTarget = resolveClickableCommandTarget(token, meta);
-      if (commandTarget) {
-        return {
-          start: tokenStart,
-          end: tokenStart + commandTableMatch[2].length,
-          command: commandTarget
-        };
-      }
-    }
-  }
-
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const commandTarget = resolveClickableCommandTarget(trimmed, meta);
-  if (commandTarget) {
-    const start = line.indexOf(trimmed);
-    if (start >= 0) {
-      return {
-        start,
-        end: start + trimmed.length,
-        command: commandTarget
-      };
-    }
-  }
-
-  return null;
-}
-
 function resolveClickableCommandTarget(candidate: string, meta: InlineCommandMeta): string | null {
   const trimmed = candidate.trim();
   if (!trimmed) {
@@ -1352,34 +1201,6 @@ function resolveClickableCommandTarget(candidate: string, meta: InlineCommandMet
   }
 
   return null;
-}
-
-function inferUsagePrefix(output: string, meta: InlineCommandMeta): string | null {
-  const usageLine = output
-    .split("\n")
-    .map((line) => line.trim())
-    .find((line) => line.toLowerCase().startsWith("usage:"));
-
-  if (!usageLine) {
-    return null;
-  }
-
-  const commandPart = usageLine.slice("usage:".length).trim();
-  const firstToken = commandPart.split(/\s+/)[0]?.toLowerCase();
-  if (!firstToken) {
-    return null;
-  }
-
-  return meta.commands.has(firstToken) ? firstToken : null;
-}
-
-function isValidSubcommandForRoot(root: string, subcommand: string, meta: InlineCommandMeta): boolean {
-  const command = meta.commandMap.get(root.toLowerCase());
-  if (!command) {
-    return false;
-  }
-
-  return command.subcommands.has(subcommand.toLowerCase());
 }
 
 function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
@@ -1473,46 +1294,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
-function lineClass(kind: EntryKind, lineIndex: number, line: string): string {
-  if (isHeadingLine(line)) {
-    return "rb-heading-line rb-on-fg";
-  }
-
-  if (kind === "banner" && lineIndex >= 1 && lineIndex <= 3) {
-    return "text-[#8ec07c]";
-  }
-  return "";
-}
-
-function isHeadingLine(line: string): boolean {
-  const trimmed = line.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  if (trimmed.startsWith("# ") || trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
-    return true;
-  }
-
-  return /^([A-Za-z][A-Za-z0-9 /_-]{2,60}):$/.test(trimmed);
-}
-
-function displayLine(line: string): string {
-  const trimmed = line.trim();
-  if (trimmed.startsWith("# ") || trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
-    return trimmed.replace(/^#{1,3}\s+/, "");
-  }
-  return line;
-}
-
 function isBootstrapSetupMessage(message: string): boolean {
   return message.toLowerCase().includes("first-time setup required");
-}
-
-function displayClickableSegment(rawSegment: string, command: string): string {
-  const trimmed = rawSegment.trim();
-  if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
-    return command;
-  }
-  return rawSegment;
 }
