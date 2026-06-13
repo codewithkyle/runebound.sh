@@ -1,5 +1,5 @@
 import { invoke } from "@tauri-apps/api/core";
-import { For, Show, createMemo, createSignal, onMount } from "solid-js";
+import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 
 type EntryKind = "input" | "output" | "error" | "info";
 
@@ -44,6 +44,17 @@ export default function App() {
       return [] as SuggestionItem[];
     }
     return buildSuggestions(command());
+  });
+
+  createEffect(() => {
+    const size = suggestionList().length;
+    if (size === 0) {
+      setActiveSuggestionIndex(0);
+      return;
+    }
+    if (activeSuggestionIndex() >= size) {
+      setActiveSuggestionIndex(0);
+    }
   });
 
   let outputRef: HTMLDivElement | undefined;
@@ -162,8 +173,17 @@ export default function App() {
               <div class="bg-surface px-3 py-[2px]">
                 <For each={suggestionList().slice(0, 8)}>
                   {(suggestion, index) => {
-                    const active = index() === activeSuggestionIndex();
-                    return <div class={active ? "text-accent" : "text-text"}>{suggestion.label}</div>;
+                    return (
+                      <div
+                        classList={{
+                          "text-accent": index() === activeSuggestionIndex(),
+                          "bg-surface2": index() === activeSuggestionIndex(),
+                          "text-text": index() !== activeSuggestionIndex()
+                        }}
+                      >
+                        {suggestion.label}
+                      </div>
+                    );
                   }}
                 </For>
               </div>
@@ -203,13 +223,13 @@ export default function App() {
                   }
 
                   const suggestions = suggestionList();
-                  if (event.key === "ArrowDown" && suggestions.length > 0) {
+                  if (event.key === "ArrowDown" && suggestions.length > 1) {
                     event.preventDefault();
                     setActiveSuggestionIndex((previous) => (previous + 1) % suggestions.length);
                     return;
                   }
 
-                  if (event.key === "ArrowUp" && suggestions.length > 0) {
+                  if (event.key === "ArrowUp" && suggestions.length > 1) {
                     event.preventDefault();
                     setActiveSuggestionIndex((previous) => (previous - 1 + suggestions.length) % suggestions.length);
                     return;
@@ -219,11 +239,6 @@ export default function App() {
                     event.preventDefault();
 
                     if (suggestions.length === 0) {
-                      return;
-                    }
-
-                    if (event.shiftKey) {
-                      setActiveSuggestionIndex((previous) => (previous - 1 + suggestions.length) % suggestions.length);
                       return;
                     }
 
