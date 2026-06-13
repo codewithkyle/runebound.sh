@@ -37,9 +37,10 @@ export default function App() {
   const [command, setCommand] = createSignal("");
   const [running, setRunning] = createSignal(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
+  const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
 
   const suggestionList = createMemo(() => {
-    if (command().trim().length === 0 || running()) {
+    if (command().trim().length === 0 || running() || suggestionsDismissed()) {
       return [] as SuggestionItem[];
     }
     return buildSuggestions(command());
@@ -74,6 +75,7 @@ export default function App() {
 
     appendEntry("info", "^C");
     setCommand("");
+    setSuggestionsDismissed(false);
     setActiveSuggestionIndex(0);
     inputRef?.focus();
   };
@@ -86,6 +88,7 @@ export default function App() {
 
     appendEntry("input", `> ${raw}`);
     setCommand("");
+    setSuggestionsDismissed(false);
     setActiveSuggestionIndex(0);
     setRunning(true);
 
@@ -131,6 +134,7 @@ export default function App() {
       if (event.key.length === 1 && !event.altKey && !ctrlOrMeta) {
         event.preventDefault();
         inputRef?.focus();
+        setSuggestionsDismissed(false);
         setCommand((previous) => previous + event.key);
       }
     };
@@ -180,6 +184,7 @@ export default function App() {
                 value={command()}
                 onInput={(event) => {
                   setCommand(event.currentTarget.value);
+                  setSuggestionsDismissed(false);
                   setActiveSuggestionIndex(0);
                 }}
                 onKeyDown={(event) => {
@@ -188,6 +193,12 @@ export default function App() {
                       event.preventDefault();
                       clearCommand();
                     }
+                    return;
+                  }
+
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setSuggestionsDismissed(true);
                     return;
                   }
 
