@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 
-type EntryKind = "input" | "output" | "error" | "info";
+type EntryKind = "input" | "output" | "error" | "info" | "banner";
 
 type HistoryEntry = {
   id: number;
@@ -41,8 +41,16 @@ export default function App() {
   const [entries, setEntries] = createSignal<HistoryEntry[]>([
     {
       id: 1,
-      kind: "info",
-      text: "DND Assistant ready."
+      kind: "banner",
+      text:
+        "\n" +
+        "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
+        "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
+        "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝\n\n" +
+        "\n" +
+        "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders.\n" +
+        "\n" +
+        "Type help to see available commands.\n"
     }
   ]);
   const [command, setCommand] = createSignal("");
@@ -392,14 +400,16 @@ export default function App() {
                   {(line, lineIndex) => (
                     <Show
                       when={
-                        entry.kind === "output"
+                        entry.kind === "output" || entry.kind === "banner"
                           ? findClickableCommandInLine(line, inferUsagePrefix(entry.text))
                           : null
                       }
-                      fallback={<div>{line}</div>}
+                      fallback={
+                        <div class={bannerLineClass(entry.kind, lineIndex())}>{line.length === 0 ? "\u00A0" : line}</div>
+                      }
                     >
                       {(match) => (
-                        <div>
+                        <div class={bannerLineClass(entry.kind, lineIndex())}>
                           <span>{line.slice(0, match().start)}</span>
                           <button
                             type="button"
@@ -408,7 +418,7 @@ export default function App() {
                               void runDisplayedCommand(match().command);
                             }}
                           >
-                            {line.slice(match().start, match().end)}
+                            {displayClickableSegment(line.slice(match().start, match().end), match().command)}
                           </button>
                           <span>{line.slice(match().end)}</span>
                         </div>
@@ -538,10 +548,29 @@ function entryClass(kind: EntryKind): string {
   if (kind === "info") {
     return `${base} text-info`;
   }
+  if (kind === "banner") {
+    return `${base} text-text`;
+  }
   return `${base} text-text`;
 }
 
 function findClickableCommandInLine(line: string, usagePrefix: string | null): CommandMatch | null {
+  const backtickMatch = line.match(/`([^`]+)`/);
+  if (backtickMatch) {
+    const candidate = backtickMatch[1].trim();
+    const commandTarget = resolveClickableCommandTarget(candidate);
+    if (commandTarget) {
+      const tickStart = line.indexOf(`\`${backtickMatch[1]}\``);
+      if (tickStart >= 0) {
+        return {
+          start: tickStart,
+          end: tickStart + backtickMatch[1].length + 2,
+          command: commandTarget
+        };
+      }
+    }
+  }
+
   const historyMatch = line.match(/^(\s*\d+:\s+)(.+?)\s*$/);
   if (historyMatch) {
     const prefix = historyMatch[1];
@@ -567,6 +596,20 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
       return {
         start,
         end: start + usageMatch[2].length,
+        command: commandTarget
+      };
+    }
+  }
+
+  const inlineTokenRegex = /\b(status|help|clear|history|config|npc)\b/gi;
+  let inlineMatch: RegExpExecArray | null;
+  while ((inlineMatch = inlineTokenRegex.exec(line)) !== null) {
+    const token = inlineMatch[1];
+    const commandTarget = resolveClickableCommandTarget(token);
+    if (commandTarget) {
+      return {
+        start: inlineMatch.index,
+        end: inlineMatch.index + token.length,
         command: commandTarget
       };
     }
@@ -830,4 +873,19 @@ function isEditableTarget(target: EventTarget | null): boolean {
   }
 
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
+}
+
+function bannerLineClass(kind: EntryKind, lineIndex: number): string {
+  if (kind === "banner" && lineIndex >= 1 && lineIndex <= 3) {
+    return "text-[#8ec07c]";
+  }
+  return "";
+}
+
+function displayClickableSegment(rawSegment: string, command: string): string {
+  const trimmed = rawSegment.trim();
+  if (trimmed.startsWith("`") && trimmed.endsWith("`")) {
+    return command;
+  }
+  return rawSegment;
 }
