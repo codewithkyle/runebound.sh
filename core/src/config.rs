@@ -4,7 +4,8 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
-const APP_DIR_NAME: &str = "dnd-assistant";
+const APP_DIR_NAME: &str = "runebound.sh";
+const WORKSPACE_DIR_NAME: &str = ".runebound.sh";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppConfig {
@@ -190,7 +191,7 @@ pub fn config_paths(workspace_root: &Path) -> Result<ConfigPaths> {
         dirs::config_dir().ok_or_else(|| anyhow!("unable to find config directory"))?;
 
     let global = config_base.join(APP_DIR_NAME).join("config.toml");
-    let workspace = workspace_root.join(".dnd-assistant").join("config.toml");
+    let workspace = workspace_root.join(WORKSPACE_DIR_NAME).join("config.toml");
 
     Ok(ConfigPaths { global, workspace })
 }

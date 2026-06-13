@@ -322,7 +322,12 @@ export default function App() {
         appendEntry("output", renderedOutput || "(ok)");
         pushCommandHistory(raw);
       } else {
-        appendEntry("error", response.error || renderedOutput || "command failed");
+        const errorText = response.error || renderedOutput || "command failed";
+        if (isBootstrapSetupMessage(errorText)) {
+          appendEntry("output", errorText);
+        } else {
+          appendEntry("error", errorText);
+        }
       }
     } catch (error) {
       appendEntry("error", `invoke error: ${String(error)}`);
@@ -370,6 +375,37 @@ export default function App() {
     inputRef?.focus();
   };
 
+  const runStartupStatusCheck = async () => {
+    if (running()) {
+      return;
+    }
+
+    setRunning(true);
+    try {
+      const response = await invoke<CommandResponse>("run_command", { input: "status" });
+      const renderedOutput = segmentsToText(response.segments, response.output);
+      if (response.ok) {
+        appendEntry("output", renderedOutput || "(ok)");
+        return;
+      }
+
+      const errorText = response.error || renderedOutput || "command failed";
+      if (isBootstrapSetupMessage(errorText)) {
+        appendEntry("output", errorText);
+        appendEntry(
+          "info",
+          "bootstrap tip: run `config init --vault-path <path> --ollama-base-url <url> --model <name>` then run `status` again."
+        );
+      } else {
+        appendEntry("error", errorText);
+      }
+    } catch (error) {
+      appendEntry("error", `startup check failed: ${String(error)}`);
+    } finally {
+      setRunning(false);
+    }
+  };
+
   onMount(() => {
     void loadManifest()
       .then((loadedManifest) => {
@@ -397,6 +433,7 @@ export default function App() {
     }
 
     inputRef?.focus();
+    void runStartupStatusCheck();
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
@@ -454,16 +491,16 @@ export default function App() {
                   {(line, lineIndex) => (
                     <Show
                       when={
-                        entry.kind === "output" || entry.kind === "banner"
+                        (entry.kind === "output" || entry.kind === "banner") && !isHeadingLine(line)
                           ? findClickableCommandInLine(line, inferUsagePrefix(entry.text, commandMeta()), commandMeta())
                           : null
                       }
                       fallback={
-                        <div class={bannerLineClass(entry.kind, lineIndex())}>{line.length === 0 ? "\u00A0" : line}</div>
+                        <div class={lineClass(entry.kind, lineIndex(), line)}>{line.length === 0 ? "\u00A0" : displayLine(line)}</div>
                       }
                     >
                       {(match) => (
-                        <div class={bannerLineClass(entry.kind, lineIndex())}>
+                        <div class={lineClass(entry.kind, lineIndex(), line)}>
                           <span>{line.slice(0, match().start)}</span>
                           <button
                             type="button"
@@ -858,11 +895,40 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
-function bannerLineClass(kind: EntryKind, lineIndex: number): string {
+function lineClass(kind: EntryKind, lineIndex: number, line: string): string {
+  if (isHeadingLine(line)) {
+    return "rb-heading-line rb-on-fg";
+  }
+
   if (kind === "banner" && lineIndex >= 1 && lineIndex <= 3) {
     return "text-[#8ec07c]";
   }
   return "";
+}
+
+function isHeadingLine(line: string): boolean {
+  const trimmed = line.trim();
+  if (!trimmed) {
+    return false;
+  }
+
+  if (trimmed.startsWith("# ") || trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
+    return true;
+  }
+
+  return /^([A-Za-z][A-Za-z0-9 /_-]{2,60}):$/.test(trimmed);
+}
+
+function displayLine(line: string): string {
+  const trimmed = line.trim();
+  if (trimmed.startsWith("# ") || trimmed.startsWith("## ") || trimmed.startsWith("### ")) {
+    return trimmed.replace(/^#{1,3}\s+/, "");
+  }
+  return line;
+}
+
+function isBootstrapSetupMessage(message: string): boolean {
+  return message.toLowerCase().includes("first-time setup required");
 }
 
 function displayClickableSegment(rawSegment: string, command: string): string {

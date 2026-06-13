@@ -189,12 +189,23 @@ async fn execute_config_command(workspace_root: &Path, command: ConfigCommand) -
 
 async fn execute_status(workspace_root: &Path) -> Result<String> {
     let loaded = load_effective(workspace_root)?;
+    let global_config_path = loaded.paths.global.display().to_string();
+    let workspace_config_path = loaded.paths.workspace.display().to_string();
     let config = loaded.effective;
 
     let issues = required_issues(&config);
     if !issues.is_empty() {
         bail!(
-            "first-time setup required. run `config init --vault-path <path> --ollama-base-url <url> --model <name>`\n- {}",
+            "## First-time setup required\n\
+             \n## Bootstrap config\n\
+             config init --vault-path <path> --ollama-base-url <url> --model <name>\n\
+             \n## Config paths\n\
+             - global: {global_config_path}\n\
+             - workspace: {workspace_config_path}\n\
+             \n## Optional next steps\n\
+             - use `config init --workspace ...` to keep settings local to this project\n\
+             - run `config show` to verify saved values\n\
+             \n## Missing required values\n- {}",
             issues.join("\n- ")
         );
     }

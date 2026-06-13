@@ -3,16 +3,32 @@
 @tailwind utilities;
 
 :root {
+  --gb-red-base: #cc241d;
+  --gb-green-base: #98971a;
+  --gb-yellow-base: #d79921;
+  --gb-blue-base: #458588;
+  --gb-purple-base: #b16286;
+  --gb-aqua-base: #689d6a;
+  --gb-orange-base: #d65d0e;
+
+  --gb-red-bright: #fb4934;
+  --gb-green-bright: #b8bb26;
+  --gb-yellow-bright: #fabd2f;
+  --gb-blue-bright: #83a598;
+  --gb-purple-bright: #d3869b;
+  --gb-aqua-bright: #8ec07c;
+  --gb-orange-bright: #fe8019;
+
   --color-bg: #282828;
   --color-surface: #32302f;
   --color-surface-2: #3c3836;
   --color-text: #ebdbb2;
   --color-muted: #a89984;
-  --color-accent: #d79921;
-  --color-success: #98971a;
-  --color-warning: #d79921;
-  --color-error: #cc241d;
-  --color-info: #458588;
+  --color-accent: var(--gb-yellow-bright);
+  --color-success: var(--gb-green-bright);
+  --color-warning: var(--gb-orange-bright);
+  --color-error: var(--gb-red-bright);
+  --color-info: var(--gb-blue-bright);
   --color-border: #504945;
 }
 
@@ -34,6 +50,22 @@ body {
   font-family: "IBM Plex Mono", "JetBrains Mono", "Fira Code", "Cascadia Mono", "Consolas", monospace;
   font-size: 16px;
   line-height: 1.375;
+}
+
+.rb-on-fg {
+  --color-accent: var(--gb-yellow-base);
+  --color-success: var(--gb-green-base);
+  --color-warning: var(--gb-orange-base);
+  --color-error: var(--gb-red-base);
+  --color-info: var(--gb-blue-base);
+}
+
+.rb-heading-line {
+  background: var(--color-text);
+  color: var(--color-bg);
+  border-radius: 2px;
+  padding: 2px 8px;
+  margin: 2px 0;
 }
 
 input,

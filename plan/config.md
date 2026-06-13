@@ -10,10 +10,10 @@
 ## Config Files and Precedence
 
 - Global config (machine-level):
-  - Linux: `~/.config/dnd-assistant/config.toml`
-  - Windows: `%APPDATA%\\dnd-assistant\\config.toml`
+  - Linux: `~/.config/runebound.sh/config.toml`
+  - Windows: `%APPDATA%\\runebound.sh\\config.toml`
 - Workspace config (project-level override):
-  - `.dnd-assistant/config.toml`
+  - `.runebound.sh/config.toml`
 - Precedence (highest to lowest):
   - Command flags
   - Workspace config
@@ -24,7 +24,7 @@
 
 ### Trigger
 
-- If required config is missing or invalid, prompt user into setup wizard.
+- If required config is missing or invalid, show startup guidance and suggest `config init` bootstrap commands.
 
 ### Wizard steps
 
