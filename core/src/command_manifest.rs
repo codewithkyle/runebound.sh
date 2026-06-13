@@ -163,16 +163,9 @@ pub fn command_manifest() -> CommandManifest {
                     },
                     SubcommandSpec {
                         name: "test".to_string(),
-                        summary: "Run quick config checks".to_string(),
+                        summary: "Run full config diagnostics".to_string(),
                         options: Vec::new(),
                         examples: vec!["config test".to_string()],
-                        clap_managed: true,
-                    },
-                    SubcommandSpec {
-                        name: "doctor".to_string(),
-                        summary: "Run extended config checks".to_string(),
-                        options: Vec::new(),
-                        examples: vec!["config doctor".to_string()],
                         clap_managed: true,
                     },
                     SubcommandSpec {

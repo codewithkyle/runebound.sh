@@ -41,7 +41,6 @@ pub enum ConfigCommand {
     Init(InitArgs),
     Show,
     Test,
-    Doctor,
 }
 
 #[derive(Debug, Clone, Args, Default)]
@@ -207,19 +206,9 @@ async fn execute_config_command(
         }
         ConfigCommand::Test => {
             let loaded = load_effective(workspace_root)?;
-            let report = health::run_quick_checks(&loaded.effective).await;
+            let report = health::run_doctor_checks(&loaded.effective, workspace_root).await;
             let out = format_report("config test", &report);
             let output_doc = report_output_doc("Config Test", &report);
-            if !report.is_ok() {
-                bail!("{out}\none or more checks failed");
-            }
-            Ok(CommandOutput::with_doc(out, output_doc))
-        }
-        ConfigCommand::Doctor => {
-            let loaded = load_effective(workspace_root)?;
-            let report = health::run_doctor_checks(&loaded.effective, workspace_root).await;
-            let out = format_report("config doctor", &report);
-            let output_doc = report_output_doc("Config Doctor", &report);
             if !report.is_ok() {
                 bail!("{out}\none or more checks failed");
             }

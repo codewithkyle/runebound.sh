@@ -55,9 +55,7 @@
 - `config unset <key>`
   - Remove one key from selected scope.
 - `config test`
-  - Quick validation for required settings and connectivity.
-- `config doctor`
-  - Deep diagnostics and recommended fixes.
+  - Full diagnostics and recommended fixes.
 - `config reset`
   - Interactive reset/reinitialize for selected scope.
 
@@ -121,17 +119,14 @@ show_inline_help = true
   - `vault.path is not writable: /path/to/vault`
   - `Cannot reach Ollama at http://127.0.0.1:11434 (timeout)`
 
-## Test and Doctor Semantics
+## Test Semantics
 
-### `config test` (quick)
+### `config test` (full)
 
 - Verify required keys are set.
 - Verify vault path exists/writable.
 - Verify Ollama endpoint reachable.
 - Verify configured model exists (warning-only if missing).
-
-### `config doctor` (deep)
-
 - Explain effective merge source per key.
 - Validate permissions and path normalization.
 - Check recommended vault directories (`npcs/`, `.trash/npcs/`).
