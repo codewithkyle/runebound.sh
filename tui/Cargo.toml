@@ -1,0 +1,15 @@
+[package]
+name = "tui"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dialoguer.workspace = true
+dnd-core = { path = "../core" }
+reqwest.workspace = true
+serde_json.workspace = true
+shellexpand.workspace = true
+tokio.workspace = true
+toml.workspace = true

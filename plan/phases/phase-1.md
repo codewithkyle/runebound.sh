@@ -65,21 +65,21 @@ Deliver a runnable Rust CLI (no Tauri yet) with first-time config setup, SQLite 
 
 ## Phase 1 Checklist
 
-- [ ] Rust workspace created with `core` and `tui` crates
-- [ ] `clap` integrated for command parsing
-- [ ] `sqlx` + SQLite dependency integrated and build passes
-- [ ] SQLite database bootstrap implemented
-- [ ] Initial migrations added and auto-applied
-- [ ] Config loader for global/workspace TOML implemented
-- [ ] First-time setup wizard implemented and required
-- [ ] Setup prompts for vault path, Ollama URL, and model
-- [ ] Config validation implemented for required keys and path/url sanity
-- [ ] Config saved and reloaded correctly on restart
-- [ ] Vault read/write service implemented
-- [ ] Vault top-level folders auto-created (`npcs`, `locations`, `items`, `factions`)
-- [ ] Path traversal protections in vault access layer
-- [ ] `config init`, `config show`, `config test`, `config doctor` available
-- [ ] Program can be built and run as CLI without Tauri
+- [x] Rust workspace created with `core` and `tui` crates
+- [x] `clap` integrated for command parsing
+- [x] `sqlx` + SQLite dependency integrated and build passes
+- [x] SQLite database bootstrap implemented
+- [x] Initial migrations added and auto-applied
+- [x] Config loader for global/workspace TOML implemented
+- [x] First-time setup wizard implemented and required
+- [x] Setup prompts for vault path, Ollama URL, and model
+- [x] Config validation implemented for required keys and path/url sanity
+- [x] Config saved and reloaded correctly on restart
+- [x] Vault read/write service implemented
+- [x] Vault top-level folders auto-created (`npcs`, `locations`, `items`, `factions`)
+- [x] Path traversal protections in vault access layer
+- [x] `config init`, `config show`, `config test`, `config doctor` available
+- [x] Program can be built and run as CLI without Tauri
 
 ## Exit Criteria
 
