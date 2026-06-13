@@ -5,6 +5,8 @@ use clap::error::ErrorKind;
 use clap::{Args, Parser, Subcommand};
 use serde::Serialize;
 
+use crate::command_manifest::command_manifest;
+use crate::command_parse::normalize_alias_tokens;
 use crate::config::{
     ConfigScope, determine_default_write_scope, load_effective, required_issues, save_config,
     validate_for_runtime,
@@ -60,29 +62,62 @@ pub struct CommandResponse {
     pub output: String,
     pub error: Option<String>,
     pub exit_code: i32,
+    pub segments: Vec<OutputSegment>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct OutputSegment {
+    pub kind: OutputSegmentKind,
+    pub text: String,
+    pub command_ref: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutputSegmentKind {
+    Text,
+    Error,
 }
 
 pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse {
     match execute_line_result(workspace_root, input).await {
-        Ok(output) => CommandResponse {
-            ok: true,
-            output,
-            error: None,
-            exit_code: 0,
-        },
-        Err(err) => CommandResponse {
-            ok: false,
-            output: String::new(),
-            error: Some(err.to_string()),
-            exit_code: 1,
-        },
+        Ok(output) => {
+            let output_text = output.clone();
+            CommandResponse {
+                ok: true,
+                output,
+                error: None,
+                exit_code: 0,
+                segments: vec![OutputSegment {
+                    kind: OutputSegmentKind::Text,
+                    text: output_text,
+                    command_ref: None,
+                }],
+            }
+        }
+        Err(err) => {
+            let error_text = err.to_string();
+            CommandResponse {
+                ok: false,
+                output: String::new(),
+                error: Some(error_text.clone()),
+                exit_code: 1,
+                segments: vec![OutputSegment {
+                    kind: OutputSegmentKind::Error,
+                    text: error_text,
+                    command_ref: None,
+                }],
+            }
+        }
     }
 }
 
 pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<String> {
     let mut argv = vec!["dnd-assistant".to_string()];
-    let parsed_words = shell_words::split(input).map_err(|e| anyhow!("invalid command input: {e}"))?;
-    argv.extend(parsed_words);
+    let parsed_words =
+        shell_words::split(input).map_err(|e| anyhow!("invalid command input: {e}"))?;
+    let normalized_words = normalize_alias_tokens(&parsed_words, &command_manifest());
+    argv.extend(normalized_words);
 
     let cli = match Cli::try_parse_from(argv) {
         Ok(cli) => cli,
@@ -110,8 +145,14 @@ async fn execute_config_command(workspace_root: &Path, command: ConfigCommand) -
         ConfigCommand::Show => {
             let loaded = load_effective(workspace_root)?;
             let mut out = String::new();
-            out.push_str(&format!("global config: {}\n", loaded.paths.global.display()));
-            out.push_str(&format!("workspace config: {}\n", loaded.paths.workspace.display()));
+            out.push_str(&format!(
+                "global config: {}\n",
+                loaded.paths.global.display()
+            ));
+            out.push_str(&format!(
+                "workspace config: {}\n",
+                loaded.paths.workspace.display()
+            ));
             out.push('\n');
             out.push_str(&toml::to_string_pretty(&loaded.effective)?);
 

@@ -51,10 +51,7 @@ impl Vault {
         let full = self.resolve_relative(relative)?;
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent).with_context(|| {
-                format!(
-                    "failed to create parent directories for {}",
-                    full.display()
-                )
+                format!("failed to create parent directories for {}", full.display())
             })?;
         }
 

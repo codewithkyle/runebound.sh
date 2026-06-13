@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
+import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
+import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner";
 
@@ -14,11 +16,25 @@ type CommandResponse = {
   output: string;
   error?: string | null;
   exit_code: number;
+  segments?: OutputSegment[];
 };
 
-type SuggestionItem = {
-  label: string;
-  completion: string;
+type OutputSegment = {
+  kind: "text" | "error";
+  text: string;
+  command_ref?: string | null;
+};
+
+type InlineCommandMeta = {
+  commands: Set<string>;
+  commandMap: Map<string, CommandSpecMeta>;
+};
+
+type CommandSpecMeta = {
+  name: string;
+  subcommands: Set<string>;
+  requiresSubcommand: boolean;
+  canonicalHelpCommand: string | null;
 };
 
 type CommandMatch = {
@@ -27,15 +43,8 @@ type CommandMatch = {
   command: string;
 };
 
-const TOP_LEVEL_COMMANDS = ["status", "config", "npc", "help", "clear", "history", "exit"];
-const CONFIG_SUBCOMMANDS = ["init", "show", "test", "doctor", "help"];
-const NPC_SUBCOMMANDS = ["create", "list", "show", "edit", "refs", "delete", "help"];
-const CONFIG_INIT_FLAGS = ["--vault-path", "--ollama-base-url", "--model", "--global", "--workspace", "--skip-test"];
-const CLEAR_FLAGS = ["--history"];
-const HISTORY_SUBCOMMANDS = ["clear"];
 const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
 const MAX_COMMAND_HISTORY = 50;
-const SUBCOMMAND_ROOTS = ["config", "npc"];
 
 export default function App() {
   const [entries, setEntries] = createSignal<HistoryEntry[]>([
@@ -60,12 +69,17 @@ export default function App() {
   const [commandHistory, setCommandHistory] = createSignal<string[]>([]);
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
+  const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
+  const [parsedInput, setParsedInput] = createSignal<ParseResult | null>(null);
+
+  const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
   const suggestionList = createMemo(() => {
     if (command().trim().length === 0 || running() || suggestionsDismissed()) {
       return [] as SuggestionItem[];
     }
-    return buildSuggestions(command());
+
+    return buildAutocompleteSuggestions(command(), manifest(), parsedInput());
   });
 
   createEffect(() => {
@@ -81,6 +95,32 @@ export default function App() {
 
   let outputRef: HTMLDivElement | undefined;
   let inputRef: HTMLInputElement | undefined;
+  let parseGeneration = 0;
+
+  createEffect(() => {
+    const currentCommand = command();
+    const loadedManifest = manifest();
+
+    if (!loadedManifest) {
+      setParsedInput(null);
+      return;
+    }
+
+    const generation = parseGeneration + 1;
+    parseGeneration = generation;
+
+    void parseInput(currentCommand)
+      .then((result) => {
+        if (parseGeneration === generation) {
+          setParsedInput(result);
+        }
+      })
+      .catch(() => {
+        if (parseGeneration === generation) {
+          setParsedInput(null);
+        }
+      });
+  });
 
   const appendEntry = (kind: EntryKind, text: string) => {
     setEntries((prev) => [
@@ -277,11 +317,12 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
+      const renderedOutput = segmentsToText(response.segments, response.output);
       if (response.ok) {
-        appendEntry("output", response.output || "(ok)");
+        appendEntry("output", renderedOutput || "(ok)");
         pushCommandHistory(raw);
       } else {
-        appendEntry("error", response.error || "command failed");
+        appendEntry("error", response.error || renderedOutput || "command failed");
       }
     } catch (error) {
       appendEntry("error", `invoke error: ${String(error)}`);
@@ -330,6 +371,14 @@ export default function App() {
   };
 
   onMount(() => {
+    void loadManifest()
+      .then((loadedManifest) => {
+        setManifest(loadedManifest);
+      })
+      .catch(() => {
+        setManifest(null);
+      });
+
     try {
       const serialized = window.localStorage.getItem(HISTORY_STORAGE_KEY);
       if (serialized) {
@@ -406,7 +455,7 @@ export default function App() {
                     <Show
                       when={
                         entry.kind === "output" || entry.kind === "banner"
-                          ? findClickableCommandInLine(line, inferUsagePrefix(entry.text))
+                          ? findClickableCommandInLine(line, inferUsagePrefix(entry.text, commandMeta()), commandMeta())
                           : null
                       }
                       fallback={
@@ -542,6 +591,14 @@ export default function App() {
   );
 }
 
+function segmentsToText(segments: OutputSegment[] | undefined, fallback: string): string {
+  if (!segments || segments.length === 0) {
+    return fallback;
+  }
+
+  return segments.map((segment) => segment.text).join("\n");
+}
+
 function entryClass(kind: EntryKind): string {
   const base = "whitespace-pre-wrap break-words";
   if (kind === "input") {
@@ -559,11 +616,11 @@ function entryClass(kind: EntryKind): string {
   return `${base} text-text`;
 }
 
-function findClickableCommandInLine(line: string, usagePrefix: string | null): CommandMatch | null {
+function findClickableCommandInLine(line: string, usagePrefix: string | null, meta: InlineCommandMeta): CommandMatch | null {
   const backtickMatch = line.match(/`([^`]+)`/);
   if (backtickMatch) {
     const candidate = backtickMatch[1].trim();
-    const commandTarget = resolveClickableCommandTarget(candidate);
+    const commandTarget = resolveClickableCommandTarget(candidate, meta);
     if (commandTarget) {
       const tickStart = line.indexOf(`\`${backtickMatch[1]}\``);
       if (tickStart >= 0) {
@@ -580,7 +637,7 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
   if (historyMatch) {
     const prefix = historyMatch[1];
     const candidate = historyMatch[2].trim();
-    const commandTarget = resolveClickableCommandTarget(candidate);
+    const commandTarget = resolveClickableCommandTarget(candidate, meta);
     if (commandTarget) {
       const start = prefix.length;
       return {
@@ -595,7 +652,7 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
   if (usageMatch) {
     const prefix = usageMatch[1];
     const candidate = usageMatch[2].trim();
-    const commandTarget = resolveClickableCommandTarget(candidate);
+    const commandTarget = resolveClickableCommandTarget(candidate, meta);
     if (commandTarget) {
       const start = prefix.length;
       return {
@@ -606,17 +663,20 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
     }
   }
 
-  const inlineTokenRegex = /\b(status|help|clear|history|config|npc|exit)\b/gi;
-  let inlineMatch: RegExpExecArray | null;
-  while ((inlineMatch = inlineTokenRegex.exec(line)) !== null) {
-    const token = inlineMatch[1];
-    const commandTarget = resolveClickableCommandTarget(token);
-    if (commandTarget) {
-      return {
-        start: inlineMatch.index,
-        end: inlineMatch.index + token.length,
-        command: commandTarget
-      };
+  if (meta.commands.size > 0) {
+    const escaped = [...meta.commands].map((token) => token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("|");
+    const inlineTokenRegex = new RegExp(`\\b(${escaped})\\b`, "gi");
+    let inlineMatch: RegExpExecArray | null;
+    while ((inlineMatch = inlineTokenRegex.exec(line)) !== null) {
+      const token = inlineMatch[1];
+      const commandTarget = resolveClickableCommandTarget(token, meta);
+      if (commandTarget) {
+        return {
+          start: inlineMatch.index,
+          end: inlineMatch.index + token.length,
+          command: commandTarget
+        };
+      }
     }
   }
 
@@ -625,7 +685,7 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
     const token = commandTableMatch[2].trim().toLowerCase();
     const tokenStart = line.indexOf(commandTableMatch[2]);
     if (tokenStart >= 0) {
-      if (usagePrefix && isValidSubcommandForRoot(usagePrefix, token)) {
+      if (usagePrefix && isValidSubcommandForRoot(usagePrefix, token, meta)) {
         return {
           start: tokenStart,
           end: tokenStart + commandTableMatch[2].length,
@@ -633,7 +693,7 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
         };
       }
 
-      const commandTarget = resolveClickableCommandTarget(token);
+      const commandTarget = resolveClickableCommandTarget(token, meta);
       if (commandTarget) {
         return {
           start: tokenStart,
@@ -649,7 +709,7 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
     return null;
   }
 
-  const commandTarget = resolveClickableCommandTarget(trimmed);
+  const commandTarget = resolveClickableCommandTarget(trimmed, meta);
   if (commandTarget) {
     const start = line.indexOf(trimmed);
     if (start >= 0) {
@@ -664,25 +724,26 @@ function findClickableCommandInLine(line: string, usagePrefix: string | null): C
   return null;
 }
 
-function resolveClickableCommandTarget(candidate: string): string | null {
+function resolveClickableCommandTarget(candidate: string, meta: InlineCommandMeta): string | null {
   const trimmed = candidate.trim();
   if (!trimmed) {
     return null;
   }
 
-  if (isValidCommandLike(trimmed)) {
+  if (isValidCommandLike(trimmed, meta)) {
     return trimmed;
   }
 
   const lowered = trimmed.toLowerCase();
-  if (SUBCOMMAND_ROOTS.includes(lowered)) {
-    return `${lowered} --help`;
+  const command = meta.commandMap.get(lowered);
+  if (command && command.requiresSubcommand && command.canonicalHelpCommand) {
+    return command.canonicalHelpCommand;
   }
 
   return null;
 }
 
-function inferUsagePrefix(output: string): string | null {
+function inferUsagePrefix(output: string, meta: InlineCommandMeta): string | null {
   const usageLine = output
     .split("\n")
     .map((line) => line.trim())
@@ -698,23 +759,19 @@ function inferUsagePrefix(output: string): string | null {
     return null;
   }
 
-  return TOP_LEVEL_COMMANDS.includes(firstToken) ? firstToken : null;
+  return meta.commands.has(firstToken) ? firstToken : null;
 }
 
-function isValidSubcommandForRoot(root: string, subcommand: string): boolean {
-  if (root === "config") {
-    return CONFIG_SUBCOMMANDS.includes(subcommand);
+function isValidSubcommandForRoot(root: string, subcommand: string, meta: InlineCommandMeta): boolean {
+  const command = meta.commandMap.get(root.toLowerCase());
+  if (!command) {
+    return false;
   }
-  if (root === "npc") {
-    return NPC_SUBCOMMANDS.includes(subcommand);
-  }
-  if (root === "history") {
-    return HISTORY_SUBCOMMANDS.includes(subcommand);
-  }
-  return false;
+
+  return command.subcommands.has(subcommand.toLowerCase());
 }
 
-function isValidCommandLike(input: string): boolean {
+function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
   const trimmed = input.trim();
   if (!trimmed) {
     return false;
@@ -729,143 +786,64 @@ function isValidCommandLike(input: string): boolean {
 
   const tokens = trimmed.split(/\s+/);
   const lowered = tokens.map((token) => token.toLowerCase());
-
-  if (lowered.length === 1) {
-    return ["status", "help", "clear", "history", "exit"].includes(lowered[0]);
+  const root = lowered[0];
+  const command = meta.commandMap.get(root);
+  if (!command) {
+    return false;
   }
 
-  if (lowered[0] === "clear") {
-    return lowered.length === 2 && lowered[1] === "--history";
+  if (lowered.length === 1 && !command.requiresSubcommand) {
+    return true;
   }
 
-  if (lowered[0] === "history") {
+  if (root === "history") {
     if (lowered.length === 2 && lowered[1] === "clear") {
       return true;
     }
-    return lowered.length === 2 && /^\d+$/.test(lowered[1]);
-  }
 
-  if (lowered[0] === "config") {
-    if (lowered.length < 2) {
-      return false;
-    }
-    const subcommand = lowered[1];
-    if (subcommand === "init") {
+    if (lowered.length === 2 && /^\d+$/.test(lowered[1])) {
       return true;
     }
-    return ["show", "test", "doctor", "help"].includes(subcommand) && lowered.length === 2;
   }
 
-  if (lowered[0] === "npc") {
-    return lowered.length >= 2 && NPC_SUBCOMMANDS.includes(lowered[1]);
+  if (lowered.length >= 2 && command.subcommands.has(lowered[1])) {
+    return true;
+  }
+
+  if (lowered.length >= 2 && lowered[1] === "--help") {
+    return true;
+  }
+
+  if (root === "clear") {
+    return lowered.length === 2 && lowered[1] === "--history";
   }
 
   return false;
 }
 
-function buildSuggestions(input: string): SuggestionItem[] {
-  const raw = input;
-  const trimmed = raw.trim();
-  const lowered = trimmed.toLowerCase();
-  const endsWithSpace = raw.endsWith(" ");
-  const tokens = trimmed.length === 0 ? [] : trimmed.split(/\s+/);
-  const loweredTokens = lowered.length === 0 ? [] : lowered.split(/\s+/);
-
-  if (tokens.length === 0) {
-    return [];
+function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
+  if (!manifest) {
+    return {
+      commands: new Set<string>(),
+      commandMap: new Map<string, CommandSpecMeta>()
+    };
   }
 
-  if (tokens.length === 1 && !endsWithSpace) {
-    const prefix = loweredTokens[0];
-    return TOP_LEVEL_COMMANDS.filter((item) => item.startsWith(prefix)).map((label) => ({
-      label,
-      completion: `${label} `
-    }));
-  }
-
-  const root = loweredTokens[0];
-  if (root === "config") {
-    return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, CONFIG_SUBCOMMANDS, {
-      init: CONFIG_INIT_FLAGS
+  const commandMap = new Map<string, CommandSpecMeta>();
+  for (const command of manifest.commands) {
+    const name = command.name.toLowerCase();
+    commandMap.set(name, {
+      name,
+      subcommands: new Set(command.subcommands.map((subcommand) => subcommand.name.toLowerCase())),
+      requiresSubcommand: command.requires_subcommand,
+      canonicalHelpCommand: command.canonical_help_command ?? null
     });
   }
 
-  if (root === "npc") {
-    return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, NPC_SUBCOMMANDS, {});
-  }
-
-  if (root === "clear") {
-    return buildFlagSuggestions(raw, tokens, endsWithSpace, CLEAR_FLAGS);
-  }
-
-  if (root === "history") {
-    return buildSubcommandSuggestions(raw, tokens, loweredTokens, endsWithSpace, HISTORY_SUBCOMMANDS, {});
-  }
-
-  return [];
-}
-
-function buildFlagSuggestions(raw: string, tokens: string[], endsWithSpace: boolean, flags: string[]): SuggestionItem[] {
-  if (tokens.length === 1 && endsWithSpace) {
-    return flags.map((flag) => ({
-      label: `${tokens[0]} ${flag}`,
-      completion: `${tokens[0]} ${flag}`
-    }));
-  }
-
-  if (tokens.length === 2 && !endsWithSpace) {
-    const current = tokens[1].toLowerCase();
-    return flags
-      .filter((flag) => flag.startsWith(current))
-      .map((flag) => ({
-        label: `${tokens[0]} ${flag}`,
-        completion: `${tokens[0]} ${flag}`
-      }));
-  }
-
-  return [];
-}
-
-function buildSubcommandSuggestions(
-  raw: string,
-  tokens: string[],
-  loweredTokens: string[],
-  endsWithSpace: boolean,
-  subcommands: string[],
-  flagsBySubcommand: Record<string, string[]>
-): SuggestionItem[] {
-  if (tokens.length === 1 && endsWithSpace) {
-    return subcommands.map((subcommand) => ({
-      label: `${tokens[0]} ${subcommand}`,
-      completion: `${tokens[0]} ${subcommand} `
-    }));
-  }
-
-  if (tokens.length === 2 && !endsWithSpace) {
-    const prefix = loweredTokens[1];
-    return subcommands
-      .filter((subcommand) => subcommand.startsWith(prefix))
-      .map((subcommand) => ({
-        label: `${tokens[0]} ${subcommand}`,
-        completion: `${tokens[0]} ${subcommand} `
-      }));
-  }
-
-  const subcommand = loweredTokens[1];
-  const flags = flagsBySubcommand[subcommand] ?? [];
-  if (flags.length === 0) {
-    return [];
-  }
-
-  const currentToken = endsWithSpace ? "" : tokens[tokens.length - 1];
-  const base = raw.slice(0, raw.length - currentToken.length);
-
-  return flags
-    .filter((flag) => flag.startsWith(currentToken))
-    .map((flag) => ({
-      label: `${tokens[0]} ${subcommand} ${flag}`,
-      completion: `${base}${flag} `
-    }));
+  return {
+    commands: new Set([...commandMap.keys()]),
+    commandMap
+  };
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {

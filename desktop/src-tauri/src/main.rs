@@ -3,6 +3,8 @@
 use std::path::PathBuf;
 
 use dnd_core::command::CommandResponse;
+use dnd_core::command_manifest::{CommandManifest, command_manifest};
+use dnd_core::command_parse::{ParseResult, parse_command_input as parse_shared_command_input};
 
 struct AppState {
     workspace_root: PathBuf,
@@ -17,6 +19,16 @@ async fn run_command(
 }
 
 #[tauri::command]
+fn get_command_manifest() -> CommandManifest {
+    command_manifest()
+}
+
+#[tauri::command]
+fn parse_command_input(input: String) -> ParseResult {
+    parse_shared_command_input(&input)
+}
+
+#[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -26,7 +38,12 @@ fn main() {
 
     tauri::Builder::default()
         .manage(AppState { workspace_root })
-        .invoke_handler(tauri::generate_handler![run_command, exit_app])
+        .invoke_handler(tauri::generate_handler![
+            run_command,
+            get_command_manifest,
+            parse_command_input,
+            exit_app
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

@@ -93,7 +93,10 @@ async fn run_setup_wizard(workspace_root: &Path, args: InitArgs) -> Result<AppCo
         fetch_ollama_models(&config.ollama.base_url, config.ollama.timeout_seconds)
             .await
             .unwrap_or_default();
-    config.ollama.model = Some(prompt_model(config.ollama.model.clone(), &discovered_models)?);
+    config.ollama.model = Some(prompt_model(
+        config.ollama.model.clone(),
+        &discovered_models,
+    )?);
 
     if !args.skip_test {
         let report = health::run_quick_checks(&config).await;

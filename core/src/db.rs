@@ -28,12 +28,9 @@ pub async fn init_database_at_path(path: &Path) -> Result<Database> {
         .create_if_missing(true)
         .disable_statement_logging();
 
-    let pool = SqlitePool::connect_with(options).await.with_context(|| {
-        format!(
-            "failed to connect to sqlite database at {}",
-            path.display()
-        )
-    })?;
+    let pool = SqlitePool::connect_with(options)
+        .await
+        .with_context(|| format!("failed to connect to sqlite database at {}", path.display()))?;
 
     MIGRATOR
         .run(&pool)
@@ -51,7 +48,9 @@ pub async fn health_check(pool: &SqlitePool) -> Result<()> {
         .fetch_one(pool)
         .await
         .context("sqlite health check query failed")?;
-    let ok: i64 = row.try_get("ok").context("sqlite health check row invalid")?;
+    let ok: i64 = row
+        .try_get("ok")
+        .context("sqlite health check row invalid")?;
 
     if ok != 1 {
         return Err(anyhow!("sqlite health check returned unexpected value"));

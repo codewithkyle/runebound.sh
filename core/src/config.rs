@@ -154,7 +154,11 @@ pub fn load_effective(workspace_root: &Path) -> Result<LoadedConfig> {
     })
 }
 
-pub fn save_config(workspace_root: &Path, scope: ConfigScope, config: &AppConfig) -> Result<PathBuf> {
+pub fn save_config(
+    workspace_root: &Path,
+    scope: ConfigScope,
+    config: &AppConfig,
+) -> Result<PathBuf> {
     let paths = config_paths(workspace_root)?;
     let target = match scope {
         ConfigScope::Global => paths.global,
@@ -182,7 +186,8 @@ pub fn determine_default_write_scope(loaded: &LoadedConfig) -> ConfigScope {
 }
 
 pub fn config_paths(workspace_root: &Path) -> Result<ConfigPaths> {
-    let config_base = dirs::config_dir().ok_or_else(|| anyhow!("unable to find config directory"))?;
+    let config_base =
+        dirs::config_dir().ok_or_else(|| anyhow!("unable to find config directory"))?;
 
     let global = config_base.join(APP_DIR_NAME).join("config.toml");
     let workspace = workspace_root.join(".dnd-assistant").join("config.toml");
