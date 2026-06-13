@@ -381,9 +381,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "clap",
  "dirs",
  "reqwest",
  "serde",
+ "shell-words",
  "sqlx",
  "tokio",
  "toml",

@@ -2,131 +2,57 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use clap::{Args, Parser, Subcommand};
+use clap::Parser;
 use dialoguer::{Confirm, Input, Select};
+use dnd_core::command::{Cli, Command, ConfigCommand, InitArgs, execute_parsed};
 use dnd_core::config::{
     AppConfig, ConfigScope, determine_default_write_scope, load_effective, required_issues,
-    save_config, validate_for_runtime,
+    save_config,
 };
 use dnd_core::db;
 use dnd_core::health::{self, CheckReport};
 use dnd_core::vault::{Vault, is_path_writable};
-
-#[derive(Debug, Parser)]
-#[command(name = "dnd-assistant")]
-#[command(about = "D&D assistant CLI bootstrap", long_about = None)]
-struct Cli {
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
-    Status,
-}
-
-#[derive(Debug, Subcommand)]
-enum ConfigCommand {
-    Init(InitArgs),
-    Show,
-    Test,
-    Doctor,
-}
-
-#[derive(Debug, Clone, Args)]
-struct InitArgs {
-    #[arg(long)]
-    global: bool,
-    #[arg(long)]
-    workspace: bool,
-    #[arg(long)]
-    skip_test: bool,
-}
 
 #[tokio::main]
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     let workspace_root = std::env::current_dir()?;
 
-    match cli.command {
-        Some(Command::Config { command }) => handle_config_command(&workspace_root, command).await?,
-        Some(Command::Status) => run_startup(&workspace_root).await?,
-        None => run_startup(&workspace_root).await?,
+    if cli.command.is_none() {
+        run_startup(&workspace_root).await?;
+        return Ok(());
     }
 
-    Ok(())
-}
-
-async fn handle_config_command(workspace_root: &Path, command: ConfigCommand) -> Result<()> {
-    match command {
-        ConfigCommand::Init(args) => {
-            let _ = run_setup_wizard(workspace_root, args).await?;
-        }
-        ConfigCommand::Show => {
-            let loaded = load_effective(workspace_root)?;
-            println!("global config: {}", loaded.paths.global.display());
-            println!("workspace config: {}", loaded.paths.workspace.display());
-            println!("\n{}", toml::to_string_pretty(&loaded.effective)?);
-
-            let issues = required_issues(&loaded.effective);
-            if !issues.is_empty() {
-                println!("incomplete config:");
-                for issue in issues {
-                    println!("- {issue}");
-                }
-            }
-        }
-        ConfigCommand::Test => {
-            let loaded = load_effective(workspace_root)?;
-            let report = health::run_quick_checks(&loaded.effective).await;
-            print_report("config test", &report);
-            if !report.is_ok() {
-                bail!("one or more checks failed");
-            }
-        }
-        ConfigCommand::Doctor => {
-            let loaded = load_effective(workspace_root)?;
-            let report = health::run_doctor_checks(&loaded.effective, workspace_root).await;
-            print_report("config doctor", &report);
-            if !report.is_ok() {
-                bail!("one or more checks failed");
-            }
+    if let Some(Command::Config {
+        command: ConfigCommand::Init(args),
+    }) = &cli.command
+    {
+        if is_interactive_init(args) {
+            let _ = run_setup_wizard(&workspace_root, args.clone()).await?;
+            return Ok(());
         }
     }
 
+    let output = execute_parsed(&workspace_root, cli).await?;
+    println!("{output}");
     Ok(())
 }
 
 async fn run_startup(workspace_root: &Path) -> Result<()> {
     let loaded = load_effective(workspace_root)?;
-
-    let config = if required_issues(&loaded.effective).is_empty() {
-        loaded.effective
-    } else {
+    if !required_issues(&loaded.effective).is_empty() {
         println!("first-time setup is required before continuing.");
-        run_setup_wizard(workspace_root, InitArgs::default()).await?
-    };
+        let _ = run_setup_wizard(workspace_root, InitArgs::default()).await?;
+    }
 
-    validate_for_runtime(&config)?;
-
-    let vault_path = config
-        .vault
-        .path
-        .clone()
-        .ok_or_else(|| anyhow::anyhow!("vault.path is not configured"))?;
-    let vault = Vault::new(vault_path);
-    vault.ensure_structure()?;
-
-    let db = db::init_database().await?;
-    db::health_check(&db.pool).await?;
-
-    println!("ready");
-    println!("vault: {}", vault.root().display());
-    println!("database: {}", db.path.display());
+    let output = execute_parsed(
+        workspace_root,
+        Cli {
+            command: Some(Command::Status),
+        },
+    )
+    .await?;
+    println!("{output}");
 
     Ok(())
 }
@@ -163,9 +89,10 @@ async fn run_setup_wizard(workspace_root: &Path, args: InitArgs) -> Result<AppCo
         .interact_text()?;
     config.ollama.base_url = ollama_base;
 
-    let discovered_models = fetch_ollama_models(&config.ollama.base_url, config.ollama.timeout_seconds)
-        .await
-        .unwrap_or_default();
+    let discovered_models =
+        fetch_ollama_models(&config.ollama.base_url, config.ollama.timeout_seconds)
+            .await
+            .unwrap_or_default();
     config.ollama.model = Some(prompt_model(config.ollama.model.clone(), &discovered_models)?);
 
     if !args.skip_test {
@@ -293,12 +220,11 @@ fn print_report(title: &str, report: &CheckReport) {
     }
 }
 
-impl Default for InitArgs {
-    fn default() -> Self {
-        Self {
-            global: false,
-            workspace: false,
-            skip_test: false,
-        }
-    }
+fn is_interactive_init(args: &InitArgs) -> bool {
+    !args.global
+        && !args.workspace
+        && !args.skip_test
+        && args.vault_path.is_none()
+        && args.ollama_base_url.is_none()
+        && args.model.is_none()
 }

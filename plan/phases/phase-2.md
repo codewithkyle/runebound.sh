@@ -108,16 +108,16 @@ Add a Tauri desktop shell that presents a fake CLI/TUI interface with:
 
 ## Phase 2 Checklist
 
-- [ ] Tauri app scaffolded and runs locally
-- [ ] SolidJS + Vite + Tailwind scaffolded for frontend
-- [ ] Shared command-dispatch path reusable by CLI and Tauri
-- [ ] `run_command` Tauri backend command implemented
-- [ ] Full-height fake terminal layout implemented
-- [ ] Bottom-locked command input implemented
-- [ ] Scrollable output/history panel implemented
-- [ ] Command result rendering (ok/warn/error) implemented
-- [ ] Basic command hint strip implemented
-- [ ] Gruvbox dark theme tokens added and applied
-- [ ] Keyboard-first behavior validated
-- [ ] Existing `config` commands verified through UI
-- [ ] Phase 2 docs updated with any scope adjustments
+- [x] Tauri app scaffolded and runs locally
+- [x] SolidJS + Vite + Tailwind scaffolded for frontend
+- [x] Shared command-dispatch path reusable by CLI and Tauri
+- [x] `run_command` Tauri backend command implemented
+- [x] Full-height fake terminal layout implemented
+- [x] Bottom-locked command input implemented
+- [x] Scrollable output/history panel implemented
+- [x] Command result rendering (ok/warn/error) implemented
+- [x] Basic command hint strip implemented
+- [x] Gruvbox dark theme tokens added and applied
+- [x] Keyboard-first behavior validated
+- [x] Existing `config` commands verified through UI
+- [x] Phase 2 docs updated with any scope adjustments
