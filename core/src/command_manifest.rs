@@ -229,9 +229,20 @@ pub fn command_manifest() -> CommandManifest {
                     },
                     SubcommandSpec {
                         name: "set".to_string(),
-                        summary: "Update NPC fields (race or sex)".to_string(),
+                        summary: "Update NPC fields (except location)".to_string(),
                         options: Vec::new(),
-                        examples: vec!["npc set race Human".to_string(), "npc set sex female".to_string()],
+                        examples: vec![
+                            "npc set name Father Elen".to_string(),
+                            "npc set race Human".to_string(),
+                            "npc set sex female".to_string(),
+                            "npc set age 42".to_string(),
+                            "npc set height 5'11\"".to_string(),
+                            "npc set weight 185".to_string(),
+                            "npc set background Former caravan guard turned innkeeper".to_string(),
+                            "npc set want Secure enough coin to leave town".to_string(),
+                            "npc set secret Owes a smuggler blood debt".to_string(),
+                            "npc set carrying keys, ledger, hidden dagger".to_string(),
+                        ],
                         clap_managed: false,
                     },
                     SubcommandSpec {

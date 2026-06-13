@@ -54,6 +54,10 @@ struct NpcSeed {
     age: String,
     height: String,
     weight_lbs: String,
+    background: String,
+    want_need: String,
+    secret_obstacle: String,
+    carrying: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -70,6 +74,10 @@ struct SaveNpcDraftInput {
     age: String,
     height: String,
     weight_lbs: String,
+    background: String,
+    want_need: String,
+    secret_obstacle: String,
+    carrying: Vec<String>,
     location: String,
 }
 
@@ -121,6 +129,10 @@ struct EntityDetails {
     age: Option<String>,
     height: Option<String>,
     weight_lbs: Option<String>,
+    background: Option<String>,
+    want_need: Option<String>,
+    secret_obstacle: Option<String>,
+    carrying: Option<Vec<String>>,
     location: Option<String>,
     vault_path: String,
     created_at: Option<String>,
@@ -175,6 +187,40 @@ fn normalize_unknown_text(value: &str) -> String {
         "Unknown".to_string()
     } else {
         trimmed.to_string()
+    }
+}
+
+fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
+    let cleaned: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+
+    if cleaned.is_empty() {
+        vec!["Unknown".to_string()]
+    } else {
+        cleaned
+    }
+}
+
+fn parse_carrying_csv(value: &str) -> Vec<String> {
+    let items: Vec<String> = value
+        .split(',')
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect();
+    normalize_unknown_list(items)
+}
+
+fn carrying_to_db_text(items: &[String]) -> Result<String, String> {
+    serde_json::to_string(items).map_err(|err| err.to_string())
+}
+
+fn carrying_from_db_text(value: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(items) => normalize_unknown_list(items),
+        Err(_) => parse_carrying_csv(value),
     }
 }
 
@@ -374,14 +420,22 @@ async fn generate_npc_seed(
 
     let schema = serde_json::json!({
         "type": "object",
-        "required": ["name", "race", "sex", "age", "height", "weight_lbs"],
+        "required": ["name", "race", "sex", "age", "height", "weight_lbs", "background", "want_need", "secret_obstacle", "carrying"],
         "properties": {
             "name": { "type": "string", "minLength": 1 },
             "race": { "type": "string", "minLength": 1 },
             "sex": { "type": "string", "enum": ["male", "female"] },
             "age": { "type": "string", "minLength": 1 },
             "height": { "type": "string", "minLength": 1 },
-            "weight_lbs": { "type": "string", "minLength": 1 }
+            "weight_lbs": { "type": "string", "minLength": 1 },
+            "background": { "type": "string", "minLength": 1 },
+            "want_need": { "type": "string", "minLength": 1 },
+            "secret_obstacle": { "type": "string", "minLength": 1 },
+            "carrying": {
+                "type": "array",
+                "minItems": 1,
+                "items": { "type": "string", "minLength": 1 }
+            }
         },
         "additionalProperties": false
     });
@@ -420,7 +474,7 @@ async fn generate_npc_seed(
                 {
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, sex, age, height, weight_lbs. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Avoid these recent seeds: {}.{}",
+                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Avoid these recent seeds: {}.{}",
                         recent_context,
                         repair_note,
                     )
@@ -463,6 +517,10 @@ async fn generate_npc_seed(
         seed.age = normalize_unknown_text(&seed.age);
         seed.height = normalize_unknown_text(&seed.height);
         seed.weight_lbs = normalize_unknown_text(&seed.weight_lbs);
+        seed.background = normalize_unknown_text(&seed.background);
+        seed.want_need = normalize_unknown_text(&seed.want_need);
+        seed.secret_obstacle = normalize_unknown_text(&seed.secret_obstacle);
+        seed.carrying = normalize_unknown_list(seed.carrying);
 
         if seed.name.is_empty() || seed.race.is_empty() {
             continue;
@@ -617,6 +675,11 @@ async fn save_npc_draft(
     let age = normalize_unknown_text(&input.age);
     let height = normalize_unknown_text(&input.height);
     let weight_lbs = normalize_unknown_text(&input.weight_lbs);
+    let background = normalize_unknown_text(&input.background);
+    let want_need = normalize_unknown_text(&input.want_need);
+    let secret_obstacle = normalize_unknown_text(&input.secret_obstacle);
+    let carrying = normalize_unknown_list(input.carrying);
+    let carrying_db = carrying_to_db_text(&carrying)?;
     let location = if input.location.trim().is_empty() {
         UNKNOWN_LOCATION.to_string()
     } else {
@@ -641,8 +704,28 @@ async fn save_npc_draft(
         .await
         .map_err(|err| err.to_string())?;
 
-    let (slug, relative_path, created_at) = if let Some(current) = existing {
-        (current.slug, current.vault_path, current.created_at)
+    let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
+        let desired_base_slug = slugify(name);
+        if desired_base_slug == current.slug {
+            (
+                current.slug,
+                current.vault_path,
+                current.created_at,
+                None,
+            )
+        } else {
+            let next_slug = unique_slug_for_dir(vault.root(), "npcs", &desired_base_slug);
+            let next_path = PathBuf::from("npcs")
+                .join(format!("{next_slug}.md"))
+                .to_string_lossy()
+                .to_string();
+            (
+                next_slug,
+                next_path,
+                current.created_at,
+                Some(current.vault_path),
+            )
+        }
     } else {
         let base_slug = slugify(name);
         let slug = unique_slug_for_dir(vault.root(), "npcs", &base_slug);
@@ -653,6 +736,7 @@ async fn save_npc_draft(
                 .to_string_lossy()
                 .to_string(),
             now.clone(),
+            None,
         )
     };
 
@@ -666,6 +750,10 @@ async fn save_npc_draft(
         age: age.clone(),
         height: height.clone(),
         weight_lbs: weight_lbs.clone(),
+        background: background.clone(),
+        want_need: want_need.clone(),
+        secret_obstacle: secret_obstacle.clone(),
+        carrying: carrying.clone(),
         location: location.clone(),
         created_at: created_at.clone(),
         updated_at: now.clone(),
@@ -685,6 +773,10 @@ async fn save_npc_draft(
         age,
         height,
         weight_lbs,
+        background,
+        want_need,
+        secret_obstacle,
+        carrying: carrying_db,
         location,
         vault_path: relative_path.clone(),
         created_at: created_at.clone(),
@@ -705,6 +797,26 @@ async fn save_npc_draft(
     )
     .await
     .map_err(|err| err.to_string())?;
+
+    if let Some(old_path) = previous_path {
+        if old_path != npc_row.vault_path {
+            db::delete_document_by_vault_path(&database.pool, &old_path)
+                .await
+                .map_err(|err| err.to_string())?;
+
+            if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
+                if old_full_path.exists() {
+                    std::fs::remove_file(&old_full_path).map_err(|err| {
+                        format!(
+                            "failed to remove old npc file {}: {}",
+                            old_full_path.display(),
+                            err
+                        )
+                    })?;
+                }
+            }
+        }
+    }
 
     Ok(SaveNpcDraftResult {
         id: npc_row.id,
@@ -865,6 +977,10 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             age: Some(npc.age),
             height: Some(npc.height),
             weight_lbs: Some(npc.weight_lbs),
+            background: Some(npc.background),
+            want_need: Some(npc.want_need),
+            secret_obstacle: Some(npc.secret_obstacle),
+            carrying: Some(carrying_from_db_text(&npc.carrying)),
             location: Some(npc.location),
             vault_path: npc.vault_path,
             created_at: Some(npc.created_at),
@@ -885,6 +1001,10 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             age: None,
             height: None,
             weight_lbs: None,
+            background: None,
+            want_need: None,
+            secret_obstacle: None,
+            carrying: None,
             location: None,
             vault_path: location.vault_path,
             created_at: Some(location.created_at),

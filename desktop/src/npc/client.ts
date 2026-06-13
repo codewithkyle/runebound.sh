@@ -7,6 +7,10 @@ export type NpcSeed = {
   age: string;
   height: string;
   weight_lbs: string;
+  background: string;
+  want_need: string;
+  secret_obstacle: string;
+  carrying: string[];
 };
 
 export type EnsureLocationResult = {
@@ -25,6 +29,10 @@ export type SaveNpcDraftInput = {
   age: string;
   height: string;
   weight_lbs: string;
+  background: string;
+  want_need: string;
+  secret_obstacle: string;
+  carrying: string[];
   location: string;
 };
 

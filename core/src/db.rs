@@ -33,6 +33,10 @@ pub struct NpcRow {
     pub age: String,
     pub height: String,
     pub weight_lbs: String,
+    pub background: String,
+    pub want_need: String,
+    pub secret_obstacle: String,
+    pub carrying: String,
     pub location: String,
     pub vault_path: String,
     pub created_at: String,
@@ -42,7 +46,7 @@ pub struct NpcRow {
 pub async fn search_npcs_by_name(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<NpcRow>> {
     let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
     let rows = sqlx::query(
-        "SELECT id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at
+        "SELECT id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
          FROM npcs
          WHERE lower(name) LIKE ?1
          ORDER BY name COLLATE NOCASE ASC
@@ -82,7 +86,7 @@ pub async fn search_locations_by_name(
 pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
-        "SELECT id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at
+        "SELECT id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
          FROM npcs
          WHERE lower(name) = ?1 OR lower(slug) = ?2
          ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
@@ -221,7 +225,7 @@ pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Resul
 
 pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
+        "SELECT id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -233,8 +237,8 @@ pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow
 
 pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     sqlx::query(
-        "INSERT INTO npcs (id, slug, name, race, sex, age, height, weight_lbs, location, vault_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO npcs (id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
          ON CONFLICT(id) DO UPDATE SET
             slug = excluded.slug,
             name = excluded.name,
@@ -243,6 +247,10 @@ pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
             age = excluded.age,
             height = excluded.height,
             weight_lbs = excluded.weight_lbs,
+            background = excluded.background,
+            want_need = excluded.want_need,
+            secret_obstacle = excluded.secret_obstacle,
+            carrying = excluded.carrying,
             location = excluded.location,
             vault_path = excluded.vault_path,
             updated_at = excluded.updated_at",
@@ -255,6 +263,10 @@ pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     .bind(&npc.age)
     .bind(&npc.height)
     .bind(&npc.weight_lbs)
+    .bind(&npc.background)
+    .bind(&npc.want_need)
+    .bind(&npc.secret_obstacle)
+    .bind(&npc.carrying)
     .bind(&npc.location)
     .bind(&npc.vault_path)
     .bind(&npc.created_at)
@@ -294,6 +306,16 @@ pub async fn upsert_document_index(
     .execute(pool)
     .await
     .context("failed to upsert documents index")?;
+
+    Ok(())
+}
+
+pub async fn delete_document_by_vault_path(pool: &SqlitePool, vault_path: &str) -> Result<()> {
+    sqlx::query("DELETE FROM documents WHERE vault_path = ?1")
+        .bind(vault_path)
+        .execute(pool)
+        .await
+        .context("failed to delete document index row")?;
 
     Ok(())
 }
@@ -377,6 +399,18 @@ fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
         weight_lbs: row
             .try_get("weight_lbs")
             .unwrap_or_else(|_| "Unknown".to_string()),
+        background: row
+            .try_get("background")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        want_need: row
+            .try_get("want_need")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        secret_obstacle: row
+            .try_get("secret_obstacle")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        carrying: row
+            .try_get("carrying")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
         location: row
             .try_get("location")
             .context("npcs.location missing")?,

@@ -1,0 +1,4 @@
+ALTER TABLE npcs ADD COLUMN background TEXT NOT NULL DEFAULT 'Unknown';
+ALTER TABLE npcs ADD COLUMN want_need TEXT NOT NULL DEFAULT 'Unknown';
+ALTER TABLE npcs ADD COLUMN secret_obstacle TEXT NOT NULL DEFAULT 'Unknown';
+ALTER TABLE npcs ADD COLUMN carrying TEXT NOT NULL DEFAULT '["Unknown"]';

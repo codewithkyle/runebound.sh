@@ -86,6 +86,26 @@ function buildArgumentSuggestions(manifest: CommandManifest, parsed: ParseResult
     }
   }
 
+  if (command.name === "npc" && subcommand?.name === "set") {
+    const fieldNames = ["name", "race", "sex", "age", "height", "weight", "background", "want", "secret", "carrying"];
+    const args = parsed.normalized_tokens.slice(2);
+
+    const shouldSuggestFields =
+      args.length === 0 ||
+      (args.length === 1 && !parsed.completion.ends_with_space);
+
+    if (shouldSuggestFields) {
+      const prefix = parsed.completion.current_token.toLowerCase();
+      const base = replaceCurrentToken(input, parsed.completion.current_token);
+      return fieldNames
+        .filter((field) => field.startsWith(prefix))
+        .map((field) => ({
+          label: `npc set ${field}`,
+          completion: `${base}${field} `
+        }));
+    }
+  }
+
   const options = subcommand ? subcommand.options : command.options;
   if (options.length === 0) {
     return [];

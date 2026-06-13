@@ -65,6 +65,10 @@ type NpcDraft = {
   age: string;
   height: string;
   weightLbs: string;
+  background: string;
+  wantNeed: string;
+  secretObstacle: string;
+  carrying: string[];
   location: string;
 };
 
@@ -783,6 +787,10 @@ export default function App() {
     age: normalizeUnknown(seed.age),
     height: normalizeUnknown(seed.height),
     weightLbs: normalizeUnknown(seed.weight_lbs),
+    background: normalizeUnknown(seed.background),
+    wantNeed: normalizeUnknown(seed.want_need),
+    secretObstacle: normalizeUnknown(seed.secret_obstacle),
+    carrying: normalizeUnknownList(seed.carrying),
     location: "Unknown"
   });
 
@@ -794,8 +802,16 @@ export default function App() {
         "create npc",
         "npc show",
         "npc rename <name>",
+        "npc set name <name>",
         "npc set race <race>",
         "npc set sex <male|female>",
+        "npc set age <age>",
+        "npc set height <height>",
+        "npc set weight <value>",
+        "npc set background <text>",
+        "npc set want <text>",
+        "npc set secret <text>",
+        "npc set carrying <item1, item2>",
         "npc travel to <location>",
         "reroll",
         "cancel",
@@ -835,6 +851,10 @@ export default function App() {
         age: normalizeUnknown(entity.age),
         height: normalizeUnknown(entity.height),
         weightLbs: normalizeUnknown(entity.weight_lbs),
+        background: normalizeUnknown(entity.background),
+        wantNeed: normalizeUnknown(entity.want_need),
+        secretObstacle: normalizeUnknown(entity.secret_obstacle),
+        carrying: normalizeUnknownList(entity.carrying ?? undefined),
         location: normalizeUnknown(entity.location)
       });
       setEditorMode("npc");
@@ -847,6 +867,10 @@ export default function App() {
         age: normalizeUnknown(entity.age),
         height: normalizeUnknown(entity.height),
         weightLbs: normalizeUnknown(entity.weight_lbs),
+        background: normalizeUnknown(entity.background),
+        wantNeed: normalizeUnknown(entity.want_need),
+        secretObstacle: normalizeUnknown(entity.secret_obstacle),
+        carrying: normalizeUnknownList(entity.carrying ?? undefined),
         location: normalizeUnknown(entity.location)
       });
       return;
@@ -946,30 +970,97 @@ export default function App() {
       return { handled: true, ok: true, recordHistory: true };
     }
 
-    const setRaceMatch = trimmed.match(/^npc\s+set\s+race\s+(.+)$/i);
-    if (setRaceMatch && draft) {
-      const race = setRaceMatch[1].trim();
-      if (!race) {
-        appendEntry("info", "npc race cannot be empty.");
+    const setFieldMatch = trimmed.match(/^npc\s+set\s+([a-z_]+)\s+(.+)$/i);
+    if (setFieldMatch && draft) {
+      const field = setFieldMatch[1].trim().toLowerCase();
+      const value = setFieldMatch[2].trim();
+      if (!value) {
+        appendEntry("info", "npc set value cannot be empty.");
         return { handled: true, ok: false, recordHistory: true };
       }
-      const next = { ...draft, race };
-      setNpcDraft(next);
-      appendNpcSummary(next);
-      return { handled: true, ok: true, recordHistory: true };
-    }
 
-    const setSexMatch = trimmed.match(/^npc\s+set\s+sex\s+(.+)$/i);
-    if (setSexMatch && draft) {
-      const sexRaw = setSexMatch[1].trim().toLowerCase();
-      if (sexRaw !== "male" && sexRaw !== "female") {
-        appendEntry("info", "sex must be one of: male, female");
+      if (field === "location") {
+        appendEntry("info", "use npc travel to <location> to change location.");
         return { handled: true, ok: false, recordHistory: true };
       }
-      const next = { ...draft, sex: sexRaw as "male" | "female" };
-      setNpcDraft(next);
-      appendNpcSummary(next);
-      return { handled: true, ok: true, recordHistory: true };
+
+      if (field === "sex") {
+        const sexRaw = value.toLowerCase();
+        if (sexRaw !== "male" && sexRaw !== "female") {
+          appendEntry("info", "sex must be one of: male, female");
+          return { handled: true, ok: false, recordHistory: true };
+        }
+        const next = { ...draft, sex: sexRaw as "male" | "female" };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "name") {
+        const next = { ...draft, name: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "race") {
+        const next = { ...draft, race: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "age") {
+        const next = { ...draft, age: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "height") {
+        const next = { ...draft, height: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "weight" || field === "weight_lbs") {
+        const next = { ...draft, weightLbs: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "background") {
+        const next = { ...draft, background: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "want" || field === "need" || field === "want_need") {
+        const next = { ...draft, wantNeed: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "secret" || field === "obstacle" || field === "secret_obstacle") {
+        const next = { ...draft, secretObstacle: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      if (field === "carrying") {
+        const next = { ...draft, carrying: parseCarryingInput(value) };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
+      appendEntry("info", `unknown npc field: ${field}. valid fields: name, race, sex, age, height, weight, background, want, secret, carrying`);
+      return { handled: true, ok: false, recordHistory: true };
     }
 
     const malformedTravelMatch = trimmed.match(/^npc\s+travel\s+(.+)$/i);
@@ -1027,7 +1118,11 @@ export default function App() {
           sex: seed.sex,
           age: normalizeUnknown(seed.age),
           height: normalizeUnknown(seed.height),
-          weightLbs: normalizeUnknown(seed.weight_lbs)
+          weightLbs: normalizeUnknown(seed.weight_lbs),
+          background: normalizeUnknown(seed.background),
+          wantNeed: normalizeUnknown(seed.want_need),
+          secretObstacle: normalizeUnknown(seed.secret_obstacle),
+          carrying: normalizeUnknownList(seed.carrying)
         };
         setNpcDraft(next);
         updateEntry(spinnerId, "spinner", "OK generated npc draft");
@@ -1052,6 +1147,10 @@ export default function App() {
           age: normalizeUnknown(draft.age),
           height: normalizeUnknown(draft.height),
           weight_lbs: normalizeUnknown(draft.weightLbs),
+          background: normalizeUnknown(draft.background),
+          want_need: normalizeUnknown(draft.wantNeed),
+          secret_obstacle: normalizeUnknown(draft.secretObstacle),
+          carrying: normalizeUnknownList(draft.carrying),
           location: normalizeUnknown(draft.location)
         });
         appendEntry(
@@ -1915,6 +2014,22 @@ function normalizeUnknown(value: string | null | undefined): string {
   return normalized;
 }
 
+function normalizeUnknownList(values: string[] | null | undefined): string[] {
+  const cleaned = (values ?? []).map((value) => value.trim()).filter((value) => value.length > 0);
+  if (cleaned.length === 0) {
+    return ["Unknown"];
+  }
+  return cleaned;
+}
+
+function parseCarryingInput(value: string): string[] {
+  return normalizeUnknownList(value.split(",").map((item) => item.trim()));
+}
+
+function carryingToDisplay(values: string[] | null | undefined): string {
+  return normalizeUnknownList(values).join(", ");
+}
+
 function npcDraftDoc(draft: NpcDraft): OutputDoc {
   return {
     blocks: [
@@ -1927,6 +2042,10 @@ function npcDraftDoc(draft: NpcDraft): OutputDoc {
           { label: "Age:", value: normalizeUnknown(draft.age) },
           { label: "Height:", value: normalizeUnknown(draft.height) },
           { label: "Weight:", value: `${normalizeUnknown(draft.weightLbs)} lbs` },
+          { label: "Background:", value: normalizeUnknown(draft.background) },
+          { label: "Want:", value: normalizeUnknown(draft.wantNeed) },
+          { label: "Secret:", value: normalizeUnknown(draft.secretObstacle) },
+          { label: "Carrying:", value: carryingToDisplay(draft.carrying) },
           { label: "Location:", value: normalizeUnknown(draft.location) }
         ]
       },
@@ -1957,6 +2076,10 @@ function entityDetailsDoc(entity: EntityDetails): OutputDoc {
             { label: "Age:", value: normalizeUnknown(entity.age) },
             { label: "Height:", value: normalizeUnknown(entity.height) },
             { label: "Weight:", value: `${normalizeUnknown(entity.weight_lbs)} lbs` },
+            { label: "Background:", value: normalizeUnknown(entity.background) },
+            { label: "Want:", value: normalizeUnknown(entity.want_need) },
+            { label: "Secret:", value: normalizeUnknown(entity.secret_obstacle) },
+            { label: "Carrying:", value: carryingToDisplay(entity.carrying) },
             { label: "Location:", value: normalizeUnknown(entity.location) }
           ]
         }

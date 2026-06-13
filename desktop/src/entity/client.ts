@@ -18,6 +18,10 @@ export type EntityDetails = {
   age?: string | null;
   height?: string | null;
   weight_lbs?: string | null;
+  background?: string | null;
+  want_need?: string | null;
+  secret_obstacle?: string | null;
+  carrying?: string[] | null;
   location?: string | null;
   vault_path: string;
   created_at?: string | null;
