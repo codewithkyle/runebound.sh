@@ -50,7 +50,7 @@ Example forms:
 ## Input and Output Rules
 
 - Input prompt can include `@vault/...` references inline.
-- Final file format is TOML frontmatter + markdown body.
+- Final file format is a fenced metadata block using ```runebound with TOML content.
 - `type` is always `npc` for this command group.
 
 ## Validation
