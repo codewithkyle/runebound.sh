@@ -796,11 +796,11 @@ pub(crate) async fn run_desktop_routed_command(
     }
 
     let manifest = dnd_core::command_manifest::command_manifest();
-    if !starts_with_known_command_root(trimmed, &manifest)
-        && let Some(entity) = resolve_entity(trimmed.to_string()).await?
-    {
-        let (output, event) = build_load_response(entity, state).await;
-        return Ok(Some(ok_response(output, event)));
+    if !starts_with_known_command_root(trimmed, &manifest) {
+        if let Some(entity) = resolve_entity(trimmed.to_string()).await? {
+            let (output, event) = build_load_response(entity, state).await;
+            return Ok(Some(ok_response(output, event)));
+        }
     }
 
     Ok(None)
