@@ -278,6 +278,7 @@ dependencies = [
  "command-specs",
  "dirs",
  "reqwest",
+ "runebound-models",
  "serde",
  "serde_json",
  "shell-words",
@@ -1287,6 +1288,16 @@ dependencies = [
  "spki",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "runebound-models"
+version = "0.2.1"
+dependencies = [
+ "chrono",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

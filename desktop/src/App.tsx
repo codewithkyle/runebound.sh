@@ -3,7 +3,15 @@ import { For, Show, createEffect, createMemo, createSignal, onMount } from "soli
 import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
-import type { OutputDoc } from "./output/types";
+import type {
+  OutputDoc,
+  CommandClientEvent,
+  CommandResponse,
+  OutputSegment,
+  NpcDraft,
+  LocationDraft,
+  FactionDraft,
+} from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
 
@@ -14,89 +22,6 @@ type HistoryEntry = {
   outputDoc?: OutputDoc | null;
 };
 
-type CommandResponse = {
-  ok: boolean;
-  output: string;
-  error?: string | null;
-  exit_code: number;
-  segments?: OutputSegment[];
-  output_doc?: OutputDoc | null;
-  client_event?: CommandClientEvent | null;
-};
-
-type CommandClientEvent =
-  | {
-      kind: "load_npc_draft";
-      id: string;
-      name: string;
-      race: string;
-      occupation: string;
-      sex: string;
-      age: string;
-      height: string;
-      weight_lbs: string;
-      background: string;
-      want_need: string;
-      secret_obstacle: string;
-      carrying: string[];
-      location: string;
-    }
-  | {
-      kind: "load_location_draft";
-      id: string;
-      name: string;
-      slug: string;
-      vault_path: string;
-      kind_type: string;
-      kind_custom?: string | null;
-      visual_description: string;
-      history_background: string;
-      exports: string[];
-      tone: string;
-      authority: string;
-      danger_level: string;
-      current_tension: string;
-    }
-  | {
-      kind: "load_faction_draft";
-      id: string;
-      name: string;
-      slug: string;
-      vault_path: string;
-      kind_type: string;
-      kind_custom?: string | null;
-      public_description: string;
-      true_agenda: string;
-      methods: string;
-      leadership: string;
-      headquarters: string;
-      sphere_of_influence: string;
-      resources_assets: string;
-      allies: string[];
-      rivals_enemies: string[];
-      reputation: string;
-      current_tension: string;
-      goals_short_term: string[];
-      goals_long_term: string[];
-      symbol_description: string;
-    }
-  | {
-      kind: "clear_drafts";
-    }
-  | {
-      kind: "clear_terminal";
-      clear_history: boolean;
-    }
-  | {
-      kind: "exit_requested";
-    };
-
-type OutputSegment = {
-  kind: "text" | "error";
-  text: string;
-  command_ref?: string | null;
-};
-
 type InlineCommandMeta = {
   commandMap: Map<string, CommandSpecMeta>;
 };
@@ -105,61 +30,6 @@ type CommandSpecMeta = {
   subcommands: Set<string>;
   requiresSubcommand: boolean;
   canonicalHelpCommand: string | null;
-};
-
-type NpcDraft = {
-  id: string;
-  name: string;
-  race: string;
-  occupation: string;
-  sex: "male" | "female";
-  age: string;
-  height: string;
-  weightLbs: string;
-  background: string;
-  wantNeed: string;
-  secretObstacle: string;
-  carrying: string[];
-  location: string;
-};
-
-type LocationDraft = {
-  id: string;
-  name: string;
-  slug: string;
-  vault_path: string;
-  kind_type: string;
-  kind_custom?: string | null;
-  visual_description: string;
-  history_background: string;
-  exports: string[];
-  tone: string;
-  authority: string;
-  danger_level: string;
-  current_tension: string;
-};
-
-type FactionDraft = {
-  id: string;
-  name: string;
-  slug: string;
-  vault_path: string;
-  kind_type: string;
-  kind_custom?: string | null;
-  public_description: string;
-  true_agenda: string;
-  methods: string;
-  leadership: string;
-  headquarters: string;
-  sphere_of_influence: string;
-  resources_assets: string;
-  allies: string[];
-  rivals_enemies: string[];
-  reputation: string;
-  current_tension: string;
-  goals_short_term: string[];
-  goals_long_term: string[];
-  symbol_description: string;
 };
 
 type SuggestionViewItem = {

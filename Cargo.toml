@@ -1,5 +1,5 @@
 [workspace]
-members = ["core", "command-handler", "command-specs"]
+members = ["core", "command-handler", "command-specs", "runebound-models"]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
 
