@@ -1,11 +1,10 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::utils::{
-    canonical_npc_reroll_field, npc_context_summary, normalize_sex, normalize_unknown_list,
-    normalize_unknown_text, parse_carrying_csv, reroll_npc_field, NpcRerollContext, RerollNpcFieldInput,
+    normalize_sex, normalize_unknown_list, normalize_unknown_text, parse_carrying_csv, reroll_npc_field,
+    NpcRerollContext, RerollNpcFieldInput,
 };
 use crate::app_state::NpcDraftSession;
-use crate::services::ai_generation::AiGenerationService;
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
@@ -168,7 +167,7 @@ pub async fn npc_set(
         "name" => draft.name = value.to_string(),
         "race" => draft.race = value.to_string(),
         "occupation" => draft.occupation = value.to_string(),
-        "sex" => draft.sex = main_normalize_sex(value)?,
+        "sex" => draft.sex = normalize_sex(value)?,
         "age" => draft.age = value.to_string(),
         "height" => draft.height = value.to_string(),
         "weight_lbs" => draft.weight_lbs = value.to_string(),
@@ -225,8 +224,7 @@ pub async fn npc_travel(
 }
 
 pub async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::{save_npc_draft_impl, SaveNpcDraftInput, SaveNpcDraftResult};
-    use dnd_core::npc::UNKNOWN_LOCATION;
+    use crate::utils::{save_npc_draft_impl, SaveNpcDraftInput};
 
     let draft = {
         let editor = state.editor_session.lock().await;
@@ -324,7 +322,7 @@ pub async fn npc_reroll(
         "name" => { if let Some(value) = rerolled.value { draft.name = value; } }
         "race" => { if let Some(value) = rerolled.value { draft.race = value; } }
         "occupation" => { if let Some(value) = rerolled.value { draft.occupation = value; } }
-        "sex" => { if let Some(value) = rerolled.value { draft.sex = main_normalize_sex(&value)?; } }
+        "sex" => { if let Some(value) = rerolled.value { draft.sex = normalize_sex(&value)?; } }
         "age" => { if let Some(value) = rerolled.value { draft.age = value; } }
         "height" => { if let Some(value) = rerolled.value { draft.height = value; } }
         "weight_lbs" => { if let Some(value) = rerolled.value { draft.weight_lbs = value; } }

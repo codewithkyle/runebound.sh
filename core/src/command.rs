@@ -25,7 +25,7 @@ use command_specs::handler_metadata_for;
 pub use runebound_models::events::{
     CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind,
 };
-pub use runebound_models::output::{OutputDoc, InlineNode, OutputBlock, StatusTone};
+pub use runebound_models::output::{InlineNode, OutputBlock, OutputDoc, StatusTone};
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {

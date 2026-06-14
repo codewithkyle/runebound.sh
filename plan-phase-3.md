@@ -5,60 +5,26 @@
 ### Completed
 - Created `services/ai_generation.rs` with `AiGenerationService` (AI generation extracted)
 - Created `repositories/mod.rs` with `VaultRepository` trait and `ProdVaultRepository`
-- Created `utils.rs` with shared types (NpcSeed, SaveNpcDraftInput, RerollNpcFieldInput, etc.)
-- Created `commands/` directory with modular handlers (npc_commands, location_commands, faction_commands, entity_commands, system_commands, create_commands) - these exist but are not yet integrated
+- Created `commands/` directory with modular handlers (npc_commands, location_commands, faction_commands, entity_commands, system_commands, create_commands)
 - Project compiles successfully (1 error fixed: NpcSeed needed Serialize)
+- **Phase 3.1** – All shared types in `desktop/src-tauri/src/utils.rs` now match the router/command expectations (EnsureLocation*, reroll contexts/results, save/soft-delete structs, shared `EntityDetails`).
+- **Phase 3.2** – Every stub helper in `utils.rs` delegates to the production logic from `main.rs`, so command modules can call reroll/save/ensure/resolve/delete without panicking.
 
 ### What's Broken
-The command modules in `commands/` are disconnected stubs:
-1. They import from `crate::utils` but types don't match what commands expect
-2. Example mismatches: `EnsureLocationInput` missing `name` field, `LocationRerollContext` missing fields like `kind_custom`, `exports`, `current_tension`
-3. Functions like `reroll_npc_field`, `save_npc_draft_impl`, `resolve_entity` return errors (stub implementations)
-4. `mod commands` was removed from main.rs because it wouldn't compile
+The command modules in `commands/` are still disconnected:
+1. `mod commands` is still commented out/absent from `main.rs`, so none of the handlers are reachable.
+2. `router.rs` still hosts the legacy inline handlers instead of delegating to `commands::desktop_handler_registry()`, so we have duplicate logic and no single registry entry point.
 
 ### Root Cause
 The command modules were created by copying code from router.rs/main.rs and using `super::super::main` imports, which doesn't work in Rust binary crates. When we switched to `crate::utils`, the types weren't properly aligned with what the command handlers actually need.
 
 ## Plan to Continue
 
-### Phase 3.1: Fix Utils Types (Critical Path)
-The utils.rs types are the foundation for all command modules. They must match what handlers expect.
+### Phase 3.1: Fix Utils Types (Completed ✅)
+All shared structs/enums in `desktop/src-tauri/src/utils.rs` now mirror the router/command expectations and include `EntityDetails` conversions.
 
-1. **Fix EnsureLocationInput and EnsureLocationResult**
-   - Add `name: String` field to `EnsureLocationInput`
-   - Ensure `ensure_location_exists()` function has correct signature
-
-2. **Fix LocationRerollContext and RerollLocationFieldResult**
-   - Add missing fields: `kind_custom`, `exports`, `current_tension`
-   - Add `list_value` field to `RerollLocationFieldResult`
-
-3. **Fix FactionRerollContext and RerollFactionFieldResult**
-   - Add missing fields: `kind_custom`, `leadership`, `headquarters`, `sphere_of_influence`, `resources_assets`, `allies`, `rivals_enemies`, `current_tension`, `goals_short_term`, `goals_long_term`, `symbol_description`
-   - Add `list_value` field to `RerollFactionFieldResult`
-
-4. **Fix Save*DraftInput and Save*DraftResult structs**
-   - Ensure SaveLocationDraftResult has `slug` field
-   - Ensure SaveFactionDraftInput has `slug` and `vault_path` fields
-   - Ensure SaveFactionDraftResult has `slug` field
-
-5. **Fix SoftDeleteEntityInput and results**
-   - Add `target: String` field to `SoftDeleteEntityInput`
-   - Update SoftDeleteEntityResult with proper fields: `entity_type`, `name`, `slug`, `trash_vault_path`, `id`
-   - Update UndoSoftDeleteResult with proper fields: `entity_type`, `name`, `id`
-
-### Phase 3.2: Implement Stub Functions in Utils
-Once types are correct, implement the stub functions:
-
-1. **reroll_npc_field** - Wrap the actual reroll logic from main.rs
-2. **reroll_location_field** - Similar wrapping
-3. **reroll_faction_field** - Similar wrapping
-4. **save_npc_draft_impl** - Delegate to main.rs implementation
-5. **save_location_draft_impl** - Delegate to main.rs implementation
-6. **save_faction_draft_impl** - Delegate to main.rs implementation
-7. **ensure_location_exists** - Delegate to main.rs implementation
-8. **resolve_entity** - Delegate to main.rs implementation
-9. **soft_delete_entity** - Delegate to main.rs implementation
-10. **undo_last_soft_delete** - Delegate to main.rs implementation
+### Phase 3.2: Implement Stub Functions in Utils (Completed ✅)
+All helper functions in `utils.rs` delegate to the production logic extracted from `main.rs`, so command modules can safely use them.
 
 ### Phase 3.3: Re-integrate Command Modules
 1. Add `mod commands;` back to main.rs

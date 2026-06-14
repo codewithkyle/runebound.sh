@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use tauri::State;
 use crate::app_state::AppState;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

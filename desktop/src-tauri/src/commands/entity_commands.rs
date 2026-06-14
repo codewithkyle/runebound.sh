@@ -1,11 +1,11 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
 use dnd_core::command::CommandClientEvent;
-use runebound_models::{CommandResponse, OutputDoc, OutputSegment, OutputSegmentKind, entity_card, entity_row};
+use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
 
 use crate::utils::{
     resolve_entity, soft_delete_entity, undo_last_soft_delete,
-    SoftDeleteEntityInput, SoftDeleteEntityResult, UndoSoftDeleteResult,
+    EntityDetails, EntityType, SoftDeleteEntityInput,
 };
 use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
 
@@ -134,7 +134,7 @@ pub async fn handle_undo(
     Ok(Some(ok_response(output, None)))
 }
 
-async fn build_load_response(entity: EntityDetails, state: tauri::State<'_, AppState>) -> (String, Option<CommandClientEvent>) {
+pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::State<'_, AppState>) -> (String, Option<CommandClientEvent>) {
     match entity.entity_type {
         EntityType::Npc => {
             let draft = NpcDraftSession {
@@ -429,61 +429,4 @@ fn normalize_sex(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized == "male" || normalized == "female" { Ok(normalized) }
     else { Err("sex must be one of: male, female".to_string()) }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityType {
-    Npc,
-    Location,
-    Faction,
-}
-
-impl EntityType {
-    fn as_str(&self) -> &'static str {
-        match self { EntityType::Npc => "npc", EntityType::Location => "location", EntityType::Faction => "faction" }
-    }
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-pub struct EntityDetails {
-    pub id: String,
-    pub entity_type: EntityType,
-    pub name: String,
-    pub slug: String,
-    pub race: Option<String>,
-    pub occupation: Option<String>,
-    pub sex: Option<String>,
-    pub age: Option<String>,
-    pub height: Option<String>,
-    pub weight_lbs: Option<String>,
-    pub background: Option<String>,
-    pub want_need: Option<String>,
-    pub secret_obstacle: Option<String>,
-    pub carrying: Option<Vec<String>>,
-    pub location: Option<String>,
-    pub vault_path: String,
-    pub kind_type: Option<String>,
-    pub kind_custom: Option<String>,
-    pub visual_description: Option<String>,
-    pub history_background: Option<String>,
-    pub exports: Option<Vec<String>>,
-    pub tone: Option<String>,
-    pub authority: Option<String>,
-    pub danger_level: Option<String>,
-    pub current_tension: Option<String>,
-    pub public_description: Option<String>,
-    pub true_agenda: Option<String>,
-    pub methods: Option<String>,
-    pub leadership: Option<String>,
-    pub headquarters: Option<String>,
-    pub sphere_of_influence: Option<String>,
-    pub resources_assets: Option<String>,
-    pub allies: Option<Vec<String>>,
-    pub rivals_enemies: Option<Vec<String>>,
-    pub reputation: Option<String>,
-    pub goals_short_term: Option<Vec<String>>,
-    pub goals_long_term: Option<Vec<String>>,
-    pub symbol_description: Option<String>,
-    pub created_at: Option<String>,
 }

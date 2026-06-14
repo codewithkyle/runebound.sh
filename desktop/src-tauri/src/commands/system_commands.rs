@@ -1,10 +1,9 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
-use crate::services::ai_generation::{AiGenerationService, LocationSeed, NpcSeed, FactionSeed};
+use crate::services::ai_generation::AiGenerationService;
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
-use crate::app_state::NpcDraftSession;
 
 pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
     let mode = {
@@ -89,7 +88,6 @@ pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<O
 
 async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{npc_summary_text, npc_event_from_draft};
-    use dnd_core::npc::UNKNOWN_LOCATION;
 
     let draft = {
         let editor = state.editor_session.lock().await;
@@ -201,7 +199,6 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
 
 async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     use crate::utils::SaveNpcDraftInput;
-    use dnd_core::npc::UNKNOWN_LOCATION;
 
     let draft = {
         let editor = state.editor_session.lock().await;

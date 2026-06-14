@@ -4,7 +4,6 @@ use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
 use crate::utils::{
-    faction_context_summary, normalize_faction_seed, validate_faction_details,
     reroll_faction_field, FactionRerollContext, RerollFactionFieldInput,
 };
 use crate::app_state::FactionDraftSession;
@@ -264,7 +263,7 @@ async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
 }
 
 async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::{save_faction_draft_impl, SaveFactionDraftInput, SaveFactionDraftResult};
+    use crate::utils::{save_faction_draft_impl, SaveFactionDraftInput};
 
     let draft = {
         let editor = state.editor_session.lock().await;

@@ -9,7 +9,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-use command_handler::{CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry};
+use command_handler::{HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry};
 use runebound_models::{
     CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind, OutputDoc,
 };

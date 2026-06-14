@@ -68,15 +68,31 @@ impl FactionKindType {
 }
 
 pub const LOCATION_KIND_TYPES: [&str; 10] = [
-    "hamlet", "town", "city", "dungeon", "hideout", "ruin", "guildhall", "landmark", "wilderness",
+    "hamlet",
+    "town",
+    "city",
+    "dungeon",
+    "hideout",
+    "ruin",
+    "guildhall",
+    "landmark",
+    "wilderness",
     "other",
 ];
 
 pub const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
 
 pub const FACTION_KIND_TYPES: [&str; 10] = [
-    "guild", "cult", "military_order", "noble_house", "criminal_syndicate", "mercantile_league",
-    "religious_order", "arcane_circle", "revolutionary_cell", "other",
+    "guild",
+    "cult",
+    "military_order",
+    "noble_house",
+    "criminal_syndicate",
+    "mercantile_league",
+    "religious_order",
+    "arcane_circle",
+    "revolutionary_cell",
+    "other",
 ];
 
 pub fn now_timestamp() -> String {
@@ -95,9 +111,7 @@ pub fn slugify(value: &str) -> String {
         if ch.is_ascii_alphanumeric() {
             out.push(ch.to_ascii_lowercase());
             last_dash = false;
-        } else if (ch.is_ascii_whitespace() || ch == '-' || ch == '_' || ch == '.')
-            && !last_dash
-        {
+        } else if (ch.is_ascii_whitespace() || ch == '-' || ch == '_' || ch == '.') && !last_dash {
             out.push('-');
             last_dash = true;
         }
@@ -135,10 +149,7 @@ pub fn normalize_markdown_file_stem(value: &str) -> String {
             continue;
         }
 
-        let invalid = matches!(
-            ch,
-            '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'
-        );
+        let invalid = matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
         if invalid || ch.is_whitespace() {
             if !out.is_empty() && !last_was_space {
                 out.push(' ');
@@ -221,10 +232,7 @@ pub fn normalize_location_danger_level(value: &str) -> Result<String, String> {
 }
 
 pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value
-        .trim()
-        .to_ascii_lowercase()
-        .replace('-', "_");
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     if FACTION_KIND_TYPES.contains(&normalized.as_str()) {
         Ok(normalized)
     } else {

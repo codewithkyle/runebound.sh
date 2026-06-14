@@ -4,7 +4,6 @@ use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
 use crate::utils::{
-    canonical_location_reroll_field, location_context_summary, normalize_location_seed, validate_location_details,
     reroll_location_field, LocationRerollContext, RerollLocationFieldInput,
 };
 use crate::app_state::LocationDraftSession;
@@ -249,7 +248,7 @@ async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
 }
 
 async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::{save_location_draft_impl, SaveLocationDraftInput, SaveLocationDraftResult};
+    use crate::utils::{save_location_draft_impl, SaveLocationDraftInput};
 
     let draft = {
         let editor = state.editor_session.lock().await;

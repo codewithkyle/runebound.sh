@@ -4,7 +4,6 @@ use crate::commands::{
     location_event_from_draft, location_summary_text, npc_event_from_draft, npc_summary_text,
 };
 use crate::services::ai_generation::AiGenerationService;
-use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::UNKNOWN_LOCATION;
 use runebound_models::CommandResponse;
 
