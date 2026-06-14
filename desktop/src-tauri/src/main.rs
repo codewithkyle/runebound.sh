@@ -368,7 +368,9 @@ struct SaveLocationDraftResult {
 #[derive(Debug, Clone, Deserialize)]
 struct SaveFactionDraftInput {
     id: String,
+    slug: String,
     name: String,
+    vault_path: String,
     kind_type: String,
     kind_custom: Option<String>,
     public_description: String,
@@ -4374,15 +4376,25 @@ async fn save_faction_draft(
         .await
         .map_err(|err| err.to_string())?;
 
-    let previous_path = existing
-        .as_ref()
-        .map(|row| normalize_relative_path_for_storage(&row.vault_path));
+    let provided_relative_path = normalize_relative_path_for_storage(input.vault_path.trim());
+    let previous_path = if let Some(row) = existing.as_ref() {
+        Some(normalize_relative_path_for_storage(&row.vault_path))
+    } else if !provided_relative_path.is_empty() {
+        Some(provided_relative_path)
+    } else {
+        None
+    };
     let created_at = existing
         .as_ref()
         .map(|row| row.created_at.clone())
         .unwrap_or_else(|| now.clone());
 
-    let base_slug = slugify(&input.name);
+    let provided_slug = input.slug.trim();
+    let base_slug = if provided_slug.is_empty() {
+        slugify(&input.name)
+    } else {
+        slugify(provided_slug)
+    };
     let slug;
     if let Some(row) = existing.as_ref() {
         if row.slug != base_slug {

@@ -33,6 +33,44 @@ pub struct NpcRerollContext {
     pub location: String,
 }
 
+impl From<NpcRerollContext> for crate::NpcRerollContext {
+    fn from(value: NpcRerollContext) -> Self {
+        Self {
+            name: value.name,
+            race: value.race,
+            occupation: value.occupation,
+            sex: value.sex,
+            age: value.age,
+            height: value.height,
+            weight_lbs: value.weight_lbs,
+            background: value.background,
+            want_need: value.want_need,
+            secret_obstacle: value.secret_obstacle,
+            carrying: value.carrying,
+            location: value.location,
+        }
+    }
+}
+
+impl From<crate::NpcRerollContext> for NpcRerollContext {
+    fn from(value: crate::NpcRerollContext) -> Self {
+        Self {
+            name: value.name,
+            race: value.race,
+            occupation: value.occupation,
+            sex: value.sex,
+            age: value.age,
+            height: value.height,
+            weight_lbs: value.weight_lbs,
+            background: value.background,
+            want_need: value.want_need,
+            secret_obstacle: value.secret_obstacle,
+            carrying: value.carrying,
+            location: value.location,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct RerollNpcFieldInput {
     pub field: String,
@@ -40,11 +78,41 @@ pub struct RerollNpcFieldInput {
     pub npc: NpcRerollContext,
 }
 
+impl From<RerollNpcFieldInput> for crate::RerollNpcFieldInput {
+    fn from(value: RerollNpcFieldInput) -> Self {
+        Self {
+            field: value.field,
+            prompt: value.prompt,
+            npc: value.npc.into(),
+        }
+    }
+}
+
+impl From<crate::RerollNpcFieldInput> for RerollNpcFieldInput {
+    fn from(value: crate::RerollNpcFieldInput) -> Self {
+        Self {
+            field: value.field,
+            prompt: value.prompt,
+            npc: value.npc.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RerollNpcFieldResult {
     pub field: String,
     pub value: Option<String>,
     pub carrying: Option<Vec<String>>,
+}
+
+impl From<crate::RerollNpcFieldResult> for RerollNpcFieldResult {
+    fn from(value: crate::RerollNpcFieldResult) -> Self {
+        Self {
+            field: value.field,
+            value: value.value,
+            carrying: value.carrying,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +146,38 @@ pub struct SaveNpcDraftResult {
     pub updated_at: String,
 }
 
+impl From<SaveNpcDraftInput> for crate::SaveNpcDraftInput {
+    fn from(value: SaveNpcDraftInput) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            race: value.race,
+            occupation: value.occupation,
+            sex: value.sex,
+            age: value.age,
+            height: value.height,
+            weight_lbs: value.weight_lbs,
+            background: value.background,
+            want_need: value.want_need,
+            secret_obstacle: value.secret_obstacle,
+            carrying: value.carrying,
+            location: value.location,
+        }
+    }
+}
+
+impl From<crate::SaveNpcDraftResult> for SaveNpcDraftResult {
+    fn from(value: crate::SaveNpcDraftResult) -> Self {
+        Self {
+            id: value.id,
+            slug: value.slug,
+            vault_path: value.vault_path,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveLocationDraftInput {
     pub id: String,
@@ -98,9 +198,42 @@ pub struct SaveLocationDraftInput {
 #[derive(Debug, Clone, Serialize)]
 pub struct SaveLocationDraftResult {
     pub id: String,
+    pub slug: String,
     pub vault_path: String,
     pub created_at: String,
     pub updated_at: String,
+}
+
+impl From<SaveLocationDraftInput> for crate::SaveLocationDraftInput {
+    fn from(value: SaveLocationDraftInput) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            slug: value.slug,
+            vault_path: value.vault_path,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            visual_description: value.visual_description,
+            history_background: value.history_background,
+            exports: value.exports,
+            tone: value.tone,
+            authority: value.authority,
+            danger_level: value.danger_level,
+            current_tension: value.current_tension,
+        }
+    }
+}
+
+impl From<crate::SaveLocationDraftResult> for SaveLocationDraftResult {
+    fn from(value: crate::SaveLocationDraftResult) -> Self {
+        Self {
+            id: value.id,
+            slug: value.slug,
+            vault_path: value.vault_path,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -130,46 +263,355 @@ pub struct SaveFactionDraftInput {
 #[derive(Debug, Clone, Serialize)]
 pub struct SaveFactionDraftResult {
     pub id: String,
+    pub slug: String,
     pub vault_path: String,
     pub created_at: String,
     pub updated_at: String,
 }
 
+impl From<SaveFactionDraftInput> for crate::SaveFactionDraftInput {
+    fn from(value: SaveFactionDraftInput) -> Self {
+        Self {
+            id: value.id,
+            slug: value.slug,
+            vault_path: value.vault_path,
+            name: value.name,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            public_description: value.public_description,
+            true_agenda: value.true_agenda,
+            methods: value.methods,
+            leadership: value.leadership,
+            headquarters: value.headquarters,
+            sphere_of_influence: value.sphere_of_influence,
+            resources_assets: value.resources_assets,
+            allies: value.allies,
+            rivals_enemies: value.rivals_enemies,
+            reputation: value.reputation,
+            current_tension: value.current_tension,
+            goals_short_term: value.goals_short_term,
+            goals_long_term: value.goals_long_term,
+            symbol_description: value.symbol_description,
+        }
+    }
+}
+
+impl From<crate::SaveFactionDraftResult> for SaveFactionDraftResult {
+    fn from(value: crate::SaveFactionDraftResult) -> Self {
+        Self {
+            id: value.id,
+            slug: value.slug,
+            vault_path: value.vault_path,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SoftDeleteEntityInput {
-    pub entity_type: String,
-    pub relative_path: String,
+    pub target: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EntityType {
+    Npc,
+    Location,
+    Faction,
+}
+
+impl EntityType {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            EntityType::Npc => "npc",
+            EntityType::Location => "location",
+            EntityType::Faction => "faction",
+        }
+    }
+}
+
+impl From<EntityType> for crate::EntityType {
+    fn from(value: EntityType) -> Self {
+        match value {
+            EntityType::Npc => crate::EntityType::Npc,
+            EntityType::Location => crate::EntityType::Location,
+            EntityType::Faction => crate::EntityType::Faction,
+        }
+    }
+}
+
+impl From<crate::EntityType> for EntityType {
+    fn from(value: crate::EntityType) -> Self {
+        match value {
+            crate::EntityType::Npc => EntityType::Npc,
+            crate::EntityType::Location => EntityType::Location,
+            crate::EntityType::Faction => EntityType::Faction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityDetails {
+    pub id: String,
+    pub entity_type: EntityType,
+    pub name: String,
+    pub slug: String,
+    pub race: Option<String>,
+    pub occupation: Option<String>,
+    pub sex: Option<String>,
+    pub age: Option<String>,
+    pub height: Option<String>,
+    pub weight_lbs: Option<String>,
+    pub background: Option<String>,
+    pub want_need: Option<String>,
+    pub secret_obstacle: Option<String>,
+    pub carrying: Option<Vec<String>>,
+    pub location: Option<String>,
+    pub vault_path: String,
+    pub kind_type: Option<String>,
+    pub kind_custom: Option<String>,
+    pub visual_description: Option<String>,
+    pub history_background: Option<String>,
+    pub exports: Option<Vec<String>>,
+    pub tone: Option<String>,
+    pub authority: Option<String>,
+    pub danger_level: Option<String>,
+    pub current_tension: Option<String>,
+    pub public_description: Option<String>,
+    pub true_agenda: Option<String>,
+    pub methods: Option<String>,
+    pub leadership: Option<String>,
+    pub headquarters: Option<String>,
+    pub sphere_of_influence: Option<String>,
+    pub resources_assets: Option<String>,
+    pub allies: Option<Vec<String>>,
+    pub rivals_enemies: Option<Vec<String>>,
+    pub reputation: Option<String>,
+    pub goals_short_term: Option<Vec<String>>,
+    pub goals_long_term: Option<Vec<String>>,
+    pub symbol_description: Option<String>,
+    pub created_at: Option<String>,
+}
+
+impl From<crate::EntityDetails> for EntityDetails {
+    fn from(value: crate::EntityDetails) -> Self {
+        Self {
+            id: value.id,
+            entity_type: value.entity_type.into(),
+            name: value.name,
+            slug: value.slug,
+            race: value.race,
+            occupation: value.occupation,
+            sex: value.sex,
+            age: value.age,
+            height: value.height,
+            weight_lbs: value.weight_lbs,
+            background: value.background,
+            want_need: value.want_need,
+            secret_obstacle: value.secret_obstacle,
+            carrying: value.carrying,
+            location: value.location,
+            vault_path: value.vault_path,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            visual_description: value.visual_description,
+            history_background: value.history_background,
+            exports: value.exports,
+            tone: value.tone,
+            authority: value.authority,
+            danger_level: value.danger_level,
+            current_tension: value.current_tension,
+            public_description: value.public_description,
+            true_agenda: value.true_agenda,
+            methods: value.methods,
+            leadership: value.leadership,
+            headquarters: value.headquarters,
+            sphere_of_influence: value.sphere_of_influence,
+            resources_assets: value.resources_assets,
+            allies: value.allies,
+            rivals_enemies: value.rivals_enemies,
+            reputation: value.reputation,
+            goals_short_term: value.goals_short_term,
+            goals_long_term: value.goals_long_term,
+            symbol_description: value.symbol_description,
+            created_at: value.created_at,
+        }
+    }
+}
+
+impl From<EntityDetails> for crate::EntityDetails {
+    fn from(value: EntityDetails) -> Self {
+        Self {
+            id: value.id,
+            entity_type: value.entity_type.into(),
+            name: value.name,
+            slug: value.slug,
+            race: value.race,
+            occupation: value.occupation,
+            sex: value.sex,
+            age: value.age,
+            height: value.height,
+            weight_lbs: value.weight_lbs,
+            background: value.background,
+            want_need: value.want_need,
+            secret_obstacle: value.secret_obstacle,
+            carrying: value.carrying,
+            location: value.location,
+            vault_path: value.vault_path,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            visual_description: value.visual_description,
+            history_background: value.history_background,
+            exports: value.exports,
+            tone: value.tone,
+            authority: value.authority,
+            danger_level: value.danger_level,
+            current_tension: value.current_tension,
+            public_description: value.public_description,
+            true_agenda: value.true_agenda,
+            methods: value.methods,
+            leadership: value.leadership,
+            headquarters: value.headquarters,
+            sphere_of_influence: value.sphere_of_influence,
+            resources_assets: value.resources_assets,
+            allies: value.allies,
+            rivals_enemies: value.rivals_enemies,
+            reputation: value.reputation,
+            goals_short_term: value.goals_short_term,
+            goals_long_term: value.goals_long_term,
+            symbol_description: value.symbol_description,
+            created_at: value.created_at,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SoftDeleteEntityResult {
-    pub success: bool,
+    pub entity_type: EntityType,
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub trash_vault_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UndoSoftDeleteResult {
-    pub success: bool,
+    pub entity_type: EntityType,
+    pub id: String,
+    pub name: String,
+    pub slug: String,
+    pub vault_path: String,
+}
+
+impl From<SoftDeleteEntityInput> for crate::SoftDeleteEntityInput {
+    fn from(value: SoftDeleteEntityInput) -> Self {
+        Self { target: value.target }
+    }
+}
+
+impl From<crate::SoftDeleteEntityResult> for SoftDeleteEntityResult {
+    fn from(value: crate::SoftDeleteEntityResult) -> Self {
+        Self {
+            entity_type: value.entity_type.into(),
+            id: value.id,
+            name: value.name,
+            slug: value.slug,
+            trash_vault_path: value.trash_vault_path,
+        }
+    }
+}
+
+impl From<crate::UndoSoftDeleteResult> for UndoSoftDeleteResult {
+    fn from(value: crate::UndoSoftDeleteResult) -> Self {
+        Self {
+            entity_type: value.entity_type.into(),
+            id: value.id,
+            name: value.name,
+            slug: value.slug,
+            vault_path: value.vault_path,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnsureLocationInput {
-    pub location_name: String,
+    pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EnsureLocationResult {
     pub name: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub created_file: bool,
+    pub created_record: bool,
+}
+
+impl From<EnsureLocationInput> for crate::EnsureLocationInput {
+    fn from(value: EnsureLocationInput) -> Self {
+        Self { name: value.name }
+    }
+}
+
+impl From<crate::EnsureLocationResult> for EnsureLocationResult {
+    fn from(value: crate::EnsureLocationResult) -> Self {
+        Self {
+            name: value.name,
+            slug: value.slug,
+            vault_path: value.vault_path,
+            created_file: value.created_file,
+            created_record: value.created_record,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocationRerollContext {
     pub name: String,
     pub kind_type: String,
+    pub kind_custom: Option<String>,
     pub visual_description: String,
     pub history_background: String,
+    pub exports: Vec<String>,
     pub tone: String,
     pub authority: String,
     pub danger_level: String,
+    pub current_tension: String,
+}
+
+impl From<LocationRerollContext> for crate::LocationRerollContext {
+    fn from(value: LocationRerollContext) -> Self {
+        Self {
+            name: value.name,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            visual_description: value.visual_description,
+            history_background: value.history_background,
+            exports: value.exports,
+            tone: value.tone,
+            authority: value.authority,
+            danger_level: value.danger_level,
+            current_tension: value.current_tension,
+        }
+    }
+}
+
+impl From<crate::LocationRerollContext> for LocationRerollContext {
+    fn from(value: crate::LocationRerollContext) -> Self {
+        Self {
+            name: value.name,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            visual_description: value.visual_description,
+            history_background: value.history_background,
+            exports: value.exports,
+            tone: value.tone,
+            authority: value.authority,
+            danger_level: value.danger_level,
+            current_tension: value.current_tension,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -179,20 +621,110 @@ pub struct RerollLocationFieldInput {
     pub location: LocationRerollContext,
 }
 
+impl From<RerollLocationFieldInput> for crate::RerollLocationFieldInput {
+    fn from(value: RerollLocationFieldInput) -> Self {
+        Self {
+            field: value.field,
+            prompt: value.prompt,
+            location: value.location.into(),
+        }
+    }
+}
+
+impl From<crate::RerollLocationFieldInput> for RerollLocationFieldInput {
+    fn from(value: crate::RerollLocationFieldInput) -> Self {
+        Self {
+            field: value.field,
+            prompt: value.prompt,
+            location: value.location.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RerollLocationFieldResult {
     pub field: String,
     pub value: Option<String>,
+    pub exports: Option<Vec<String>>,
+}
+
+impl From<crate::RerollLocationFieldResult> for RerollLocationFieldResult {
+    fn from(value: crate::RerollLocationFieldResult) -> Self {
+        Self {
+            field: value.field,
+            value: value.value,
+            exports: value.exports,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FactionRerollContext {
     pub name: String,
     pub kind_type: String,
+    pub kind_custom: Option<String>,
     pub public_description: String,
     pub true_agenda: String,
     pub methods: String,
+    pub leadership: String,
+    pub headquarters: String,
+    pub sphere_of_influence: String,
+    pub resources_assets: String,
+    pub allies: Vec<String>,
+    pub rivals_enemies: Vec<String>,
     pub reputation: String,
+    pub current_tension: String,
+    pub goals_short_term: Vec<String>,
+    pub goals_long_term: Vec<String>,
+    pub symbol_description: String,
+}
+
+impl From<FactionRerollContext> for crate::FactionRerollContext {
+    fn from(value: FactionRerollContext) -> Self {
+        Self {
+            name: value.name,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            public_description: value.public_description,
+            true_agenda: value.true_agenda,
+            methods: value.methods,
+            leadership: value.leadership,
+            headquarters: value.headquarters,
+            sphere_of_influence: value.sphere_of_influence,
+            resources_assets: value.resources_assets,
+            allies: value.allies,
+            rivals_enemies: value.rivals_enemies,
+            reputation: value.reputation,
+            current_tension: value.current_tension,
+            goals_short_term: value.goals_short_term,
+            goals_long_term: value.goals_long_term,
+            symbol_description: value.symbol_description,
+        }
+    }
+}
+
+impl From<crate::FactionRerollContext> for FactionRerollContext {
+    fn from(value: crate::FactionRerollContext) -> Self {
+        Self {
+            name: value.name,
+            kind_type: value.kind_type,
+            kind_custom: value.kind_custom,
+            public_description: value.public_description,
+            true_agenda: value.true_agenda,
+            methods: value.methods,
+            leadership: value.leadership,
+            headquarters: value.headquarters,
+            sphere_of_influence: value.sphere_of_influence,
+            resources_assets: value.resources_assets,
+            allies: value.allies,
+            rivals_enemies: value.rivals_enemies,
+            reputation: value.reputation,
+            current_tension: value.current_tension,
+            goals_short_term: value.goals_short_term,
+            goals_long_term: value.goals_long_term,
+            symbol_description: value.symbol_description,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -202,10 +734,41 @@ pub struct RerollFactionFieldInput {
     pub faction: FactionRerollContext,
 }
 
+impl From<RerollFactionFieldInput> for crate::RerollFactionFieldInput {
+    fn from(value: RerollFactionFieldInput) -> Self {
+        Self {
+            field: value.field,
+            prompt: value.prompt,
+            faction: value.faction.into(),
+        }
+    }
+}
+
+impl From<crate::RerollFactionFieldInput> for RerollFactionFieldInput {
+    fn from(value: crate::RerollFactionFieldInput) -> Self {
+        Self {
+            field: value.field,
+            prompt: value.prompt,
+            faction: value.faction.into(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct RerollFactionFieldResult {
     pub field: String,
     pub value: Option<String>,
+    pub list_value: Option<Vec<String>>,
+}
+
+impl From<crate::RerollFactionFieldResult> for RerollFactionFieldResult {
+    fn from(value: crate::RerollFactionFieldResult) -> Self {
+        Self {
+            field: value.field,
+            value: value.value,
+            list_value: value.list_value,
+        }
+    }
 }
 
 pub fn normalize_sex(value: &str) -> Result<String, String> {
@@ -511,41 +1074,59 @@ pub fn validate_faction_details(seed: &crate::services::ai_generation::FactionSe
 }
 
 pub async fn reroll_npc_field(input: RerollNpcFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollNpcFieldResult, String> {
-    Err("reroll_npc_field not yet implemented in utils".to_string())
+    let internal_input: crate::RerollNpcFieldInput = input.into();
+    let result = crate::reroll_npc_field(internal_input, state).await?;
+    Ok(result.into())
 }
 
 pub async fn reroll_location_field(input: RerollLocationFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollLocationFieldResult, String> {
-    Err("reroll_location_field not yet implemented in utils".to_string())
+    let internal_input: crate::RerollLocationFieldInput = input.into();
+    let result = crate::reroll_location_field(internal_input, state).await?;
+    Ok(result.into())
 }
 
 pub async fn reroll_faction_field(input: RerollFactionFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollFactionFieldResult, String> {
-    Err("reroll_faction_field not yet implemented in utils".to_string())
+    let internal_input: crate::RerollFactionFieldInput = input.into();
+    let result = crate::reroll_faction_field(internal_input, state).await?;
+    Ok(result.into())
 }
 
 pub async fn save_npc_draft_impl(input: SaveNpcDraftInput, state: tauri::State<'_, AppState>) -> Result<SaveNpcDraftResult, String> {
-    Err("save_npc_draft_impl not yet implemented in utils".to_string())
+    let internal_input: crate::SaveNpcDraftInput = input.into();
+    let result = crate::save_npc_draft(internal_input, state).await?;
+    Ok(result.into())
 }
 
 pub async fn save_location_draft_impl(input: SaveLocationDraftInput, state: tauri::State<'_, AppState>) -> Result<SaveLocationDraftResult, String> {
-    Err("save_location_draft_impl not yet implemented in utils".to_string())
+    let internal_input: crate::SaveLocationDraftInput = input.into();
+    let result = crate::save_location_draft(internal_input, state).await?;
+    Ok(result.into())
 }
 
 pub async fn save_faction_draft_impl(input: SaveFactionDraftInput, state: tauri::State<'_, AppState>) -> Result<SaveFactionDraftResult, String> {
-    Err("save_faction_draft_impl not yet implemented in utils".to_string())
+    let internal_input: crate::SaveFactionDraftInput = input.into();
+    let result = crate::save_faction_draft(internal_input, state).await?;
+    Ok(result.into())
 }
 
 pub async fn ensure_location_exists(input: EnsureLocationInput, state: tauri::State<'_, AppState>) -> Result<EnsureLocationResult, String> {
-    Err("ensure_location_exists not yet implemented in utils".to_string())
+    let internal_input: crate::EnsureLocationInput = input.into();
+    let result = crate::ensure_location_exists(internal_input, state).await?;
+    Ok(result.into())
 }
 
-pub async fn resolve_entity(name: String) -> Result<Option<dnd_core::command::CommandClientEvent>, String> {
-    Err("resolve_entity not yet implemented in utils".to_string())
+pub async fn resolve_entity(name: String) -> Result<Option<EntityDetails>, String> {
+    let result = crate::resolve_entity(name).await?;
+    Ok(result.map(Into::into))
 }
 
-pub async fn soft_delete_entity(input: SoftDeleteEntityInput) -> Result<SoftDeleteEntityResult, String> {
-    Err("soft_delete_entity not yet implemented in utils".to_string())
+pub async fn soft_delete_entity(input: SoftDeleteEntityInput, state: tauri::State<'_, AppState>) -> Result<SoftDeleteEntityResult, String> {
+    let internal_input: crate::SoftDeleteEntityInput = input.into();
+    let result = crate::soft_delete_entity(internal_input, state).await?;
+    Ok(result.into())
 }
 
-pub async fn undo_last_soft_delete(entity_type: String, relative_path: String) -> Result<UndoSoftDeleteResult, String> {
-    Err("undo_last_soft_delete not yet implemented in utils".to_string())
+pub async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
+    let result = crate::undo_last_soft_delete(state).await?;
+    Ok(result.into())
 }

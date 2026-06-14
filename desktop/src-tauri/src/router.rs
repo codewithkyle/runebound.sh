@@ -1089,7 +1089,9 @@ async fn faction_save(state: State<'_, AppState>) -> Result<Option<CommandRespon
     let result = save_faction_draft(
         SaveFactionDraftInput {
             id: draft.id.clone(),
+            slug: draft.slug.clone(),
             name: draft.name.clone(),
+            vault_path: draft.vault_path.clone(),
             kind_type: draft.kind_type.clone(),
             kind_custom: draft.kind_custom.clone(),
             public_description: draft.public_description.clone(),
