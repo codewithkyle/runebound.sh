@@ -219,6 +219,7 @@ export default function App() {
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
   const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
+  const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
@@ -274,6 +275,14 @@ export default function App() {
     });
   };
 
+  const updateScrollbarCompensation = () => {
+    if (!outputRef) {
+      return;
+    }
+    const scrollbarWidth = Math.max(0, outputRef.offsetWidth - outputRef.clientWidth);
+    setScrollbarCompensationPx(scrollbarWidth);
+  };
+
   createEffect(() => {
     if (!manifest()) {
       setSuggestions([]);
@@ -312,6 +321,13 @@ export default function App() {
     command();
     queueMicrotask(() => {
       resizeCommandInput();
+    });
+  });
+
+  createEffect(() => {
+    entries().length;
+    queueMicrotask(() => {
+      updateScrollbarCompensation();
     });
   });
 
@@ -778,6 +794,7 @@ export default function App() {
 
     inputRef?.focus();
     resizeCommandInput();
+    updateScrollbarCompensation();
     void runStartupStatusCheck();
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
@@ -810,9 +827,24 @@ export default function App() {
       }
     };
 
+    const handleWindowResize = () => {
+      updateScrollbarCompensation();
+    };
+
+    let resizeObserver: ResizeObserver | undefined;
+    if (typeof ResizeObserver !== "undefined" && outputRef) {
+      resizeObserver = new ResizeObserver(() => {
+        updateScrollbarCompensation();
+      });
+      resizeObserver.observe(outputRef);
+    }
+
     window.addEventListener("keydown", handleGlobalKeyDown);
+    window.addEventListener("resize", handleWindowResize);
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
+      window.removeEventListener("resize", handleWindowResize);
+      resizeObserver?.disconnect();
     };
   });
 
@@ -852,7 +884,12 @@ export default function App() {
       </main>
 
       <section class="shrink-0 pb-[2px]">
-        <div class="w-full max-w-[1040px] mx-auto">
+        <div
+          class="w-full max-w-[1040px] mx-auto"
+          style={{
+            "padding-right": `${scrollbarCompensationPx()}px`
+          }}
+        >
           <div class="mb-[2px]">
             <Show when={suggestionList().length > 0}>
               <div class="bg-surface py-[2px]">
