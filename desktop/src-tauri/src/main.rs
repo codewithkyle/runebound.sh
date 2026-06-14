@@ -3,7 +3,7 @@
 mod app_state;
 mod router;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::time::Duration;
@@ -213,6 +213,7 @@ enum SuggestionHelperText {
     Command,
     Npc,
     Location,
+    Reference,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -269,6 +270,25 @@ struct SaveLocationDraftResult {
     vault_path: String,
     created_at: String,
     updated_at: String,
+}
+
+#[derive(Debug, Clone)]
+struct VaultReferenceEntry {
+    key: String,
+    key_lower: String,
+    markdown_path: Option<String>,
+    is_dir: bool,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveReferenceQuery {
+    at_index: usize,
+    query: String,
+}
+
+#[derive(Debug, Clone, Default)]
+struct PromptReferenceContext {
+    system_context: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -702,6 +722,291 @@ fn location_context_summary(context: &LocationRerollContext) -> String {
     )
 }
 
+fn is_reference_boundary_char(ch: char) -> bool {
+    ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"')
+}
+
+fn can_start_reference_at(input: &str, at_index: usize) -> bool {
+    if at_index == 0 {
+        return true;
+    }
+
+    let before = input[..at_index].chars().next_back();
+    before.is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '\''))
+}
+
+fn extract_active_reference_query(input: &str) -> Option<ActiveReferenceQuery> {
+    for (idx, ch) in input.char_indices().rev() {
+        if ch != '@' {
+            continue;
+        }
+        if !can_start_reference_at(input, idx) {
+            continue;
+        }
+
+        return Some(ActiveReferenceQuery {
+            at_index: idx,
+            query: input[idx + 1..].to_string(),
+        });
+    }
+
+    None
+}
+
+fn should_ignore_reference_component(component: &str) -> bool {
+    component
+        .split('/')
+        .any(|part| part.starts_with('.') || part.eq_ignore_ascii_case("target"))
+}
+
+fn markdown_reference_key(relative_path: &str) -> Option<String> {
+    let normalized = normalize_relative_path_for_storage(relative_path);
+    let path = Path::new(&normalized);
+    let ext = path.extension().and_then(|value| value.to_str())?;
+    if !ext.eq_ignore_ascii_case("md") {
+        return None;
+    }
+
+    let stem = path
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())?;
+    let parent = path.parent().and_then(|value| value.to_str()).unwrap_or("");
+    if parent.is_empty() {
+        Some(stem.to_string())
+    } else {
+        Some(format!("{parent}/{stem}"))
+    }
+}
+
+fn is_top_level_reference_key(key: &str, is_dir: bool) -> bool {
+    if is_dir {
+        let trimmed = key.trim_end_matches('/');
+        !trimmed.is_empty() && !trimmed.contains('/')
+    } else {
+        !key.contains('/')
+    }
+}
+
+fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry>, String> {
+    vault.ensure_root_exists().map_err(|err| err.to_string())?;
+
+    let mut entries: HashMap<String, VaultReferenceEntry> = HashMap::new();
+    let mut stack = vec![PathBuf::new()];
+
+    while let Some(relative_dir) = stack.pop() {
+        let full_dir = vault
+            .resolve_relative(&relative_dir)
+            .map_err(|err| err.to_string())?;
+        let dir_entries = fs::read_dir(&full_dir)
+            .map_err(|err| format!("failed to read directory {}: {}", full_dir.display(), err))?;
+
+        for dir_entry in dir_entries {
+            let dir_entry = match dir_entry {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!("reference index warning: failed to read directory entry: {err}");
+                    continue;
+                }
+            };
+            let entry_path = dir_entry.path();
+            let relative = match entry_path.strip_prefix(vault.root()) {
+                Ok(value) => normalize_relative_path_for_storage(&value.to_string_lossy()),
+                Err(_) => continue,
+            };
+            if should_ignore_reference_component(&relative) {
+                continue;
+            }
+
+            if entry_path.is_dir() {
+                let mut key = relative.trim_matches('/').to_string();
+                if key.is_empty() {
+                    continue;
+                }
+                key.push('/');
+                entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
+                    key: key.clone(),
+                    key_lower: key.to_lowercase(),
+                    markdown_path: None,
+                    is_dir: true,
+                });
+                stack.push(PathBuf::from(relative));
+                continue;
+            }
+
+            let Some(key) = markdown_reference_key(&relative) else {
+                continue;
+            };
+            entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
+                key: key.clone(),
+                key_lower: key.to_lowercase(),
+                markdown_path: Some(relative),
+                is_dir: false,
+            });
+        }
+    }
+
+    let mut out: Vec<VaultReferenceEntry> = entries.into_values().collect();
+    out.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
+    Ok(out)
+}
+
+fn build_reference_suggestions_from_entries(
+    input: &str,
+    active: &ActiveReferenceQuery,
+    entries: &[VaultReferenceEntry],
+) -> Vec<CommandSuggestion> {
+    let query_lower = normalize_relative_path_for_storage(&active.query).to_lowercase();
+    let mut ranked: Vec<&VaultReferenceEntry> = entries
+        .iter()
+        .filter(|entry| {
+            if query_lower.is_empty() {
+                return is_top_level_reference_key(&entry.key, entry.is_dir);
+            }
+            entry.key_lower.starts_with(&query_lower)
+        })
+        .collect();
+
+    ranked.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
+    ranked
+        .into_iter()
+        .take(12)
+        .map(|entry| {
+            let completion_suffix = if entry.is_dir { "" } else { " " };
+            CommandSuggestion {
+                label: format!("@{}", entry.key),
+                completion: format!(
+                    "{}@{}{}",
+                    &input[..active.at_index],
+                    entry.key,
+                    completion_suffix
+                ),
+                helper_text: Some(SuggestionHelperText::Reference),
+            }
+        })
+        .collect()
+}
+
+fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) -> Vec<String> {
+    let mut candidates: Vec<&VaultReferenceEntry> = entries
+        .iter()
+        .filter(|entry| !entry.is_dir && entry.markdown_path.is_some())
+        .collect();
+    candidates.sort_by(|left, right| right.key_lower.len().cmp(&left.key_lower.len()));
+
+    let prompt_lower = prompt.to_lowercase();
+    let mut cursor = 0;
+    let mut matched = Vec::new();
+
+    while cursor < prompt.len() {
+        let next_at = match prompt[cursor..].find('@') {
+            Some(offset) => cursor + offset,
+            None => break,
+        };
+        if !can_start_reference_at(prompt, next_at) {
+            cursor = next_at + 1;
+            continue;
+        }
+
+        let tail_start = next_at + 1;
+        let tail = &prompt_lower[tail_start..];
+        let mut best: Option<&VaultReferenceEntry> = None;
+
+        for candidate in &candidates {
+            if !tail.starts_with(&candidate.key_lower) {
+                continue;
+            }
+            let boundary_index = tail_start + candidate.key.len();
+            let boundary_ok = prompt[boundary_index..]
+                .chars()
+                .next()
+                .is_none_or(is_reference_boundary_char);
+            if !boundary_ok {
+                continue;
+            }
+            best = Some(*candidate);
+            break;
+        }
+
+        if let Some(candidate) = best {
+            matched.push(candidate.key.clone());
+            cursor = tail_start + candidate.key.len();
+            continue;
+        }
+
+        cursor = next_at + 1;
+    }
+
+    let mut unique = Vec::new();
+    let mut seen = HashSet::new();
+    for key in matched {
+        let lowered = key.to_lowercase();
+        if seen.insert(lowered) {
+            unique.push(key);
+        }
+    }
+    unique
+}
+
+fn build_prompt_reference_context(
+    prompt: &str,
+    entries: &[VaultReferenceEntry],
+    vault: &Vault,
+) -> PromptReferenceContext {
+    const MAX_REFERENCE_DOCS: usize = 5;
+    const MAX_METADATA_CHARS_PER_DOC: usize = 1800;
+
+    let keys = extract_prompt_reference_keys(prompt, entries);
+    if keys.is_empty() {
+        return PromptReferenceContext::default();
+    }
+
+    let path_by_key: HashMap<String, String> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .markdown_path
+                .as_ref()
+                .map(|path| (entry.key.to_lowercase(), path.clone()))
+        })
+        .collect();
+
+    let mut blocks = Vec::new();
+    for key in keys.into_iter().take(MAX_REFERENCE_DOCS) {
+        let Some(path) = path_by_key.get(&key.to_lowercase()) else {
+            continue;
+        };
+        let contents = match vault.read_relative(Path::new(path)) {
+            Ok(value) => value,
+            Err(err) => {
+                eprintln!("reference context warning: failed reading {}: {}", path, err);
+                continue;
+            }
+        };
+        let Some(runebound) = extract_runebound_toml(&contents) else {
+            continue;
+        };
+        let metadata = if runebound.len() > MAX_METADATA_CHARS_PER_DOC {
+            format!("{}...", &runebound[..MAX_METADATA_CHARS_PER_DOC])
+        } else {
+            runebound
+        };
+        blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
+    }
+
+    if blocks.is_empty() {
+        return PromptReferenceContext::default();
+    }
+
+    PromptReferenceContext {
+        system_context: format!(
+            "Referenced vault metadata (treat as authoritative setting context):\n\n{}",
+            blocks.join("\n\n")
+        ),
+    }
+}
+
 fn parse_recent_location_seeds(payloads: Vec<String>) -> Vec<LocationSeed> {
     payloads
         .into_iter()
@@ -736,6 +1041,55 @@ fn recent_name_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
         .collect()
 }
 
+fn occupation_tokens(value: &str) -> Vec<String> {
+    const STOP_WORDS: &[&str] = &[
+        "a",
+        "an",
+        "and",
+        "as",
+        "at",
+        "by",
+        "deceased",
+        "ex",
+        "for",
+        "former",
+        "from",
+        "in",
+        "of",
+        "on",
+        "retired",
+        "the",
+        "to",
+        "under",
+        "with",
+    ];
+
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty())
+        .filter(|token| !STOP_WORDS.contains(&token.as_str()))
+        .collect()
+}
+
+fn occupation_anchor(value: &str) -> String {
+    occupation_tokens(value)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "unknown".to_string())
+}
+
+fn recent_occupation_anchor_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
+    seeds
+        .iter()
+        .map(|seed| occupation_anchor(&seed.occupation))
+        .filter(|anchor| !anchor.is_empty() && anchor != "unknown")
+        .collect()
+}
+
 fn recent_location_name_set(seeds: &[LocationSeed]) -> std::collections::HashSet<String> {
     seeds
         .iter()
@@ -759,9 +1113,24 @@ fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
     let items: Vec<String> = seeds
         .iter()
         .take(10)
-        .map(|seed| format!("{} | {} | {}", seed.name, seed.race, seed.sex))
+        .map(|seed| {
+            format!(
+                "{} | {} | {} | {}",
+                seed.name, seed.race, seed.sex, seed.occupation
+            )
+        })
         .collect();
     items.join("; ")
+}
+
+fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> String {
+    let mut anchors: Vec<String> = recent_occupation_anchor_set(seeds).into_iter().collect();
+    if anchors.is_empty() {
+        return "none".to_string();
+    }
+    anchors.sort();
+    anchors.truncate(12);
+    anchors.join(", ")
 }
 
 #[tauri::command]
@@ -771,6 +1140,22 @@ async fn suggest_command_input(
 ) -> Result<Vec<CommandSuggestion>, String> {
     if input.trim().is_empty() {
         return Ok(Vec::new());
+    }
+
+    if let Some(active_ref) = extract_active_reference_query(&input) {
+        if !active_ref.query.trim().starts_with('-') {
+            let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+            if let Some(vault_path) = loaded.effective.vault.path {
+                let vault = Vault::new(vault_path);
+                if vault.ensure_root_exists().is_ok() {
+                    let entries = load_vault_reference_entries(&vault)?;
+                    let suggestions = build_reference_suggestions_from_entries(&input, &active_ref, &entries);
+                    if !suggestions.is_empty() {
+                        return Ok(suggestions);
+                    }
+                }
+            }
+        }
     }
 
     let manifest = dnd_core::command_manifest::command_manifest();
@@ -1610,6 +1995,23 @@ async fn generate_npc_seed(
         .filter(|value| !value.is_empty())
         .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
+    let reference_context = if let Some(vault_path) = config.vault.path.clone() {
+        let vault = Vault::new(vault_path);
+        if vault.ensure_root_exists().is_ok() {
+            match load_vault_reference_entries(&vault) {
+                Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault),
+                Err(err) => {
+                    eprintln!("reference context warning: {err}");
+                    PromptReferenceContext::default()
+                }
+            }
+        } else {
+            PromptReferenceContext::default()
+        }
+    } else {
+        PromptReferenceContext::default()
+    };
+
     let database = db::init_database().await.map_err(|err| err.to_string())?;
     let recent_payloads = db::recent_generation_prompts(&database.pool, "npc_seed", 20)
         .await
@@ -1617,6 +2019,8 @@ async fn generate_npc_seed(
     let recent_seeds = parse_recent_npc_seeds(recent_payloads);
     let recent_names = recent_name_set(&recent_seeds);
     let recent_context = describe_recent_npc_seeds(&recent_seeds);
+    let recent_occupation_anchors = recent_occupation_anchor_set(&recent_seeds);
+    let recent_occupation_context = describe_recent_npc_occupation_anchors(&recent_seeds);
 
     let schema = serde_json::json!({
         "type": "object",
@@ -1648,6 +2052,7 @@ async fn generate_npc_seed(
         .map_err(|err| err.to_string())?;
 
     let mut seen_attempt_names = std::collections::HashSet::new();
+    let mut seen_attempt_occupation_anchors = std::collections::HashSet::new();
 
     for attempt in 0..5 {
         let base_seed = std::time::SystemTime::now()
@@ -1658,7 +2063,7 @@ async fn generate_npc_seed(
         let repair_note = if attempt == 0 {
             ""
         } else {
-            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations."
         };
 
         let payload = serde_json::json!({
@@ -1675,9 +2080,15 @@ async fn generate_npc_seed(
                 {
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Avoid these recent seeds: {}.{}",
+                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}",
+                        recent_occupation_context,
                         recent_context,
                         repair_note,
+                        if reference_context.system_context.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\n\n{}", reference_context.system_context)
+                        },
                     )
                 },
                 {
@@ -1732,7 +2143,15 @@ async fn generate_npc_seed(
         if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) {
             continue;
         }
+        let occupation_anchor = occupation_anchor(&seed.occupation);
+        if occupation_anchor != "unknown"
+            && (recent_occupation_anchors.contains(&occupation_anchor)
+                || seen_attempt_occupation_anchors.contains(&occupation_anchor))
+        {
+            continue;
+        }
         seen_attempt_names.insert(normalized_name);
+        seen_attempt_occupation_anchors.insert(occupation_anchor);
 
         let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
         db::insert_generation(&database.pool, "npc_seed", None, &serialized_seed)
@@ -1767,6 +2186,20 @@ async fn reroll_npc_field(
         .unwrap_or("");
 
     let context_summary = npc_context_summary(&input.npc);
+    let (recent_occupation_anchors, recent_occupation_context) = if field == "occupation" {
+        let database = db::init_database().await.map_err(|err| err.to_string())?;
+        let recent_payloads = db::recent_generation_prompts(&database.pool, "npc_seed", 20)
+            .await
+            .map_err(|err| err.to_string())?;
+        let recent_seeds = parse_recent_npc_seeds(recent_payloads);
+        (
+            recent_occupation_anchor_set(&recent_seeds),
+            describe_recent_npc_occupation_anchors(&recent_seeds),
+        )
+    } else {
+        (HashSet::new(), "none".to_string())
+    };
+    let current_occupation_anchor = occupation_anchor(&input.npc.occupation);
     let field_instructions = match field {
         "name" => "Generate a single fitting fantasy NPC name.",
         "race" => "Generate a fitting fantasy race for this NPC.",
@@ -1821,6 +2254,8 @@ async fn reroll_npc_field(
         .build()
         .map_err(|err| err.to_string())?;
 
+    let mut seen_attempt_occupation_anchors = HashSet::new();
+
     for attempt in 0..4 {
         let base_seed = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -1841,15 +2276,23 @@ async fn reroll_npc_field(
             "messages": [
                 {
                     "role": "system",
-                    "content": "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                    "content": format!(
+                        "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                        if field == "occupation" {
+                            " For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one."
+                        } else {
+                            ""
+                        }
+                    )
                 },
                 {
                     "role": "user",
                     "content": format!(
-                        "NPC context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
+                        "NPC context: {}\nField to reroll: {}\nInstruction: {}\nRecent occupation roots to avoid: {}\nOptional shaping prompt: {}",
                         context_summary,
                         field,
                         field_instructions,
+                        if field == "occupation" { &recent_occupation_context } else { "(n/a)" },
                         if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
                     )
                 }
@@ -1925,6 +2368,20 @@ async fn reroll_npc_field(
 
         if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
             continue;
+        }
+
+        if field == "occupation" {
+            let anchor = occupation_anchor(&normalized);
+            if anchor != "unknown"
+                && (anchor == current_occupation_anchor
+                    || recent_occupation_anchors.contains(&anchor)
+                    || seen_attempt_occupation_anchors.contains(&anchor))
+            {
+                continue;
+            }
+            if anchor != "unknown" {
+                seen_attempt_occupation_anchors.insert(anchor);
+            }
         }
 
         return Ok(RerollNpcFieldResult {
@@ -3287,9 +3744,12 @@ fn exit_app(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocationSeed, extract_runebound_toml, normalize_input_for_dispatch, normalize_location_seed,
-        normalize_relative_path_for_storage, path_for_display, scan_npc_row_from_markdown,
-        validate_location_details,
+        ActiveReferenceQuery, LocationSeed, VaultReferenceEntry,
+        build_reference_suggestions_from_entries, extract_active_reference_query,
+        extract_prompt_reference_keys, extract_runebound_toml, normalize_input_for_dispatch,
+        normalize_location_seed, normalize_relative_path_for_storage, occupation_anchor,
+        path_for_display, recent_occupation_anchor_set, scan_npc_row_from_markdown,
+        validate_location_details, describe_recent_npc_occupation_anchors,
     };
 
     #[test]
@@ -3376,6 +3836,188 @@ mod tests {
         assert_eq!(row.name, "Father Elen");
         assert_eq!(row.slug, "father-elen");
         assert_eq!(row.vault_path, "npcs/Father Elen.md");
+    }
+
+    #[test]
+    fn extracts_active_reference_query_from_tail() {
+        let input = "create npc a duke for @locations/Aegis";
+        let active = extract_active_reference_query(input).expect("expected active reference");
+        assert_eq!(active.at_index, 22);
+        assert_eq!(active.query, "locations/Aegis");
+    }
+
+    #[test]
+    fn does_not_treat_email_as_reference_query() {
+        let input = "create npc envoy named a@b";
+        let active = extract_active_reference_query(input);
+        assert!(active.is_none());
+    }
+
+    #[test]
+    fn prompt_reference_matching_prefers_longest_entry() {
+        let entries = vec![
+            VaultReferenceEntry {
+                key: "locations/Aegis".to_string(),
+                key_lower: "locations/aegis".to_string(),
+                markdown_path: Some("locations/Aegis.md".to_string()),
+                is_dir: false,
+            },
+            VaultReferenceEntry {
+                key: "locations/Aegis Isle".to_string(),
+                key_lower: "locations/aegis isle".to_string(),
+                markdown_path: Some("locations/Aegis Isle.md".to_string()),
+                is_dir: false,
+            },
+        ];
+
+        let found = extract_prompt_reference_keys(
+            "create npc a duke for @locations/Aegis Isle during winter",
+            &entries,
+        );
+        assert_eq!(found, vec!["locations/Aegis Isle"]);
+    }
+
+    #[test]
+    fn prompt_reference_matching_supports_multiple_mentions() {
+        let entries = vec![
+            VaultReferenceEntry {
+                key: "locations/Aegis Isle".to_string(),
+                key_lower: "locations/aegis isle".to_string(),
+                markdown_path: Some("locations/Aegis Isle.md".to_string()),
+                is_dir: false,
+            },
+            VaultReferenceEntry {
+                key: "npcs/Lady Aisling Everlynn".to_string(),
+                key_lower: "npcs/lady aisling everlynn".to_string(),
+                markdown_path: Some("npcs/Lady Aisling Everlynn.md".to_string()),
+                is_dir: false,
+            },
+        ];
+
+        let found = extract_prompt_reference_keys(
+            "create npc sibling of @npcs/Lady Aisling Everlynn from @locations/Aegis Isle",
+            &entries,
+        );
+        assert_eq!(
+            found,
+            vec![
+                "npcs/Lady Aisling Everlynn".to_string(),
+                "locations/Aegis Isle".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn empty_reference_query_suggests_top_level_directories() {
+        let entries = vec![
+            VaultReferenceEntry {
+                key: "locations/".to_string(),
+                key_lower: "locations/".to_string(),
+                markdown_path: None,
+                is_dir: true,
+            },
+            VaultReferenceEntry {
+                key: "npcs/".to_string(),
+                key_lower: "npcs/".to_string(),
+                markdown_path: None,
+                is_dir: true,
+            },
+            VaultReferenceEntry {
+                key: "locations/Aegis Isle".to_string(),
+                key_lower: "locations/aegis isle".to_string(),
+                markdown_path: Some("locations/Aegis Isle.md".to_string()),
+                is_dir: false,
+            },
+        ];
+
+        let active = ActiveReferenceQuery {
+            at_index: 11,
+            query: String::new(),
+        };
+        let suggestions = build_reference_suggestions_from_entries("create npc @", &active, &entries);
+        let labels: Vec<String> = suggestions.into_iter().map(|item| item.label).collect();
+
+        assert_eq!(labels, vec!["@locations/".to_string(), "@npcs/".to_string()]);
+    }
+
+    #[test]
+    fn occupation_anchor_ignores_descriptive_fillers() {
+        assert_eq!(
+            occupation_anchor("former cartographer, current wanderer"),
+            "cartographer"
+        );
+        assert_eq!(occupation_anchor("Cartographer & explorer (deceased)"), "cartographer");
+    }
+
+    #[test]
+    fn recent_occupation_anchor_set_collects_unique_roots() {
+        let seeds = vec![
+            super::NpcSeed {
+                name: "A".to_string(),
+                race: "Human".to_string(),
+                occupation: "former cartographer, current wanderer".to_string(),
+                sex: "male".to_string(),
+                age: "30".to_string(),
+                height: "5'10\"".to_string(),
+                weight_lbs: "170".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+            super::NpcSeed {
+                name: "B".to_string(),
+                race: "Elf".to_string(),
+                occupation: "cartographer & explorer (deceased)".to_string(),
+                sex: "female".to_string(),
+                age: "29".to_string(),
+                height: "5'8\"".to_string(),
+                weight_lbs: "130".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+        ];
+
+        let anchors = recent_occupation_anchor_set(&seeds);
+        assert_eq!(anchors.len(), 1);
+        assert!(anchors.contains("cartographer"));
+    }
+
+    #[test]
+    fn describe_recent_occupation_anchors_is_compact_and_unique() {
+        let seeds = vec![
+            super::NpcSeed {
+                name: "A".to_string(),
+                race: "Human".to_string(),
+                occupation: "former cartographer".to_string(),
+                sex: "male".to_string(),
+                age: "30".to_string(),
+                height: "5'10\"".to_string(),
+                weight_lbs: "170".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+            super::NpcSeed {
+                name: "B".to_string(),
+                race: "Elf".to_string(),
+                occupation: "cartographer and explorer".to_string(),
+                sex: "female".to_string(),
+                age: "29".to_string(),
+                height: "5'8\"".to_string(),
+                weight_lbs: "130".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+        ];
+
+        let described = describe_recent_npc_occupation_anchors(&seeds);
+        assert_eq!(described, "cartographer");
     }
 }
 
