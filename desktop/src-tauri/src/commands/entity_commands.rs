@@ -27,7 +27,7 @@ pub async fn handle_load(
         return Ok(Some(ok_response("usage: load <npc-or-location-or-faction-name>".to_string(), None)));
     }
 
-    let entity = resolve_entity(target.to_string()).await?;
+    let entity = resolve_entity(target.to_string(), invocation.state.clone()).await?;
     let Some(entity) = entity else {
         return Ok(Some(ok_response(format!("no npc, location, or faction found for: {target}"), None)));
     };
@@ -64,7 +64,7 @@ async fn entity_preview_response(
     if target.is_empty() {
         return Ok(Some(ok_response(format!("usage: {} <npc-or-location-or-faction-name>", root), None)));
     }
-    let entity = resolve_entity(target.to_string()).await?;
+    let entity = resolve_entity(target.to_string(), invocation.state.clone()).await?;
     let Some(entity) = entity else {
         return Ok(Some(ok_response(format!("no npc, location, or faction found for: {target}"), None)));
     };

@@ -98,7 +98,16 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
     };
 
     let ai = AiGenerationService;
-    let seed = ai.generate_npc_seed(draft.seed_prompt.clone(), &state.workspace_root).await?;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let seed = ai
+        .generate_npc_seed(
+            draft.seed_prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
     draft.name = seed.name.trim().to_string();
     draft.race = seed.race.trim().to_string();
     draft.occupation = normalize_unknown_text(&seed.occupation);
@@ -133,7 +142,16 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
     };
 
     let ai = AiGenerationService;
-    let seed = ai.generate_location_seed(draft.seed_prompt.clone(), &state.workspace_root).await?;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let seed = ai
+        .generate_location_seed(
+            draft.seed_prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
     draft.name = seed.name;
     draft.kind_type = seed.kind_type;
     draft.kind_custom = seed.kind_custom;
@@ -167,7 +185,16 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
     };
 
     let ai = AiGenerationService;
-    let seed = ai.generate_faction_seed(draft.seed_prompt.clone(), &state.workspace_root).await?;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let seed = ai
+        .generate_faction_seed(
+            draft.seed_prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
     draft.name = seed.name;
     draft.kind_type = seed.kind_type;
     draft.kind_custom = seed.kind_custom;

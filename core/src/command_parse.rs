@@ -88,12 +88,13 @@ fn normalize_help_tokens(tokens: &[String]) -> Vec<String> {
 
 pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest) -> ParseResult {
     let normalized_input = normalize_command_input(input);
+    let sanitized_input = sanitize_inline_apostrophes(&normalized_input);
     let ends_with_space = normalized_input
         .chars()
         .last()
         .is_some_and(char::is_whitespace);
 
-    let raw_tokens = match shell_words::split(&normalized_input) {
+    let raw_tokens = match shell_words::split(&sanitized_input) {
         Ok(tokens) => tokens,
         Err(err) => {
             return ParseResult {
@@ -231,6 +232,59 @@ fn find_command<'a>(manifest: &'a CommandManifest, name: &str) -> Option<&'a Com
         .find(|cmd| cmd.name.eq_ignore_ascii_case(name))
 }
 
+fn sanitize_inline_apostrophes(input: &str) -> String {
+    if !input.contains('\'') {
+        return input.to_string();
+    }
+
+    let mut sanitized = String::with_capacity(input.len());
+    let mut prev_char: Option<char> = None;
+    let mut in_single_quote = false;
+    let mut in_double_quote = false;
+
+    for ch in input.chars() {
+        match ch {
+            '"' => {
+                if !in_single_quote {
+                    in_double_quote = !in_double_quote;
+                }
+                sanitized.push(ch);
+            }
+            '\'' => {
+                if in_double_quote {
+                    sanitized.push(ch);
+                } else if in_single_quote {
+                    in_single_quote = false;
+                    sanitized.push(ch);
+                } else if matches!(prev_char, Some('\\')) {
+                    sanitized.push(ch);
+                } else if is_quote_start_boundary(prev_char) {
+                    in_single_quote = true;
+                    sanitized.push(ch);
+                } else {
+                    sanitized.push('\\');
+                    sanitized.push('\'');
+                }
+            }
+            _ => sanitized.push(ch),
+        }
+
+        prev_char = Some(ch);
+    }
+
+    sanitized
+}
+
+fn is_quote_start_boundary(prev: Option<char>) -> bool {
+    match prev {
+        None => true,
+        Some(ch) => {
+            ch.is_whitespace()
+                || matches!(ch, '=' | ':' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '|' | '&')
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{normalize_command_input, parse_command_input};
@@ -238,6 +292,13 @@ mod tests {
     #[test]
     fn parses_quoted_arguments() {
         let parsed = parse_command_input("config show \"/tmp/with space\"");
+        assert!(parsed.valid);
+        assert_eq!(parsed.raw_tokens[2], "/tmp/with space");
+    }
+
+    #[test]
+    fn parses_single_quoted_arguments() {
+        let parsed = parse_command_input("config show '/tmp/with space'");
         assert!(parsed.valid);
         assert_eq!(parsed.raw_tokens[2], "/tmp/with space");
     }
@@ -292,5 +353,19 @@ mod tests {
     #[test]
     fn does_not_unwrap_malformed_nested_backticks() {
         assert_eq!(normalize_command_input("``help``"), "``help``");
+    }
+
+    #[test]
+    fn tokenizes_words_with_inline_apostrophes() {
+        let parsed = parse_command_input("create npc mariner's concordance");
+        assert!(parsed.valid);
+        assert!(parsed.raw_tokens.iter().any(|token| token == "mariner's"));
+    }
+
+    #[test]
+    fn tokenizes_possessive_suffixes_without_closing_quote() {
+        let parsed = parse_command_input("create npc pirates' cove");
+        assert!(parsed.valid);
+        assert!(parsed.raw_tokens.iter().any(|token| token == "pirates'"));
     }
 }

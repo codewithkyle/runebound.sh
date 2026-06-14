@@ -1114,8 +1114,11 @@ pub async fn ensure_location_exists(input: EnsureLocationInput, state: tauri::St
     Ok(result.into())
 }
 
-pub async fn resolve_entity(name: String) -> Result<Option<EntityDetails>, String> {
-    let result = crate::resolve_entity(name).await?;
+pub async fn resolve_entity(
+    name: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<EntityDetails>, String> {
+    let result = crate::resolve_entity(name, state.inner()).await?;
     Ok(result.map(Into::into))
 }
 

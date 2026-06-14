@@ -40,7 +40,7 @@ pub(crate) async fn dispatch_desktop_command(
 
     let manifest = command_manifest();
     if !crate::starts_with_known_command_root(trimmed, &manifest) {
-        if let Some(entity) = crate::resolve_entity(trimmed.to_string()).await? {
+        if let Some(entity) = crate::resolve_entity(trimmed.to_string(), state.inner()).await? {
             let load_entity: EntityDetails = entity.into();
             let (output, event) = build_load_response(load_entity, state).await;
             return Ok(Some(ok_response(output, event)));

@@ -10,6 +10,7 @@ mod utils;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::sync::Arc;
 use std::time::Duration;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse};
@@ -28,6 +29,12 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
 use crate::app_state::{AppState, EditorSession};
+use crate::repositories::{
+    Database, DocumentRepository, FactionRepository, GenerationRepository, LocationRepository,
+    NpcRepository, ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository,
+    ProdLocationRepository, ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository,
+    SoftDeleteRepository, VaultRepository,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NpcSeed {
@@ -1570,7 +1577,7 @@ async fn suggest_command_input(
             || is_preview_context
             || !starts_with_known_command_root(trimmed, &manifest))
     {
-        let entity_results = search_entities(search_query.to_string(), Some(6)).await?;
+        let entity_results = search_entities(state.inner(), search_query.to_string(), Some(6)).await?;
         let prefix = if is_load_context {
             Some("load")
         } else if is_delete_context {
@@ -1602,7 +1609,8 @@ async fn suggest_command_input(
 
     if mode == app_state::EditorMode::Npc {
         if let Some(location_query) = npc_travel_location_query(trimmed) {
-            let location_names = search_location_names(location_query, Some(8)).await?;
+            let location_names =
+                search_location_names(state.inner(), location_query, Some(8)).await?;
             for location_name in location_names {
                 suggestions.push(CommandSuggestion {
                     label: location_name.clone(),
@@ -2470,7 +2478,14 @@ fn scan_faction_row_from_markdown(relative_path: &str, contents: &str) -> db::Fa
     }
 }
 
-async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
+async fn sync_database_from_vault(
+    workspace_root: &Path,
+    database: Arc<Database>,
+    npc_repo: Arc<dyn NpcRepository>,
+    location_repo: Arc<dyn LocationRepository>,
+    faction_repo: Arc<dyn FactionRepository>,
+    document_repo: Arc<dyn DocumentRepository>,
+) -> Result<(), String> {
     let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
     if !loaded.effective.vault.autoscan_on_start {
         return Ok(());
@@ -2483,40 +2498,32 @@ async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
     let vault = Vault::new(vault_path);
     vault.ensure_structure().map_err(|err| err.to_string())?;
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-
     let npc_files = collect_markdown_files_under(vault.root(), "npcs")?;
     let mut scanned_npc_paths = HashSet::new();
     for (relative_path, contents) in npc_files {
         let row = scan_npc_row_from_markdown(&relative_path, &contents);
         scanned_npc_paths.insert(row.vault_path.clone());
-        db::upsert_npc(&database.pool, &row)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::upsert_document_index(
-            &database.pool,
-            "npc",
-            &row.slug,
-            Some(&row.name),
-            &row.vault_path,
-            &row.created_at,
-            &row.updated_at,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        npc_repo.upsert(database.as_ref(), &row).await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "npc",
+                &row.slug,
+                Some(&row.name),
+                &row.vault_path,
+                &row.created_at,
+                &row.updated_at,
+            )
+            .await?;
     }
 
-    let existing_npcs = db::list_npcs(&database.pool)
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing_npcs = npc_repo.list_all(database.as_ref()).await?;
     for npc in existing_npcs {
         if npc.vault_path.starts_with("npcs/") && !scanned_npc_paths.contains(&npc.vault_path) {
-            db::delete_npc_by_id(&database.pool, &npc.id)
-                .await
-                .map_err(|err| err.to_string())?;
-            db::delete_document_by_vault_path(&database.pool, &npc.vault_path)
-                .await
-                .map_err(|err| err.to_string())?;
+            npc_repo.delete_by_id(database.as_ref(), &npc.id).await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &npc.vault_path)
+                .await?;
         }
     }
 
@@ -2525,35 +2532,31 @@ async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
     for (relative_path, contents) in location_files {
         let row = scan_location_row_from_markdown(&relative_path, &contents);
         scanned_location_paths.insert(row.vault_path.clone());
-        db::upsert_location(&database.pool, &row)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::upsert_document_index(
-            &database.pool,
-            "location",
-            &row.slug,
-            Some(&row.name),
-            &row.vault_path,
-            &row.created_at,
-            &row.updated_at,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        location_repo.upsert(database.as_ref(), &row).await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "location",
+                &row.slug,
+                Some(&row.name),
+                &row.vault_path,
+                &row.created_at,
+                &row.updated_at,
+            )
+            .await?;
     }
 
-    let existing_locations = db::list_locations(&database.pool)
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing_locations = location_repo.list_all(database.as_ref()).await?;
     for location in existing_locations {
         if location.vault_path.starts_with("locations/")
             && !scanned_location_paths.contains(&location.vault_path)
         {
-            db::delete_location_by_id(&database.pool, &location.id)
-                .await
-                .map_err(|err| err.to_string())?;
-            db::delete_document_by_vault_path(&database.pool, &location.vault_path)
-                .await
-                .map_err(|err| err.to_string())?;
+            location_repo
+                .delete_by_id(database.as_ref(), &location.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &location.vault_path)
+                .await?;
         }
     }
 
@@ -2562,35 +2565,31 @@ async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
     for (relative_path, contents) in faction_files {
         let row = scan_faction_row_from_markdown(&relative_path, &contents);
         scanned_faction_paths.insert(row.vault_path.clone());
-        db::upsert_faction(&database.pool, &row)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::upsert_document_index(
-            &database.pool,
-            "faction",
-            &row.slug,
-            Some(&row.name),
-            &row.vault_path,
-            &row.created_at,
-            &row.updated_at,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        faction_repo.upsert(database.as_ref(), &row).await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "faction",
+                &row.slug,
+                Some(&row.name),
+                &row.vault_path,
+                &row.created_at,
+                &row.updated_at,
+            )
+            .await?;
     }
 
-    let existing_factions = db::list_factions(&database.pool)
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing_factions = faction_repo.list_all(database.as_ref()).await?;
     for faction in existing_factions {
         if faction.vault_path.starts_with("factions/")
             && !scanned_faction_paths.contains(&faction.vault_path)
         {
-            db::delete_faction_by_id(&database.pool, &faction.id)
-                .await
-                .map_err(|err| err.to_string())?;
-            db::delete_document_by_vault_path(&database.pool, &faction.vault_path)
-                .await
-                .map_err(|err| err.to_string())?;
+            faction_repo
+                .delete_by_id(database.as_ref(), &faction.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &faction.vault_path)
+                .await?;
         }
     }
 
@@ -2609,6 +2608,9 @@ async fn generate_npc_seed(
         .model
         .clone()
         .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+    let database = state.database();
+    let generation_repo = state.generation_repo();
 
     let user_prompt = input
         .prompt
@@ -2634,10 +2636,9 @@ async fn generate_npc_seed(
         PromptReferenceContext::default()
     };
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-    let recent_payloads = db::recent_generation_prompts(&database.pool, "npc_seed", 20)
-        .await
-        .map_err(|err| err.to_string())?;
+    let recent_payloads = generation_repo
+        .recent_prompts(database.as_ref(), "npc_seed", 20)
+        .await?;
     let recent_seeds = parse_recent_npc_seeds(recent_payloads);
     let recent_names = recent_name_set(&recent_seeds);
     let recent_context = describe_recent_npc_seeds(&recent_seeds);
@@ -2776,9 +2777,9 @@ async fn generate_npc_seed(
         seen_attempt_occupation_anchors.insert(occupation_anchor);
 
         let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-        db::insert_generation(&database.pool, "npc_seed", None, &serialized_seed)
-            .await
-            .map_err(|err| err.to_string())?;
+        generation_repo
+            .insert(database.as_ref(), "npc_seed", None, &serialized_seed)
+            .await?;
 
         return Ok(seed);
     }
@@ -2808,11 +2809,12 @@ async fn reroll_npc_field(
         .unwrap_or("");
 
     let context_summary = npc_context_summary(&input.npc);
+    let database = state.database();
+    let generation_repo = state.generation_repo();
     let (recent_occupation_anchors, recent_occupation_context) = if field == "occupation" {
-        let database = db::init_database().await.map_err(|err| err.to_string())?;
-        let recent_payloads = db::recent_generation_prompts(&database.pool, "npc_seed", 20)
-            .await
-            .map_err(|err| err.to_string())?;
+        let recent_payloads = generation_repo
+            .recent_prompts(database.as_ref(), "npc_seed", 20)
+            .await?;
         let recent_seeds = parse_recent_npc_seeds(recent_payloads);
         (
             recent_occupation_anchor_set(&recent_seeds),
@@ -3029,6 +3031,9 @@ async fn generate_location_seed(
         .clone()
         .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
 
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+
     let user_prompt = input
         .prompt
         .as_ref()
@@ -3036,10 +3041,9 @@ async fn generate_location_seed(
         .filter(|value| !value.is_empty())
         .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-    let recent_payloads = db::recent_generation_prompts(&database.pool, "location_seed", 20)
-        .await
-        .map_err(|err| err.to_string())?;
+    let recent_payloads = generation_repo
+        .recent_prompts(database.as_ref(), "location_seed", 20)
+        .await?;
     let recent_seeds = parse_recent_location_seeds(recent_payloads);
     let recent_names = recent_location_name_set(&recent_seeds);
     let recent_context = describe_recent_location_seeds(&recent_seeds);
@@ -3163,9 +3167,9 @@ async fn generate_location_seed(
         seen_attempt_names.insert(normalized_name);
 
         let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-        db::insert_generation(&database.pool, "location_seed", None, &serialized_seed)
-            .await
-            .map_err(|err| err.to_string())?;
+        generation_repo
+            .insert(database.as_ref(), "location_seed", None, &serialized_seed)
+            .await?;
 
         return Ok(seed);
     }
@@ -3380,6 +3384,9 @@ async fn generate_faction_seed(
         .clone()
         .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
 
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+
     let user_prompt = input
         .prompt
         .as_ref()
@@ -3404,10 +3411,9 @@ async fn generate_faction_seed(
         PromptReferenceContext::default()
     };
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-    let recent_payloads = db::recent_generation_prompts(&database.pool, "faction_seed", 20)
-        .await
-        .map_err(|err| err.to_string())?;
+    let recent_payloads = generation_repo
+        .recent_prompts(database.as_ref(), "faction_seed", 20)
+        .await?;
     let recent_seeds = parse_recent_faction_seeds(recent_payloads);
     let recent_names = recent_faction_name_set(&recent_seeds);
     let recent_context = describe_recent_faction_seeds(&recent_seeds);
@@ -3536,9 +3542,9 @@ async fn generate_faction_seed(
         }
 
         let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-        db::insert_generation(&database.pool, "faction_seed", None, &serialized_seed)
-            .await
-            .map_err(|err| err.to_string())?;
+        generation_repo
+            .insert(database.as_ref(), "faction_seed", None, &serialized_seed)
+            .await?;
 
         return Ok(seed);
     }
@@ -3764,7 +3770,7 @@ async fn ensure_location_exists(
         .clone()
         .ok_or_else(|| "vault.path is not configured".to_string())?;
     let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
+    state.vault_repo().ensure_structure(&vault)?;
 
     let raw_name = input.name.trim();
     if raw_name.is_empty() {
@@ -3780,11 +3786,13 @@ async fn ensure_location_exists(
         });
     }
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let database = state.database();
+    let location_repo = state.location_repo();
+    let document_repo = state.document_repo();
     let slug = slugify(raw_name);
-    let existing = db::find_location_by_slug(&database.pool, &slug)
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing = location_repo
+        .find_by_slug(database.as_ref(), &slug)
+        .await?;
 
     let mut created_file = false;
     let mut created_record = false;
@@ -3887,20 +3895,20 @@ async fn ensure_location_exists(
         updated_at: now.clone(),
     };
 
-    db::upsert_location(&database.pool, &row)
-        .await
-        .map_err(|err| err.to_string())?;
-    db::upsert_document_index(
-        &database.pool,
-        "location",
-        &row.slug,
-        Some(&row.name),
-        &row.vault_path,
-        &row.created_at,
-        &row.updated_at,
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    location_repo
+        .upsert(database.as_ref(), &row)
+        .await?;
+    document_repo
+        .upsert_index(
+            database.as_ref(),
+            "location",
+            &row.slug,
+            Some(&row.name),
+            &row.vault_path,
+            &row.created_at,
+            &row.updated_at,
+        )
+        .await?;
 
     Ok(EnsureLocationResult {
         name: canonical_name,
@@ -3954,12 +3962,14 @@ async fn save_npc_draft(
     let vault = Vault::new(vault_path);
     vault.ensure_structure().map_err(|err| err.to_string())?;
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let database = state.database();
+    let npc_repo = state.npc_repo();
+    let document_repo = state.document_repo();
     let now = now_timestamp();
 
-    let existing = db::find_npc_by_id(&database.pool, input.id.trim())
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing = npc_repo
+        .find_by_id(database.as_ref(), input.id.trim())
+        .await?;
 
     let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
         let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
@@ -4065,26 +4075,26 @@ async fn save_npc_draft(
         updated_at: now.clone(),
     };
 
-    db::upsert_npc(&database.pool, &npc_row)
-        .await
-        .map_err(|err| err.to_string())?;
-    db::upsert_document_index(
-        &database.pool,
-        "npc",
-        &npc_row.slug,
-        Some(&npc_row.name),
-        &npc_row.vault_path,
-        &npc_row.created_at,
-        &npc_row.updated_at,
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    npc_repo
+        .upsert(database.as_ref(), &npc_row)
+        .await?;
+    document_repo
+        .upsert_index(
+            database.as_ref(),
+            "npc",
+            &npc_row.slug,
+            Some(&npc_row.name),
+            &npc_row.vault_path,
+            &npc_row.created_at,
+            &npc_row.updated_at,
+        )
+        .await?;
 
     if let Some(old_path) = previous_path {
         if old_path != npc_row.vault_path {
-            db::delete_document_by_vault_path(&database.pool, &old_path)
-                .await
-                .map_err(|err| err.to_string())?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &old_path)
+                .await?;
 
             if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
                 if old_full_path.exists() {
@@ -4168,13 +4178,15 @@ async fn save_location_draft(
         .clone()
         .ok_or_else(|| "vault.path is not configured".to_string())?;
     let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
+    state.vault_repo().ensure_structure(&vault)?;
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let database = state.database();
+    let location_repo = state.location_repo();
+    let document_repo = state.document_repo();
     let now = now_timestamp();
-    let existing = db::find_location_by_id(&database.pool, input.id.trim())
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing = location_repo
+        .find_by_id(database.as_ref(), input.id.trim())
+        .await?;
     let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
         let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
         let desired_base_slug = slugify(name);
@@ -4277,26 +4289,26 @@ async fn save_location_draft(
         updated_at: now.clone(),
     };
 
-    db::upsert_location(&database.pool, &location_row)
-        .await
-        .map_err(|err| err.to_string())?;
-    db::upsert_document_index(
-        &database.pool,
-        "location",
-        &location_row.slug,
-        Some(&location_row.name),
-        &location_row.vault_path,
-        &location_row.created_at,
-        &location_row.updated_at,
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    location_repo
+        .upsert(database.as_ref(), &location_row)
+        .await?;
+    document_repo
+        .upsert_index(
+            database.as_ref(),
+            "location",
+            &location_row.slug,
+            Some(&location_row.name),
+            &location_row.vault_path,
+            &location_row.created_at,
+            &location_row.updated_at,
+        )
+        .await?;
 
     if let Some(old_path) = previous_path {
         if old_path != location_row.vault_path {
-            db::delete_document_by_vault_path(&database.pool, &old_path)
-                .await
-                .map_err(|err| err.to_string())?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &old_path)
+                .await?;
 
             if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
                 if old_full_path.exists() {
@@ -4369,13 +4381,15 @@ async fn save_faction_draft(
         .clone()
         .ok_or_else(|| "vault.path is not configured".to_string())?;
     let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
+    state.vault_repo().ensure_structure(&vault)?;
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let database = state.database();
+    let faction_repo = state.faction_repo();
+    let document_repo = state.document_repo();
     let now = now_timestamp();
-    let existing = db::find_faction_by_id(&database.pool, input.id.trim())
-        .await
-        .map_err(|err| err.to_string())?;
+    let existing = faction_repo
+        .find_by_id(database.as_ref(), input.id.trim())
+        .await?;
 
     let provided_relative_path = normalize_relative_path_for_storage(input.vault_path.trim());
     let previous_path = if let Some(row) = existing.as_ref() {
@@ -4480,26 +4494,26 @@ async fn save_faction_draft(
         updated_at: now.clone(),
     };
 
-    db::upsert_faction(&database.pool, &faction_row)
-        .await
-        .map_err(|err| err.to_string())?;
-    db::upsert_document_index(
-        &database.pool,
-        "faction",
-        &faction_row.slug,
-        Some(&faction_row.name),
-        &faction_row.vault_path,
-        &faction_row.created_at,
-        &faction_row.updated_at,
-    )
-    .await
-    .map_err(|err| err.to_string())?;
+    faction_repo
+        .upsert(database.as_ref(), &faction_row)
+        .await?;
+    document_repo
+        .upsert_index(
+            database.as_ref(),
+            "faction",
+            &faction_row.slug,
+            Some(&faction_row.name),
+            &faction_row.vault_path,
+            &faction_row.created_at,
+            &faction_row.updated_at,
+        )
+        .await?;
 
     if let Some(old_path) = previous_path {
         if old_path != faction_row.vault_path {
-            db::delete_document_by_vault_path(&database.pool, &old_path)
-                .await
-                .map_err(|err| err.to_string())?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &old_path)
+                .await?;
             if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
                 if old_full_path.exists() {
                     std::fs::remove_file(&old_full_path).map_err(|err| {
@@ -4523,24 +4537,31 @@ async fn save_faction_draft(
     })
 }
 
-async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<EntitySuggestion>, String> {
+async fn search_entities(
+    state: &AppState,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<EntitySuggestion>, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
         return Ok(Vec::new());
     }
 
     let limit = i64::from(limit.unwrap_or(8)).clamp(1, 20);
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let database = state.database();
+    let npc_repo = state.npc_repo();
+    let location_repo = state.location_repo();
+    let faction_repo = state.faction_repo();
 
-    let npcs = db::search_npcs_by_name(&database.pool, trimmed, limit)
-        .await
-        .map_err(|err| err.to_string())?;
-    let locations = db::search_locations_by_name(&database.pool, trimmed, limit)
-        .await
-        .map_err(|err| err.to_string())?;
-    let factions = db::search_factions_by_name(&database.pool, trimmed, limit)
-        .await
-        .map_err(|err| err.to_string())?;
+    let npcs = npc_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
+    let locations = location_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
+    let factions = faction_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
 
     let mut items: Vec<EntitySuggestion> = npcs
         .into_iter()
@@ -4566,12 +4587,17 @@ async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<Entity
     Ok(items)
 }
 
-async fn search_location_names(query: String, limit: Option<u32>) -> Result<Vec<String>, String> {
+async fn search_location_names(
+    state: &AppState,
+    query: String,
+    limit: Option<u32>,
+) -> Result<Vec<String>, String> {
     let limit = i64::from(limit.unwrap_or(8)).clamp(1, 20);
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-    let rows = db::search_locations_by_name(&database.pool, query.trim(), limit)
-        .await
-        .map_err(|err| err.to_string())?;
+    let database = state.database();
+    let location_repo = state.location_repo();
+    let rows = location_repo
+        .search_by_name(database.as_ref(), query.trim(), limit)
+        .await?;
 
     let mut out = Vec::new();
     let mut seen = HashSet::new();
@@ -4589,16 +4615,20 @@ async fn search_location_names(query: String, limit: Option<u32>) -> Result<Vec<
     Ok(out)
 }
 
-async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> {
+async fn resolve_entity(input: String, state: &AppState) -> Result<Option<EntityDetails>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
         return Ok(None);
     }
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-    if let Some(npc) = db::find_npc_by_name_or_slug(&database.pool, trimmed)
-        .await
-        .map_err(|err| err.to_string())?
+    let database = state.database();
+    let npc_repo = state.npc_repo();
+    let location_repo = state.location_repo();
+    let faction_repo = state.faction_repo();
+
+    if let Some(npc) = npc_repo
+        .find_by_name_or_slug(database.as_ref(), trimmed)
+        .await?
     {
         return Ok(Some(EntityDetails {
             id: npc.id,
@@ -4643,9 +4673,9 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
         }));
     }
 
-    if let Some(location) = db::find_location_by_name_or_slug(&database.pool, trimmed)
-        .await
-        .map_err(|err| err.to_string())?
+    if let Some(location) = location_repo
+        .find_by_name_or_slug(database.as_ref(), trimmed)
+        .await?
     {
         return Ok(Some(EntityDetails {
             id: location.id,
@@ -4690,9 +4720,9 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
         }));
     }
 
-    if let Some(faction) = db::find_faction_by_name_or_slug(&database.pool, trimmed)
-        .await
-        .map_err(|err| err.to_string())?
+    if let Some(faction) = faction_repo
+        .find_by_name_or_slug(database.as_ref(), trimmed)
+        .await?
     {
         return Ok(Some(EntityDetails {
             id: faction.id,
@@ -4758,25 +4788,30 @@ async fn soft_delete_entity(
         .clone()
         .ok_or_else(|| "vault.path is not configured".to_string())?;
     let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
+    state.vault_repo().ensure_structure(&vault)?;
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let database = state.database();
+    let npc_repo = state.npc_repo();
+    let location_repo = state.location_repo();
+    let faction_repo = state.faction_repo();
+    let document_repo = state.document_repo();
+    let soft_delete_repo = state.soft_delete_repo();
     let now = now_timestamp();
 
-    if let Some(npc) = db::find_npc_by_name_or_slug(&database.pool, target)
-        .await
-        .map_err(|err| err.to_string())?
+    if let Some(npc) = npc_repo
+        .find_by_name_or_slug(database.as_ref(), target)
+        .await?
     {
         let normalized_vault_path = normalize_relative_path_for_storage(&npc.vault_path);
         let trash_path = unique_trash_path(&vault, "npcs", &npc.slug, &now)?;
         move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
 
-        db::delete_npc_by_id(&database.pool, &npc.id)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::delete_document_by_vault_path(&database.pool, &npc.vault_path)
-            .await
-            .map_err(|err| err.to_string())?;
+        npc_repo
+            .delete_by_id(database.as_ref(), &npc.id)
+            .await?;
+        document_repo
+            .delete_by_vault_path(database.as_ref(), &npc.vault_path)
+            .await?;
 
         let payload = NpcDeletePayload {
             id: npc.id.clone(),
@@ -4811,9 +4846,9 @@ async fn soft_delete_entity(
             created_at: now,
             undone_at: None,
         };
-        db::insert_soft_delete(&database.pool, &soft_delete_row)
-            .await
-            .map_err(|err| err.to_string())?;
+        soft_delete_repo
+            .insert(database.as_ref(), &soft_delete_row)
+            .await?;
 
         return Ok(SoftDeleteEntityResult {
             entity_type: EntityType::Npc,
@@ -4824,20 +4859,20 @@ async fn soft_delete_entity(
         });
     }
 
-    if let Some(location) = db::find_location_by_name_or_slug(&database.pool, target)
-        .await
-        .map_err(|err| err.to_string())?
+    if let Some(location) = location_repo
+        .find_by_name_or_slug(database.as_ref(), target)
+        .await?
     {
         let normalized_vault_path = normalize_relative_path_for_storage(&location.vault_path);
         let trash_path = unique_trash_path(&vault, "locations", &location.slug, &now)?;
         move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
 
-        db::delete_location_by_id(&database.pool, &location.id)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::delete_document_by_vault_path(&database.pool, &location.vault_path)
-            .await
-            .map_err(|err| err.to_string())?;
+        location_repo
+            .delete_by_id(database.as_ref(), &location.id)
+            .await?;
+        document_repo
+            .delete_by_vault_path(database.as_ref(), &location.vault_path)
+            .await?;
 
         let payload = LocationDeletePayload {
             id: location.id.clone(),
@@ -4870,9 +4905,9 @@ async fn soft_delete_entity(
             created_at: now,
             undone_at: None,
         };
-        db::insert_soft_delete(&database.pool, &soft_delete_row)
-            .await
-            .map_err(|err| err.to_string())?;
+        soft_delete_repo
+            .insert(database.as_ref(), &soft_delete_row)
+            .await?;
 
         return Ok(SoftDeleteEntityResult {
             entity_type: EntityType::Location,
@@ -4883,20 +4918,20 @@ async fn soft_delete_entity(
         });
     }
 
-    if let Some(faction) = db::find_faction_by_name_or_slug(&database.pool, target)
-        .await
-        .map_err(|err| err.to_string())?
+    if let Some(faction) = faction_repo
+        .find_by_name_or_slug(database.as_ref(), target)
+        .await?
     {
         let normalized_vault_path = normalize_relative_path_for_storage(&faction.vault_path);
         let trash_path = unique_trash_path(&vault, "factions", &faction.slug, &now)?;
         move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
 
-        db::delete_faction_by_id(&database.pool, &faction.id)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::delete_document_by_vault_path(&database.pool, &faction.vault_path)
-            .await
-            .map_err(|err| err.to_string())?;
+        faction_repo
+            .delete_by_id(database.as_ref(), &faction.id)
+            .await?;
+        document_repo
+            .delete_by_vault_path(database.as_ref(), &faction.vault_path)
+            .await?;
 
         let payload = FactionDeletePayload {
             id: faction.id.clone(),
@@ -4936,9 +4971,9 @@ async fn soft_delete_entity(
             created_at: now,
             undone_at: None,
         };
-        db::insert_soft_delete(&database.pool, &soft_delete_row)
-            .await
-            .map_err(|err| err.to_string())?;
+        soft_delete_repo
+            .insert(database.as_ref(), &soft_delete_row)
+            .await?;
 
         return Ok(SoftDeleteEntityResult {
             entity_type: EntityType::Faction,
@@ -4962,12 +4997,18 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
         .clone()
         .ok_or_else(|| "vault.path is not configured".to_string())?;
     let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
+    state.vault_repo().ensure_structure(&vault)?;
 
-    let database = db::init_database().await.map_err(|err| err.to_string())?;
-    let Some(soft_delete) = db::latest_pending_soft_delete(&database.pool)
-        .await
-        .map_err(|err| err.to_string())?
+    let database = state.database();
+    let npc_repo = state.npc_repo();
+    let location_repo = state.location_repo();
+    let faction_repo = state.faction_repo();
+    let document_repo = state.document_repo();
+    let soft_delete_repo = state.soft_delete_repo();
+
+    let Some(soft_delete) = soft_delete_repo
+        .latest_pending(database.as_ref())
+        .await?
     else {
         return Err("nothing to undo".to_string());
     };
@@ -5011,24 +5052,24 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             updated_at: now.clone(),
         };
 
-        db::upsert_npc(&database.pool, &npc_row)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::upsert_document_index(
-            &database.pool,
-            "npc",
-            &npc_row.slug,
-            Some(&npc_row.name),
-            &npc_row.vault_path,
-            &npc_row.created_at,
-            &npc_row.updated_at,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        npc_repo
+            .upsert(database.as_ref(), &npc_row)
+            .await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "npc",
+                &npc_row.slug,
+                Some(&npc_row.name),
+                &npc_row.vault_path,
+                &npc_row.created_at,
+                &npc_row.updated_at,
+            )
+            .await?;
 
-        db::mark_soft_delete_undone(&database.pool, soft_delete.id, &now)
-            .await
-            .map_err(|err| err.to_string())?;
+        soft_delete_repo
+            .mark_undone(database.as_ref(), soft_delete.id, &now)
+            .await?;
 
         return Ok(UndoSoftDeleteResult {
             entity_type: EntityType::Npc,
@@ -5075,24 +5116,24 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             updated_at: now.clone(),
         };
 
-        db::upsert_location(&database.pool, &location_row)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::upsert_document_index(
-            &database.pool,
-            "location",
-            &location_row.slug,
-            Some(&location_row.name),
-            &location_row.vault_path,
-            &location_row.created_at,
-            &location_row.updated_at,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        location_repo
+            .upsert(database.as_ref(), &location_row)
+            .await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "location",
+                &location_row.slug,
+                Some(&location_row.name),
+                &location_row.vault_path,
+                &location_row.created_at,
+                &location_row.updated_at,
+            )
+            .await?;
 
-        db::mark_soft_delete_undone(&database.pool, soft_delete.id, &now)
-            .await
-            .map_err(|err| err.to_string())?;
+        soft_delete_repo
+            .mark_undone(database.as_ref(), soft_delete.id, &now)
+            .await?;
 
         return Ok(UndoSoftDeleteResult {
             entity_type: EntityType::Location,
@@ -5146,24 +5187,24 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             updated_at: now.clone(),
         };
 
-        db::upsert_faction(&database.pool, &faction_row)
-            .await
-            .map_err(|err| err.to_string())?;
-        db::upsert_document_index(
-            &database.pool,
-            "faction",
-            &faction_row.slug,
-            Some(&faction_row.name),
-            &faction_row.vault_path,
-            &faction_row.created_at,
-            &faction_row.updated_at,
-        )
-        .await
-        .map_err(|err| err.to_string())?;
+        faction_repo
+            .upsert(database.as_ref(), &faction_row)
+            .await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "faction",
+                &faction_row.slug,
+                Some(&faction_row.name),
+                &faction_row.vault_path,
+                &faction_row.created_at,
+                &faction_row.updated_at,
+            )
+            .await?;
 
-        db::mark_soft_delete_undone(&database.pool, soft_delete.id, &now)
-            .await
-            .map_err(|err| err.to_string())?;
+        soft_delete_repo
+            .mark_undone(database.as_ref(), soft_delete.id, &now)
+            .await?;
 
         return Ok(UndoSoftDeleteResult {
             entity_type: EntityType::Faction,
@@ -5483,9 +5524,30 @@ mod tests {
 
 fn main() {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    if let Err(err) = tauri::async_runtime::block_on(sync_database_from_vault(&workspace_root)) {
+
+    let database = tauri::async_runtime::block_on(db::init_database())
+        .expect("failed to initialize sqlite database");
+    let database = Arc::new(database);
+
+    let vault_repo: Arc<dyn VaultRepository> = Arc::new(ProdVaultRepository);
+    let npc_repo: Arc<dyn NpcRepository> = Arc::new(ProdNpcRepository);
+    let location_repo: Arc<dyn LocationRepository> = Arc::new(ProdLocationRepository);
+    let faction_repo: Arc<dyn FactionRepository> = Arc::new(ProdFactionRepository);
+    let document_repo: Arc<dyn DocumentRepository> = Arc::new(ProdDocumentRepository);
+    let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
+    let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
+
+    if let Err(err) = tauri::async_runtime::block_on(sync_database_from_vault(
+        &workspace_root,
+        database.clone(),
+        npc_repo.clone(),
+        location_repo.clone(),
+        faction_repo.clone(),
+        document_repo.clone(),
+    )) {
         eprintln!("startup vault sync skipped: {err}");
     }
+
     let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
 
     tauri::Builder::default()
@@ -5493,6 +5555,14 @@ fn main() {
             workspace_root,
             command_service: Mutex::new(command_service),
             editor_session: Mutex::new(EditorSession::default()),
+            database: database.clone(),
+            vault_repo: vault_repo.clone(),
+            npc_repo: npc_repo.clone(),
+            location_repo: location_repo.clone(),
+            faction_repo: faction_repo.clone(),
+            document_repo: document_repo.clone(),
+            generation_repo: generation_repo.clone(),
+            soft_delete_repo: soft_delete_repo.clone(),
         })
         .invoke_handler(tauri::generate_handler![
             run_command,

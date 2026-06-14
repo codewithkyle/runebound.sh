@@ -1,3 +1,4 @@
+use crate::repositories::{Database, GenerationRepository};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::npc::{slugify, UNKNOWN_LOCATION};
 use dnd_core::vault::Vault;
@@ -19,7 +20,13 @@ const FACTION_KIND_TYPES: [&str; 10] = [
 pub struct AiGenerationService;
 
 impl AiGenerationService {
-    pub async fn generate_npc_seed(&self, prompt: Option<String>, workspace_root: &PathBuf) -> Result<NpcSeed, String> {
+    pub async fn generate_npc_seed(
+        &self,
+        prompt: Option<String>,
+        workspace_root: &PathBuf,
+        database: &Database,
+        generation_repo: &dyn GenerationRepository,
+    ) -> Result<NpcSeed, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -42,8 +49,9 @@ impl AiGenerationService {
             PromptReferenceContext::default()
         };
 
-        let database = dnd_core::db::init_database().await.map_err(|err| err.to_string())?;
-        let recent_payloads = dnd_core::db::recent_generation_prompts(&database.pool, "npc_seed", 20).await.map_err(|err| err.to_string())?;
+        let recent_payloads = generation_repo
+            .recent_prompts(database, "npc_seed", 20)
+            .await?;
         let recent_seeds = parse_recent_npc_seeds(recent_payloads);
         let recent_names = recent_name_set(&recent_seeds);
         let recent_context = describe_recent_npc_seeds(&recent_seeds);
@@ -131,7 +139,9 @@ impl AiGenerationService {
             seen_attempt_occupation_anchors.insert(occupation_anchor);
 
             let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            dnd_core::db::insert_generation(&database.pool, "npc_seed", None, &serialized_seed).await.map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "npc_seed", None, &serialized_seed)
+                .await?;
 
             return Ok(seed);
         }
@@ -139,7 +149,13 @@ impl AiGenerationService {
         Err("failed to generate valid structured NPC output from ollama".to_string())
     }
 
-    pub async fn generate_location_seed(&self, prompt: Option<String>, workspace_root: &PathBuf) -> Result<LocationSeed, String> {
+    pub async fn generate_location_seed(
+        &self,
+        prompt: Option<String>,
+        workspace_root: &PathBuf,
+        database: &Database,
+        generation_repo: &dyn GenerationRepository,
+    ) -> Result<LocationSeed, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -148,8 +164,9 @@ impl AiGenerationService {
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-        let database = dnd_core::db::init_database().await.map_err(|err| err.to_string())?;
-        let recent_payloads = dnd_core::db::recent_generation_prompts(&database.pool, "location_seed", 20).await.map_err(|err| err.to_string())?;
+        let recent_payloads = generation_repo
+            .recent_prompts(database, "location_seed", 20)
+            .await?;
         let recent_seeds = parse_recent_location_seeds(recent_payloads);
         let recent_names = recent_location_name_set(&recent_seeds);
         let recent_context = describe_recent_location_seeds(&recent_seeds);
@@ -221,7 +238,9 @@ impl AiGenerationService {
             seen_attempt_names.insert(normalized_name);
 
             let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            dnd_core::db::insert_generation(&database.pool, "location_seed", None, &serialized_seed).await.map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "location_seed", None, &serialized_seed)
+                .await?;
 
             return Ok(seed);
         }
@@ -229,7 +248,13 @@ impl AiGenerationService {
         Err("failed to generate valid structured location output from ollama".to_string())
     }
 
-    pub async fn generate_faction_seed(&self, prompt: Option<String>, workspace_root: &PathBuf) -> Result<FactionSeed, String> {
+    pub async fn generate_faction_seed(
+        &self,
+        prompt: Option<String>,
+        workspace_root: &PathBuf,
+        database: &Database,
+        generation_repo: &dyn GenerationRepository,
+    ) -> Result<FactionSeed, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -252,8 +277,9 @@ impl AiGenerationService {
             PromptReferenceContext::default()
         };
 
-        let database = dnd_core::db::init_database().await.map_err(|err| err.to_string())?;
-        let recent_payloads = dnd_core::db::recent_generation_prompts(&database.pool, "faction_seed", 20).await.map_err(|err| err.to_string())?;
+        let recent_payloads = generation_repo
+            .recent_prompts(database, "faction_seed", 20)
+            .await?;
         let recent_seeds = parse_recent_faction_seeds(recent_payloads);
         let recent_names = recent_faction_name_set(&recent_seeds);
         let recent_context = describe_recent_faction_seeds(&recent_seeds);
@@ -334,7 +360,9 @@ impl AiGenerationService {
             if enforce_unique_name { seen_attempt_names.insert(normalized_name); }
 
             let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            dnd_core::db::insert_generation(&database.pool, "faction_seed", None, &serialized_seed).await.map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "faction_seed", None, &serialized_seed)
+                .await?;
 
             return Ok(seed);
         }

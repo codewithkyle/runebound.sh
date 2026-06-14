@@ -9,11 +9,12 @@
 - Project compiles successfully (1 error fixed: NpcSeed needed Serialize)
 - **Phase 3.1** – All shared types in `desktop/src-tauri/src/utils.rs` now match the router/command expectations (EnsureLocation*, reroll contexts/results, save/soft-delete structs, shared `EntityDetails`).
 - **Phase 3.2** – Every stub helper in `utils.rs` delegates to the production logic from `main.rs`, so command modules can call reroll/save/ensure/resolve/delete without panicking.
+- **Phase 3.3** – `mod commands;` is restored in `main.rs`, the handler modules compile cleanly against the shared utils types, and duplicate helpers were removed from `commands/`.
+- **Phase 3.4** – `router.rs` is now a thin bridge that dispatches via `commands::desktop_handler_registry()` (the inline legacy handlers are gone).
 
 ### What's Broken
-The command modules in `commands/` are still disconnected:
-1. `mod commands` is still commented out/absent from `main.rs`, so none of the handlers are reachable.
-2. `router.rs` still hosts the legacy inline handlers instead of delegating to `commands::desktop_handler_registry()`, so we have duplicate logic and no single registry entry point.
+1. Database access still happens through ad-hoc `dnd_core::db::*` calls in `main.rs`; AppState doesn’t expose repository handles yet, so nothing can be mocked/injected (Phase 3.5).
+2. No automated tests or mock repositories exist for the command modules (Phase 3.6).
 
 ### Root Cause
 The command modules were created by copying code from router.rs/main.rs and using `super::super::main` imports, which doesn't work in Rust binary crates. When we switched to `crate::utils`, the types weren't properly aligned with what the command handlers actually need.
@@ -26,23 +27,19 @@ All shared structs/enums in `desktop/src-tauri/src/utils.rs` now mirror the rout
 ### Phase 3.2: Implement Stub Functions in Utils (Completed ✅)
 All helper functions in `utils.rs` delegate to the production logic extracted from `main.rs`, so command modules can safely use them.
 
-### Phase 3.3: Re-integrate Command Modules
-1. Add `mod commands;` back to main.rs
-2. Fix remaining import issues in command modules
-3. Ensure all handler functions have correct signatures matching utils types
-4. Add missing helper functions to command modules (like `canonical_faction_reroll_field` which is defined locally in faction_commands.rs but also exists in utils)
+### Phase 3.3: Re-integrate Command Modules _(Completed)_
+- `mod commands;` restored, imports fixed, handlers rely solely on the shared utils layer.
 
-### Phase 3.4: Connect Router to Command Registry
-1. Modify router.rs to use `commands::desktop_handler_registry()` instead of its own inline handlers
-2. Keep backward compatibility by ensuring router.rs handlers delegate to command modules
-3. Eventually remove duplicate handler code from router.rs
+### Phase 3.4: Connect Router to Command Registry _(Completed)_
+- Router delegates to the desktop handler registry; duplicate legacy logic removed.
 
-### Phase 3.5: Add Repository Implementations
-1. Fix SqlitePool import issue - either use `dnd_core::db::Database` type or add sqlx to Cargo.toml
-2. Uncomment database repository traits and implementations
-3. Create mock repository implementations for testing
+### Phase 3.5: Add Repository Implementations (In Progress)
+1. Use `dnd_core::db::Database` (via `Arc`) so the desktop crate doesn’t rely on sqlx directly.
+2. Finish the repository traits/implementations (`Vault`, `Npc`, `Location`, `Faction`, `Document`, `Generation`, `SoftDelete`) and inject them through `AppState` using `Arc<dyn Trait>`.
+3. Update the runtime helpers (`save_*`, `ensure_location_exists`, `resolve_entity`, `soft_delete_entity`, `undo_last_soft_delete`, `search_*`, etc.) to consume those repositories instead of calling `dnd_core::db::*` directly.
+4. Provide lightweight mock structs for Phase 3.6 tests (or at least ensure traits make mocking easy).
 
-### Phase 3.6: Testing Infrastructure
+### Phase 3.6: Testing Infrastructure (Next)
 1. Create `tests/` directory with mock repository implementations
 2. Add unit tests for command handlers using mocked repositories
 3. Verify AI generation service can be tested independently

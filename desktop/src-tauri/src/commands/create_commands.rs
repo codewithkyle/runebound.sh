@@ -71,8 +71,15 @@ async fn create_npc(
     let prompt = normalize_optional_prompt(prompt);
 
     let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
     let seed = ai
-        .generate_npc_seed(prompt.clone(), &state.workspace_root)
+        .generate_npc_seed(
+            prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
         .await?;
 
     let draft = NpcDraftSession {
@@ -125,8 +132,15 @@ async fn create_location(
     let prompt = normalize_optional_prompt(prompt);
 
     let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
     let seed = ai
-        .generate_location_seed(prompt.clone(), &state.workspace_root)
+        .generate_location_seed(
+            prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
         .await?;
 
     let draft = LocationDraftSession {
@@ -179,8 +193,15 @@ async fn create_faction(
     let prompt = normalize_optional_prompt(prompt);
 
     let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
     let seed = ai
-        .generate_faction_seed(prompt.clone(), &state.workspace_root)
+        .generate_faction_seed(
+            prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
         .await?;
 
     let draft = FactionDraftSession {
