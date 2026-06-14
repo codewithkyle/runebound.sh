@@ -1,7 +1,11 @@
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
+use command_handler::{ExecutionTarget, HandlerEntry, HandlerMetadata, HandlerRegistry};
 use reqwest::StatusCode;
 use serde::Serialize;
 
@@ -126,6 +130,120 @@ impl CommandOutput {
     }
 }
 
+type CoreHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>>;
+type CoreHandler =
+    Arc<dyn for<'a> Fn(CoreHandlerInvocation<'a>) -> CoreHandlerFuture<'a> + Send + Sync>;
+
+struct CoreHandlerInvocation<'a> {
+    workspace_root: &'a Path,
+    tokens: &'a [String],
+    lowered: &'a [String],
+    manifest: &'a CommandManifest,
+    session: &'a mut SessionState,
+    raw_input: &'a str,
+}
+
+fn core_handler_registry() -> &'static HandlerRegistry<CoreHandler> {
+    static REGISTRY: OnceLock<HandlerRegistry<CoreHandler>> = OnceLock::new();
+    REGISTRY.get_or_init(build_core_handler_registry)
+}
+
+fn build_core_handler_registry() -> HandlerRegistry<CoreHandler> {
+    let mut registry = HandlerRegistry::new();
+    registry.register(status_handler_entry());
+    registry.register(config_handler_entry());
+    registry.register(help_handler_entry());
+    registry.register(exit_handler_entry());
+    registry.register(setup_handler_entry());
+    registry
+}
+
+fn status_handler_entry() -> HandlerEntry<CoreHandler> {
+    HandlerEntry::new(
+        "status",
+        HandlerMetadata::new(
+            "Run readiness checks for configured services",
+            ExecutionTarget::Core,
+        )
+        .with_examples(&["status"]),
+        Arc::new(|invocation| {
+            Box::pin(async move {
+                match invocation.lowered.len() {
+                    0 | 1 => execute_status(invocation.workspace_root).await,
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                        render_command_help(invocation.manifest, "status"),
+                    )),
+                    _ => bail!("unknown status command. use `status help`"),
+                }
+            })
+        }),
+    )
+}
+
+fn config_handler_entry() -> HandlerEntry<CoreHandler> {
+    HandlerEntry::new(
+        "config",
+        HandlerMetadata::new("Inspect and validate configuration", ExecutionTarget::Core)
+            .with_examples(&["config show", "config test"])
+            .with_canonical_help("config help")
+            .requires_subcommand(),
+        Arc::new(|invocation| Box::pin(async move { execute_config_command(invocation).await })),
+    )
+}
+
+fn help_handler_entry() -> HandlerEntry<CoreHandler> {
+    HandlerEntry::new(
+        "help",
+        HandlerMetadata::new("Show top-level help", ExecutionTarget::Core).with_examples(&["help"]),
+        Arc::new(|invocation| {
+            Box::pin(async move { Ok(CommandOutput::text(render_root_help(invocation.manifest))) })
+        }),
+    )
+}
+
+fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
+    HandlerEntry::new(
+        "exit",
+        HandlerMetadata::new("Exit the application", ExecutionTarget::Core)
+            .with_examples(&["exit"]),
+        Arc::new(|invocation| {
+            Box::pin(async move {
+                match invocation.lowered.len() {
+                    0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                        render_command_help(invocation.manifest, "exit"),
+                    )),
+                    _ => bail!("unknown exit command. use `exit help`"),
+                }
+            })
+        }),
+    )
+}
+
+fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
+    HandlerEntry::new(
+        "setup",
+        HandlerMetadata::new("Guided setup helper commands", ExecutionTarget::Core)
+            .with_examples(&["start setup", "setup help", "setup show"])
+            .requires_subcommand()
+            .with_canonical_help("setup help"),
+        Arc::new(|invocation| {
+            Box::pin(async move {
+                match try_execute_onboarding(
+                    invocation.workspace_root,
+                    invocation.raw_input,
+                    invocation.session,
+                )
+                .await?
+                {
+                    Some(output) => Ok(output),
+                    None => bail!("unknown setup command"),
+                }
+            })
+        }),
+    )
+}
+
 pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse {
     let mut session = SessionState::default();
     execute_line_with_session(workspace_root, input, &mut session).await
@@ -178,7 +296,7 @@ pub async fn execute_line_with_session(
         }
     }
 
-    match execute_line_result(workspace_root, input).await {
+    match execute_line_internal(workspace_root, input, session).await {
         Ok(output) => {
             let output_text = output.output.clone();
             CommandResponse {
@@ -653,23 +771,72 @@ async fn probe_ollama_models(
 }
 
 pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {
+    let mut session = SessionState::default();
+    execute_line_internal(workspace_root, input, &mut session).await
+}
+
+async fn execute_line_internal(
+    workspace_root: &Path,
+    input: &str,
+    session: &mut SessionState,
+) -> Result<CommandOutput> {
     let normalized_input = normalize_command_input(input);
     let parsed_words =
         shell_words::split(&normalized_input).map_err(|e| anyhow!("invalid command input: {e}"))?;
     let manifest = command_manifest();
     let normalized_words = normalize_alias_tokens(&parsed_words, &manifest);
-    execute_dispatched(workspace_root, &normalized_words, &manifest).await
+    let mut rewritten_tokens =
+        rewrite_onboarding_tokens(&normalized_words, &normalized_input, session);
+    let tokens_ref = if let Some(ref rewritten) = rewritten_tokens {
+        rewritten.as_slice()
+    } else {
+        &normalized_words
+    };
+    execute_dispatched(
+        workspace_root,
+        tokens_ref,
+        &manifest,
+        session,
+        &normalized_input,
+    )
+    .await
+}
+
+fn rewrite_onboarding_tokens(
+    tokens: &[String],
+    raw_input: &str,
+    session: &SessionState,
+) -> Option<Vec<String>> {
+    if !session.onboarding.active {
+        return None;
+    }
+
+    if tokens.is_empty() {
+        let trimmed = raw_input.trim();
+        if trimmed.is_empty() {
+            return None;
+        }
+        return Some(vec![
+            "setup".to_string(),
+            "input".to_string(),
+            trimmed.to_string(),
+        ]);
+    }
+
+    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("save") {
+        return Some(vec!["setup".to_string(), "save".to_string()]);
+    }
+
+    None
 }
 
 async fn execute_dispatched(
     workspace_root: &Path,
     tokens: &[String],
     manifest: &CommandManifest,
+    session: &mut SessionState,
+    raw_input: &str,
 ) -> Result<CommandOutput> {
-    if tokens.is_empty() {
-        return execute_status(workspace_root).await;
-    }
-
     let lowered: Vec<String> = tokens
         .iter()
         .map(|token| token.to_ascii_lowercase())
@@ -686,40 +853,36 @@ async fn execute_dispatched(
         bail!("`-h`/`--help` is not supported; {hint}");
     }
 
-    if lowered.len() == 1 && lowered[0] == "help" {
-        return Ok(CommandOutput::text(render_root_help(manifest)));
+    let registry = core_handler_registry();
+    let handler_name = if lowered.is_empty() {
+        "status"
+    } else {
+        lowered[0].as_str()
+    };
+
+    if let Some(entry) = registry.get(handler_name) {
+        let invocation = CoreHandlerInvocation {
+            workspace_root,
+            tokens,
+            lowered: &lowered,
+            manifest,
+            session,
+            raw_input,
+        };
+        return (entry.handler)(invocation).await;
     }
 
-    match lowered[0].as_str() {
-        "status" => {
-            if lowered.len() == 1 {
-                return execute_status(workspace_root).await;
-            }
-            if lowered.len() == 2 && lowered[1] == "help" {
-                return Ok(CommandOutput::text(render_command_help(manifest, "status")));
-            }
-            bail!("unknown status command. use `status help`");
-        }
-        "exit" => {
-            if lowered.len() == 1 {
-                return Ok(CommandOutput::text("exiting".to_string()));
-            }
-            if lowered.len() == 2 && lowered[1] == "help" {
-                return Ok(CommandOutput::text(render_command_help(manifest, "exit")));
-            }
-            bail!("unknown exit command. use `exit help`");
-        }
-        "config" => execute_config_command(workspace_root, &lowered, manifest).await,
-        "help" => Ok(CommandOutput::text(render_root_help(manifest))),
-        other => bail!("unknown command: {other}. use `help`"),
+    if lowered.is_empty() {
+        bail!("unknown command. use `help`");
     }
+
+    bail!("unknown command: {}. use `help`", lowered[0]);
 }
 
-async fn execute_config_command(
-    workspace_root: &Path,
-    lowered: &[String],
-    manifest: &CommandManifest,
-) -> Result<CommandOutput> {
+async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result<CommandOutput> {
+    let workspace_root = invocation.workspace_root;
+    let lowered = invocation.lowered;
+    let manifest = invocation.manifest;
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
         return Ok(CommandOutput::text(render_command_help(manifest, "config")));
     }

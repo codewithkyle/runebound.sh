@@ -1,5 +1,5 @@
 [workspace]
-members = ["core"]
+members = ["core", "command-handler"]
 exclude = ["desktop/src-tauri"]
 resolver = "2"
 

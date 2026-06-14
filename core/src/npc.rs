@@ -245,7 +245,9 @@ pub fn render_location_markdown(
     Ok(out)
 }
 
-pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> Result<String, toml::ser::Error> {
+pub fn render_faction_markdown(
+    frontmatter: &FactionFrontmatter,
+) -> Result<String, toml::ser::Error> {
     #[derive(Serialize)]
     struct Frontmatter<'a> {
         #[serde(rename = "type")]

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse};
 use dnd_core::command_manifest::{CommandManifest, CommandSpec};
-use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input};
+use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input, parse_command_input};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
@@ -1927,9 +1927,17 @@ async fn run_command(
     state: tauri::State<'_, AppState>,
 ) -> Result<CommandResponse, String> {
     let normalized_input = normalize_input_for_dispatch(&input);
+    let parsed = parse_command_input(&normalized_input);
+    if !parsed.valid {
+        if let Some(diag) = parsed.diagnostics.first() {
+            return Err(diag.message.clone());
+        }
+        return Err("invalid command".to_string());
+    }
 
     if let Some(response) =
-        router::run_desktop_routed_command(&normalized_input, state.clone()).await?
+        router::dispatch_desktop_command(&normalized_input, &parsed.normalized_tokens, state.clone())
+            .await?
     {
         let skip_history_push = matches!(
             response.client_event,

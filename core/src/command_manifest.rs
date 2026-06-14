@@ -197,8 +197,7 @@ pub fn command_manifest() -> CommandManifest {
             },
             CommandSpec {
                 name: "show".to_string(),
-                summary: "Preview an NPC, location, or faction without entering editor"
-                    .to_string(),
+                summary: "Preview an NPC, location, or faction without entering editor".to_string(),
                 examples: vec!["show Elara Meadowlight".to_string()],
                 subcommands: Vec::new(),
                 options: Vec::new(),
@@ -407,10 +406,8 @@ pub fn command_manifest() -> CommandManifest {
                             "faction set kind guild".to_string(),
                             "faction set public Smugglers posing as licensed traders.".to_string(),
                             "faction set agenda Control every harbor tax office.".to_string(),
-                            "faction set goals_short bribe customs, sabotage rivals"
-                                .to_string(),
-                            "faction set symbol A crimson lantern on black sails."
-                                .to_string(),
+                            "faction set goals_short bribe customs, sabotage rivals".to_string(),
+                            "faction set symbol A crimson lantern on black sails.".to_string(),
                         ],
                     },
                     SubcommandSpec {
@@ -569,11 +566,57 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
         ],
-        aliases: vec![CommandAlias {
-            from: vec!["history".to_string(), "clear".to_string()],
-            to: vec!["clear".to_string(), "--history".to_string()],
-            summary: "history clear alias".to_string(),
-        }],
+        aliases: vec![
+            CommandAlias {
+                from: vec!["history".to_string(), "clear".to_string()],
+                to: vec!["clear".to_string(), "--history".to_string()],
+                summary: "history clear alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["start".to_string(), "setup".to_string()],
+                to: vec!["setup".to_string(), "start".to_string()],
+                summary: "setup start alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["show".to_string(), "setup".to_string()],
+                to: vec!["setup".to_string(), "show".to_string()],
+                summary: "setup show alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["cancel".to_string(), "setup".to_string()],
+                to: vec!["setup".to_string(), "cancel".to_string()],
+                summary: "setup cancel alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["set".to_string(), "vault".to_string()],
+                to: vec!["setup".to_string(), "set".to_string(), "vault".to_string()],
+                summary: "setup set vault alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["set".to_string(), "ollama".to_string()],
+                to: vec!["setup".to_string(), "set".to_string(), "ollama".to_string()],
+                summary: "setup set ollama alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["test".to_string(), "ollama".to_string()],
+                to: vec![
+                    "setup".to_string(),
+                    "test".to_string(),
+                    "ollama".to_string(),
+                ],
+                summary: "setup test ollama alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["use".to_string(), "model".to_string()],
+                to: vec!["setup".to_string(), "use".to_string(), "model".to_string()],
+                summary: "setup use model alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["set".to_string(), "model".to_string()],
+                to: vec!["setup".to_string(), "set".to_string(), "model".to_string()],
+                summary: "setup set model alias".to_string(),
+            },
+        ],
     }
 }
 

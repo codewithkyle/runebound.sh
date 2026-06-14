@@ -1,3 +1,8 @@
+use std::future::Future;
+use std::pin::Pin;
+use std::sync::{Arc, OnceLock};
+
+use command_handler::{ExecutionTarget, HandlerEntry, HandlerMetadata, HandlerRegistry};
 use dnd_core::command::{CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind};
 use dnd_core::output::{OutputDoc, entity_card, entity_row};
 use tauri::State;
@@ -7,6 +12,146 @@ use crate::app_state::{
 };
 
 use super::*;
+
+type DesktopHandlerFuture<'a> =
+    Pin<Box<dyn Future<Output = Result<Option<CommandResponse>, String>> + Send + 'a>>;
+type DesktopHandler = Arc<dyn for<'a> Fn(DesktopHandlerInvocation<'a>) -> DesktopHandlerFuture<'a> + Send + Sync>;
+
+pub struct DesktopHandlerInvocation<'a> {
+    pub raw_input: &'a str,
+    pub tokens: &'a [String],
+    pub lowered: &'a [String],
+    pub state: State<'a, AppState>,
+}
+
+fn desktop_handler_registry() -> &'static HandlerRegistry<DesktopHandler> {
+    static REGISTRY: OnceLock<HandlerRegistry<DesktopHandler>> = OnceLock::new();
+    REGISTRY.get_or_init(build_desktop_handler_registry)
+}
+
+fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
+    let mut registry = HandlerRegistry::new();
+    registry.register(clear_handler_entry());
+    registry.register(history_handler_entry());
+    registry
+}
+
+pub(crate) async fn dispatch_desktop_command(
+    input: &str,
+    tokens: &[String],
+    state: State<'_, AppState>,
+) -> Result<Option<CommandResponse>, String> {
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+
+    let lowered: Vec<String> = tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    let registry = desktop_handler_registry();
+    if let Some(entry) = registry.get(lowered[0].as_str()) {
+        let invocation = DesktopHandlerInvocation {
+            raw_input: input,
+            tokens,
+            lowered: &lowered,
+            state,
+        };
+        return (entry.handler)(invocation).await;
+    }
+
+    run_desktop_routed_command(input, state).await
+}
+
+fn clear_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "clear",
+        HandlerMetadata::new(
+            "Clear terminal output in desktop UI",
+            ExecutionTarget::Desktop,
+        )
+        .with_examples(&["clear", "clear --history"]),
+        Arc::new(|invocation| {
+            let state = invocation.state.clone();
+            Box::pin(async move {
+                if invocation.lowered.len() == 1 {
+                    return Ok(Some(ok_response(
+                        String::new(),
+                        Some(CommandClientEvent::ClearTerminal {
+                            clear_history: false,
+                        }),
+                    )));
+                }
+
+                if invocation.lowered.len() == 2 && invocation.lowered[1] == "--history" {
+                    {
+                        let mut service = state.command_service.lock().await;
+                        service.session_mut().clear_history();
+                    }
+                    return Ok(Some(ok_response(
+                        String::new(),
+                        Some(CommandClientEvent::ClearTerminal {
+                            clear_history: true,
+                        }),
+                    )));
+                }
+
+                Ok(Some(ok_response(
+                    "usage: clear [--history]".to_string(),
+                    None,
+                )))
+            })
+        }),
+    )
+}
+
+fn history_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "history",
+        HandlerMetadata::new("Inspect command history", ExecutionTarget::Desktop)
+            .with_examples(&["history", "history 10", "history clear"]),
+        Arc::new(|invocation| {
+            let state = invocation.state.clone();
+            Box::pin(async move {
+                if invocation.lowered.len() >= 2 && invocation.lowered[1] == "clear" {
+                    {
+                        let mut service = state.command_service.lock().await;
+                        service.session_mut().clear_history();
+                    }
+                    return Ok(Some(ok_response("history cleared".to_string(), None)));
+                }
+
+                if invocation.lowered.len() > 2 {
+                    return Ok(Some(ok_response(
+                        "usage: history [limit|clear]".to_string(),
+                        None,
+                    )));
+                }
+
+                let limit = if invocation.lowered.len() == 2 {
+                    match invocation.lowered[1].parse::<usize>() {
+                        Ok(parsed) if parsed > 0 => parsed,
+                        _ => {
+                            return Ok(Some(ok_response(
+                                "usage: history [limit|clear]".to_string(),
+                                None,
+                            )))
+                        }
+                    }
+                } else {
+                    20
+                };
+
+                let history = {
+                    let service = state.command_service.lock().await;
+                    service.session().command_history.clone()
+                };
+                Ok(Some(ok_response(render_history_output(&history, limit), None)))
+            })
+        }),
+    )
+}
 
 fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
     prompt

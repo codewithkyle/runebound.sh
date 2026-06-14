@@ -60,13 +60,16 @@ pub fn normalize_alias_tokens(tokens: &[String], manifest: &CommandManifest) -> 
 
 fn normalize_alias_tokens_only(tokens: &[String], manifest: &CommandManifest) -> Vec<String> {
     for alias in &manifest.aliases {
-        if tokens.len() == alias.from.len()
+        if tokens.len() >= alias.from.len()
             && tokens
                 .iter()
+                .take(alias.from.len())
                 .zip(alias.from.iter())
                 .all(|(left, right)| left.eq_ignore_ascii_case(right))
         {
-            return alias.to.clone();
+            let mut rewritten = alias.to.clone();
+            rewritten.extend_from_slice(&tokens[alias.from.len()..]);
+            return rewritten;
         }
     }
 

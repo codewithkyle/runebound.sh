@@ -1,0 +1,8 @@
+[package]
+name = "command-handler"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+once_cell = "1.19"
+serde.workspace = true

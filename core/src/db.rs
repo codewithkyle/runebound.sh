@@ -210,7 +210,10 @@ pub async fn find_location_by_name_or_slug(
     row.map(row_to_location).transpose()
 }
 
-pub async fn find_faction_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<FactionRow>> {
+pub async fn find_faction_by_name_or_slug(
+    pool: &SqlitePool,
+    input: &str,
+) -> Result<Option<FactionRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
         "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
