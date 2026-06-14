@@ -44,8 +44,14 @@ Example forms:
 ### `npc delete`
 
 - Soft delete only in v1.
-- Move file to `vault/.trash/npcs/`.
-- Remove from normal `npc list` output.
+- Global command form is `delete <npc-or-location-name>`.
+- NPC files move to `vault/.trash/npcs/` and locations move to `vault/.trash/locations/`.
+- `undo` restores the most recently deleted entity (LIFO).
+
+## Save Behavior
+
+- Saving replaces only the fenced ` ```runebound ` metadata block.
+- Any non-runebound content in the file is preserved verbatim (notes, embeds, headings, custom text).
 
 ## Input and Output Rules
 

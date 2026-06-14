@@ -44,7 +44,25 @@ pub struct NpcRow {
     pub updated_at: String,
 }
 
-pub async fn search_npcs_by_name(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<NpcRow>> {
+#[derive(Debug, Clone)]
+pub struct SoftDeleteRow {
+    pub id: i64,
+    pub entity_type: String,
+    pub entity_id: String,
+    pub name: String,
+    pub slug: String,
+    pub original_vault_path: String,
+    pub trash_vault_path: String,
+    pub payload_json: String,
+    pub created_at: String,
+    pub undone_at: Option<String>,
+}
+
+pub async fn search_npcs_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<NpcRow>> {
     let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
     let rows = sqlx::query(
         "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
@@ -313,12 +331,88 @@ pub async fn upsert_document_index(
     Ok(())
 }
 
+pub async fn delete_npc_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM npcs WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete npc row")?;
+
+    Ok(())
+}
+
+pub async fn delete_location_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM locations WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete location row")?;
+
+    Ok(())
+}
+
 pub async fn delete_document_by_vault_path(pool: &SqlitePool, vault_path: &str) -> Result<()> {
     sqlx::query("DELETE FROM documents WHERE vault_path = ?1")
         .bind(vault_path)
         .execute(pool)
         .await
         .context("failed to delete document index row")?;
+
+    Ok(())
+}
+
+pub async fn insert_soft_delete(pool: &SqlitePool, row: &SoftDeleteRow) -> Result<i64> {
+    let result = sqlx::query(
+        "INSERT INTO soft_deletes (
+            entity_type,
+            entity_id,
+            name,
+            slug,
+            original_vault_path,
+            trash_vault_path,
+            payload_json,
+            created_at,
+            undone_at
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+    )
+    .bind(&row.entity_type)
+    .bind(&row.entity_id)
+    .bind(&row.name)
+    .bind(&row.slug)
+    .bind(&row.original_vault_path)
+    .bind(&row.trash_vault_path)
+    .bind(&row.payload_json)
+    .bind(&row.created_at)
+    .bind(&row.undone_at)
+    .execute(pool)
+    .await
+    .context("failed to insert soft delete row")?;
+
+    Ok(result.last_insert_rowid())
+}
+
+pub async fn latest_pending_soft_delete(pool: &SqlitePool) -> Result<Option<SoftDeleteRow>> {
+    let row = sqlx::query(
+        "SELECT id, entity_type, entity_id, name, slug, original_vault_path, trash_vault_path, payload_json, created_at, undone_at
+         FROM soft_deletes
+         WHERE undone_at IS NULL
+         ORDER BY id DESC
+         LIMIT 1",
+    )
+    .fetch_optional(pool)
+    .await
+    .context("failed to query latest pending soft delete")?;
+
+    row.map(row_to_soft_delete).transpose()
+}
+
+pub async fn mark_soft_delete_undone(pool: &SqlitePool, id: i64, undone_at: &str) -> Result<()> {
+    sqlx::query("UPDATE soft_deletes SET undone_at = ?2 WHERE id = ?1")
+        .bind(id)
+        .bind(undone_at)
+        .execute(pool)
+        .await
+        .context("failed to mark soft delete as undone")?;
 
     Ok(())
 }
@@ -362,10 +456,7 @@ pub async fn recent_generation_prompts(
     .context("failed to query recent generations")?;
 
     rows.into_iter()
-        .map(|row| {
-            row.try_get("prompt")
-                .context("generations.prompt missing")
-        })
+        .map(|row| row.try_get("prompt").context("generations.prompt missing"))
         .collect()
 }
 
@@ -396,9 +487,7 @@ fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
             .try_get("occupation")
             .unwrap_or_else(|_| "Unknown".to_string()),
         sex: row.try_get("sex").context("npcs.sex missing")?,
-        age: row
-            .try_get("age")
-            .unwrap_or_else(|_| "Unknown".to_string()),
+        age: row.try_get("age").unwrap_or_else(|_| "Unknown".to_string()),
         height: row
             .try_get("height")
             .unwrap_or_else(|_| "Unknown".to_string()),
@@ -417,13 +506,42 @@ fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
         carrying: row
             .try_get("carrying")
             .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        location: row
-            .try_get("location")
-            .context("npcs.location missing")?,
+        location: row.try_get("location").context("npcs.location missing")?,
         vault_path: row
             .try_get("vault_path")
             .context("npcs.vault_path missing")?,
-        created_at: row.try_get("created_at").context("npcs.created_at missing")?,
-        updated_at: row.try_get("updated_at").context("npcs.updated_at missing")?,
+        created_at: row
+            .try_get("created_at")
+            .context("npcs.created_at missing")?,
+        updated_at: row
+            .try_get("updated_at")
+            .context("npcs.updated_at missing")?,
+    })
+}
+
+fn row_to_soft_delete(row: sqlx::sqlite::SqliteRow) -> Result<SoftDeleteRow> {
+    Ok(SoftDeleteRow {
+        id: row.try_get("id").context("soft_deletes.id missing")?,
+        entity_type: row
+            .try_get("entity_type")
+            .context("soft_deletes.entity_type missing")?,
+        entity_id: row
+            .try_get("entity_id")
+            .context("soft_deletes.entity_id missing")?,
+        name: row.try_get("name").context("soft_deletes.name missing")?,
+        slug: row.try_get("slug").context("soft_deletes.slug missing")?,
+        original_vault_path: row
+            .try_get("original_vault_path")
+            .context("soft_deletes.original_vault_path missing")?,
+        trash_vault_path: row
+            .try_get("trash_vault_path")
+            .context("soft_deletes.trash_vault_path missing")?,
+        payload_json: row
+            .try_get("payload_json")
+            .context("soft_deletes.payload_json missing")?,
+        created_at: row
+            .try_get("created_at")
+            .context("soft_deletes.created_at missing")?,
+        undone_at: row.try_get("undone_at").ok(),
     })
 }

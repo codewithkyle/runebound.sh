@@ -108,7 +108,7 @@ show_inline_help = true
 - Verify Ollama endpoint reachable.
 - Verify configured model exists (warning-only if missing).
 - Validate permissions and path normalization.
-- Check recommended vault directories (`npcs/`, `.trash/npcs/`).
+- Check recommended vault directories (`npcs/`, `locations/`, `.trash/npcs/`, `.trash/locations/`).
 - Check Ollama response timing and timeout suitability.
 - Provide explicit fix steps for each failure.
 

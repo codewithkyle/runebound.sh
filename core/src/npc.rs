@@ -177,7 +177,12 @@ pub fn merge_runebound_block(existing: &str, runebound_block: &str) -> String {
         return format!("{}\n{}", runebound_block, existing);
     };
 
-    let block_end = search_from + relative_end + "\n```".len();
+    let mut block_end = search_from + relative_end + "\n```".len();
+    if existing[block_end..].starts_with("\r\n") {
+        block_end += 2;
+    } else if existing[block_end..].starts_with('\n') {
+        block_end += 1;
+    }
     let mut merged = String::with_capacity(existing.len() + runebound_block.len());
     merged.push_str(&existing[..block_start]);
     merged.push_str(runebound_block);
@@ -191,7 +196,8 @@ mod tests {
 
     #[test]
     fn merge_replaces_existing_runebound_block() {
-        let existing = "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Old\"\n```\n\nPlayer notes here.\n";
+        let existing =
+            "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Old\"\n```\n\nPlayer notes here.\n";
         let replacement = "```runebound\ntype = \"npc\"\nname = \"New\"\n```\n";
 
         let merged = merge_runebound_block(existing, replacement);
@@ -210,5 +216,16 @@ mod tests {
 
         assert!(merged.starts_with(replacement));
         assert!(merged.contains("# Story"));
+    }
+
+    #[test]
+    fn merge_does_not_accumulate_blank_lines_after_repeated_saves() {
+        let replacement = "```runebound\ntype = \"npc\"\nname = \"A\"\n```\n";
+        let original = "```runebound\ntype = \"npc\"\nname = \"A\"\n```\n\nNotes\n";
+
+        let once = merge_runebound_block(original, replacement);
+        let twice = merge_runebound_block(&once, replacement);
+
+        assert_eq!(once, twice);
     }
 }

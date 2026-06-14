@@ -206,7 +206,8 @@ fn check_vault_structure(config: &AppConfig) -> CheckItem {
         Ok(()) => CheckItem {
             name: "vault directories".to_string(),
             ok: true,
-            detail: "npcs, locations, items, factions ensured".to_string(),
+            detail: "npcs, locations, items, factions, .trash/npcs, .trash/locations ensured"
+                .to_string(),
         },
         Err(err) => CheckItem {
             name: "vault directories".to_string(),

@@ -6,6 +6,8 @@ import {
   resolveEntity,
   saveLocationDraft,
   searchEntities,
+  softDeleteEntity,
+  undoLastSoftDelete,
   type EntityDetails,
   type EntitySuggestion,
   type SaveLocationDraftInput
@@ -242,9 +244,14 @@ export default function App() {
     const lowered = query.toLowerCase();
 
     const isLoadContext = lowered === "load" || lowered.startsWith("load ");
-    const searchQuery = isLoadContext ? query.slice(4).trim() : query;
+    const isDeleteContext = lowered === "delete" || lowered.startsWith("delete ");
+    const searchQuery = isLoadContext
+      ? query.slice(4).trim()
+      : isDeleteContext
+        ? query.slice(6).trim()
+        : query;
 
-    if (!query || (!isLoadContext && startsWithKnownCommandRoot(query, meta))) {
+    if (!query || (!isLoadContext && !isDeleteContext && startsWithKnownCommandRoot(query, meta))) {
       setEntitySuggestions([]);
       return;
     }
@@ -263,7 +270,8 @@ export default function App() {
           return;
         }
 
-        setEntitySuggestions(results.map((result) => toEntitySuggestionItem(result, isLoadContext)));
+        const completionPrefix = isLoadContext ? "load" : isDeleteContext ? "delete" : null;
+        setEntitySuggestions(results.map((result) => toEntitySuggestionItem(result, completionPrefix)));
       })
       .catch(() => {
         if (entitySuggestionGeneration === generation) {
@@ -653,6 +661,74 @@ export default function App() {
         return;
       } catch (error) {
         appendEntry("error", String(error));
+        return;
+      }
+    }
+
+    const deleteMatch = raw.trim().match(/^delete\s+(.+)$/i);
+    if (loweredRaw === "delete") {
+      appendEntry("info", "usage: delete <npc-or-location-name>");
+      pushCommandHistory(raw);
+      return;
+    }
+    if (deleteMatch) {
+      const target = deleteMatch[1].trim();
+      if (!target) {
+        appendEntry("info", "usage: delete <npc-or-location-name>");
+        pushCommandHistory(raw);
+        return;
+      }
+
+      try {
+        const result = await softDeleteEntity({ target });
+        appendEntry(
+          "output",
+          [
+            "## Deleted",
+            `type: ${result.entity_type}`,
+            `name: ${result.name}`,
+            `slug: ${result.slug}`,
+            `trash: ${result.trash_vault_path}`
+          ].join("\n")
+        );
+
+        if (result.entity_type === "npc" && npcDraft()?.id === result.id) {
+          setNpcDraft(null);
+          setEditorMode("none");
+          appendEntry("info", "deleted NPC was open in editor; editor closed.");
+        }
+        if (result.entity_type === "location" && locationDraft()?.id === result.id) {
+          setLocationDraft(null);
+          setEditorMode("none");
+          appendEntry("info", "deleted location was open in editor; editor closed.");
+        }
+
+        pushCommandHistory(raw);
+        return;
+      } catch (error) {
+        appendEntry("error", String(error));
+        return;
+      }
+    }
+
+    if (loweredRaw === "undo") {
+      try {
+        const result = await undoLastSoftDelete();
+        appendEntry(
+          "output",
+          [
+            "## Undo complete",
+            `type: ${result.entity_type}`,
+            `name: ${result.name}`,
+            `slug: ${result.slug}`,
+            `vault: ${result.vault_path}`
+          ].join("\n")
+        );
+        pushCommandHistory(raw);
+        return;
+      } catch (error) {
+        appendEntry("info", String(error));
+        pushCommandHistory(raw);
         return;
       }
     }
@@ -2068,10 +2144,11 @@ function startsWithKnownCommandRoot(input: string, meta: InlineCommandMeta): boo
   return meta.commandMap.has(first);
 }
 
-function toEntitySuggestionItem(entity: EntitySuggestion, loadContext: boolean): EntitySuggestionItem {
+function toEntitySuggestionItem(entity: EntitySuggestion, commandPrefix: "load" | "delete" | null): EntitySuggestionItem {
+  const completion = commandPrefix ? `${commandPrefix} ${entity.name}` : entity.name;
   return {
     label: entity.name,
-    completion: loadContext ? `load ${entity.name}` : entity.name,
+    completion,
     helperText: entity.entity_type
   };
 }

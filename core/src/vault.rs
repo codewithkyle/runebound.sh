@@ -3,7 +3,14 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-const REQUIRED_TOP_LEVEL_DIRS: [&str; 4] = ["npcs", "locations", "items", "factions"];
+const REQUIRED_TOP_LEVEL_DIRS: [&str; 6] = [
+    "npcs",
+    "locations",
+    "items",
+    "factions",
+    ".trash/npcs",
+    ".trash/locations",
+];
 
 #[derive(Debug, Clone)]
 pub struct Vault {

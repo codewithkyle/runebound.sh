@@ -11,7 +11,8 @@ use dnd_core::db;
 use dnd_core::health;
 use dnd_core::npc::{
     LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp,
-    render_location_markdown, render_npc_markdown, slugify, unique_slug_for_dir,
+    merge_runebound_block, render_location_markdown, render_npc_markdown, slugify,
+    unique_slug_for_dir,
 };
 use dnd_core::vault::{Vault, is_path_writable};
 use serde::{Deserialize, Serialize};
@@ -188,6 +189,60 @@ struct SaveLocationDraftResult {
     updated_at: String,
 }
 
+#[derive(Debug, Clone, Deserialize)]
+struct SoftDeleteEntityInput {
+    target: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SoftDeleteEntityResult {
+    entity_type: EntityType,
+    id: String,
+    name: String,
+    slug: String,
+    trash_vault_path: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct UndoSoftDeleteResult {
+    entity_type: EntityType,
+    id: String,
+    name: String,
+    slug: String,
+    vault_path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NpcDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    race: String,
+    occupation: String,
+    sex: String,
+    age: String,
+    height: String,
+    weight_lbs: String,
+    background: String,
+    want_need: String,
+    secret_obstacle: String,
+    carrying: String,
+    location: String,
+    vault_path: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LocationDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
+    created_at: String,
+    updated_at: String,
+}
+
 struct AppState {
     workspace_root: PathBuf,
 }
@@ -255,6 +310,64 @@ fn carrying_from_db_text(value: &str) -> Vec<String> {
         Ok(items) => normalize_unknown_list(items),
         Err(_) => parse_carrying_csv(value),
     }
+}
+
+fn read_vault_file_if_exists(vault: &Vault, relative_path: &str) -> Result<Option<String>, String> {
+    let relative = PathBuf::from(relative_path);
+    let full = vault.resolve_relative(&relative).map_err(|err| err.to_string())?;
+    if !full.exists() {
+        return Ok(None);
+    }
+
+    std::fs::read_to_string(&full)
+        .map(Some)
+        .map_err(|err| format!("failed to read vault file {}: {}", full.display(), err))
+}
+
+fn unique_trash_path(vault: &Vault, entity_dir: &str, slug: &str, timestamp: &str) -> Result<String, String> {
+    let base = format!("{}-{}", slug, timestamp.replace(':', "").replace('-', ""));
+    let mut candidate = format!(".trash/{entity_dir}/{base}.md");
+    let mut index = 2;
+
+    loop {
+        let full = vault
+            .resolve_relative(&PathBuf::from(&candidate))
+            .map_err(|err| err.to_string())?;
+        if !full.exists() {
+            return Ok(candidate);
+        }
+        candidate = format!(".trash/{entity_dir}/{base}-{index}.md");
+        index += 1;
+    }
+}
+
+fn move_vault_file(vault: &Vault, source_relative: &str, target_relative: &str) -> Result<(), String> {
+    let source_full = vault
+        .resolve_relative(&PathBuf::from(source_relative))
+        .map_err(|err| err.to_string())?;
+    if !source_full.exists() {
+        return Err(format!(
+            "source file does not exist: {}",
+            source_full.display()
+        ));
+    }
+
+    let target_full = vault
+        .resolve_relative(&PathBuf::from(target_relative))
+        .map_err(|err| err.to_string())?;
+    if let Some(parent) = target_full.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|err| format!("failed to create trash directory {}: {}", parent.display(), err))?;
+    }
+
+    std::fs::rename(&source_full, &target_full).map_err(|err| {
+        format!(
+            "failed to move file from {} to {}: {}",
+            source_full.display(),
+            target_full.display(),
+            err
+        )
+    })
 }
 
 fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
@@ -1036,8 +1149,26 @@ async fn save_npc_draft(
     })
     .map_err(|err| err.to_string())?;
 
+    let existing_markdown = if let Some(ref old_path) = previous_path {
+        if old_path != &relative_path {
+            match read_vault_file_if_exists(&vault, old_path) {
+                Ok(Some(contents)) => Some(contents),
+                Ok(None) => read_vault_file_if_exists(&vault, &relative_path)?,
+                Err(err) => return Err(err),
+            }
+        } else {
+            read_vault_file_if_exists(&vault, &relative_path)?
+        }
+    } else {
+        read_vault_file_if_exists(&vault, &relative_path)?
+    };
+    let merged_markdown = match existing_markdown {
+        Some(existing) => merge_runebound_block(&existing, &markdown),
+        None => markdown,
+    };
+
     vault
-        .write_relative(&PathBuf::from(&relative_path), &markdown)
+        .write_relative(&PathBuf::from(&relative_path), &merged_markdown)
         .map_err(|err| err.to_string())?;
 
     let npc_row = db::NpcRow {
@@ -1159,8 +1290,14 @@ async fn save_location_draft(
     .map_err(|err| err.to_string())?;
 
     let relative_path = PathBuf::from(vault_path_relative);
+    let existing_markdown = read_vault_file_if_exists(&vault, vault_path_relative)?;
+    let merged_markdown = match existing_markdown {
+        Some(existing) => merge_runebound_block(&existing, &markdown),
+        None => markdown,
+    };
+
     vault
-        .write_relative(&relative_path, &markdown)
+        .write_relative(&relative_path, &merged_markdown)
         .map_err(|err| err.to_string())?;
 
     let location_row = db::LocationRow {
@@ -1294,6 +1431,294 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
 }
 
 #[tauri::command]
+async fn soft_delete_entity(
+    input: SoftDeleteEntityInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<SoftDeleteEntityResult, String> {
+    let target = input.target.trim();
+    if target.is_empty() {
+        return Err("usage: delete <npc-or-location-name>".to_string());
+    }
+
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let vault_path = loaded
+        .effective
+        .vault
+        .path
+        .clone()
+        .ok_or_else(|| "vault.path is not configured".to_string())?;
+    let vault = Vault::new(vault_path);
+    vault.ensure_structure().map_err(|err| err.to_string())?;
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let now = now_timestamp();
+
+    if let Some(npc) = db::find_npc_by_name_or_slug(&database.pool, target)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        let trash_path = unique_trash_path(&vault, "npcs", &npc.slug, &now)?;
+        move_vault_file(&vault, &npc.vault_path, &trash_path)?;
+
+        db::delete_npc_by_id(&database.pool, &npc.id)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::delete_document_by_vault_path(&database.pool, &npc.vault_path)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let payload = NpcDeletePayload {
+            id: npc.id.clone(),
+            slug: npc.slug.clone(),
+            name: npc.name.clone(),
+            race: npc.race,
+            occupation: npc.occupation,
+            sex: npc.sex,
+            age: npc.age,
+            height: npc.height,
+            weight_lbs: npc.weight_lbs,
+            background: npc.background,
+            want_need: npc.want_need,
+            secret_obstacle: npc.secret_obstacle,
+            carrying: npc.carrying,
+            location: npc.location,
+            vault_path: npc.vault_path.clone(),
+            created_at: npc.created_at,
+            updated_at: npc.updated_at,
+        };
+
+        let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+        let soft_delete_row = db::SoftDeleteRow {
+            id: 0,
+            entity_type: "npc".to_string(),
+            entity_id: npc.id.clone(),
+            name: npc.name.clone(),
+            slug: npc.slug.clone(),
+            original_vault_path: npc.vault_path,
+            trash_vault_path: trash_path.clone(),
+            payload_json,
+            created_at: now,
+            undone_at: None,
+        };
+        db::insert_soft_delete(&database.pool, &soft_delete_row)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(SoftDeleteEntityResult {
+            entity_type: EntityType::Npc,
+            id: npc.id,
+            name: npc.name,
+            slug: npc.slug,
+            trash_vault_path: trash_path,
+        });
+    }
+
+    if let Some(location) = db::find_location_by_name_or_slug(&database.pool, target)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        let trash_path = unique_trash_path(&vault, "locations", &location.slug, &now)?;
+        move_vault_file(&vault, &location.vault_path, &trash_path)?;
+
+        db::delete_location_by_id(&database.pool, &location.id)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::delete_document_by_vault_path(&database.pool, &location.vault_path)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let payload = LocationDeletePayload {
+            id: location.id.clone(),
+            slug: location.slug.clone(),
+            name: location.name.clone(),
+            vault_path: location.vault_path.clone(),
+            created_at: location.created_at,
+            updated_at: location.updated_at,
+        };
+
+        let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+        let soft_delete_row = db::SoftDeleteRow {
+            id: 0,
+            entity_type: "location".to_string(),
+            entity_id: location.id.clone(),
+            name: location.name.clone(),
+            slug: location.slug.clone(),
+            original_vault_path: location.vault_path,
+            trash_vault_path: trash_path.clone(),
+            payload_json,
+            created_at: now,
+            undone_at: None,
+        };
+        db::insert_soft_delete(&database.pool, &soft_delete_row)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(SoftDeleteEntityResult {
+            entity_type: EntityType::Location,
+            id: location.id,
+            name: location.name,
+            slug: location.slug,
+            trash_vault_path: trash_path,
+        });
+    }
+
+    Err(format!("no npc or location found for: {target}"))
+}
+
+#[tauri::command]
+async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let vault_path = loaded
+        .effective
+        .vault
+        .path
+        .clone()
+        .ok_or_else(|| "vault.path is not configured".to_string())?;
+    let vault = Vault::new(vault_path);
+    vault.ensure_structure().map_err(|err| err.to_string())?;
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let Some(soft_delete) = db::latest_pending_soft_delete(&database.pool)
+        .await
+        .map_err(|err| err.to_string())?
+    else {
+        return Err("nothing to undo".to_string());
+    };
+
+    let now = now_timestamp();
+
+    if soft_delete.entity_type == "npc" {
+        let payload: NpcDeletePayload =
+            serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+        let mut restored_slug = payload.slug;
+        let mut restored_vault_path = payload.vault_path;
+        let preferred_full = vault
+            .resolve_relative(&PathBuf::from(&restored_vault_path))
+            .map_err(|err| err.to_string())?;
+        if preferred_full.exists() {
+            restored_slug = unique_slug_for_dir(vault.root(), "npcs", &restored_slug);
+            restored_vault_path = PathBuf::from("npcs")
+                .join(format!("{restored_slug}.md"))
+                .to_string_lossy()
+                .to_string();
+        }
+
+        move_vault_file(&vault, &soft_delete.trash_vault_path, &restored_vault_path)?;
+
+        let npc_row = db::NpcRow {
+            id: payload.id.clone(),
+            slug: restored_slug.clone(),
+            name: payload.name.clone(),
+            race: payload.race,
+            occupation: payload.occupation,
+            sex: payload.sex,
+            age: payload.age,
+            height: payload.height,
+            weight_lbs: payload.weight_lbs,
+            background: payload.background,
+            want_need: payload.want_need,
+            secret_obstacle: payload.secret_obstacle,
+            carrying: payload.carrying,
+            location: payload.location,
+            vault_path: restored_vault_path.clone(),
+            created_at: payload.created_at,
+            updated_at: now.clone(),
+        };
+
+        db::upsert_npc(&database.pool, &npc_row)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::upsert_document_index(
+            &database.pool,
+            "npc",
+            &npc_row.slug,
+            Some(&npc_row.name),
+            &npc_row.vault_path,
+            &npc_row.created_at,
+            &npc_row.updated_at,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+        db::mark_soft_delete_undone(&database.pool, soft_delete.id, &now)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(UndoSoftDeleteResult {
+            entity_type: EntityType::Npc,
+            id: payload.id,
+            name: payload.name,
+            slug: restored_slug,
+            vault_path: restored_vault_path,
+        });
+    }
+
+    if soft_delete.entity_type == "location" {
+        let payload: LocationDeletePayload =
+            serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+        let mut restored_slug = payload.slug;
+        let mut restored_vault_path = payload.vault_path;
+        let preferred_full = vault
+            .resolve_relative(&PathBuf::from(&restored_vault_path))
+            .map_err(|err| err.to_string())?;
+        if preferred_full.exists() {
+            restored_slug = unique_slug_for_dir(vault.root(), "locations", &restored_slug);
+            restored_vault_path = PathBuf::from("locations")
+                .join(format!("{restored_slug}.md"))
+                .to_string_lossy()
+                .to_string();
+        }
+
+        move_vault_file(&vault, &soft_delete.trash_vault_path, &restored_vault_path)?;
+
+        let location_row = db::LocationRow {
+            id: payload.id.clone(),
+            slug: restored_slug.clone(),
+            name: payload.name.clone(),
+            vault_path: restored_vault_path.clone(),
+            created_at: payload.created_at,
+            updated_at: now.clone(),
+        };
+
+        db::upsert_location(&database.pool, &location_row)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::upsert_document_index(
+            &database.pool,
+            "location",
+            &location_row.slug,
+            Some(&location_row.name),
+            &location_row.vault_path,
+            &location_row.created_at,
+            &location_row.updated_at,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+        db::mark_soft_delete_undone(&database.pool, soft_delete.id, &now)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(UndoSoftDeleteResult {
+            entity_type: EntityType::Location,
+            id: payload.id,
+            name: payload.name,
+            slug: restored_slug,
+            vault_path: restored_vault_path,
+        });
+    }
+
+    Err(format!(
+        "unsupported soft delete entity type: {}",
+        soft_delete.entity_type
+    ))
+}
+
+#[tauri::command]
 fn get_command_manifest() -> CommandManifest {
     command_manifest()
 }
@@ -1326,6 +1751,8 @@ fn main() {
             save_location_draft,
             search_entities,
             resolve_entity,
+            soft_delete_entity,
+            undo_last_soft_delete,
             get_command_manifest,
             parse_command_input,
             exit_app

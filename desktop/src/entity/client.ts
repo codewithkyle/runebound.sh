@@ -43,6 +43,26 @@ export type SaveLocationDraftResult = {
   updated_at: string;
 };
 
+export type SoftDeleteEntityInput = {
+  target: string;
+};
+
+export type SoftDeleteEntityResult = {
+  entity_type: EntityType;
+  id: string;
+  name: string;
+  slug: string;
+  trash_vault_path: string;
+};
+
+export type UndoSoftDeleteResult = {
+  entity_type: EntityType;
+  id: string;
+  name: string;
+  slug: string;
+  vault_path: string;
+};
+
 export async function searchEntities(query: string, limit = 8): Promise<EntitySuggestion[]> {
   return invoke<EntitySuggestion[]>("search_entities", { query, limit });
 }
@@ -53,4 +73,12 @@ export async function resolveEntity(input: string): Promise<EntityDetails | null
 
 export async function saveLocationDraft(input: SaveLocationDraftInput): Promise<SaveLocationDraftResult> {
   return invoke<SaveLocationDraftResult>("save_location_draft", { input });
+}
+
+export async function softDeleteEntity(input: SoftDeleteEntityInput): Promise<SoftDeleteEntityResult> {
+  return invoke<SoftDeleteEntityResult>("soft_delete_entity", { input });
+}
+
+export async function undoLastSoftDelete(): Promise<UndoSoftDeleteResult> {
+  return invoke<UndoSoftDeleteResult>("undo_last_soft_delete");
 }
