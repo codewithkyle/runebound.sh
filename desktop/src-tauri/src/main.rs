@@ -3380,6 +3380,7 @@ async fn generate_faction_seed(
     let recent_seeds = parse_recent_faction_seeds(recent_payloads);
     let recent_names = recent_faction_name_set(&recent_seeds);
     let recent_context = describe_recent_faction_seeds(&recent_seeds);
+    let enforce_unique_name = reference_context.system_context.is_empty();
 
     let schema = serde_json::json!({
         "type": "object",
@@ -3493,10 +3494,15 @@ async fn generate_faction_seed(
         }
 
         let normalized_name = seed.name.to_ascii_lowercase();
-        if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) {
+        if enforce_unique_name
+            && (recent_names.contains(&normalized_name)
+                || seen_attempt_names.contains(&normalized_name))
+        {
             continue;
         }
-        seen_attempt_names.insert(normalized_name);
+        if enforce_unique_name {
+            seen_attempt_names.insert(normalized_name);
+        }
 
         let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
         db::insert_generation(&database.pool, "faction_seed", None, &serialized_seed)

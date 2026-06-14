@@ -1168,6 +1168,16 @@ function factionDraftDoc(draft: FactionDraft): OutputDoc {
           { label: "symbol", value: draft.symbol_description },
           { label: "path", value: draft.vault_path }
         ]
+      },
+      {
+        kind: "paragraph",
+        inlines: [
+          { kind: "text", text: "Use " },
+          { kind: "command_ref", label: "save", command: "save" },
+          { kind: "text", text: " to persist this faction, or " },
+          { kind: "command_ref", label: "reroll", command: "reroll" },
+          { kind: "text", text: " to regenerate it." }
+        ]
       }
     ]
   };
