@@ -11,7 +11,8 @@ use dnd_core::db;
 use dnd_core::health;
 use dnd_core::npc::{
     LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp,
-    merge_runebound_block, render_location_markdown, render_npc_markdown, slugify,
+    merge_runebound_block, normalize_markdown_file_stem, render_location_markdown,
+    render_npc_markdown, slugify,
     unique_slug_for_dir,
 };
 use dnd_core::vault::{Vault, is_path_writable};
@@ -368,6 +369,38 @@ fn move_vault_file(vault: &Vault, source_relative: &str, target_relative: &str) 
             err
         )
     })
+}
+
+fn unique_markdown_path_for_name(
+    vault: &Vault,
+    relative_dir: &str,
+    display_name: &str,
+    keep_path: Option<&str>,
+) -> Result<String, String> {
+    let base = normalize_markdown_file_stem(display_name);
+    let mut candidate = base.clone();
+    let mut index = 2;
+
+    loop {
+        let relative = PathBuf::from(relative_dir)
+            .join(format!("{candidate}.md"))
+            .to_string_lossy()
+            .to_string();
+
+        if keep_path.is_some_and(|existing| existing == relative) {
+            return Ok(relative);
+        }
+
+        let full = vault
+            .resolve_relative(&PathBuf::from(&relative))
+            .map_err(|err| err.to_string())?;
+        if !full.exists() {
+            return Ok(relative);
+        }
+
+        candidate = format!("{base} {index}");
+        index += 1;
+    }
 }
 
 fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
@@ -960,14 +993,8 @@ async fn ensure_location_exists(
         });
     }
 
-    let slug = slugify(raw_name);
-    let relative_path = PathBuf::from("locations").join(format!("{slug}.md"));
-    let full_path = vault
-        .resolve_relative(&relative_path)
-        .map_err(|err| err.to_string())?;
-    let file_exists = full_path.exists();
-
     let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let slug = slugify(raw_name);
     let existing = db::find_location_by_slug(&database.pool, &slug)
         .await
         .map_err(|err| err.to_string())?;
@@ -988,6 +1015,16 @@ async fn ensure_location_exists(
         .map(|row| row.created_at.clone())
         .unwrap_or_else(|| now.clone());
 
+    let relative_path = if let Some(row) = existing.as_ref() {
+        row.vault_path.clone()
+    } else {
+        unique_markdown_path_for_name(&vault, "locations", &canonical_name, None)?
+    };
+    let file_exists = vault
+        .resolve_relative(&PathBuf::from(&relative_path))
+        .map_err(|err| err.to_string())?
+        .exists();
+
     if !file_exists {
         let content = render_location_markdown(&LocationFrontmatter {
             doc_type: "location".to_string(),
@@ -999,7 +1036,7 @@ async fn ensure_location_exists(
         })
         .map_err(|err| err.to_string())?;
         vault
-            .write_relative(&relative_path, &content)
+            .write_relative(&PathBuf::from(&relative_path), &content)
             .map_err(|err| err.to_string())?;
         created_file = true;
     }
@@ -1012,7 +1049,7 @@ async fn ensure_location_exists(
         id,
         slug: slug.clone(),
         name: canonical_name.clone(),
-        vault_path: relative_path.to_string_lossy().to_string(),
+        vault_path: relative_path,
         created_at,
         updated_at: now.clone(),
     };
@@ -1094,22 +1131,29 @@ async fn save_npc_draft(
 
     let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
         let desired_base_slug = slugify(name);
+        let desired_path = unique_markdown_path_for_name(
+            &vault,
+            "npcs",
+            name,
+            Some(current.vault_path.as_str()),
+        )?;
+
         if desired_base_slug == current.slug {
             (
                 current.slug,
-                current.vault_path,
+                desired_path.clone(),
                 current.created_at,
-                None,
+                if desired_path == current.vault_path {
+                    None
+                } else {
+                    Some(current.vault_path)
+                },
             )
         } else {
             let next_slug = unique_slug_for_dir(vault.root(), "npcs", &desired_base_slug);
-            let next_path = PathBuf::from("npcs")
-                .join(format!("{next_slug}.md"))
-                .to_string_lossy()
-                .to_string();
             (
                 next_slug,
-                next_path,
+                desired_path,
                 current.created_at,
                 Some(current.vault_path),
             )
@@ -1119,10 +1163,7 @@ async fn save_npc_draft(
         let slug = unique_slug_for_dir(vault.root(), "npcs", &base_slug);
         (
             slug.clone(),
-            PathBuf::from("npcs")
-                .join(format!("{slug}.md"))
-                .to_string_lossy()
-                .to_string(),
+            unique_markdown_path_for_name(&vault, "npcs", name, None)?,
             now.clone(),
             None,
         )
@@ -1249,15 +1290,8 @@ async fn save_location_draft(
         return Err("location name cannot be empty".to_string());
     }
 
-    let slug = input.slug.trim();
-    if slug.is_empty() {
-        return Err("location slug cannot be empty".to_string());
-    }
-
-    let vault_path_relative = input.vault_path.trim();
-    if vault_path_relative.is_empty() {
-        return Err("location vault path cannot be empty".to_string());
-    }
+    let _legacy_slug_input = input.slug.trim();
+    let previous_vault_path_input = input.vault_path.trim();
 
     let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
     validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
@@ -1275,36 +1309,85 @@ async fn save_location_draft(
     let existing = db::find_location_by_id(&database.pool, input.id.trim())
         .await
         .map_err(|err| err.to_string())?;
-    let created_at = existing
-        .map(|location| location.created_at)
-        .unwrap_or_else(|| now.clone());
+    let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
+        let desired_base_slug = slugify(name);
+        let desired_path = unique_markdown_path_for_name(
+            &vault,
+            "locations",
+            name,
+            Some(current.vault_path.as_str()),
+        )?;
+
+        if desired_base_slug == current.slug {
+            (
+                current.slug,
+                desired_path.clone(),
+                current.created_at,
+                if desired_path == current.vault_path {
+                    None
+                } else {
+                    Some(current.vault_path)
+                },
+            )
+        } else {
+            (
+                unique_slug_for_dir(vault.root(), "locations", &desired_base_slug),
+                desired_path,
+                current.created_at,
+                Some(current.vault_path),
+            )
+        }
+    } else {
+        let base_slug = slugify(name);
+        (
+            unique_slug_for_dir(vault.root(), "locations", &base_slug),
+            unique_markdown_path_for_name(&vault, "locations", name, None)?,
+            now.clone(),
+            if previous_vault_path_input.is_empty() {
+                None
+            } else {
+                Some(previous_vault_path_input.to_string())
+            },
+        )
+    };
 
     let markdown = render_location_markdown(&LocationFrontmatter {
         doc_type: "location".to_string(),
         id: input.id.trim().to_string(),
-        slug: slug.to_string(),
+        slug: slug.clone(),
         name: name.to_string(),
         created_at: created_at.clone(),
         updated_at: now.clone(),
     })
     .map_err(|err| err.to_string())?;
 
-    let relative_path = PathBuf::from(vault_path_relative);
-    let existing_markdown = read_vault_file_if_exists(&vault, vault_path_relative)?;
+    let existing_markdown = if let Some(ref old_path) = previous_path {
+        if old_path != &relative_path {
+            match read_vault_file_if_exists(&vault, old_path) {
+                Ok(Some(contents)) => Some(contents),
+                Ok(None) => read_vault_file_if_exists(&vault, &relative_path)?,
+                Err(err) => return Err(err),
+            }
+        } else {
+            read_vault_file_if_exists(&vault, &relative_path)?
+        }
+    } else {
+        read_vault_file_if_exists(&vault, &relative_path)?
+    };
     let merged_markdown = match existing_markdown {
         Some(existing) => merge_runebound_block(&existing, &markdown),
         None => markdown,
     };
 
     vault
-        .write_relative(&relative_path, &merged_markdown)
+        .write_relative(&PathBuf::from(&relative_path), &merged_markdown)
         .map_err(|err| err.to_string())?;
 
     let location_row = db::LocationRow {
         id: input.id.trim().to_string(),
-        slug: slug.to_string(),
+        slug,
         name: name.to_string(),
-        vault_path: vault_path_relative.to_string(),
+        vault_path: relative_path.clone(),
         created_at: created_at.clone(),
         updated_at: now.clone(),
     };
@@ -1323,6 +1406,26 @@ async fn save_location_draft(
     )
     .await
     .map_err(|err| err.to_string())?;
+
+    if let Some(old_path) = previous_path {
+        if old_path != location_row.vault_path {
+            db::delete_document_by_vault_path(&database.pool, &old_path)
+                .await
+                .map_err(|err| err.to_string())?;
+
+            if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
+                if old_full_path.exists() {
+                    std::fs::remove_file(&old_full_path).map_err(|err| {
+                        format!(
+                            "failed to remove old location file {}: {}",
+                            old_full_path.display(),
+                            err
+                        )
+                    })?;
+                }
+            }
+        }
+    }
 
     Ok(SaveLocationDraftResult {
         id: location_row.id,
@@ -1600,10 +1703,7 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             .map_err(|err| err.to_string())?;
         if preferred_full.exists() {
             restored_slug = unique_slug_for_dir(vault.root(), "npcs", &restored_slug);
-            restored_vault_path = PathBuf::from("npcs")
-                .join(format!("{restored_slug}.md"))
-                .to_string_lossy()
-                .to_string();
+            restored_vault_path = unique_markdown_path_for_name(&vault, "npcs", &payload.name, None)?;
         }
 
         move_vault_file(&vault, &soft_delete.trash_vault_path, &restored_vault_path)?;
@@ -1667,10 +1767,8 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             .map_err(|err| err.to_string())?;
         if preferred_full.exists() {
             restored_slug = unique_slug_for_dir(vault.root(), "locations", &restored_slug);
-            restored_vault_path = PathBuf::from("locations")
-                .join(format!("{restored_slug}.md"))
-                .to_string_lossy()
-                .to_string();
+            restored_vault_path =
+                unique_markdown_path_for_name(&vault, "locations", &payload.name, None)?;
         }
 
         move_vault_file(&vault, &soft_delete.trash_vault_path, &restored_vault_path)?;

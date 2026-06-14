@@ -81,6 +81,36 @@ pub fn unique_slug_for_dir(root: &Path, relative_dir: &str, base_slug: &str) -> 
     }
 }
 
+pub fn normalize_markdown_file_stem(value: &str) -> String {
+    let mut out = String::new();
+    let mut last_was_space = false;
+
+    for ch in value.trim().chars() {
+        if ch.is_control() {
+            continue;
+        }
+
+        let invalid = matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
+        if invalid || ch.is_whitespace() {
+            if !out.is_empty() && !last_was_space {
+                out.push(' ');
+                last_was_space = true;
+            }
+            continue;
+        }
+
+        out.push(ch);
+        last_was_space = false;
+    }
+
+    let trimmed = out.trim().trim_matches('.').trim();
+    if trimmed.is_empty() {
+        "Untitled".to_string()
+    } else {
+        trimmed.to_string()
+    }
+}
+
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml::ser::Error> {
     #[derive(Serialize)]
     struct Frontmatter<'a> {
@@ -227,5 +257,21 @@ mod tests {
         let twice = merge_runebound_block(&once, replacement);
 
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn normalize_markdown_file_stem_keeps_readable_name() {
+        assert_eq!(
+            super::normalize_markdown_file_stem("  Lady Aria of Neverwinter  "),
+            "Lady Aria of Neverwinter"
+        );
+    }
+
+    #[test]
+    fn normalize_markdown_file_stem_replaces_invalid_chars() {
+        assert_eq!(
+            super::normalize_markdown_file_stem("Drizzt/Do'Urden: Ranger?"),
+            "Drizzt Do'Urden Ranger"
+        );
     }
 }

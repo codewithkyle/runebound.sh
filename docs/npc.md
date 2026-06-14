@@ -52,6 +52,7 @@ Example forms:
 
 - Saving replaces only the fenced ` ```runebound ` metadata block.
 - Any non-runebound content in the file is preserved verbatim (notes, embeds, headings, custom text).
+- NPC and location markdown filenames use readable proper names (for clean `[[Wiki Links]]`), with numeric suffixes only when needed for collision handling.
 
 ## Input and Output Rules
 

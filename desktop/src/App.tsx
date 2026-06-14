@@ -688,7 +688,8 @@ export default function App() {
             `type: ${result.entity_type}`,
             `name: ${result.name}`,
             `slug: ${result.slug}`,
-            `trash: ${result.trash_vault_path}`
+            `trash: ${result.trash_vault_path}`,
+            "tip: run undo to restore it."
           ].join("\n")
         );
 
@@ -1322,7 +1323,7 @@ export default function App() {
         );
         setNpcDraft(null);
         setEditorMode("none");
-        appendEntry("info", "npc editor closed. run create npc to start another draft.");
+        appendEntry("info", "npc editor closed");
         return { handled: true, ok: true, recordHistory: true };
       } catch (error) {
         appendEntry("error", String(error));
