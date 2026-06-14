@@ -9,6 +9,13 @@
 ## Current Command Surface (MVP)
 
 - `status`
+- `create npc [prompt...]`
+- `load <npc-or-location-name>`
+- `npc ...` (editor commands)
+- `location ...` (editor commands)
+- `save` / `reroll` / `cancel` (active-context global commands)
+- `delete <npc-or-location-name>`
+- `undo`
 - `config show`
 - `config test`
 - `help`
