@@ -90,6 +90,8 @@ pub fn command_manifest() -> CommandManifest {
                     "create npc".to_string(),
                     "create npc an inexperienced town guard trying to make a name for himself"
                         .to_string(),
+                    "create location".to_string(),
+                    "create location a swamp trade post controlled by smugglers".to_string(),
                     "create help".to_string(),
                 ],
                 subcommands: vec![
@@ -98,6 +100,12 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Start guided NPC creation".to_string(),
                         options: Vec::new(),
                         examples: vec!["create npc".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "location".to_string(),
+                        summary: "Start guided location creation".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["create location".to_string()],
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
@@ -268,6 +276,8 @@ pub fn command_manifest() -> CommandManifest {
                 examples: vec![
                     "location show".to_string(),
                     "location rename Neverwinter Harbor".to_string(),
+                    "location set kind town".to_string(),
+                    "location reroll exports".to_string(),
                     "location save".to_string(),
                 ],
                 subcommands: vec![
@@ -282,6 +292,34 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Update location name".to_string(),
                         options: Vec::new(),
                         examples: vec!["location rename Neverwinter Harbor".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "set".to_string(),
+                        summary: "Update location fields".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "location set kind city".to_string(),
+                            "location set kind_custom drifting armada".to_string(),
+                            "location set visual Lantern-lit markets line flooded alleys."
+                                .to_string(),
+                            "location set history Built on drowned ruins reclaimed by merchants."
+                                .to_string(),
+                            "location set exports smoked eel, river pearls".to_string(),
+                            "location set tone damp suspicious crowded".to_string(),
+                            "location set authority Merchants' Compact".to_string(),
+                            "location set danger risky".to_string(),
+                            "location set tension Guild war brews beneath trade talks.".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "reroll".to_string(),
+                        summary: "Reroll one location field with optional prompt".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "location reroll visual".to_string(),
+                            "location reroll history old dwarven colony".to_string(),
+                            "location reroll exports".to_string(),
+                        ],
                     },
                     SubcommandSpec {
                         name: "save".to_string(),

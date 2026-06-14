@@ -47,6 +47,15 @@ type CommandClientEvent =
       name: string;
       slug: string;
       vault_path: string;
+      kind_type: string;
+      kind_custom?: string | null;
+      visual_description: string;
+      history_background: string;
+      exports: string[];
+      tone: string;
+      authority: string;
+      danger_level: string;
+      current_tension: string;
     }
   | {
       kind: "clear_drafts";
@@ -96,6 +105,15 @@ type LocationDraft = {
   name: string;
   slug: string;
   vault_path: string;
+  kind_type: string;
+  kind_custom?: string | null;
+  visual_description: string;
+  history_background: string;
+  exports: string[];
+  tone: string;
+  authority: string;
+  danger_level: string;
+  current_tension: string;
 };
 
 type SuggestionViewItem = {
@@ -522,7 +540,16 @@ export default function App() {
       id: event.id,
       name: event.name,
       slug: event.slug,
-      vault_path: event.vault_path
+      vault_path: event.vault_path,
+      kind_type: event.kind_type,
+      kind_custom: event.kind_custom,
+      visual_description: event.visual_description,
+      history_background: event.history_background,
+      exports: event.exports,
+      tone: event.tone,
+      authority: event.authority,
+      danger_level: event.danger_level,
+      current_tension: event.current_tension
     };
     setLocationDraft(draft);
     setEditorMode("location");
@@ -551,6 +578,25 @@ export default function App() {
         location: normalizeUnknown(event.location)
       };
       return npcDraftDoc(draft);
+    }
+
+    if (event.kind === "load_location_draft") {
+      const draft: LocationDraft = {
+        id: event.id,
+        name: normalizeUnknown(event.name),
+        slug: normalizeUnknown(event.slug),
+        vault_path: normalizeUnknown(event.vault_path),
+        kind_type: normalizeUnknown(event.kind_type),
+        kind_custom: normalizeUnknown(event.kind_custom),
+        visual_description: normalizeUnknown(event.visual_description),
+        history_background: normalizeUnknown(event.history_background),
+        exports: normalizeUnknownList(event.exports),
+        tone: normalizeUnknown(event.tone),
+        authority: normalizeUnknown(event.authority),
+        danger_level: normalizeUnknown(event.danger_level),
+        current_tension: normalizeUnknown(event.current_tension)
+      };
+      return locationDraftDoc(draft);
     }
 
     return null;
@@ -633,7 +679,7 @@ export default function App() {
   return (
     <div class="h-screen bg-bg text-text flex flex-col p-[8px]">
       <main ref={outputRef} class="flex-1 overflow-y-auto py-[2px]">
-        <div class="w-full max-w-[960px] mx-auto space-y-2">
+        <div class="w-full max-w-[1040px] mx-auto space-y-2">
           <For each={entries()}>
             {(entry) => (
               <div class={entryClass(entry.kind)}>
@@ -657,7 +703,7 @@ export default function App() {
       </main>
 
       <section class="shrink-0 pb-[2px]">
-        <div class="w-full max-w-[960px] mx-auto">
+        <div class="w-full max-w-[1040px] mx-auto">
           <div class="mb-[2px]">
             <Show when={suggestionList().length > 0}>
               <div class="bg-surface py-[2px]">
@@ -907,6 +953,22 @@ function carryingToDisplay(values: string[] | null | undefined): string {
   return normalizeUnknownList(values).join(", ");
 }
 
+function locationKindToDisplay(kindType: string | null | undefined, kindCustom: string | null | undefined): string {
+  const kind = normalizeUnknown(kindType);
+  if (kind.toLowerCase() !== "other") {
+    return kind;
+  }
+  const custom = normalizeUnknown(kindCustom);
+  if (custom === "Unknown") {
+    return "Other";
+  }
+  return `Other (${custom})`;
+}
+
+function exportsToDisplay(values: string[] | null | undefined): string {
+  return normalizeUnknownList(values).join(", ");
+}
+
 function npcDraftDoc(draft: NpcDraft): OutputDoc {
   return {
     blocks: [
@@ -935,6 +997,38 @@ function npcDraftDoc(draft: NpcDraft): OutputDoc {
           { kind: "text", text: " to persist this NPC, or " },
           { kind: "command_ref", label: "reroll", command: "reroll" },
           { kind: "text", text: " to generate again." }
+        ]
+      }
+    ]
+  };
+}
+
+function locationDraftDoc(draft: LocationDraft): OutputDoc {
+  return {
+    blocks: [
+      {
+        kind: "entity_card",
+        title: draft.name,
+        rows: [
+          { label: "Kind:", value: locationKindToDisplay(draft.kind_type, draft.kind_custom) },
+          { label: "Visual:", value: normalizeUnknown(draft.visual_description) },
+          { label: "History:", value: normalizeUnknown(draft.history_background) },
+          { label: "Exports:", value: exportsToDisplay(draft.exports) },
+          { label: "Tone:", value: normalizeUnknown(draft.tone) },
+          { label: "Authority:", value: normalizeUnknown(draft.authority) },
+          { label: "Danger:", value: normalizeUnknown(draft.danger_level) },
+          { label: "Tension:", value: normalizeUnknown(draft.current_tension) },
+          { label: "Path:", value: normalizeUnknown(draft.vault_path) }
+        ]
+      },
+      {
+        kind: "paragraph",
+        inlines: [
+          { kind: "text", text: "Use " },
+          { kind: "command_ref", label: "save", command: "save" },
+          { kind: "text", text: " to persist this location, or " },
+          { kind: "command_ref", label: "reroll", command: "reroll" },
+          { kind: "text", text: " to regenerate it." }
         ]
       }
     ]
@@ -983,8 +1077,14 @@ function commandSpinnerLabel(raw: string): string | null {
   if (lowered === "create npc" || lowered.startsWith("create npc ")) {
     return "generating npc";
   }
+  if (lowered === "create location" || lowered.startsWith("create location ")) {
+    return "generating location";
+  }
   if (lowered === "reroll" || lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
     return "rerolling npc";
+  }
+  if (lowered === "location reroll" || lowered.startsWith("location reroll ")) {
+    return "rerolling location";
   }
   if (lowered.startsWith("npc save") || lowered.startsWith("location save") || lowered === "save") {
     return "saving draft";

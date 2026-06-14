@@ -25,6 +25,15 @@ pub(crate) struct LocationDraftSession {
     pub(crate) name: String,
     pub(crate) slug: String,
     pub(crate) vault_path: String,
+    pub(crate) kind_type: String,
+    pub(crate) kind_custom: Option<String>,
+    pub(crate) visual_description: String,
+    pub(crate) history_background: String,
+    pub(crate) exports: Vec<String>,
+    pub(crate) tone: String,
+    pub(crate) authority: String,
+    pub(crate) danger_level: String,
+    pub(crate) current_tension: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

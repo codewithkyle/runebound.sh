@@ -49,7 +49,7 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
             {(row) => (
               <div class="rb-entity-row">
                 <span class="rb-entity-label">{row.label}</span>
-                <span>{row.value}</span>
+                <span class="rb-entity-value">{row.value}</span>
               </div>
             )}
           </For>

@@ -3,7 +3,9 @@
 mod app_state;
 mod router;
 
-use std::path::{MAIN_SEPARATOR, PathBuf};
+use std::collections::HashSet;
+use std::fs;
+use std::path::{MAIN_SEPARATOR, Path, PathBuf};
 use std::time::Duration;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse};
@@ -99,6 +101,68 @@ struct SaveNpcDraftResult {
     updated_at: String,
 }
 
+const LOCATION_KIND_TYPES: [&str; 10] = [
+    "hamlet",
+    "town",
+    "city",
+    "dungeon",
+    "hideout",
+    "ruin",
+    "guildhall",
+    "landmark",
+    "wilderness",
+    "other",
+];
+
+const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LocationSeed {
+    name: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    visual_description: String,
+    history_background: String,
+    exports: Vec<String>,
+    tone: String,
+    authority: String,
+    danger_level: String,
+    current_tension: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GenerateLocationSeedInput {
+    prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct LocationRerollContext {
+    name: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    visual_description: String,
+    history_background: String,
+    exports: Vec<String>,
+    tone: String,
+    authority: String,
+    danger_level: String,
+    current_tension: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RerollLocationFieldInput {
+    field: String,
+    prompt: Option<String>,
+    location: LocationRerollContext,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RerollLocationFieldResult {
+    field: String,
+    value: Option<String>,
+    exports: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct EnsureLocationInput {
     name: String,
@@ -169,6 +233,15 @@ struct EntityDetails {
     carrying: Option<Vec<String>>,
     location: Option<String>,
     vault_path: String,
+    kind_type: Option<String>,
+    kind_custom: Option<String>,
+    visual_description: Option<String>,
+    history_background: Option<String>,
+    exports: Option<Vec<String>>,
+    tone: Option<String>,
+    authority: Option<String>,
+    danger_level: Option<String>,
+    current_tension: Option<String>,
     created_at: Option<String>,
 }
 
@@ -178,6 +251,15 @@ struct SaveLocationDraftInput {
     name: String,
     slug: String,
     vault_path: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    visual_description: String,
+    history_background: String,
+    exports: Vec<String>,
+    tone: String,
+    authority: String,
+    danger_level: String,
+    current_tension: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -239,6 +321,15 @@ struct LocationDeletePayload {
     slug: String,
     name: String,
     vault_path: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    visual_description: String,
+    history_background: String,
+    exports: String,
+    tone: String,
+    authority: String,
+    danger_level: String,
+    current_tension: String,
     created_at: String,
     updated_at: String,
 }
@@ -282,6 +373,144 @@ fn parse_carrying_csv(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .collect();
     normalize_unknown_list(items)
+}
+
+fn normalize_location_kind_type(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if LOCATION_KIND_TYPES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "kind_type must be one of: {}",
+            LOCATION_KIND_TYPES.join(", ")
+        ))
+    }
+}
+
+fn normalize_location_danger_level(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    let normalized = if trimmed.eq_ignore_ascii_case("unknown") {
+        "Unknown".to_string()
+    } else {
+        trimmed.to_ascii_lowercase()
+    };
+    if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "danger_level must be one of: {}",
+            LOCATION_DANGER_LEVELS.join(", ")
+        ))
+    }
+}
+
+fn parse_list_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
+fn normalize_exports(values: Vec<String>) -> Vec<String> {
+    let cleaned: Vec<String> = values
+        .into_iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect();
+    if cleaned.is_empty() {
+        vec!["Unknown".to_string()]
+    } else {
+        cleaned
+    }
+}
+
+fn exports_to_db_text(items: &[String]) -> Result<String, String> {
+    serde_json::to_string(items).map_err(|err| err.to_string())
+}
+
+fn exports_from_db_text(value: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(items) => normalize_exports(items),
+        Err(_) => normalize_exports(parse_list_csv(value)),
+    }
+}
+
+fn sentence_count(value: &str) -> usize {
+    value
+        .split_terminator(['.', '!', '?'])
+        .filter(|part| !part.trim().is_empty())
+        .count()
+}
+
+fn word_count(value: &str) -> usize {
+    value.split_whitespace().count()
+}
+
+fn validate_sentence_range(value: &str, min: usize, max: usize, field: &str) -> Result<(), String> {
+    let count = sentence_count(value);
+    if count < min || count > max {
+        return Err(format!(
+            "{field} must be {min}-{max} sentences; got {count}"
+        ));
+    }
+    Ok(())
+}
+
+fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, String> {
+    seed.name = seed.name.trim().to_string();
+    seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
+    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
+    if seed.kind_type == "other" {
+        if seed
+            .kind_custom
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err("kind_custom is required when kind_type is other".to_string());
+        }
+    } else {
+        seed.kind_custom = None;
+    }
+    seed.visual_description = normalize_unknown_text(&seed.visual_description);
+    seed.history_background = normalize_unknown_text(&seed.history_background);
+    seed.exports = normalize_exports(seed.exports);
+    seed.tone = normalize_unknown_text(&seed.tone);
+    seed.authority = normalize_unknown_text(&seed.authority);
+    seed.danger_level = normalize_location_danger_level(&seed.danger_level)?;
+    seed.current_tension = normalize_unknown_text(&seed.current_tension);
+    Ok(seed)
+}
+
+fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
+    if seed.name.trim().is_empty() {
+        return Err("location name cannot be empty".to_string());
+    }
+    if seed.visual_description != "Unknown" {
+        validate_sentence_range(&seed.visual_description, 1, 3, "visual_description")?;
+    }
+    if seed.history_background != "Unknown" {
+        validate_sentence_range(&seed.history_background, 2, 5, "history_background")?;
+    }
+    if seed.current_tension != "Unknown" {
+        validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?;
+    }
+    if seed.exports.is_empty() || seed.exports.len() > 3 {
+        return Err("exports must have 1-3 items".to_string());
+    }
+    if !(seed.exports.len() == 1 && seed.exports[0] == "Unknown") {
+        let empty_item = seed.exports.iter().any(|item| item.trim().is_empty());
+        if empty_item {
+            return Err("exports cannot contain empty items".to_string());
+        }
+    }
+    if seed.tone != "Unknown" {
+        let tone_words = word_count(&seed.tone);
+        if !(2..=5).contains(&tone_words) {
+            return Err(format!("tone must be 2-5 words; got {tone_words}"));
+        }
+    }
+    Ok(())
 }
 
 fn carrying_to_db_text(items: &[String]) -> Result<String, String> {
@@ -434,7 +663,80 @@ fn npc_context_summary(context: &NpcRerollContext) -> String {
     )
 }
 
+fn canonical_location_reroll_field(raw: &str) -> Result<&'static str, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let field = match normalized.as_str() {
+        "name" => "name",
+        "kind" | "kind_type" => "kind_type",
+        "kind_custom" | "custom_kind" => "kind_custom",
+        "visual" | "visual_description" | "description" => "visual_description",
+        "history" | "history_background" | "background" => "history_background",
+        "exports" => "exports",
+        "tone" => "tone",
+        "authority" => "authority",
+        "danger" | "danger_level" => "danger_level",
+        "tension" | "current_tension" => "current_tension",
+        _ => {
+            return Err(format!(
+                "unknown location reroll field: {}. valid fields: name, kind, kind_custom, visual, history, exports, tone, authority, danger, tension",
+                raw
+            ))
+        }
+    };
+    Ok(field)
+}
+
+fn location_context_summary(context: &LocationRerollContext) -> String {
+    format!(
+        "name={}, kind_type={}, kind_custom={}, visual_description={}, history_background={}, exports={}, tone={}, authority={}, danger_level={}, current_tension={}",
+        context.name,
+        context.kind_type,
+        context.kind_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+        context.visual_description,
+        context.history_background,
+        context.exports.join(", "),
+        context.tone,
+        context.authority,
+        context.danger_level,
+        context.current_tension
+    )
+}
+
+fn parse_recent_location_seeds(payloads: Vec<String>) -> Vec<LocationSeed> {
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<LocationSeed>(&payload).ok())
+        .collect()
+}
+
+fn describe_recent_location_seeds(seeds: &[LocationSeed]) -> String {
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| {
+            format!(
+                "{} | {} | {}",
+                seed.name,
+                seed.kind_type,
+                seed.danger_level
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn recent_name_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn recent_location_name_set(seeds: &[LocationSeed]) -> std::collections::HashSet<String> {
     seeds
         .iter()
         .map(|seed| seed.name.trim().to_ascii_lowercase())
@@ -492,7 +794,9 @@ async fn suggest_command_input(
             {
                 return false;
             }
-            if completion == "reroll" || label == "reroll" {
+            if mode != app_state::EditorMode::Location
+                && (completion == "reroll" || label == "reroll")
+            {
                 return false;
             }
         }
@@ -696,6 +1000,46 @@ fn build_argument_suggestions(
         }
     }
 
+    if command.name == "location"
+        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
+    {
+        let field_names = [
+            "name",
+            "kind",
+            "kind_custom",
+            "visual",
+            "history",
+            "exports",
+            "tone",
+            "authority",
+            "danger",
+            "tension",
+        ];
+        let args = &parsed.normalized_tokens[2..];
+        let should_suggest_fields =
+            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
+
+        if should_suggest_fields {
+            let prefix = parsed.completion.current_token.to_ascii_lowercase();
+            let base = replace_current_token(input, &parsed.completion.current_token);
+            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
+                "location set"
+            } else {
+                "location reroll"
+            };
+
+            return field_names
+                .iter()
+                .filter(|field| field.starts_with(&prefix))
+                .map(|field| CommandSuggestion {
+                    label: format!("{prefix_label} {field}"),
+                    completion: format!("{base}{field} "),
+                    helper_text: Some(SuggestionHelperText::Command),
+                })
+                .collect();
+        }
+    }
+
     let options = match subcommand {
         Some(item) => &item.options,
         None => &command.options,
@@ -820,6 +1164,430 @@ pub(crate) fn path_for_display(path: &str) -> String {
     } else {
         path.replace('\\', "/")
     }
+}
+
+fn stable_id_from_relative(prefix: &str, relative_path: &str) -> String {
+    let suffix: String = relative_path
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    format!("{prefix}_{suffix}")
+}
+
+fn file_stem_name(relative_path: &str) -> String {
+    Path::new(relative_path)
+        .file_stem()
+        .and_then(|value| value.to_str())
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Unknown")
+        .to_string()
+}
+
+fn extract_runebound_toml(contents: &str) -> Option<String> {
+    let start = contents.find("```runebound")?;
+    let mut body = &contents[start + "```runebound".len()..];
+    if let Some(rest) = body.strip_prefix("\r\n") {
+        body = rest;
+    } else if let Some(rest) = body.strip_prefix('\n') {
+        body = rest;
+    }
+
+    let end = body.find("\n```").or_else(|| body.find("```"))?;
+    let block = body[..end].trim();
+    if block.is_empty() {
+        None
+    } else {
+        Some(block.to_string())
+    }
+}
+
+fn collect_markdown_files_under(
+    root: &Path,
+    relative_dir: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let base_dir = root.join(relative_dir);
+    if !base_dir.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut stack = vec![base_dir];
+    let mut files = Vec::new();
+
+    while let Some(current) = stack.pop() {
+        let entries = fs::read_dir(&current)
+            .map_err(|err| format!("failed to read directory {}: {}", current.display(), err))?;
+
+        for entry in entries {
+            let entry = match entry {
+                Ok(entry) => entry,
+                Err(err) => {
+                    eprintln!("startup sync warning: failed to read directory entry: {err}");
+                    continue;
+                }
+            };
+            let path = entry.path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+
+            let is_md = path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
+            if !is_md {
+                continue;
+            }
+
+            let relative = match path.strip_prefix(root) {
+                Ok(relative) => normalize_relative_path_for_storage(&relative.to_string_lossy()),
+                Err(_) => continue,
+            };
+            match fs::read_to_string(&path) {
+                Ok(contents) => files.push((relative, contents)),
+                Err(err) => {
+                    eprintln!(
+                        "startup sync warning: failed to read markdown file {}: {}",
+                        path.display(),
+                        err
+                    );
+                }
+            }
+        }
+    }
+
+    Ok(files)
+}
+
+fn scan_npc_row_from_markdown(relative_path: &str, contents: &str) -> db::NpcRow {
+    let parsed = extract_runebound_toml(contents).and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
+    let now = now_timestamp();
+    let fallback_name = file_stem_name(relative_path);
+
+    let name = parsed
+        .as_ref()
+        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&fallback_name)
+        .to_string();
+    let slug = parsed
+        .as_ref()
+        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| slugify(&name));
+    let id = parsed
+        .as_ref()
+        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| stable_id_from_relative("npc", relative_path));
+
+    let sex = parsed
+        .as_ref()
+        .and_then(|value| value.get("sex").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .map(str::to_ascii_lowercase)
+        .filter(|value| value == "male" || value == "female")
+        .unwrap_or_else(|| "male".to_string());
+
+    let carrying = parsed
+        .as_ref()
+        .and_then(|value| value.get("carrying").and_then(toml::Value::as_array))
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(toml::Value::as_str)
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|items| !items.is_empty())
+        .unwrap_or_else(|| vec!["Unknown".to_string()]);
+
+    db::NpcRow {
+        id,
+        slug,
+        name,
+        race: parsed
+            .as_ref()
+            .and_then(|value| value.get("race").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        occupation: parsed
+            .as_ref()
+            .and_then(|value| value.get("occupation").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        sex,
+        age: parsed
+            .as_ref()
+            .and_then(|value| value.get("age").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        height: parsed
+            .as_ref()
+            .and_then(|value| value.get("height").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        weight_lbs: parsed
+            .as_ref()
+            .and_then(|value| value.get("weight_lbs").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        background: parsed
+            .as_ref()
+            .and_then(|value| value.get("background").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        want_need: parsed
+            .as_ref()
+            .and_then(|value| value.get("want_need").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        secret_obstacle: parsed
+            .as_ref()
+            .and_then(|value| value.get("secret_obstacle").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        carrying: serde_json::to_string(&carrying).unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        location: parsed
+            .as_ref()
+            .and_then(|value| value.get("location").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| UNKNOWN_LOCATION.to_string()),
+        vault_path: normalize_relative_path_for_storage(relative_path),
+        created_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| now.clone()),
+        updated_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or(now),
+    }
+}
+
+fn scan_location_row_from_markdown(relative_path: &str, contents: &str) -> db::LocationRow {
+    let parsed = extract_runebound_toml(contents).and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
+    let now = now_timestamp();
+    let fallback_name = file_stem_name(relative_path);
+
+    let name = parsed
+        .as_ref()
+        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&fallback_name)
+        .to_string();
+    let slug = parsed
+        .as_ref()
+        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| slugify(&name));
+    let id = parsed
+        .as_ref()
+        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| stable_id_from_relative("loc", relative_path));
+
+    let kind_raw = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("kind_type")
+                .or_else(|| value.get("kind"))
+                .and_then(toml::Value::as_str)
+        })
+        .unwrap_or("other");
+    let kind_type = normalize_location_kind_type(kind_raw).unwrap_or_else(|_| "other".to_string());
+
+    let mut kind_custom = parsed
+        .as_ref()
+        .and_then(|value| value.get("kind_custom").and_then(toml::Value::as_str))
+        .map(normalize_unknown_text);
+    if kind_type == "other" && kind_custom.is_none() {
+        kind_custom = Some("Unknown".to_string());
+    }
+    if kind_type != "other" {
+        kind_custom = None;
+    }
+
+    let exports = parsed
+        .as_ref()
+        .and_then(|value| value.get("exports"))
+        .and_then(|raw| {
+            if let Some(items) = raw.as_array() {
+                let out: Vec<String> = items
+                    .iter()
+                    .filter_map(toml::Value::as_str)
+                    .map(str::trim)
+                    .filter(|item| !item.is_empty())
+                    .map(ToString::to_string)
+                    .collect();
+                return Some(out);
+            }
+            raw.as_str().map(parse_list_csv)
+        })
+        .unwrap_or_else(|| vec!["Unknown".to_string()]);
+    let exports = normalize_exports(exports);
+
+    db::LocationRow {
+        id,
+        slug,
+        name,
+        vault_path: normalize_relative_path_for_storage(relative_path),
+        kind_type,
+        kind_custom,
+        visual_description: parsed
+            .as_ref()
+            .and_then(|value| value.get("visual_description").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        history_background: parsed
+            .as_ref()
+            .and_then(|value| value.get("history_background").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        exports: serde_json::to_string(&exports).unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        tone: parsed
+            .as_ref()
+            .and_then(|value| value.get("tone").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        authority: parsed
+            .as_ref()
+            .and_then(|value| value.get("authority").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        danger_level: parsed
+            .as_ref()
+            .and_then(|value| value.get("danger_level").and_then(toml::Value::as_str))
+            .map(|value| normalize_location_danger_level(value).unwrap_or_else(|_| "Unknown".to_string()))
+            .unwrap_or_else(|| "Unknown".to_string()),
+        current_tension: parsed
+            .as_ref()
+            .and_then(|value| value.get("current_tension").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        created_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| now.clone()),
+        updated_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or(now),
+    }
+}
+
+async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
+    let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
+    if !loaded.effective.vault.autoscan_on_start {
+        return Ok(());
+    }
+
+    let Some(vault_path) = loaded.effective.vault.path.clone() else {
+        return Ok(());
+    };
+
+    let vault = Vault::new(vault_path);
+    vault.ensure_structure().map_err(|err| err.to_string())?;
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+
+    let npc_files = collect_markdown_files_under(vault.root(), "npcs")?;
+    let mut scanned_npc_paths = HashSet::new();
+    for (relative_path, contents) in npc_files {
+        let row = scan_npc_row_from_markdown(&relative_path, &contents);
+        scanned_npc_paths.insert(row.vault_path.clone());
+        db::upsert_npc(&database.pool, &row)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::upsert_document_index(
+            &database.pool,
+            "npc",
+            &row.slug,
+            Some(&row.name),
+            &row.vault_path,
+            &row.created_at,
+            &row.updated_at,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    }
+
+    let existing_npcs = db::list_npcs(&database.pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    for npc in existing_npcs {
+        if npc.vault_path.starts_with("npcs/") && !scanned_npc_paths.contains(&npc.vault_path) {
+            db::delete_npc_by_id(&database.pool, &npc.id)
+                .await
+                .map_err(|err| err.to_string())?;
+            db::delete_document_by_vault_path(&database.pool, &npc.vault_path)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    let location_files = collect_markdown_files_under(vault.root(), "locations")?;
+    let mut scanned_location_paths = HashSet::new();
+    for (relative_path, contents) in location_files {
+        let row = scan_location_row_from_markdown(&relative_path, &contents);
+        scanned_location_paths.insert(row.vault_path.clone());
+        db::upsert_location(&database.pool, &row)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::upsert_document_index(
+            &database.pool,
+            "location",
+            &row.slug,
+            Some(&row.name),
+            &row.vault_path,
+            &row.created_at,
+            &row.updated_at,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    }
+
+    let existing_locations = db::list_locations(&database.pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    for location in existing_locations {
+        if location.vault_path.starts_with("locations/")
+            && !scanned_location_paths.contains(&location.vault_path)
+        {
+            db::delete_location_by_id(&database.pool, &location.id)
+                .await
+                .map_err(|err| err.to_string())?;
+            db::delete_document_by_vault_path(&database.pool, &location.vault_path)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    Ok(())
 }
 
 async fn generate_npc_seed(
@@ -1169,6 +1937,357 @@ async fn reroll_npc_field(
     Err(format!("failed to reroll npc field: {}", field))
 }
 
+async fn generate_location_seed(
+    input: GenerateLocationSeedInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<LocationSeed, String> {
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let config = loaded.effective;
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+    let user_prompt = input
+        .prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let recent_payloads = db::recent_generation_prompts(&database.pool, "location_seed", 20)
+        .await
+        .map_err(|err| err.to_string())?;
+    let recent_seeds = parse_recent_location_seeds(recent_payloads);
+    let recent_names = recent_location_name_set(&recent_seeds);
+    let recent_context = describe_recent_location_seeds(&recent_seeds);
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "required": [
+            "name",
+            "kind_type",
+            "visual_description",
+            "history_background",
+            "exports",
+            "tone",
+            "authority",
+            "danger_level",
+            "current_tension"
+        ],
+        "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "kind_type": { "type": "string", "enum": LOCATION_KIND_TYPES },
+            "kind_custom": { "type": ["string", "null"] },
+            "visual_description": { "type": "string", "minLength": 1 },
+            "history_background": { "type": "string", "minLength": 1 },
+            "exports": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 3,
+                "items": { "type": "string", "minLength": 1 }
+            },
+            "tone": { "type": "string", "minLength": 1 },
+            "authority": { "type": "string", "minLength": 1 },
+            "danger_level": { "type": "string", "enum": LOCATION_DANGER_LEVELS },
+            "current_tension": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+    });
+
+    let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    let mut seen_attempt_names = std::collections::HashSet::new();
+
+    for attempt in 0..5 {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_micros() as i64)
+            .unwrap_or(0);
+        let run_seed = (base_seed + i64::from(attempt)) as i32;
+        let repair_note = if attempt == 0 {
+            ""
+        } else {
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
+        };
+
+        let payload = serde_json::json!({
+            "model": model,
+            "stream": false,
+            "format": schema,
+            "options": {
+                "temperature": 1.08,
+                "top_p": 0.93,
+                "repeat_penalty": 1.14,
+                "seed": run_seed
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": format!(
+                        "You generate concise, usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. visual_description must be 1-3 sentences. history_background must be 2-5 sentences. exports must have 1-3 short items. tone must be 2-5 words. current_tension must be 1-2 sentences. If kind_type is not other, kind_custom must be null. Avoid these recent seeds: {}.{}",
+                        recent_context,
+                        repair_note,
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        });
+
+        let response = client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!("ollama chat failed with status {}", response.status()));
+        }
+
+        let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+        let Some(content) = value
+            .get("message")
+            .and_then(|msg| msg.get("content"))
+            .and_then(|content| content.as_str())
+        else {
+            continue;
+        };
+
+        let parsed: Result<LocationSeed, _> = serde_json::from_str(content);
+        let Ok(seed) = parsed else {
+            continue;
+        };
+
+        let seed = match normalize_location_seed(seed) {
+            Ok(seed) => seed,
+            Err(_) => continue,
+        };
+        if validate_location_details(&seed).is_err() {
+            continue;
+        }
+
+        let normalized_name = seed.name.to_ascii_lowercase();
+        if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) {
+            continue;
+        }
+        seen_attempt_names.insert(normalized_name);
+
+        let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+        db::insert_generation(&database.pool, "location_seed", None, &serialized_seed)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(seed);
+    }
+
+    Err("failed to generate valid structured location output from ollama".to_string())
+}
+
+async fn reroll_location_field(
+    input: RerollLocationFieldInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<RerollLocationFieldResult, String> {
+    let field = canonical_location_reroll_field(&input.field)?;
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let config = loaded.effective;
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+    let extra_prompt = input
+        .prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+
+    let context_summary = location_context_summary(&input.location);
+    let field_instructions = match field {
+        "name" => "Generate a concise, fitting fantasy location name.",
+        "kind_type" => {
+            "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other."
+        }
+        "kind_custom" => "Generate a concise custom kind label for this location.",
+        "visual_description" => "Generate a visual description in 1-3 sentences.",
+        "history_background" => "Generate a history/background in 2-5 sentences.",
+        "exports" => "Generate 1-3 exports as concise industry or specialty item strings.",
+        "tone" => "Generate a mood tone in 2-5 words.",
+        "authority" => "Generate who controls or governs this location.",
+        "danger_level" => "Generate danger_level as one of: Unknown, safe, guarded, risky, deadly.",
+        "current_tension" => "Generate current_tension in 1-2 sentences.",
+        _ => "Generate a concise field value.",
+    };
+
+    let schema = if field == "exports" {
+        serde_json::json!({
+            "type": "object",
+            "required": ["exports"],
+            "properties": {
+                "exports": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 3,
+                    "items": { "type": "string", "minLength": 1 }
+                }
+            },
+            "additionalProperties": false
+        })
+    } else {
+        serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "properties": {
+                "value": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        })
+    };
+
+    let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    for attempt in 0..4 {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_micros() as i64)
+            .unwrap_or(0);
+        let run_seed = (base_seed + i64::from(attempt)) as i32;
+
+        let payload = serde_json::json!({
+            "model": model,
+            "stream": false,
+            "format": schema,
+            "options": {
+                "temperature": 1.03,
+                "top_p": 0.92,
+                "repeat_penalty": 1.12,
+                "seed": run_seed
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                },
+                {
+                    "role": "user",
+                    "content": format!(
+                        "Location context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
+                        context_summary,
+                        field,
+                        field_instructions,
+                        if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                    )
+                }
+            ]
+        });
+
+        let response = client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("ollama chat failed with status {}", response.status()));
+        }
+
+        let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+        let Some(content) = value
+            .get("message")
+            .and_then(|msg| msg.get("content"))
+            .and_then(|content| content.as_str())
+        else {
+            continue;
+        };
+
+        let parsed: serde_json::Value = match serde_json::from_str(content) {
+            Ok(parsed) => parsed,
+            Err(_) => continue,
+        };
+
+        if field == "exports" {
+            let Some(items) = parsed.get("exports").and_then(|item| item.as_array()) else {
+                continue;
+            };
+            let next = normalize_exports(
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                    .collect(),
+            );
+            if next.is_empty() || next.len() > 3 {
+                continue;
+            }
+            if attempt < 3 && next == normalize_exports(input.location.exports.clone()) {
+                continue;
+            }
+            return Ok(RerollLocationFieldResult {
+                field: field.to_string(),
+                value: None,
+                exports: Some(next),
+            });
+        }
+
+        let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
+            continue;
+        };
+
+        let normalized = match field {
+            "kind_type" => match normalize_location_kind_type(raw_value) {
+                Ok(value) => value,
+                Err(_) => continue,
+            },
+            "danger_level" => match normalize_location_danger_level(raw_value) {
+                Ok(value) => value,
+                Err(_) => continue,
+            },
+            _ => normalize_unknown_text(raw_value),
+        };
+
+        let current = match field {
+            "name" => input.location.name.clone(),
+            "kind_type" => input.location.kind_type.clone(),
+            "kind_custom" => input.location.kind_custom.clone().unwrap_or_default(),
+            "visual_description" => input.location.visual_description.clone(),
+            "history_background" => input.location.history_background.clone(),
+            "tone" => input.location.tone.clone(),
+            "authority" => input.location.authority.clone(),
+            "danger_level" => input.location.danger_level.clone(),
+            "current_tension" => input.location.current_tension.clone(),
+            _ => String::new(),
+        };
+
+        if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
+            continue;
+        }
+
+        return Ok(RerollLocationFieldResult {
+            field: field.to_string(),
+            value: Some(normalized),
+            exports: None,
+        });
+    }
+
+    Err(format!("failed to reroll location field: {}", field))
+}
+
 async fn ensure_location_exists(
     input: EnsureLocationInput,
     state: tauri::State<'_, AppState>,
@@ -1231,11 +2350,21 @@ async fn ensure_location_exists(
         .exists();
 
     if !file_exists {
+        let default_exports = vec!["Unknown".to_string()];
         let content = render_location_markdown(&LocationFrontmatter {
             doc_type: "location".to_string(),
             id: id.clone(),
             slug: slug.clone(),
             name: canonical_name.clone(),
+            kind_type: "other".to_string(),
+            kind_custom: Some("Unknown".to_string()),
+            visual_description: "Unknown".to_string(),
+            history_background: "Unknown".to_string(),
+            exports: default_exports.clone(),
+            tone: "Unknown".to_string(),
+            authority: "Unknown".to_string(),
+            danger_level: "Unknown".to_string(),
+            current_tension: "Unknown".to_string(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
         })
@@ -1255,6 +2384,42 @@ async fn ensure_location_exists(
         slug: slug.clone(),
         name: canonical_name.clone(),
         vault_path: relative_path,
+        kind_type: existing
+            .as_ref()
+            .map(|row| row.kind_type.clone())
+            .unwrap_or_else(|| "other".to_string()),
+        kind_custom: existing
+            .as_ref()
+            .and_then(|row| row.kind_custom.clone())
+            .or_else(|| Some("Unknown".to_string())),
+        visual_description: existing
+            .as_ref()
+            .map(|row| row.visual_description.clone())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        history_background: existing
+            .as_ref()
+            .map(|row| row.history_background.clone())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        exports: existing
+            .as_ref()
+            .map(|row| row.exports.clone())
+            .unwrap_or_else(|| "[\"Unknown\"]".to_string()),
+        tone: existing
+            .as_ref()
+            .map(|row| row.tone.clone())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        authority: existing
+            .as_ref()
+            .map(|row| row.authority.clone())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        danger_level: existing
+            .as_ref()
+            .map(|row| row.danger_level.clone())
+            .unwrap_or_else(|| "Unknown".to_string()),
+        current_tension: existing
+            .as_ref()
+            .map(|row| row.current_tension.clone())
+            .unwrap_or_else(|| "Unknown".to_string()),
         created_at,
         updated_at: now.clone(),
     };
@@ -1497,6 +2662,40 @@ async fn save_location_draft(
     let _legacy_slug_input = input.slug.trim();
     let previous_vault_path_input = normalize_relative_path_for_storage(input.vault_path.trim());
 
+    let kind_type = normalize_location_kind_type(&input.kind_type)?;
+    let mut kind_custom = input.kind_custom.map(|value| normalize_unknown_text(&value));
+    if kind_type == "other" {
+        if kind_custom
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err("kind_custom is required when kind_type is other".to_string());
+        }
+    } else {
+        kind_custom = None;
+    }
+    let visual_description = normalize_unknown_text(&input.visual_description);
+    let history_background = normalize_unknown_text(&input.history_background);
+    let exports = normalize_exports(input.exports);
+    let tone = normalize_unknown_text(&input.tone);
+    let authority = normalize_unknown_text(&input.authority);
+    let danger_level = normalize_location_danger_level(&input.danger_level)?;
+    let current_tension = normalize_unknown_text(&input.current_tension);
+
+    validate_location_details(&LocationSeed {
+        name: name.to_string(),
+        kind_type: kind_type.clone(),
+        kind_custom: kind_custom.clone(),
+        visual_description: visual_description.clone(),
+        history_background: history_background.clone(),
+        exports: exports.clone(),
+        tone: tone.clone(),
+        authority: authority.clone(),
+        danger_level: danger_level.clone(),
+        current_tension: current_tension.clone(),
+    })?;
+    let exports_db = exports_to_db_text(&exports)?;
+
     let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
     validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
     let vault_path = loaded
@@ -1561,6 +2760,15 @@ async fn save_location_draft(
         id: input.id.trim().to_string(),
         slug: slug.clone(),
         name: name.to_string(),
+        kind_type: kind_type.clone(),
+        kind_custom: kind_custom.clone(),
+        visual_description: visual_description.clone(),
+        history_background: history_background.clone(),
+        exports: exports.clone(),
+        tone: tone.clone(),
+        authority: authority.clone(),
+        danger_level: danger_level.clone(),
+        current_tension: current_tension.clone(),
         created_at: created_at.clone(),
         updated_at: now.clone(),
     })
@@ -1593,6 +2801,15 @@ async fn save_location_draft(
         slug,
         name: name.to_string(),
         vault_path: relative_path.clone(),
+        kind_type,
+        kind_custom,
+        visual_description,
+        history_background,
+        exports: exports_db,
+        tone,
+        authority,
+        danger_level,
+        current_tension,
         created_at: created_at.clone(),
         updated_at: now.clone(),
     };
@@ -1704,6 +2921,15 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             carrying: Some(carrying_from_db_text(&npc.carrying)),
             location: Some(npc.location),
             vault_path: normalize_relative_path_for_storage(&npc.vault_path),
+            kind_type: None,
+            kind_custom: None,
+            visual_description: None,
+            history_background: None,
+            exports: None,
+            tone: None,
+            authority: None,
+            danger_level: None,
+            current_tension: None,
             created_at: Some(npc.created_at),
         }));
     }
@@ -1729,6 +2955,15 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             carrying: None,
             location: None,
             vault_path: normalize_relative_path_for_storage(&location.vault_path),
+            kind_type: Some(location.kind_type),
+            kind_custom: location.kind_custom,
+            visual_description: Some(location.visual_description),
+            history_background: Some(location.history_background),
+            exports: Some(exports_from_db_text(&location.exports)),
+            tone: Some(location.tone),
+            authority: Some(location.authority),
+            danger_level: Some(location.danger_level),
+            current_tension: Some(location.current_tension),
             created_at: Some(location.created_at),
         }));
     }
@@ -1840,6 +3075,15 @@ async fn soft_delete_entity(
             slug: location.slug.clone(),
             name: location.name.clone(),
             vault_path: normalized_vault_path.clone(),
+            kind_type: location.kind_type,
+            kind_custom: location.kind_custom,
+            visual_description: location.visual_description,
+            history_background: location.history_background,
+            exports: location.exports,
+            tone: location.tone,
+            authority: location.authority,
+            danger_level: location.danger_level,
+            current_tension: location.current_tension,
             created_at: location.created_at,
             updated_at: location.updated_at,
         };
@@ -1983,6 +3227,15 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             slug: restored_slug.clone(),
             name: payload.name.clone(),
             vault_path: restored_vault_path.clone(),
+            kind_type: payload.kind_type,
+            kind_custom: payload.kind_custom,
+            visual_description: payload.visual_description,
+            history_background: payload.history_background,
+            exports: payload.exports,
+            tone: payload.tone,
+            authority: payload.authority,
+            danger_level: payload.danger_level,
+            current_tension: payload.current_tension,
             created_at: payload.created_at,
             updated_at: now.clone(),
         };
@@ -2034,7 +3287,9 @@ fn exit_app(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_input_for_dispatch, normalize_relative_path_for_storage, path_for_display,
+        LocationSeed, extract_runebound_toml, normalize_input_for_dispatch, normalize_location_seed,
+        normalize_relative_path_for_storage, path_for_display, scan_npc_row_from_markdown,
+        validate_location_details,
     };
 
     #[test]
@@ -2069,10 +3324,66 @@ mod tests {
             assert_eq!(displayed, "locations/frostholm.md");
         }
     }
+
+    #[test]
+    fn location_seed_requires_custom_kind_for_other() {
+        let seed = LocationSeed {
+            name: "Gloomreach".to_string(),
+            kind_type: "other".to_string(),
+            kind_custom: None,
+            visual_description: "Moss-slick walls drip in torchlight.".to_string(),
+            history_background: "Built by exiles. Later seized by smugglers.".to_string(),
+            exports: vec!["amber resin".to_string()],
+            tone: "wet tense".to_string(),
+            authority: "Smuggler council".to_string(),
+            danger_level: "risky".to_string(),
+            current_tension: "A rival gang stalks the tunnels.".to_string(),
+        };
+
+        let err = normalize_location_seed(seed).expect_err("expected missing kind_custom error");
+        assert!(err.contains("kind_custom"));
+    }
+
+    #[test]
+    fn location_seed_validation_accepts_unknown_backcompat_values() {
+        let seed = LocationSeed {
+            name: "Unknown Hold".to_string(),
+            kind_type: "other".to_string(),
+            kind_custom: Some("Unknown".to_string()),
+            visual_description: "Unknown".to_string(),
+            history_background: "Unknown".to_string(),
+            exports: vec!["Unknown".to_string()],
+            tone: "Unknown".to_string(),
+            authority: "Unknown".to_string(),
+            danger_level: "Unknown".to_string(),
+            current_tension: "Unknown".to_string(),
+        };
+
+        validate_location_details(&seed).expect("expected Unknown defaults to pass validation");
+    }
+
+    #[test]
+    fn extracts_runebound_toml_block() {
+        let markdown = "# Note\n\n```runebound\ntype = \"npc\"\nname = \"Aelar\"\n```\n";
+        let block = extract_runebound_toml(markdown).expect("expected runebound block");
+        assert!(block.contains("type = \"npc\""));
+        assert!(block.contains("name = \"Aelar\""));
+    }
+
+    #[test]
+    fn indexes_npc_from_filename_without_runebound_block() {
+        let row = scan_npc_row_from_markdown("npcs/Father Elen.md", "# Existing notes");
+        assert_eq!(row.name, "Father Elen");
+        assert_eq!(row.slug, "father-elen");
+        assert_eq!(row.vault_path, "npcs/Father Elen.md");
+    }
 }
 
 fn main() {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    if let Err(err) = tauri::async_runtime::block_on(sync_database_from_vault(&workspace_root)) {
+        eprintln!("startup vault sync skipped: {err}");
+    }
     let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
 
     tauri::Builder::default()

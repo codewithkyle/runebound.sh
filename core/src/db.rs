@@ -19,6 +19,15 @@ pub struct LocationRow {
     pub slug: String,
     pub name: String,
     pub vault_path: String,
+    pub kind_type: String,
+    pub kind_custom: Option<String>,
+    pub visual_description: String,
+    pub history_background: String,
+    pub exports: String,
+    pub tone: String,
+    pub authority: String,
+    pub danger_level: String,
+    pub current_tension: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -87,7 +96,7 @@ pub async fn search_locations_by_name(
 ) -> Result<Vec<LocationRow>> {
     let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
     let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, created_at, updated_at
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
          FROM locations
          WHERE lower(name) LIKE ?1
          ORDER BY name COLLATE NOCASE ASC
@@ -120,13 +129,25 @@ pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<
     row.map(row_to_npc).transpose()
 }
 
+pub async fn list_npcs(pool: &SqlitePool) -> Result<Vec<NpcRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
+         FROM npcs",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list npcs")?;
+
+    rows.into_iter().map(row_to_npc).collect()
+}
+
 pub async fn find_location_by_name_or_slug(
     pool: &SqlitePool,
     input: &str,
 ) -> Result<Option<LocationRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, created_at, updated_at
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
          FROM locations
          WHERE lower(name) = ?1 OR lower(slug) = ?2
          ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
@@ -139,6 +160,18 @@ pub async fn find_location_by_name_or_slug(
     .context("failed to find location by name or slug")?;
 
     row.map(row_to_location).transpose()
+}
+
+pub async fn list_locations(pool: &SqlitePool) -> Result<Vec<LocationRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
+         FROM locations",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list locations")?;
+
+    rows.into_iter().map(row_to_location).collect()
 }
 
 pub async fn init_database() -> Result<Database> {
@@ -197,7 +230,7 @@ pub fn default_database_path() -> Result<PathBuf> {
 
 pub async fn find_location_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<LocationRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, created_at, updated_at FROM locations WHERE slug = ?1",
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at FROM locations WHERE slug = ?1",
     )
     .bind(slug)
     .fetch_optional(pool)
@@ -209,7 +242,7 @@ pub async fn find_location_by_slug(pool: &SqlitePool, slug: &str) -> Result<Opti
 
 pub async fn find_location_by_id(pool: &SqlitePool, id: &str) -> Result<Option<LocationRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, created_at, updated_at FROM locations WHERE id = ?1",
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at FROM locations WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -221,18 +254,36 @@ pub async fn find_location_by_id(pool: &SqlitePool, id: &str) -> Result<Option<L
 
 pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Result<()> {
     sqlx::query(
-        "INSERT INTO locations (id, slug, name, vault_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+        "INSERT INTO locations (id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
          ON CONFLICT(id) DO UPDATE SET
             slug = excluded.slug,
             name = excluded.name,
             vault_path = excluded.vault_path,
+            kind_type = excluded.kind_type,
+            kind_custom = excluded.kind_custom,
+            visual_description = excluded.visual_description,
+            history_background = excluded.history_background,
+            exports = excluded.exports,
+            tone = excluded.tone,
+            authority = excluded.authority,
+            danger_level = excluded.danger_level,
+            current_tension = excluded.current_tension,
             updated_at = excluded.updated_at",
     )
     .bind(&location.id)
     .bind(&location.slug)
     .bind(&location.name)
     .bind(&location.vault_path)
+    .bind(&location.kind_type)
+    .bind(&location.kind_custom)
+    .bind(&location.visual_description)
+    .bind(&location.history_background)
+    .bind(&location.exports)
+    .bind(&location.tone)
+    .bind(&location.authority)
+    .bind(&location.danger_level)
+    .bind(&location.current_tension)
     .bind(&location.created_at)
     .bind(&location.updated_at)
     .execute(pool)
@@ -468,6 +519,31 @@ fn row_to_location(row: sqlx::sqlite::SqliteRow) -> Result<LocationRow> {
         vault_path: row
             .try_get("vault_path")
             .context("locations.vault_path missing")?,
+        kind_type: row
+            .try_get("kind_type")
+            .unwrap_or_else(|_| "other".to_string()),
+        kind_custom: row.try_get("kind_custom").ok(),
+        visual_description: row
+            .try_get("visual_description")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        history_background: row
+            .try_get("history_background")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        exports: row
+            .try_get("exports")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        tone: row
+            .try_get("tone")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        authority: row
+            .try_get("authority")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        danger_level: row
+            .try_get("danger_level")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        current_tension: row
+            .try_get("current_tension")
+            .unwrap_or_else(|_| "Unknown".to_string()),
         created_at: row
             .try_get("created_at")
             .context("locations.created_at missing")?,

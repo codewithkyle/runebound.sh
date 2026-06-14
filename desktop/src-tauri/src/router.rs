@@ -76,7 +76,14 @@ pub(crate) async fn run_desktop_routed_command(
 
     if lowered == "create help" {
         return Ok(Some(ok_response(
-            ["## Create commands", "create npc", "create npc <prompt text>"].join("\n"),
+            [
+                "## Create commands",
+                "create npc",
+                "create npc <prompt text>",
+                "create location",
+                "create location <prompt text>",
+            ]
+            .join("\n"),
             None,
         )));
     }
@@ -123,6 +130,48 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered == "create location" || lowered.starts_with("create location ") {
+        let prompt = if trimmed.len() > 15 {
+            let value = trimmed[15..].trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        } else {
+            None
+        };
+
+        let seed = generate_location_seed(GenerateLocationSeedInput { prompt }, state.clone()).await?;
+        let draft = LocationDraftSession {
+            id: make_entity_id("loc"),
+            slug: slugify(&seed.name),
+            name: seed.name,
+            vault_path: String::new(),
+            kind_type: seed.kind_type,
+            kind_custom: seed.kind_custom,
+            visual_description: seed.visual_description,
+            history_background: seed.history_background,
+            exports: seed.exports,
+            tone: seed.tone,
+            authority: seed.authority,
+            danger_level: seed.danger_level,
+            current_tension: seed.current_tension,
+        };
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Location;
+            editor.npc_draft = None;
+            editor.location_draft = Some(draft.clone());
+        }
+
+        return Ok(Some(ok_response(
+            location_summary_text(&draft),
+            Some(location_event_from_draft(&draft)),
+        )));
+    }
+
     if lowered == "npc help" {
         let has_draft = {
             let editor = state.editor_session.lock().await;
@@ -158,7 +207,7 @@ pub(crate) async fn run_desktop_routed_command(
         };
         if !has_draft {
             return Ok(Some(ok_response(
-                "no active location draft. run load <name>.".to_string(),
+                "no active location draft. run create location or load <name>.".to_string(),
                 None,
             )));
         }
@@ -167,6 +216,9 @@ pub(crate) async fn run_desktop_routed_command(
                 "## Location editor commands",
                 "location show",
                 "location rename <name>",
+                "location set <field> <value>",
+                "location reroll <field> [prompt]",
+                "reroll",
                 "location save",
                 "location cancel",
             ]
@@ -199,7 +251,7 @@ pub(crate) async fn run_desktop_routed_command(
         };
         let Some(draft) = draft else {
             return Ok(Some(ok_response(
-                "no active location draft. run load <name>.".to_string(),
+                "no active location draft. run create location or load <name>.".to_string(),
                 None,
             )));
         };
@@ -251,7 +303,7 @@ pub(crate) async fn run_desktop_routed_command(
         };
         if !had_draft {
             return Ok(Some(ok_response(
-                "no active location draft. run load <name>.".to_string(),
+                "no active location draft. run create location or load <name>.".to_string(),
                 None,
             )));
         }
@@ -295,38 +347,83 @@ pub(crate) async fn run_desktop_routed_command(
     }
 
     if lowered == "reroll" || lowered == "npc reroll" {
-        let draft = {
+        let mode = {
             let editor = state.editor_session.lock().await;
-            editor.npc_draft.clone()
-        };
-        let Some(mut draft) = draft else {
-            return Ok(None);
+            editor.mode
         };
 
-        let seed = generate_npc_seed(GenerateNpcSeedInput { prompt: None }, state.clone()).await?;
-        draft.name = seed.name.trim().to_string();
-        draft.race = seed.race.trim().to_string();
-        draft.occupation = normalize_unknown_text(&seed.occupation);
-        draft.sex = normalize_sex(&seed.sex)?;
-        draft.age = normalize_unknown_text(&seed.age);
-        draft.height = normalize_unknown_text(&seed.height);
-        draft.weight_lbs = normalize_unknown_text(&seed.weight_lbs);
-        draft.background = normalize_unknown_text(&seed.background);
-        draft.want_need = normalize_unknown_text(&seed.want_need);
-        draft.secret_obstacle = normalize_unknown_text(&seed.secret_obstacle);
-        draft.carrying = normalize_unknown_list(seed.carrying);
+        if mode == EditorMode::Npc {
+            let draft = {
+                let editor = state.editor_session.lock().await;
+                editor.npc_draft.clone()
+            };
+            let Some(mut draft) = draft else {
+                return Ok(None);
+            };
 
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.mode = EditorMode::Npc;
-            editor.location_draft = None;
-            editor.npc_draft = Some(draft.clone());
+            let seed = generate_npc_seed(GenerateNpcSeedInput { prompt: None }, state.clone()).await?;
+            draft.name = seed.name.trim().to_string();
+            draft.race = seed.race.trim().to_string();
+            draft.occupation = normalize_unknown_text(&seed.occupation);
+            draft.sex = normalize_sex(&seed.sex)?;
+            draft.age = normalize_unknown_text(&seed.age);
+            draft.height = normalize_unknown_text(&seed.height);
+            draft.weight_lbs = normalize_unknown_text(&seed.weight_lbs);
+            draft.background = normalize_unknown_text(&seed.background);
+            draft.want_need = normalize_unknown_text(&seed.want_need);
+            draft.secret_obstacle = normalize_unknown_text(&seed.secret_obstacle);
+            draft.carrying = normalize_unknown_list(seed.carrying);
+
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::Npc;
+                editor.location_draft = None;
+                editor.npc_draft = Some(draft.clone());
+            }
+
+            return Ok(Some(ok_response(
+                npc_summary_text(&draft),
+                Some(npc_event_from_draft(&draft)),
+            )));
         }
 
-        return Ok(Some(ok_response(
-            npc_summary_text(&draft),
-            Some(npc_event_from_draft(&draft)),
-        )));
+        if mode == EditorMode::Location {
+            let draft = {
+                let editor = state.editor_session.lock().await;
+                editor.location_draft.clone()
+            };
+            let Some(mut draft) = draft else {
+                return Ok(None);
+            };
+
+            let seed =
+                generate_location_seed(GenerateLocationSeedInput { prompt: None }, state.clone())
+                    .await?;
+            draft.name = seed.name;
+            draft.kind_type = seed.kind_type;
+            draft.kind_custom = seed.kind_custom;
+            draft.visual_description = seed.visual_description;
+            draft.history_background = seed.history_background;
+            draft.exports = seed.exports;
+            draft.tone = seed.tone;
+            draft.authority = seed.authority;
+            draft.danger_level = seed.danger_level;
+            draft.current_tension = seed.current_tension;
+
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::Location;
+                editor.npc_draft = None;
+                editor.location_draft = Some(draft.clone());
+            }
+
+            return Ok(Some(ok_response(
+                location_summary_text(&draft),
+                Some(location_event_from_draft(&draft)),
+            )));
+        }
+
+        return Ok(None);
     }
 
     if lowered.starts_with("npc rename ") {
@@ -510,7 +607,9 @@ pub(crate) async fn run_desktop_routed_command(
                 let editor = state.editor_session.lock().await;
                 editor.location_draft.clone()
             }
-            .ok_or_else(|| "no active location draft. run load <name>.".to_string())?;
+            .ok_or_else(|| {
+                "no active location draft. run create location or load <name>.".to_string()
+            })?;
 
             let result = save_location_draft(
                 SaveLocationDraftInput {
@@ -518,6 +617,15 @@ pub(crate) async fn run_desktop_routed_command(
                     name: draft.name.clone(),
                     slug: draft.slug.clone(),
                     vault_path: draft.vault_path.clone(),
+                    kind_type: draft.kind_type.clone(),
+                    kind_custom: draft.kind_custom.clone(),
+                    visual_description: draft.visual_description.clone(),
+                    history_background: draft.history_background.clone(),
+                    exports: draft.exports.clone(),
+                    tone: draft.tone.clone(),
+                    authority: draft.authority.clone(),
+                    danger_level: draft.danger_level.clone(),
+                    current_tension: draft.current_tension.clone(),
                 },
                 state.clone(),
             )
@@ -669,8 +777,196 @@ pub(crate) async fn run_desktop_routed_command(
             let editor = state.editor_session.lock().await;
             editor.location_draft.clone()
         }
-        .ok_or_else(|| "no active location draft. run load <name>.".to_string())?;
+        .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
         draft.name = name.to_string();
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Location;
+            editor.location_draft = Some(draft.clone());
+            editor.npc_draft = None;
+        }
+
+        return Ok(Some(ok_response(
+            location_summary_text(&draft),
+            Some(location_event_from_draft(&draft)),
+        )));
+    }
+
+    if lowered.starts_with("location set ") {
+        let mut parts = trimmed.splitn(4, char::is_whitespace);
+        let _ = parts.next();
+        let _ = parts.next();
+        let field = parts.next().unwrap_or_default();
+        let value = parts.next().unwrap_or_default().trim();
+        if value.is_empty() {
+            return Ok(Some(ok_response(
+                "location set value cannot be empty.".to_string(),
+                None,
+            )));
+        }
+
+        let mut draft = {
+            let editor = state.editor_session.lock().await;
+            editor.location_draft.clone()
+        }
+        .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+
+        let Some(canonical) = canonical_location_set_field(field) else {
+            return Ok(Some(ok_response(
+                format!(
+                    "unknown location field: {}. valid fields: name, kind, kind_custom, visual, history, exports, tone, authority, danger, tension",
+                    field
+                ),
+                None,
+            )));
+        };
+
+        match canonical {
+            "name" => draft.name = value.to_string(),
+            "kind_type" => {
+                draft.kind_type = normalize_location_kind_type(value)?;
+                if draft.kind_type == "other" && draft.kind_custom.is_none() {
+                    draft.kind_custom = Some("Unknown".to_string());
+                }
+            }
+            "kind_custom" => draft.kind_custom = Some(value.to_string()),
+            "visual_description" => draft.visual_description = value.to_string(),
+            "history_background" => draft.history_background = value.to_string(),
+            "exports" => draft.exports = normalize_exports(parse_list_csv(value)),
+            "tone" => draft.tone = value.to_string(),
+            "authority" => draft.authority = value.to_string(),
+            "danger_level" => draft.danger_level = normalize_location_danger_level(value)?,
+            "current_tension" => draft.current_tension = value.to_string(),
+            _ => {}
+        }
+
+        if draft.kind_type == "other"
+            && draft
+                .kind_custom
+                .as_ref()
+                .is_none_or(|item| item.trim().is_empty())
+        {
+            return Ok(Some(ok_response(
+                "kind_custom is required when kind is other. use location set kind_custom <value>."
+                    .to_string(),
+                None,
+            )));
+        }
+        if draft.kind_type != "other" {
+            draft.kind_custom = None;
+        }
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Location;
+            editor.location_draft = Some(draft.clone());
+            editor.npc_draft = None;
+        }
+
+        return Ok(Some(ok_response(
+            location_summary_text(&draft),
+            Some(location_event_from_draft(&draft)),
+        )));
+    }
+
+    if lowered.starts_with("location reroll ") {
+        let args = trimmed[16..].trim();
+        if args.is_empty() {
+            return Ok(Some(ok_response(
+                "usage: location reroll <field> [prompt]".to_string(),
+                None,
+            )));
+        }
+        let mut split = args.splitn(2, char::is_whitespace);
+        let field = split.next().unwrap_or_default().trim().to_string();
+        let prompt = split.next().map(|value| value.trim().to_string());
+
+        let mut draft = {
+            let editor = state.editor_session.lock().await;
+            editor.location_draft.clone()
+        }
+        .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+
+        let rerolled = reroll_location_field(
+            RerollLocationFieldInput {
+                field,
+                prompt,
+                location: LocationRerollContext {
+                    name: draft.name.clone(),
+                    kind_type: draft.kind_type.clone(),
+                    kind_custom: draft.kind_custom.clone(),
+                    visual_description: draft.visual_description.clone(),
+                    history_background: draft.history_background.clone(),
+                    exports: draft.exports.clone(),
+                    tone: draft.tone.clone(),
+                    authority: draft.authority.clone(),
+                    danger_level: draft.danger_level.clone(),
+                    current_tension: draft.current_tension.clone(),
+                },
+            },
+            state.clone(),
+        )
+        .await?;
+
+        match rerolled.field.as_str() {
+            "name" => {
+                if let Some(value) = rerolled.value {
+                    draft.name = value;
+                }
+            }
+            "kind_type" => {
+                if let Some(value) = rerolled.value {
+                    draft.kind_type = normalize_location_kind_type(&value)?;
+                    if draft.kind_type != "other" {
+                        draft.kind_custom = None;
+                    } else if draft.kind_custom.is_none() {
+                        draft.kind_custom = Some("Unknown".to_string());
+                    }
+                }
+            }
+            "kind_custom" => {
+                if let Some(value) = rerolled.value {
+                    draft.kind_custom = Some(value);
+                }
+            }
+            "visual_description" => {
+                if let Some(value) = rerolled.value {
+                    draft.visual_description = value;
+                }
+            }
+            "history_background" => {
+                if let Some(value) = rerolled.value {
+                    draft.history_background = value;
+                }
+            }
+            "exports" => {
+                if let Some(exports) = rerolled.exports {
+                    draft.exports = exports;
+                }
+            }
+            "tone" => {
+                if let Some(value) = rerolled.value {
+                    draft.tone = value;
+                }
+            }
+            "authority" => {
+                if let Some(value) = rerolled.value {
+                    draft.authority = value;
+                }
+            }
+            "danger_level" => {
+                if let Some(value) = rerolled.value {
+                    draft.danger_level = normalize_location_danger_level(&value)?;
+                }
+            }
+            "current_tension" => {
+                if let Some(value) = rerolled.value {
+                    draft.current_tension = value;
+                }
+            }
+            _ => {}
+        }
 
         {
             let mut editor = state.editor_session.lock().await;
@@ -911,6 +1207,33 @@ async fn build_load_response(
                 name: entity.name.clone(),
                 slug: entity.slug.clone(),
                 vault_path: path_for_display(&entity.vault_path),
+                kind_type: entity
+                    .kind_type
+                    .clone()
+                    .unwrap_or_else(|| "other".to_string()),
+                kind_custom: entity.kind_custom.clone(),
+                visual_description: entity
+                    .visual_description
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                history_background: entity
+                    .history_background
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                exports: entity
+                    .exports
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()]),
+                tone: entity.tone.clone().unwrap_or_else(|| "Unknown".to_string()),
+                authority: entity.authority.clone().unwrap_or_else(|| "Unknown".to_string()),
+                danger_level: entity
+                    .danger_level
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                current_tension: entity
+                    .current_tension
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
             };
             {
                 let mut editor = state.editor_session.lock().await;
@@ -921,9 +1244,21 @@ async fn build_load_response(
 
             (
                 format!(
-                    "## Location\nname: {}\nslug: {}\npath: {}",
+                    "## Location\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
                     entity.name,
                     entity.slug,
+                    draft.kind_type,
+                    draft
+                        .kind_custom
+                        .clone()
+                        .unwrap_or_else(|| "(none)".to_string()),
+                    draft.visual_description,
+                    draft.history_background,
+                    draft.exports.join(", "),
+                    draft.tone,
+                    draft.authority,
+                    draft.danger_level,
+                    draft.current_tension,
                     path_for_display(&entity.vault_path)
                 ),
                 Some(location_event_from_draft(&draft)),
@@ -956,6 +1291,15 @@ fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent
         name: draft.name.clone(),
         slug: draft.slug.clone(),
         vault_path: draft.vault_path.clone(),
+        kind_type: draft.kind_type.clone(),
+        kind_custom: draft.kind_custom.clone(),
+        visual_description: draft.visual_description.clone(),
+        history_background: draft.history_background.clone(),
+        exports: draft.exports.clone(),
+        tone: draft.tone.clone(),
+        authority: draft.authority.clone(),
+        danger_level: draft.danger_level.clone(),
+        current_tension: draft.current_tension.clone(),
     }
 }
 
@@ -979,9 +1323,36 @@ fn npc_summary_text(draft: &NpcDraftSession) -> String {
 
 fn location_summary_text(draft: &LocationDraftSession) -> String {
     format!(
-        "## Location Draft\nname: {}\nslug: {}\npath: {}",
-        draft.name, draft.slug, draft.vault_path
+        "## Location Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
+        draft.name,
+        draft.slug,
+        draft.kind_type,
+        draft.kind_custom.as_deref().unwrap_or("(none)"),
+        draft.visual_description,
+        draft.history_background,
+        draft.exports.join(", "),
+        draft.tone,
+        draft.authority,
+        draft.danger_level,
+        draft.current_tension,
+        draft.vault_path
     )
+}
+
+fn canonical_location_set_field(raw: &str) -> Option<&'static str> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "name" => Some("name"),
+        "kind" | "kind_type" => Some("kind_type"),
+        "kind_custom" | "custom_kind" => Some("kind_custom"),
+        "visual" | "visual_description" | "description" => Some("visual_description"),
+        "history" | "history_background" | "background" => Some("history_background"),
+        "exports" => Some("exports"),
+        "tone" => Some("tone"),
+        "authority" => Some("authority"),
+        "danger" | "danger_level" => Some("danger_level"),
+        "tension" | "current_tension" => Some("current_tension"),
+        _ => None,
+    }
 }
 
 fn canonical_npc_set_field(raw: &str) -> Option<&'static str> {
