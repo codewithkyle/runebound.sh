@@ -1,7 +1,7 @@
 pub use runebound_models::{
-    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter,
-    now_timestamp, make_entity_id, slugify, unique_slug_for_dir, normalize_markdown_file_stem,
-    UNKNOWN_LOCATION, normalize_unknown_list, normalize_unknown_text,
+    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id,
+    normalize_markdown_file_stem, normalize_unknown_list, normalize_unknown_text, now_timestamp,
+    slugify, unique_slug_for_dir,
 };
 
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml::ser::Error> {
