@@ -142,3 +142,131 @@ pub struct FactionFrontmatter {
     pub created_at: String,
     pub updated_at: String,
 }
+
+use super::output::{
+    doc, entity_card, entity_row, paragraph_with_inlines, text_node, command_ref, OutputDoc,
+};
+use super::utils::{normalize_unknown_text, normalize_unknown_list};
+
+fn title_case_sex(value: &str) -> String {
+    match value.to_lowercase().as_str() {
+        "male" => "Male".to_string(),
+        "female" => "Female".to_string(),
+        _ => value.to_string(),
+    }
+}
+
+fn location_kind_display(kind_type: &str, kind_custom: &Option<String>) -> String {
+    let kind = normalize_unknown_text(kind_type);
+    if kind.to_lowercase() != "other" {
+        return kind;
+    }
+    let custom = kind_custom.as_ref().map(|s| s.as_str()).unwrap_or("");
+    let custom_norm = normalize_unknown_text(custom);
+    if custom_norm == "Unknown" {
+        return "Other".to_string();
+    }
+    format!("Other ({})", custom_norm)
+}
+
+pub fn npc_entity_card(draft: &NpcDraft) -> OutputDoc {
+    let rows = vec![
+        entity_row("Race:", normalize_unknown_text(&draft.race)),
+        entity_row("Occupation:", normalize_unknown_text(&draft.occupation)),
+        entity_row("Gender:", title_case_sex(&draft.sex)),
+        entity_row("Age:", normalize_unknown_text(&draft.age)),
+        entity_row("Height:", normalize_unknown_text(&draft.height)),
+        entity_row(
+            "Weight:",
+            format!("{} lbs", normalize_unknown_text(&draft.weight_lbs)),
+        ),
+        entity_row("Background:", normalize_unknown_text(&draft.background)),
+        entity_row("Want:", normalize_unknown_text(&draft.want_need)),
+        entity_row("Secret:", normalize_unknown_text(&draft.secret_obstacle)),
+        entity_row(
+            "Carrying:",
+            normalize_unknown_list(draft.carrying.clone()).join(", "),
+        ),
+        entity_row("Location:", normalize_unknown_text(&draft.location)),
+    ];
+    doc()
+        .with_block(entity_card(&draft.name, rows))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this NPC, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to generate again."),
+        ]))
+}
+
+pub fn location_entity_card(draft: &LocationDraft) -> OutputDoc {
+    let rows = vec![
+        entity_row(
+            "Kind:",
+            location_kind_display(&draft.kind_type, &draft.kind_custom),
+        ),
+        entity_row("Visual:", normalize_unknown_text(&draft.visual_description)),
+        entity_row(
+            "History:",
+            normalize_unknown_text(&draft.history_background),
+        ),
+        entity_row(
+            "Exports:",
+            normalize_unknown_list(draft.exports.clone()).join(", "),
+        ),
+        entity_row("Tone:", normalize_unknown_text(&draft.tone)),
+        entity_row("Authority:", normalize_unknown_text(&draft.authority)),
+        entity_row("Danger:", normalize_unknown_text(&draft.danger_level)),
+        entity_row("Tension:", normalize_unknown_text(&draft.current_tension)),
+        entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
+    ];
+    doc()
+        .with_block(entity_card(&draft.name, rows))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this location, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to regenerate it."),
+        ]))
+}
+
+pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
+    let rows = vec![
+        entity_row("name", &draft.name),
+        entity_row("slug", &draft.slug),
+        entity_row("kind", &draft.kind_type),
+        entity_row(
+            "kind_custom",
+            draft.kind_custom.as_deref().unwrap_or("(none)"),
+        ),
+        entity_row("public", &draft.public_description),
+        entity_row("agenda", &draft.true_agenda),
+        entity_row("methods", &draft.methods),
+        entity_row("leadership", &draft.leadership),
+        entity_row("headquarters", &draft.headquarters),
+        entity_row("influence", &draft.sphere_of_influence),
+        entity_row("resources", &draft.resources_assets),
+        entity_row("allies", draft.allies.join(", ")),
+        entity_row("rivals", draft.rivals_enemies.join(", ")),
+        entity_row("reputation", &draft.reputation),
+        entity_row("tension", &draft.current_tension),
+        entity_row(
+            "goals_short",
+            draft.goals_short_term.join(", "),
+        ),
+        entity_row("goals_long", draft.goals_long_term.join(", ")),
+        entity_row("symbol", &draft.symbol_description),
+        entity_row("path", &draft.vault_path),
+    ];
+    doc()
+        .with_block(entity_card("Faction Draft", rows))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this faction, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to regenerate it."),
+        ]))
+}

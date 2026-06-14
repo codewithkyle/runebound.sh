@@ -466,56 +466,42 @@ export default function App() {
       return;
     }
 
-    if (event.kind === "load_npc_draft") {
-      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
+    if (event.kind === "load_npc_draft_with_card") {
+      setNpcDraft(event.draft);
       setLocationDraft(null);
-      const draft: NpcDraft = {
-        id: event.id,
-        name: event.name,
-        race: normalizeUnknown(event.race),
-        occupation: normalizeUnknown(event.occupation),
-        sex,
-        age: normalizeUnknown(event.age),
-        height: normalizeUnknown(event.height),
-        weightLbs: normalizeUnknown(event.weight_lbs),
-        background: normalizeUnknown(event.background),
-        wantNeed: normalizeUnknown(event.want_need),
-        secretObstacle: normalizeUnknown(event.secret_obstacle),
-        carrying: normalizeUnknownList(event.carrying),
-        location: normalizeUnknown(event.location)
-      };
-      setNpcDraft(draft);
+      setFactionDraft(null);
+      setEditorMode("npc");
+      return;
+    }
+
+    if (event.kind === "load_location_draft_with_card") {
+      setLocationDraft(event.draft);
+      setNpcDraft(null);
+      setFactionDraft(null);
+      setEditorMode("location");
+      return;
+    }
+
+    if (event.kind === "load_faction_draft_with_card") {
+      setFactionDraft(event.draft);
+      setNpcDraft(null);
+      setLocationDraft(null);
+      setEditorMode("faction");
+      return;
+    }
+
+    if (event.kind === "load_npc_draft") {
+      setNpcDraft(event);
+      setLocationDraft(null);
       setFactionDraft(null);
       setEditorMode("npc");
       return;
     }
 
     if (event.kind === "load_faction_draft") {
+      setFactionDraft(event);
       setNpcDraft(null);
       setLocationDraft(null);
-      const draft: FactionDraft = {
-        id: event.id,
-        name: normalizeUnknown(event.name),
-        slug: normalizeUnknown(event.slug),
-        vault_path: normalizeUnknown(event.vault_path),
-        kind_type: normalizeUnknown(event.kind_type),
-        kind_custom: normalizeUnknown(event.kind_custom),
-        public_description: normalizeUnknown(event.public_description),
-        true_agenda: normalizeUnknown(event.true_agenda),
-        methods: normalizeUnknown(event.methods),
-        leadership: normalizeUnknown(event.leadership),
-        headquarters: normalizeUnknown(event.headquarters),
-        sphere_of_influence: normalizeUnknown(event.sphere_of_influence),
-        resources_assets: normalizeUnknown(event.resources_assets),
-        allies: normalizeUnknownList(event.allies),
-        rivals_enemies: normalizeUnknownList(event.rivals_enemies),
-        reputation: normalizeUnknown(event.reputation),
-        current_tension: normalizeUnknown(event.current_tension),
-        goals_short_term: normalizeUnknownList(event.goals_short_term),
-        goals_long_term: normalizeUnknownList(event.goals_long_term),
-        symbol_description: normalizeUnknown(event.symbol_description)
-      };
-      setFactionDraft(draft);
       setEditorMode("faction");
       return;
     }
@@ -542,25 +528,13 @@ export default function App() {
       return;
     }
 
-    setNpcDraft(null);
-    setFactionDraft(null);
-    const draft: LocationDraft = {
-      id: event.id,
-      name: event.name,
-      slug: event.slug,
-      vault_path: event.vault_path,
-      kind_type: event.kind_type,
-      kind_custom: event.kind_custom,
-      visual_description: event.visual_description,
-      history_background: event.history_background,
-      exports: event.exports,
-      tone: event.tone,
-      authority: event.authority,
-      danger_level: event.danger_level,
-      current_tension: event.current_tension
-    };
-    setLocationDraft(draft);
-    setEditorMode("location");
+    if (event.kind === "load_location_draft") {
+      setLocationDraft(event);
+      setNpcDraft(null);
+      setFactionDraft(null);
+      setEditorMode("location");
+      return;
+    }
   };
 
   const outputDocFromClientEvent = (event: CommandClientEvent | null | undefined): OutputDoc | null => {
@@ -568,69 +542,28 @@ export default function App() {
       return null;
     }
 
+    if (event.kind === "load_npc_draft_with_card") {
+      return event.entity_card;
+    }
+
+    if (event.kind === "load_location_draft_with_card") {
+      return event.entity_card;
+    }
+
+    if (event.kind === "load_faction_draft_with_card") {
+      return event.entity_card;
+    }
+
     if (event.kind === "load_npc_draft") {
-      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
-      const draft: NpcDraft = {
-        id: event.id,
-        name: event.name,
-        race: normalizeUnknown(event.race),
-        occupation: normalizeUnknown(event.occupation),
-        sex,
-        age: normalizeUnknown(event.age),
-        height: normalizeUnknown(event.height),
-        weightLbs: normalizeUnknown(event.weight_lbs),
-        background: normalizeUnknown(event.background),
-        wantNeed: normalizeUnknown(event.want_need),
-        secretObstacle: normalizeUnknown(event.secret_obstacle),
-        carrying: normalizeUnknownList(event.carrying),
-        location: normalizeUnknown(event.location)
-      };
-      return npcDraftDoc(draft);
+      return npcDraftDoc(event);
     }
 
     if (event.kind === "load_location_draft") {
-      const draft: LocationDraft = {
-        id: event.id,
-        name: normalizeUnknown(event.name),
-        slug: normalizeUnknown(event.slug),
-        vault_path: normalizeUnknown(event.vault_path),
-        kind_type: normalizeUnknown(event.kind_type),
-        kind_custom: normalizeUnknown(event.kind_custom),
-        visual_description: normalizeUnknown(event.visual_description),
-        history_background: normalizeUnknown(event.history_background),
-        exports: normalizeUnknownList(event.exports),
-        tone: normalizeUnknown(event.tone),
-        authority: normalizeUnknown(event.authority),
-        danger_level: normalizeUnknown(event.danger_level),
-        current_tension: normalizeUnknown(event.current_tension)
-      };
-      return locationDraftDoc(draft);
+      return locationDraftDoc(event);
     }
 
     if (event.kind === "load_faction_draft") {
-      const draft: FactionDraft = {
-        id: event.id,
-        name: normalizeUnknown(event.name),
-        slug: normalizeUnknown(event.slug),
-        vault_path: normalizeUnknown(event.vault_path),
-        kind_type: normalizeUnknown(event.kind_type),
-        kind_custom: normalizeUnknown(event.kind_custom),
-        public_description: normalizeUnknown(event.public_description),
-        true_agenda: normalizeUnknown(event.true_agenda),
-        methods: normalizeUnknown(event.methods),
-        leadership: normalizeUnknown(event.leadership),
-        headquarters: normalizeUnknown(event.headquarters),
-        sphere_of_influence: normalizeUnknown(event.sphere_of_influence),
-        resources_assets: normalizeUnknown(event.resources_assets),
-        allies: normalizeUnknownList(event.allies),
-        rivals_enemies: normalizeUnknownList(event.rivals_enemies),
-        reputation: normalizeUnknown(event.reputation),
-        current_tension: normalizeUnknown(event.current_tension),
-        goals_short_term: normalizeUnknownList(event.goals_short_term),
-        goals_long_term: normalizeUnknownList(event.goals_long_term),
-        symbol_description: normalizeUnknown(event.symbol_description)
-      };
-      return factionDraftDoc(draft);
+      return factionDraftDoc(event);
     }
 
     return null;
@@ -1057,17 +990,17 @@ function npcDraftDoc(draft: NpcDraft): OutputDoc {
         kind: "entity_card",
         title: draft.name,
         rows: [
-          { label: "Race:", value: normalizeUnknown(draft.race) },
-          { label: "Occupation:", value: normalizeUnknown(draft.occupation) },
-          { label: "Gender:", value: titleCaseSex(normalizeUnknown(draft.sex)) },
-          { label: "Age:", value: normalizeUnknown(draft.age) },
-          { label: "Height:", value: normalizeUnknown(draft.height) },
-          { label: "Weight:", value: `${normalizeUnknown(draft.weightLbs)} lbs` },
-          { label: "Background:", value: normalizeUnknown(draft.background) },
-          { label: "Want:", value: normalizeUnknown(draft.wantNeed) },
-          { label: "Secret:", value: normalizeUnknown(draft.secretObstacle) },
-          { label: "Carrying:", value: carryingToDisplay(draft.carrying) },
-          { label: "Location:", value: normalizeUnknown(draft.location) }
+          { label: "Race:", value: draft.race },
+          { label: "Occupation:", value: draft.occupation },
+          { label: "Gender:", value: titleCaseSex(draft.sex) },
+          { label: "Age:", value: draft.age },
+          { label: "Height:", value: draft.height },
+          { label: "Weight:", value: `${draft.weight_lbs} lbs` },
+          { label: "Background:", value: draft.background },
+          { label: "Want:", value: draft.want_need },
+          { label: "Secret:", value: draft.secret_obstacle },
+          { label: "Carrying:", value: draft.carrying.join(", ") },
+          { label: "Location:", value: draft.location }
         ]
       },
       {
@@ -1092,14 +1025,14 @@ function locationDraftDoc(draft: LocationDraft): OutputDoc {
         title: draft.name,
         rows: [
           { label: "Kind:", value: locationKindToDisplay(draft.kind_type, draft.kind_custom) },
-          { label: "Visual:", value: normalizeUnknown(draft.visual_description) },
-          { label: "History:", value: normalizeUnknown(draft.history_background) },
-          { label: "Exports:", value: exportsToDisplay(draft.exports) },
-          { label: "Tone:", value: normalizeUnknown(draft.tone) },
-          { label: "Authority:", value: normalizeUnknown(draft.authority) },
-          { label: "Danger:", value: normalizeUnknown(draft.danger_level) },
-          { label: "Tension:", value: normalizeUnknown(draft.current_tension) },
-          { label: "Path:", value: normalizeUnknown(draft.vault_path) }
+          { label: "Visual:", value: draft.visual_description },
+          { label: "History:", value: draft.history_background },
+          { label: "Exports:", value: draft.exports.join(", ") },
+          { label: "Tone:", value: draft.tone },
+          { label: "Authority:", value: draft.authority },
+          { label: "Danger:", value: draft.danger_level },
+          { label: "Tension:", value: draft.current_tension },
+          { label: "Path:", value: draft.vault_path }
         ]
       },
       {

@@ -9,6 +9,18 @@ pub enum CommandClientEvent {
     LoadNpcDraft(NpcDraft),
     LoadLocationDraft(LocationDraft),
     LoadFactionDraft(FactionDraft),
+    LoadNpcDraftWithCard {
+        draft: NpcDraft,
+        entity_card: OutputDoc,
+    },
+    LoadLocationDraftWithCard {
+        draft: LocationDraft,
+        entity_card: OutputDoc,
+    },
+    LoadFactionDraftWithCard {
+        draft: FactionDraft,
+        entity_card: OutputDoc,
+    },
     ClearDrafts,
     ClearTerminal {
         clear_history: bool,

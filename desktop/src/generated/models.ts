@@ -163,6 +163,9 @@ export type CommandClientEvent =
   | { kind: "load_npc_draft" } & NpcDraft
   | { kind: "load_location_draft" } & LocationDraft
   | { kind: "load_faction_draft" } & FactionDraft
+  | { kind: "load_npc_draft_with_card"; draft: NpcDraft; entity_card: OutputDoc }
+  | { kind: "load_location_draft_with_card"; draft: LocationDraft; entity_card: OutputDoc }
+  | { kind: "load_faction_draft_with_card"; draft: FactionDraft; entity_card: OutputDoc }
   | { kind: "clear_drafts" }
   | { kind: "clear_terminal"; clear_history: boolean }
   | { kind: "exit_requested" };
