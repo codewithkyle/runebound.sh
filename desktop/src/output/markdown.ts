@@ -1,4 +1,4 @@
-import type { OutputBlock, OutputDoc } from "./types";
+import type { OutputBlock, OutputDoc } from "../generated/models";
 
 export type ResolveCommandTarget = (candidate: string) => string | null;
 

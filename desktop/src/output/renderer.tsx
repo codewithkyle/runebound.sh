@@ -1,6 +1,6 @@
 import { For, type JSX } from "solid-js";
 import { commandRefClass, spinnerClass, spinnerTextClass, statusClass } from "./theme";
-import type { InlineNode, OutputBlock, OutputDoc, SpinnerState } from "./types";
+import type { InlineNode, OutputBlock, OutputDoc, SpinnerState } from "../generated/models";
 
 type OutputRendererProps = {
   doc: OutputDoc;

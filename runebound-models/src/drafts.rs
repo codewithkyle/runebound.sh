@@ -144,9 +144,9 @@ pub struct FactionFrontmatter {
 }
 
 use super::output::{
-    doc, entity_card, entity_row, paragraph_with_inlines, text_node, command_ref, OutputDoc,
+    OutputDoc, command_ref, doc, entity_card, entity_row, paragraph_with_inlines, text_node,
 };
-use super::utils::{normalize_unknown_text, normalize_unknown_list};
+use super::utils::{normalize_unknown_list, normalize_unknown_text};
 
 fn title_case_sex(value: &str) -> String {
     match value.to_lowercase().as_str() {
@@ -233,35 +233,66 @@ pub fn location_entity_card(draft: &LocationDraft) -> OutputDoc {
 }
 
 pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
+    let kind_custom_display = draft
+        .kind_custom
+        .as_deref()
+        .map(|value| {
+            let normalized = normalize_unknown_text(value);
+            if normalized == "Unknown" {
+                "(none)".to_string()
+            } else {
+                normalized
+            }
+        })
+        .unwrap_or_else(|| "(none)".to_string());
+
     let rows = vec![
-        entity_row("name", &draft.name),
-        entity_row("slug", &draft.slug),
-        entity_row("kind", &draft.kind_type),
+        entity_row("Name:", normalize_unknown_text(&draft.name)),
+        entity_row("Slug:", normalize_unknown_text(&draft.slug)),
+        entity_row("Kind:", normalize_unknown_text(&draft.kind_type)),
+        entity_row("Custom Kind:", kind_custom_display),
         entity_row(
-            "kind_custom",
-            draft.kind_custom.as_deref().unwrap_or("(none)"),
+            "Public Face:",
+            normalize_unknown_text(&draft.public_description),
         ),
-        entity_row("public", &draft.public_description),
-        entity_row("agenda", &draft.true_agenda),
-        entity_row("methods", &draft.methods),
-        entity_row("leadership", &draft.leadership),
-        entity_row("headquarters", &draft.headquarters),
-        entity_row("influence", &draft.sphere_of_influence),
-        entity_row("resources", &draft.resources_assets),
-        entity_row("allies", draft.allies.join(", ")),
-        entity_row("rivals", draft.rivals_enemies.join(", ")),
-        entity_row("reputation", &draft.reputation),
-        entity_row("tension", &draft.current_tension),
+        entity_row("True Agenda:", normalize_unknown_text(&draft.true_agenda)),
+        entity_row("Methods:", normalize_unknown_text(&draft.methods)),
+        entity_row("Leadership:", normalize_unknown_text(&draft.leadership)),
+        entity_row("Headquarters:", normalize_unknown_text(&draft.headquarters)),
         entity_row(
-            "goals_short",
-            draft.goals_short_term.join(", "),
+            "Sphere of Influence:",
+            normalize_unknown_text(&draft.sphere_of_influence),
         ),
-        entity_row("goals_long", draft.goals_long_term.join(", ")),
-        entity_row("symbol", &draft.symbol_description),
-        entity_row("path", &draft.vault_path),
+        entity_row(
+            "Resources:",
+            normalize_unknown_text(&draft.resources_assets),
+        ),
+        entity_row(
+            "Allies:",
+            normalize_unknown_list(draft.allies.clone()).join(", "),
+        ),
+        entity_row(
+            "Rivals:",
+            normalize_unknown_list(draft.rivals_enemies.clone()).join(", "),
+        ),
+        entity_row("Reputation:", normalize_unknown_text(&draft.reputation)),
+        entity_row(
+            "Current Tension:",
+            normalize_unknown_text(&draft.current_tension),
+        ),
+        entity_row(
+            "Short-Term Goals:",
+            normalize_unknown_list(draft.goals_short_term.clone()).join(", "),
+        ),
+        entity_row(
+            "Long-Term Goals:",
+            normalize_unknown_list(draft.goals_long_term.clone()).join(", "),
+        ),
+        entity_row("Symbol:", normalize_unknown_text(&draft.symbol_description)),
+        entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
     doc()
-        .with_block(entity_card("Faction Draft", rows))
+        .with_block(entity_card(&draft.name, rows))
         .with_block(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),

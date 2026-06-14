@@ -466,74 +466,50 @@ export default function App() {
       return;
     }
 
-    if (event.kind === "load_npc_draft_with_card") {
-      setNpcDraft(event.draft);
-      setLocationDraft(null);
-      setFactionDraft(null);
-      setEditorMode("npc");
-      return;
-    }
-
-    if (event.kind === "load_location_draft_with_card") {
-      setLocationDraft(event.draft);
-      setNpcDraft(null);
-      setFactionDraft(null);
-      setEditorMode("location");
-      return;
-    }
-
-    if (event.kind === "load_faction_draft_with_card") {
-      setFactionDraft(event.draft);
-      setNpcDraft(null);
-      setLocationDraft(null);
-      setEditorMode("faction");
-      return;
-    }
-
-    if (event.kind === "load_npc_draft") {
-      setNpcDraft(event);
-      setLocationDraft(null);
-      setFactionDraft(null);
-      setEditorMode("npc");
-      return;
-    }
-
-    if (event.kind === "load_faction_draft") {
-      setFactionDraft(event);
-      setNpcDraft(null);
-      setLocationDraft(null);
-      setEditorMode("faction");
-      return;
-    }
-
-    if (event.kind === "clear_drafts") {
-      setNpcDraft(null);
-      setLocationDraft(null);
-      setFactionDraft(null);
-      setEditorMode("none");
-      return;
-    }
-
-    if (event.kind === "clear_terminal") {
-      setEntries([]);
-      if (event.clear_history) {
-        setCommandHistory([]);
-        resetHistoryNavigation();
+    switch (event.kind) {
+      case "load_npc_draft_with_card":
+        setNpcDraft(event.draft);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setEditorMode("npc");
+        return;
+      case "load_location_draft_with_card":
+        setLocationDraft(event.draft);
+        setNpcDraft(null);
+        setFactionDraft(null);
+        setEditorMode("location");
+        return;
+      case "load_faction_draft_with_card":
+        setFactionDraft(event.draft);
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setEditorMode("faction");
+        return;
+      case "load_npc_draft":
+      case "load_location_draft":
+      case "load_faction_draft":
+        console.warn("Received legacy draft event without entity card", event);
+        return;
+      case "clear_drafts":
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setEditorMode("none");
+        return;
+      case "clear_terminal":
+        setEntries([]);
+        if (event.clear_history) {
+          setCommandHistory([]);
+          resetHistoryNavigation();
+        }
+        return;
+      case "exit_requested":
+        void invoke("exit_app");
+        return;
+      default: {
+        const exhaustiveCheck: never = event;
+        return exhaustiveCheck;
       }
-      return;
-    }
-
-    if (event.kind === "exit_requested") {
-      void invoke("exit_app");
-      return;
-    }
-
-    if (event.kind === "load_location_draft") {
-      setLocationDraft(event);
-      setNpcDraft(null);
-      setFactionDraft(null);
-      setEditorMode("location");
-      return;
     }
   };
 
@@ -542,31 +518,25 @@ export default function App() {
       return null;
     }
 
-    if (event.kind === "load_npc_draft_with_card") {
-      return event.entity_card;
+    switch (event.kind) {
+      case "load_npc_draft_with_card":
+      case "load_location_draft_with_card":
+      case "load_faction_draft_with_card":
+        return event.entity_card;
+      case "load_npc_draft":
+      case "load_location_draft":
+      case "load_faction_draft":
+        console.warn("Legacy client event is missing entity_card", event);
+        return null;
+      case "clear_drafts":
+      case "clear_terminal":
+      case "exit_requested":
+        return null;
+      default: {
+        const exhaustiveCheck: never = event;
+        return exhaustiveCheck;
+      }
     }
-
-    if (event.kind === "load_location_draft_with_card") {
-      return event.entity_card;
-    }
-
-    if (event.kind === "load_faction_draft_with_card") {
-      return event.entity_card;
-    }
-
-    if (event.kind === "load_npc_draft") {
-      return npcDraftDoc(event);
-    }
-
-    if (event.kind === "load_location_draft") {
-      return locationDraftDoc(event);
-    }
-
-    if (event.kind === "load_faction_draft") {
-      return factionDraftDoc(event);
-    }
-
-    return null;
   };
 
   onMount(() => {
@@ -932,165 +902,9 @@ function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem
   };
 }
 
-function titleCaseSex(value: string): string {
-  const lowered = value.toLowerCase();
-  if (lowered === "male") {
-    return "Male";
-  }
-  if (lowered === "female") {
-    return "Female";
-  }
-  return value;
-}
-
-function normalizeUnknown(value: string | null | undefined): string {
-  const normalized = (value ?? "").trim();
-  if (!normalized) {
-    return "Unknown";
-  }
-  return normalized;
-}
-
-function normalizeUnknownList(values: string[] | null | undefined): string[] {
-  const cleaned = (values ?? []).map((value) => value.trim()).filter((value) => value.length > 0);
-  if (cleaned.length === 0) {
-    return ["Unknown"];
-  }
-  return cleaned;
-}
-
 function normalizeSubmittedCommand(value: string): string {
   return value.replace(/\r?\n/g, " ").trim();
 }
-
-function carryingToDisplay(values: string[] | null | undefined): string {
-  return normalizeUnknownList(values).join(", ");
-}
-
-function locationKindToDisplay(kindType: string | null | undefined, kindCustom: string | null | undefined): string {
-  const kind = normalizeUnknown(kindType);
-  if (kind.toLowerCase() !== "other") {
-    return kind;
-  }
-  const custom = normalizeUnknown(kindCustom);
-  if (custom === "Unknown") {
-    return "Other";
-  }
-  return `Other (${custom})`;
-}
-
-function exportsToDisplay(values: string[] | null | undefined): string {
-  return normalizeUnknownList(values).join(", ");
-}
-
-function npcDraftDoc(draft: NpcDraft): OutputDoc {
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: draft.name,
-        rows: [
-          { label: "Race:", value: draft.race },
-          { label: "Occupation:", value: draft.occupation },
-          { label: "Gender:", value: titleCaseSex(draft.sex) },
-          { label: "Age:", value: draft.age },
-          { label: "Height:", value: draft.height },
-          { label: "Weight:", value: `${draft.weight_lbs} lbs` },
-          { label: "Background:", value: draft.background },
-          { label: "Want:", value: draft.want_need },
-          { label: "Secret:", value: draft.secret_obstacle },
-          { label: "Carrying:", value: draft.carrying.join(", ") },
-          { label: "Location:", value: draft.location }
-        ]
-      },
-      {
-        kind: "paragraph",
-        inlines: [
-          { kind: "text", text: "Use " },
-          { kind: "command_ref", label: "save", command: "save" },
-          { kind: "text", text: " to persist this NPC, or " },
-          { kind: "command_ref", label: "reroll", command: "reroll" },
-          { kind: "text", text: " to generate again." }
-        ]
-      }
-    ]
-  };
-}
-
-function locationDraftDoc(draft: LocationDraft): OutputDoc {
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: draft.name,
-        rows: [
-          { label: "Kind:", value: locationKindToDisplay(draft.kind_type, draft.kind_custom) },
-          { label: "Visual:", value: draft.visual_description },
-          { label: "History:", value: draft.history_background },
-          { label: "Exports:", value: draft.exports.join(", ") },
-          { label: "Tone:", value: draft.tone },
-          { label: "Authority:", value: draft.authority },
-          { label: "Danger:", value: draft.danger_level },
-          { label: "Tension:", value: draft.current_tension },
-          { label: "Path:", value: draft.vault_path }
-        ]
-      },
-      {
-        kind: "paragraph",
-        inlines: [
-          { kind: "text", text: "Use " },
-          { kind: "command_ref", label: "save", command: "save" },
-          { kind: "text", text: " to persist this location, or " },
-          { kind: "command_ref", label: "reroll", command: "reroll" },
-          { kind: "text", text: " to regenerate it." }
-        ]
-      }
-    ]
-  };
-}
-
-function factionDraftDoc(draft: FactionDraft): OutputDoc {
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: "Faction Draft",
-        rows: [
-          { label: "name", value: draft.name },
-          { label: "slug", value: draft.slug },
-          { label: "kind", value: draft.kind_type },
-          { label: "kind_custom", value: draft.kind_custom ?? "(none)" },
-          { label: "public", value: draft.public_description },
-          { label: "agenda", value: draft.true_agenda },
-          { label: "methods", value: draft.methods },
-          { label: "leadership", value: draft.leadership },
-          { label: "headquarters", value: draft.headquarters },
-          { label: "influence", value: draft.sphere_of_influence },
-          { label: "resources", value: draft.resources_assets },
-          { label: "allies", value: draft.allies.join(", ") },
-          { label: "rivals", value: draft.rivals_enemies.join(", ") },
-          { label: "reputation", value: draft.reputation },
-          { label: "tension", value: draft.current_tension },
-          { label: "goals_short", value: draft.goals_short_term.join(", ") },
-          { label: "goals_long", value: draft.goals_long_term.join(", ") },
-          { label: "symbol", value: draft.symbol_description },
-          { label: "path", value: draft.vault_path }
-        ]
-      },
-      {
-        kind: "paragraph",
-        inlines: [
-          { kind: "text", text: "Use " },
-          { kind: "command_ref", label: "save", command: "save" },
-          { kind: "text", text: " to persist this faction, or " },
-          { kind: "command_ref", label: "reroll", command: "reroll" },
-          { kind: "text", text: " to regenerate it." }
-        ]
-      }
-    ]
-  };
-}
-
 function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
   if (!manifest) {
     return {
