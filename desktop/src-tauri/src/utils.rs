@@ -1,5 +1,17 @@
 use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
+use crate::services::ai_generation::{
+    AiGenerationService,
+    FactionRerollContext as ServiceFactionRerollContext,
+    LocationRerollContext as ServiceLocationRerollContext,
+    NpcRerollContext as ServiceNpcRerollContext,
+    RerollFactionFieldInput as ServiceRerollFactionFieldInput,
+    RerollFactionFieldResult as ServiceRerollFactionFieldResult,
+    RerollLocationFieldInput as ServiceRerollLocationFieldInput,
+    RerollLocationFieldResult as ServiceRerollLocationFieldResult,
+    RerollNpcFieldInput as ServiceRerollNpcFieldInput,
+    RerollNpcFieldResult as ServiceRerollNpcFieldResult,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcSeed {
@@ -32,7 +44,7 @@ pub struct NpcRerollContext {
     pub location: String,
 }
 
-impl From<NpcRerollContext> for crate::NpcRerollContext {
+impl From<NpcRerollContext> for ServiceNpcRerollContext {
     fn from(value: NpcRerollContext) -> Self {
         Self {
             name: value.name,
@@ -51,8 +63,8 @@ impl From<NpcRerollContext> for crate::NpcRerollContext {
     }
 }
 
-impl From<crate::NpcRerollContext> for NpcRerollContext {
-    fn from(value: crate::NpcRerollContext) -> Self {
+impl From<ServiceNpcRerollContext> for NpcRerollContext {
+    fn from(value: ServiceNpcRerollContext) -> Self {
         Self {
             name: value.name,
             race: value.race,
@@ -77,7 +89,7 @@ pub struct RerollNpcFieldInput {
     pub npc: NpcRerollContext,
 }
 
-impl From<RerollNpcFieldInput> for crate::RerollNpcFieldInput {
+impl From<RerollNpcFieldInput> for ServiceRerollNpcFieldInput {
     fn from(value: RerollNpcFieldInput) -> Self {
         Self {
             field: value.field,
@@ -87,8 +99,8 @@ impl From<RerollNpcFieldInput> for crate::RerollNpcFieldInput {
     }
 }
 
-impl From<crate::RerollNpcFieldInput> for RerollNpcFieldInput {
-    fn from(value: crate::RerollNpcFieldInput) -> Self {
+impl From<ServiceRerollNpcFieldInput> for RerollNpcFieldInput {
+    fn from(value: ServiceRerollNpcFieldInput) -> Self {
         Self {
             field: value.field,
             prompt: value.prompt,
@@ -104,8 +116,8 @@ pub struct RerollNpcFieldResult {
     pub carrying: Option<Vec<String>>,
 }
 
-impl From<crate::RerollNpcFieldResult> for RerollNpcFieldResult {
-    fn from(value: crate::RerollNpcFieldResult) -> Self {
+impl From<ServiceRerollNpcFieldResult> for RerollNpcFieldResult {
+    fn from(value: ServiceRerollNpcFieldResult) -> Self {
         Self {
             field: value.field,
             value: value.value,
@@ -579,7 +591,7 @@ pub struct LocationRerollContext {
     pub current_tension: String,
 }
 
-impl From<LocationRerollContext> for crate::LocationRerollContext {
+impl From<LocationRerollContext> for ServiceLocationRerollContext {
     fn from(value: LocationRerollContext) -> Self {
         Self {
             name: value.name,
@@ -596,8 +608,8 @@ impl From<LocationRerollContext> for crate::LocationRerollContext {
     }
 }
 
-impl From<crate::LocationRerollContext> for LocationRerollContext {
-    fn from(value: crate::LocationRerollContext) -> Self {
+impl From<ServiceLocationRerollContext> for LocationRerollContext {
+    fn from(value: ServiceLocationRerollContext) -> Self {
         Self {
             name: value.name,
             kind_type: value.kind_type,
@@ -620,7 +632,7 @@ pub struct RerollLocationFieldInput {
     pub location: LocationRerollContext,
 }
 
-impl From<RerollLocationFieldInput> for crate::RerollLocationFieldInput {
+impl From<RerollLocationFieldInput> for ServiceRerollLocationFieldInput {
     fn from(value: RerollLocationFieldInput) -> Self {
         Self {
             field: value.field,
@@ -630,8 +642,8 @@ impl From<RerollLocationFieldInput> for crate::RerollLocationFieldInput {
     }
 }
 
-impl From<crate::RerollLocationFieldInput> for RerollLocationFieldInput {
-    fn from(value: crate::RerollLocationFieldInput) -> Self {
+impl From<ServiceRerollLocationFieldInput> for RerollLocationFieldInput {
+    fn from(value: ServiceRerollLocationFieldInput) -> Self {
         Self {
             field: value.field,
             prompt: value.prompt,
@@ -647,8 +659,8 @@ pub struct RerollLocationFieldResult {
     pub exports: Option<Vec<String>>,
 }
 
-impl From<crate::RerollLocationFieldResult> for RerollLocationFieldResult {
-    fn from(value: crate::RerollLocationFieldResult) -> Self {
+impl From<ServiceRerollLocationFieldResult> for RerollLocationFieldResult {
+    fn from(value: ServiceRerollLocationFieldResult) -> Self {
         Self {
             field: value.field,
             value: value.value,
@@ -678,7 +690,7 @@ pub struct FactionRerollContext {
     pub symbol_description: String,
 }
 
-impl From<FactionRerollContext> for crate::FactionRerollContext {
+impl From<FactionRerollContext> for ServiceFactionRerollContext {
     fn from(value: FactionRerollContext) -> Self {
         Self {
             name: value.name,
@@ -702,8 +714,8 @@ impl From<FactionRerollContext> for crate::FactionRerollContext {
     }
 }
 
-impl From<crate::FactionRerollContext> for FactionRerollContext {
-    fn from(value: crate::FactionRerollContext) -> Self {
+impl From<ServiceFactionRerollContext> for FactionRerollContext {
+    fn from(value: ServiceFactionRerollContext) -> Self {
         Self {
             name: value.name,
             kind_type: value.kind_type,
@@ -733,7 +745,7 @@ pub struct RerollFactionFieldInput {
     pub faction: FactionRerollContext,
 }
 
-impl From<RerollFactionFieldInput> for crate::RerollFactionFieldInput {
+impl From<RerollFactionFieldInput> for ServiceRerollFactionFieldInput {
     fn from(value: RerollFactionFieldInput) -> Self {
         Self {
             field: value.field,
@@ -743,8 +755,8 @@ impl From<RerollFactionFieldInput> for crate::RerollFactionFieldInput {
     }
 }
 
-impl From<crate::RerollFactionFieldInput> for RerollFactionFieldInput {
-    fn from(value: crate::RerollFactionFieldInput) -> Self {
+impl From<ServiceRerollFactionFieldInput> for RerollFactionFieldInput {
+    fn from(value: ServiceRerollFactionFieldInput) -> Self {
         Self {
             field: value.field,
             prompt: value.prompt,
@@ -760,8 +772,8 @@ pub struct RerollFactionFieldResult {
     pub list_value: Option<Vec<String>>,
 }
 
-impl From<crate::RerollFactionFieldResult> for RerollFactionFieldResult {
-    fn from(value: crate::RerollFactionFieldResult) -> Self {
+impl From<ServiceRerollFactionFieldResult> for RerollFactionFieldResult {
+    fn from(value: ServiceRerollFactionFieldResult) -> Self {
         Self {
             field: value.field,
             value: value.value,
@@ -1073,20 +1085,50 @@ pub fn validate_faction_details(seed: &crate::services::ai_generation::FactionSe
 }
 
 pub async fn reroll_npc_field(input: RerollNpcFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollNpcFieldResult, String> {
-    let internal_input: crate::RerollNpcFieldInput = input.into();
-    let result = crate::reroll_npc_field(internal_input, state).await?;
+    let internal_input: ServiceRerollNpcFieldInput = input.into();
+    let service = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let result = service
+        .reroll_npc_field(
+            internal_input,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
     Ok(result.into())
 }
 
 pub async fn reroll_location_field(input: RerollLocationFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollLocationFieldResult, String> {
-    let internal_input: crate::RerollLocationFieldInput = input.into();
-    let result = crate::reroll_location_field(internal_input, state).await?;
+    let internal_input: ServiceRerollLocationFieldInput = input.into();
+    let service = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let result = service
+        .reroll_location_field(
+            internal_input,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
     Ok(result.into())
 }
 
 pub async fn reroll_faction_field(input: RerollFactionFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollFactionFieldResult, String> {
-    let internal_input: crate::RerollFactionFieldInput = input.into();
-    let result = crate::reroll_faction_field(internal_input, state).await?;
+    let internal_input: ServiceRerollFactionFieldInput = input.into();
+    let service = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let result = service
+        .reroll_faction_field(
+            internal_input,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
     Ok(result.into())
 }
 

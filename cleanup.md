@@ -56,7 +56,7 @@ This means `utils.rs` cannot be removed until `main.rs` stops being the source o
 
 ---
 
-## Phase 1: Remove Duplicate AI Generation Code
+## Phase 1: Remove Duplicate AI Generation Code *(✅ Completed 2026-06-14)*
 
 ### What's in `main.rs`
 
