@@ -943,7 +943,10 @@ function commandSpinnerLabel(raw: string): string | null {
   if (lowered === "create faction" || lowered.startsWith("create faction ")) {
     return "generating faction";
   }
-  if (lowered === "reroll" || lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
+  if (lowered === "reroll" || lowered.startsWith("reroll ")) {
+    return "rerolling draft";
+  }
+  if (lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
     return "rerolling npc";
   }
   if (lowered === "location reroll" || lowered.startsWith("location reroll ")) {
