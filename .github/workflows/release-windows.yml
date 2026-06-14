@@ -6,6 +6,8 @@ on:
 jobs:
   build-windows:
     runs-on: windows-latest
+    env:
+      CARGO_INCREMENTAL: 0
 
     steps:
       - name: Checkout
@@ -19,11 +21,18 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@1.85.1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            desktop/src-tauri -> target
 
       - name: Install frontend dependencies
         working-directory: desktop
-        run: npm ci
+        run: npm ci --prefer-offline --no-audit
 
       - name: Build Tauri app (NSIS)
         working-directory: desktop
