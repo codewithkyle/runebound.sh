@@ -1929,10 +1929,17 @@ async fn run_command(
     let normalized_input = normalize_input_for_dispatch(&input);
     let parsed = parse_command_input(&normalized_input);
     if !parsed.valid {
-        if let Some(diag) = parsed.diagnostics.first() {
-            return Err(diag.message.clone());
+        let has_unknown_command = parsed
+            .diagnostics
+            .iter()
+            .any(|diag| diag.code == "unknown_command");
+
+        if !has_unknown_command {
+            if let Some(diag) = parsed.diagnostics.first() {
+                return Err(diag.message.clone());
+            }
+            return Err("invalid command".to_string());
         }
-        return Err("invalid command".to_string());
     }
 
     if let Some(response) =
