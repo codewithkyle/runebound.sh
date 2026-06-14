@@ -810,13 +810,10 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
     if !issues.is_empty() {
         bail!(
             "## First-time setup required\n\
-             \n## Bootstrap config\n\
-             start setup\n\
+             \nrunebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.\n\
+             \nRun `start setup` to begin guided setup.\n\
              \n## Config paths\n\
              - global: {global_config_path}\n\
-             \n## Optional next steps\n\
-             - run setup help to see guided setup commands\n\
-             - run config show to verify saved values\n\
              \n## Missing required values\n- {}",
             issues.join("\n- ")
         );
@@ -899,31 +896,43 @@ fn report_list_block(report: &CheckReport) -> OutputBlock {
 
 fn output_doc_from_error_text(message: String) -> OutputDoc {
     if message.to_lowercase().contains("first-time setup required") {
+        let missing_values = extract_missing_values(&message);
         let mut output_doc = doc();
         output_doc.push(heading(2, "First-time setup required"));
-        output_doc.push(heading(2, "Bootstrap config"));
+        output_doc.push(paragraph_text(
+            "runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path."
+                .to_string(),
+        ));
         output_doc.push(paragraph_with_inlines(vec![command_ref(
             "start setup",
             "start setup",
         )]));
-        output_doc.push(heading(2, "Optional next steps"));
-        output_doc.push(list(vec![
-            vec![
-                text_node("run "),
-                command_ref("setup help", "setup help"),
-                text_node(" to see guided setup commands"),
-            ],
-            vec![
-                text_node("run "),
-                command_ref("config show", "config show"),
-                text_node(" to verify saved values"),
-            ],
-        ]));
-        output_doc.push(paragraph_text(message));
+        if !missing_values.is_empty() {
+            output_doc.push(heading(2, "Missing required values"));
+            output_doc.push(list(
+                missing_values
+                    .into_iter()
+                    .map(|value| vec![text_node(value)])
+                    .collect(),
+            ));
+        }
         return output_doc;
     }
 
     doc().with_block(status(StatusTone::Error, message))
+}
+
+fn extract_missing_values(message: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    for line in message.lines() {
+        let trimmed = line.trim();
+        if let Some(value) = trimmed.strip_prefix("- ") {
+            if !value.is_empty() {
+                values.push(value.to_string());
+            }
+        }
+    }
+    values
 }
 
 #[cfg(test)]

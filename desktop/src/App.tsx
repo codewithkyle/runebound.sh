@@ -458,10 +458,6 @@ export default function App() {
       const errorText = response.error || rendered.text || "command failed";
       if (isBootstrapSetupMessage(errorText)) {
         appendEntry("output", errorText, rendered.outputDoc);
-        appendEntry(
-          "info",
-          "bootstrap tip: run start setup, complete onboarding, then run status again."
-        );
       } else {
         appendEntry("error", errorText);
       }
