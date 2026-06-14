@@ -1475,12 +1475,13 @@ async fn suggest_command_input(
                 let vault = Vault::new(vault_path);
                 if vault.ensure_root_exists().is_ok() {
                     let entries = load_vault_reference_entries(&vault)?;
-                    let suggestions = build_reference_suggestions_from_entries(&input, &active_ref, &entries);
-                    if !suggestions.is_empty() {
-                        return Ok(suggestions);
-                    }
+                    let suggestions =
+                        build_reference_suggestions_from_entries(&input, &active_ref, &entries);
+                    return Ok(suggestions);
                 }
             }
+
+            return Ok(Vec::new());
         }
     }
 

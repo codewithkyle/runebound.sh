@@ -8,6 +8,36 @@ use crate::app_state::{
 
 use super::*;
 
+fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
+    prompt
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+fn merge_seed_and_reroll_prompt(
+    seed_prompt: &Option<String>,
+    reroll_prompt: Option<String>,
+) -> Option<String> {
+    let seed_prompt = seed_prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+    let reroll_prompt = reroll_prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty());
+
+    match (seed_prompt, reroll_prompt) {
+        (Some(seed), Some(reroll)) => Some(format!(
+            "Seed context from original create command:\n{}\n\nReroll request:\n{}",
+            seed, reroll
+        )),
+        (Some(seed), None) => Some(seed.to_string()),
+        (None, Some(reroll)) => Some(reroll.to_string()),
+        (None, None) => None,
+    }
+}
+
 pub(crate) async fn run_desktop_routed_command(
     input: &str,
     state: State<'_, AppState>,
@@ -105,9 +135,18 @@ pub(crate) async fn run_desktop_routed_command(
             None
         };
 
-        let seed = generate_npc_seed(GenerateNpcSeedInput { prompt }, state.clone()).await?;
+        let prompt = normalize_optional_prompt(prompt);
+
+        let seed = generate_npc_seed(
+            GenerateNpcSeedInput {
+                prompt: prompt.clone(),
+            },
+            state.clone(),
+        )
+        .await?;
         let draft = NpcDraftSession {
             id: make_entity_id("npc"),
+            seed_prompt: prompt,
             name: seed.name.trim().to_string(),
             race: seed.race.trim().to_string(),
             occupation: normalize_unknown_text(&seed.occupation),
@@ -147,9 +186,18 @@ pub(crate) async fn run_desktop_routed_command(
             None
         };
 
-        let seed = generate_location_seed(GenerateLocationSeedInput { prompt }, state.clone()).await?;
+        let prompt = normalize_optional_prompt(prompt);
+
+        let seed = generate_location_seed(
+            GenerateLocationSeedInput {
+                prompt: prompt.clone(),
+            },
+            state.clone(),
+        )
+        .await?;
         let draft = LocationDraftSession {
             id: make_entity_id("loc"),
+            seed_prompt: prompt,
             slug: slugify(&seed.name),
             name: seed.name,
             vault_path: String::new(),
@@ -189,9 +237,18 @@ pub(crate) async fn run_desktop_routed_command(
             None
         };
 
-        let seed = generate_faction_seed(GenerateFactionSeedInput { prompt }, state.clone()).await?;
+        let prompt = normalize_optional_prompt(prompt);
+
+        let seed = generate_faction_seed(
+            GenerateFactionSeedInput {
+                prompt: prompt.clone(),
+            },
+            state.clone(),
+        )
+        .await?;
         let draft = FactionDraftSession {
             id: make_entity_id("fac"),
+            seed_prompt: prompt,
             slug: slugify(&seed.name),
             name: seed.name,
             vault_path: String::new(),
@@ -515,7 +572,13 @@ pub(crate) async fn run_desktop_routed_command(
                 return Ok(None);
             };
 
-            let seed = generate_npc_seed(GenerateNpcSeedInput { prompt: None }, state.clone()).await?;
+            let seed = generate_npc_seed(
+                GenerateNpcSeedInput {
+                    prompt: draft.seed_prompt.clone(),
+                },
+                state.clone(),
+            )
+            .await?;
             draft.name = seed.name.trim().to_string();
             draft.race = seed.race.trim().to_string();
             draft.occupation = normalize_unknown_text(&seed.occupation);
@@ -551,8 +614,13 @@ pub(crate) async fn run_desktop_routed_command(
             };
 
             let seed =
-                generate_location_seed(GenerateLocationSeedInput { prompt: None }, state.clone())
-                    .await?;
+                generate_location_seed(
+                    GenerateLocationSeedInput {
+                        prompt: draft.seed_prompt.clone(),
+                    },
+                    state.clone(),
+                )
+                .await?;
             draft.name = seed.name;
             draft.kind_type = seed.kind_type;
             draft.kind_custom = seed.kind_custom;
@@ -586,8 +654,13 @@ pub(crate) async fn run_desktop_routed_command(
                 return Ok(None);
             };
 
-            let seed = generate_faction_seed(GenerateFactionSeedInput { prompt: None }, state.clone())
-                .await?;
+            let seed = generate_faction_seed(
+                GenerateFactionSeedInput {
+                    prompt: draft.seed_prompt.clone(),
+                },
+                state.clone(),
+            )
+            .await?;
             draft.name = seed.name;
             draft.kind_type = seed.kind_type;
             draft.kind_custom = seed.kind_custom;
@@ -918,13 +991,15 @@ pub(crate) async fn run_desktop_routed_command(
         }
         let mut split = args.splitn(2, char::is_whitespace);
         let field = split.next().unwrap_or_default().trim().to_string();
-        let prompt = split.next().map(|value| value.trim().to_string());
+        let prompt = normalize_optional_prompt(split.next().map(|value| value.to_string()));
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
             editor.npc_draft.clone()
         }
         .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
+
+        let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let rerolled = reroll_npc_field(
             RerollNpcFieldInput {
@@ -1137,13 +1212,15 @@ pub(crate) async fn run_desktop_routed_command(
         }
         let mut split = args.splitn(2, char::is_whitespace);
         let field = split.next().unwrap_or_default().trim().to_string();
-        let prompt = split.next().map(|value| value.trim().to_string());
+        let prompt = normalize_optional_prompt(split.next().map(|value| value.to_string()));
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
             editor.location_draft.clone()
         }
         .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+
+        let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let rerolled = reroll_location_field(
             RerollLocationFieldInput {
@@ -1358,13 +1435,15 @@ pub(crate) async fn run_desktop_routed_command(
         }
         let mut split = args.splitn(2, char::is_whitespace);
         let field = split.next().unwrap_or_default().trim().to_string();
-        let prompt = split.next().map(|value| value.trim().to_string());
+        let prompt = normalize_optional_prompt(split.next().map(|value| value.to_string()));
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
             editor.faction_draft.clone()
         }
         .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+
+        let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let rerolled = reroll_faction_field(
             RerollFactionFieldInput {
@@ -1671,6 +1750,7 @@ async fn build_load_response(
         EntityType::Npc => {
             let draft = NpcDraftSession {
                 id: entity.id.clone(),
+                seed_prompt: None,
                 name: entity.name.clone(),
                 race: entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
                 occupation: entity
@@ -1726,6 +1806,7 @@ async fn build_load_response(
         EntityType::Location => {
             let draft = LocationDraftSession {
                 id: entity.id.clone(),
+                seed_prompt: None,
                 name: entity.name.clone(),
                 slug: entity.slug.clone(),
                 vault_path: path_for_display(&entity.vault_path),
@@ -1769,6 +1850,7 @@ async fn build_load_response(
         EntityType::Faction => {
             let draft = FactionDraftSession {
                 id: entity.id.clone(),
+                seed_prompt: None,
                 name: entity.name.clone(),
                 slug: entity.slug.clone(),
                 vault_path: path_for_display(&entity.vault_path),

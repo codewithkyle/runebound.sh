@@ -5,6 +5,7 @@ use tokio::sync::Mutex;
 #[derive(Debug, Clone)]
 pub(crate) struct NpcDraftSession {
     pub(crate) id: String,
+    pub(crate) seed_prompt: Option<String>,
     pub(crate) name: String,
     pub(crate) race: String,
     pub(crate) occupation: String,
@@ -22,6 +23,7 @@ pub(crate) struct NpcDraftSession {
 #[derive(Debug, Clone)]
 pub(crate) struct LocationDraftSession {
     pub(crate) id: String,
+    pub(crate) seed_prompt: Option<String>,
     pub(crate) name: String,
     pub(crate) slug: String,
     pub(crate) vault_path: String,
@@ -39,6 +41,7 @@ pub(crate) struct LocationDraftSession {
 #[derive(Debug, Clone)]
 pub(crate) struct FactionDraftSession {
     pub(crate) id: String,
+    pub(crate) seed_prompt: Option<String>,
     pub(crate) name: String,
     pub(crate) slug: String,
     pub(crate) vault_path: String,

@@ -827,7 +827,7 @@ export default function App() {
 
   return (
     <div class="h-screen bg-bg text-text flex flex-col p-[8px]">
-      <main ref={outputRef} class="flex-1 overflow-y-auto py-[2px]">
+      <main ref={outputRef} class="rb-output-scroll flex-1 overflow-y-auto py-[2px]">
         <div class="w-full max-w-[1040px] mx-auto space-y-2">
           <For each={entries()}>
             {(entry) => (
