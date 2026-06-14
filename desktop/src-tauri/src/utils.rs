@@ -1,5 +1,14 @@
 use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
+use crate::services::entity_persistence::{
+    EntityPersistenceService,
+    SaveFactionDraftInput as ServiceSaveFactionDraftInput,
+    SaveFactionDraftResult as ServiceSaveFactionDraftResult,
+    SaveLocationDraftInput as ServiceSaveLocationDraftInput,
+    SaveLocationDraftResult as ServiceSaveLocationDraftResult,
+    SaveNpcDraftInput as ServiceSaveNpcDraftInput,
+    SaveNpcDraftResult as ServiceSaveNpcDraftResult,
+};
 use crate::services::entity_reroll::{
     EntityRerollService,
     FactionRerollContext as ServiceFactionRerollContext,
@@ -157,7 +166,7 @@ pub struct SaveNpcDraftResult {
     pub updated_at: String,
 }
 
-impl From<SaveNpcDraftInput> for crate::SaveNpcDraftInput {
+impl From<SaveNpcDraftInput> for ServiceSaveNpcDraftInput {
     fn from(value: SaveNpcDraftInput) -> Self {
         Self {
             id: value.id,
@@ -177,8 +186,8 @@ impl From<SaveNpcDraftInput> for crate::SaveNpcDraftInput {
     }
 }
 
-impl From<crate::SaveNpcDraftResult> for SaveNpcDraftResult {
-    fn from(value: crate::SaveNpcDraftResult) -> Self {
+impl From<ServiceSaveNpcDraftResult> for SaveNpcDraftResult {
+    fn from(value: ServiceSaveNpcDraftResult) -> Self {
         Self {
             id: value.id,
             slug: value.slug,
@@ -215,7 +224,7 @@ pub struct SaveLocationDraftResult {
     pub updated_at: String,
 }
 
-impl From<SaveLocationDraftInput> for crate::SaveLocationDraftInput {
+impl From<SaveLocationDraftInput> for ServiceSaveLocationDraftInput {
     fn from(value: SaveLocationDraftInput) -> Self {
         Self {
             id: value.id,
@@ -235,8 +244,8 @@ impl From<SaveLocationDraftInput> for crate::SaveLocationDraftInput {
     }
 }
 
-impl From<crate::SaveLocationDraftResult> for SaveLocationDraftResult {
-    fn from(value: crate::SaveLocationDraftResult) -> Self {
+impl From<ServiceSaveLocationDraftResult> for SaveLocationDraftResult {
+    fn from(value: ServiceSaveLocationDraftResult) -> Self {
         Self {
             id: value.id,
             slug: value.slug,
@@ -280,7 +289,7 @@ pub struct SaveFactionDraftResult {
     pub updated_at: String,
 }
 
-impl From<SaveFactionDraftInput> for crate::SaveFactionDraftInput {
+impl From<SaveFactionDraftInput> for ServiceSaveFactionDraftInput {
     fn from(value: SaveFactionDraftInput) -> Self {
         Self {
             id: value.id,
@@ -307,8 +316,8 @@ impl From<SaveFactionDraftInput> for crate::SaveFactionDraftInput {
     }
 }
 
-impl From<crate::SaveFactionDraftResult> for SaveFactionDraftResult {
-    fn from(value: crate::SaveFactionDraftResult) -> Self {
+impl From<ServiceSaveFactionDraftResult> for SaveFactionDraftResult {
+    fn from(value: ServiceSaveFactionDraftResult) -> Self {
         Self {
             id: value.id,
             slug: value.slug,
@@ -1133,20 +1142,27 @@ pub async fn reroll_faction_field(input: RerollFactionFieldInput, state: tauri::
 }
 
 pub async fn save_npc_draft_impl(input: SaveNpcDraftInput, state: tauri::State<'_, AppState>) -> Result<SaveNpcDraftResult, String> {
-    let internal_input: crate::SaveNpcDraftInput = input.into();
-    let result = crate::save_npc_draft(internal_input, state).await?;
+    let internal_input: ServiceSaveNpcDraftInput = input.into();
+    let service = EntityPersistenceService;
+    let result = service.save_npc_draft(internal_input, state.inner()).await?;
     Ok(result.into())
 }
 
 pub async fn save_location_draft_impl(input: SaveLocationDraftInput, state: tauri::State<'_, AppState>) -> Result<SaveLocationDraftResult, String> {
-    let internal_input: crate::SaveLocationDraftInput = input.into();
-    let result = crate::save_location_draft(internal_input, state).await?;
+    let internal_input: ServiceSaveLocationDraftInput = input.into();
+    let service = EntityPersistenceService;
+    let result = service
+        .save_location_draft(internal_input, state.inner())
+        .await?;
     Ok(result.into())
 }
 
 pub async fn save_faction_draft_impl(input: SaveFactionDraftInput, state: tauri::State<'_, AppState>) -> Result<SaveFactionDraftResult, String> {
-    let internal_input: crate::SaveFactionDraftInput = input.into();
-    let result = crate::save_faction_draft(internal_input, state).await?;
+    let internal_input: ServiceSaveFactionDraftInput = input.into();
+    let service = EntityPersistenceService;
+    let result = service
+        .save_faction_draft(internal_input, state.inner())
+        .await?;
     Ok(result.into())
 }
 

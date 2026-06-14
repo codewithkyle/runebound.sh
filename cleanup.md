@@ -125,7 +125,7 @@ Same as Phase 1, item 1. If already done in Phase 1, skip this phase.
 
 ---
 
-## Phase 3: Move Save/Persistence Logic into `services/entity_persistence.rs`
+## Phase 3: Move Save/Persistence Logic into `services/entity_persistence.rs` *(✅ Completed 2026-06-14)*
 
 ### What's in `main.rs`
 
