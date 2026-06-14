@@ -129,6 +129,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "command-handler"
+version = "0.2.1"
+dependencies = [
+ "once_cell",
+]
+
+[[package]]
+name = "command-specs"
+version = "0.2.1"
+dependencies = [
+ "command-handler",
+ "serde",
+]
+
+[[package]]
 name = "concurrent-queue"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -259,6 +274,8 @@ version = "0.2.1"
 dependencies = [
  "anyhow",
  "chrono",
+ "command-handler",
+ "command-specs",
  "dirs",
  "reqwest",
  "serde",

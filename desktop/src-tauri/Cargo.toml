@@ -13,7 +13,9 @@ LegalCopyright = "Copyright (c) 2026"
 tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
+command-handler = { path = "../../command-handler" }
 dnd-core = { path = "../../core" }
+command-specs = { path = "../../command-specs" }
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

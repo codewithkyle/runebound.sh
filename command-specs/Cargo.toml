@@ -1,0 +1,8 @@
+[package]
+name = "command-specs"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+serde.workspace = true
+command-handler = { path = "../command-handler" }

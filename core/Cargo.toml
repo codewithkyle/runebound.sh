@@ -6,6 +6,8 @@ edition.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+command-handler = { path = "../command-handler" }
+command-specs = { path = "../command-specs" }
 dirs.workspace = true
 reqwest.workspace = true
 serde.workspace = true
