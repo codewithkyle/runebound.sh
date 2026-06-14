@@ -53,7 +53,9 @@ pub enum CommandClientEvent {
         vault_path: String,
     },
     ClearDrafts,
-    ClearTerminal { clear_history: bool },
+    ClearTerminal {
+        clear_history: bool,
+    },
     ExitRequested,
 }
 
@@ -191,15 +193,13 @@ async fn try_execute_onboarding(
         return Ok(None);
     }
 
-    let tokens = shell_words::split(trimmed).map_err(|e| anyhow!("invalid command input: {e}"))?;
-    if tokens.is_empty() {
-        return Ok(None);
-    }
-
-    let lowered: Vec<String> = tokens
-        .iter()
+    let lowered: Vec<String> = trimmed
+        .split_whitespace()
         .map(|token| token.to_ascii_lowercase())
         .collect();
+    if lowered.is_empty() {
+        return Ok(None);
+    }
 
     if lowered == ["start", "setup"] {
         let loaded = load_effective(workspace_root)?;
@@ -453,7 +453,8 @@ async fn try_execute_onboarding(
     if session.onboarding.step == 3 && !trimmed.is_empty() {
         if let Ok(index) = trimmed.parse::<usize>() {
             if index >= 1 && index <= session.onboarding.ollama_models.len() {
-                session.onboarding.selected_model = session.onboarding.ollama_models[index - 1].clone();
+                session.onboarding.selected_model =
+                    session.onboarding.ollama_models[index - 1].clone();
             } else {
                 bail!("model index out of range: {trimmed}");
             }
@@ -587,7 +588,10 @@ fn normalize_ollama_input(value: &str) -> String {
     format!("http://{trimmed}")
 }
 
-async fn probe_ollama_models(base_url: &str, timeout_seconds: u64) -> Result<(String, Vec<String>)> {
+async fn probe_ollama_models(
+    base_url: &str,
+    timeout_seconds: u64,
+) -> Result<(String, Vec<String>)> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(timeout_seconds))
         .build()?;
@@ -640,7 +644,10 @@ async fn execute_dispatched(
         .map(|token| token.to_ascii_lowercase())
         .collect();
 
-    if lowered.iter().any(|token| token == "-h" || token == "--help") {
+    if lowered
+        .iter()
+        .any(|token| token == "-h" || token == "--help")
+    {
         let hint = lowered
             .first()
             .map(|root| format!("use `{root} help` or `help {root}`"))
@@ -753,7 +760,10 @@ fn render_command_help(manifest: &CommandManifest, root: &str) -> String {
         lines.push(String::new());
         lines.push("Subcommands:".to_string());
         for subcommand in &command.subcommands {
-            lines.push(format!("- {} {} - {}", command.name, subcommand.name, subcommand.summary));
+            lines.push(format!(
+                "- {} {} - {}",
+                command.name, subcommand.name, subcommand.summary
+            ));
         }
     }
 

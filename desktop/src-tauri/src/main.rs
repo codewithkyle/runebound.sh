@@ -3,12 +3,12 @@
 mod app_state;
 mod router;
 
-use std::path::PathBuf;
+use std::path::{MAIN_SEPARATOR, PathBuf};
 use std::time::Duration;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse};
 use dnd_core::command_manifest::{CommandManifest, CommandSpec};
-use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input, parse_command_input};
+use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
@@ -296,7 +296,7 @@ fn carrying_from_db_text(value: &str) -> Vec<String> {
 }
 
 fn read_vault_file_if_exists(vault: &Vault, relative_path: &str) -> Result<Option<String>, String> {
-    let relative = PathBuf::from(relative_path);
+    let relative = PathBuf::from(normalize_relative_path_for_storage(relative_path));
     let full = vault.resolve_relative(&relative).map_err(|err| err.to_string())?;
     if !full.exists() {
         return Ok(None);
@@ -325,8 +325,10 @@ fn unique_trash_path(vault: &Vault, entity_dir: &str, slug: &str, timestamp: &st
 }
 
 fn move_vault_file(vault: &Vault, source_relative: &str, target_relative: &str) -> Result<(), String> {
+    let source_relative = normalize_relative_path_for_storage(source_relative);
+    let target_relative = normalize_relative_path_for_storage(target_relative);
     let source_full = vault
-        .resolve_relative(&PathBuf::from(source_relative))
+        .resolve_relative(&PathBuf::from(&source_relative))
         .map_err(|err| err.to_string())?;
     if !source_full.exists() {
         return Err(format!(
@@ -336,7 +338,7 @@ fn move_vault_file(vault: &Vault, source_relative: &str, target_relative: &str) 
     }
 
     let target_full = vault
-        .resolve_relative(&PathBuf::from(target_relative))
+        .resolve_relative(&PathBuf::from(&target_relative))
         .map_err(|err| err.to_string())?;
     if let Some(parent) = target_full.parent() {
         std::fs::create_dir_all(parent)
@@ -368,6 +370,7 @@ fn unique_markdown_path_for_name(
             .join(format!("{candidate}.md"))
             .to_string_lossy()
             .to_string();
+        let relative = normalize_relative_path_for_storage(&relative);
 
         if keep_path.is_some_and(|existing| existing == relative) {
             return Ok(relative);
@@ -804,12 +807,18 @@ async fn run_command(
 }
 
 fn normalize_input_for_dispatch(input: &str) -> String {
-    let normalized = normalize_command_input(input);
-    let parsed = parse_command_input(&normalized);
-    if parsed.canonical_input.is_empty() {
-        normalized
+    normalize_command_input(input)
+}
+
+pub(crate) fn normalize_relative_path_for_storage(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+pub(crate) fn path_for_display(path: &str) -> String {
+    if MAIN_SEPARATOR == '\\' {
+        path.replace('/', "\\")
     } else {
-        parsed.canonical_input
+        path.replace('\\', "/")
     }
 }
 
@@ -1212,7 +1221,7 @@ async fn ensure_location_exists(
         .unwrap_or_else(|| now.clone());
 
     let relative_path = if let Some(row) = existing.as_ref() {
-        row.vault_path.clone()
+        normalize_relative_path_for_storage(&row.vault_path)
     } else {
         unique_markdown_path_for_name(&vault, "locations", &canonical_name, None)?
     };
@@ -1325,12 +1334,13 @@ async fn save_npc_draft(
         .map_err(|err| err.to_string())?;
 
     let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
+        let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
         let desired_base_slug = slugify(name);
         let desired_path = unique_markdown_path_for_name(
             &vault,
             "npcs",
             name,
-            Some(current.vault_path.as_str()),
+            Some(current_vault_path.as_str()),
         )?;
 
         if desired_base_slug == current.slug {
@@ -1338,10 +1348,10 @@ async fn save_npc_draft(
                 current.slug,
                 desired_path.clone(),
                 current.created_at,
-                if desired_path == current.vault_path {
+                if desired_path == current_vault_path {
                     None
                 } else {
-                    Some(current.vault_path)
+                    Some(current_vault_path)
                 },
             )
         } else {
@@ -1350,7 +1360,7 @@ async fn save_npc_draft(
                 next_slug,
                 desired_path,
                 current.created_at,
-                Some(current.vault_path),
+                Some(current_vault_path),
             )
         }
     } else {
@@ -1485,7 +1495,7 @@ async fn save_location_draft(
     }
 
     let _legacy_slug_input = input.slug.trim();
-    let previous_vault_path_input = input.vault_path.trim();
+    let previous_vault_path_input = normalize_relative_path_for_storage(input.vault_path.trim());
 
     let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
     validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
@@ -1504,12 +1514,13 @@ async fn save_location_draft(
         .await
         .map_err(|err| err.to_string())?;
     let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
+        let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
         let desired_base_slug = slugify(name);
         let desired_path = unique_markdown_path_for_name(
             &vault,
             "locations",
             name,
-            Some(current.vault_path.as_str()),
+            Some(current_vault_path.as_str()),
         )?;
 
         if desired_base_slug == current.slug {
@@ -1517,10 +1528,10 @@ async fn save_location_draft(
                 current.slug,
                 desired_path.clone(),
                 current.created_at,
-                if desired_path == current.vault_path {
+                if desired_path == current_vault_path {
                     None
                 } else {
-                    Some(current.vault_path)
+                    Some(current_vault_path)
                 },
             )
         } else {
@@ -1528,7 +1539,7 @@ async fn save_location_draft(
                 unique_slug_for_dir(vault.root(), "locations", &desired_base_slug),
                 desired_path,
                 current.created_at,
-                Some(current.vault_path),
+                Some(current_vault_path),
             )
         }
     } else {
@@ -1692,7 +1703,7 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             secret_obstacle: Some(npc.secret_obstacle),
             carrying: Some(carrying_from_db_text(&npc.carrying)),
             location: Some(npc.location),
-            vault_path: npc.vault_path,
+            vault_path: normalize_relative_path_for_storage(&npc.vault_path),
             created_at: Some(npc.created_at),
         }));
     }
@@ -1717,7 +1728,7 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             secret_obstacle: None,
             carrying: None,
             location: None,
-            vault_path: location.vault_path,
+            vault_path: normalize_relative_path_for_storage(&location.vault_path),
             created_at: Some(location.created_at),
         }));
     }
@@ -1752,8 +1763,9 @@ async fn soft_delete_entity(
         .await
         .map_err(|err| err.to_string())?
     {
+        let normalized_vault_path = normalize_relative_path_for_storage(&npc.vault_path);
         let trash_path = unique_trash_path(&vault, "npcs", &npc.slug, &now)?;
-        move_vault_file(&vault, &npc.vault_path, &trash_path)?;
+        move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
 
         db::delete_npc_by_id(&database.pool, &npc.id)
             .await
@@ -1777,7 +1789,7 @@ async fn soft_delete_entity(
             secret_obstacle: npc.secret_obstacle,
             carrying: npc.carrying,
             location: npc.location,
-            vault_path: npc.vault_path.clone(),
+            vault_path: normalized_vault_path.clone(),
             created_at: npc.created_at,
             updated_at: npc.updated_at,
         };
@@ -1789,7 +1801,7 @@ async fn soft_delete_entity(
             entity_id: npc.id.clone(),
             name: npc.name.clone(),
             slug: npc.slug.clone(),
-            original_vault_path: npc.vault_path,
+            original_vault_path: normalized_vault_path,
             trash_vault_path: trash_path.clone(),
             payload_json,
             created_at: now,
@@ -1812,8 +1824,9 @@ async fn soft_delete_entity(
         .await
         .map_err(|err| err.to_string())?
     {
+        let normalized_vault_path = normalize_relative_path_for_storage(&location.vault_path);
         let trash_path = unique_trash_path(&vault, "locations", &location.slug, &now)?;
-        move_vault_file(&vault, &location.vault_path, &trash_path)?;
+        move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
 
         db::delete_location_by_id(&database.pool, &location.id)
             .await
@@ -1826,7 +1839,7 @@ async fn soft_delete_entity(
             id: location.id.clone(),
             slug: location.slug.clone(),
             name: location.name.clone(),
-            vault_path: location.vault_path.clone(),
+            vault_path: normalized_vault_path.clone(),
             created_at: location.created_at,
             updated_at: location.updated_at,
         };
@@ -1838,7 +1851,7 @@ async fn soft_delete_entity(
             entity_id: location.id.clone(),
             name: location.name.clone(),
             slug: location.slug.clone(),
-            original_vault_path: location.vault_path,
+            original_vault_path: normalized_vault_path,
             trash_vault_path: trash_path.clone(),
             payload_json,
             created_at: now,
@@ -1887,7 +1900,8 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
 
         let mut restored_slug = payload.slug;
-        let mut restored_vault_path = payload.vault_path;
+        let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+        let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
         let preferred_full = vault
             .resolve_relative(&PathBuf::from(&restored_vault_path))
             .map_err(|err| err.to_string())?;
@@ -1896,7 +1910,7 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             restored_vault_path = unique_markdown_path_for_name(&vault, "npcs", &payload.name, None)?;
         }
 
-        move_vault_file(&vault, &soft_delete.trash_vault_path, &restored_vault_path)?;
+        move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
 
         let npc_row = db::NpcRow {
             id: payload.id.clone(),
@@ -1951,7 +1965,8 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
             serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
 
         let mut restored_slug = payload.slug;
-        let mut restored_vault_path = payload.vault_path;
+        let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+        let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
         let preferred_full = vault
             .resolve_relative(&PathBuf::from(&restored_vault_path))
             .map_err(|err| err.to_string())?;
@@ -1961,7 +1976,7 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
                 unique_markdown_path_for_name(&vault, "locations", &payload.name, None)?;
         }
 
-        move_vault_file(&vault, &soft_delete.trash_vault_path, &restored_vault_path)?;
+        move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
 
         let location_row = db::LocationRow {
             id: payload.id.clone(),
@@ -2014,6 +2029,46 @@ fn get_command_manifest() -> CommandManifest {
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        normalize_input_for_dispatch, normalize_relative_path_for_storage, path_for_display,
+    };
+
+    #[test]
+    fn dispatch_preserves_windows_backslashes() {
+        let input = r"set vault C:\Users\andrewk9\Documents\DND";
+        assert_eq!(normalize_input_for_dispatch(input), input);
+    }
+
+    #[test]
+    fn dispatch_only_unwraps_markdown_backticks() {
+        let input = "  `set vault C:\\Users\\andrewk9\\Documents\\DND`  ";
+        assert_eq!(
+            normalize_input_for_dispatch(input),
+            r"set vault C:\Users\andrewk9\Documents\DND"
+        );
+    }
+
+    #[test]
+    fn normalizes_storage_paths_to_forward_slashes() {
+        assert_eq!(
+            normalize_relative_path_for_storage(r"npcs\grave cleric.md"),
+            "npcs/grave cleric.md"
+        );
+    }
+
+    #[test]
+    fn displays_paths_with_host_separator() {
+        let displayed = path_for_display("locations/frostholm.md");
+        if std::path::MAIN_SEPARATOR == '\\' {
+            assert_eq!(displayed, r"locations\frostholm.md");
+        } else {
+            assert_eq!(displayed, "locations/frostholm.md");
+        }
+    }
 }
 
 fn main() {

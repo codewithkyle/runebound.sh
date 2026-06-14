@@ -36,7 +36,11 @@ impl SessionState {
             return;
         }
 
-        if self.command_history.last().is_some_and(|last| last == value) {
+        if self
+            .command_history
+            .last()
+            .is_some_and(|last| last == value)
+        {
             return;
         }
 

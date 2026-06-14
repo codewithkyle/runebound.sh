@@ -497,7 +497,7 @@ pub(crate) async fn run_desktop_routed_command(
                 "## NPC saved".to_string(),
                 format!("id: {}", result.id),
                 format!("slug: {}", result.slug),
-                format!("vault: {}", result.vault_path),
+                format!("vault: {}", path_for_display(&result.vault_path)),
                 format!("updated: {}", result.updated_at),
             ]
             .join("\n");
@@ -534,7 +534,7 @@ pub(crate) async fn run_desktop_routed_command(
                 "## Location saved".to_string(),
                 format!("id: {}", result.id),
                 format!("slug: {}", result.slug),
-                format!("vault: {}", result.vault_path),
+                format!("vault: {}", path_for_display(&result.vault_path)),
                 format!("updated: {}", result.updated_at),
             ]
             .join("\n");
@@ -754,7 +754,7 @@ pub(crate) async fn run_desktop_routed_command(
             format!("type: {}", result.entity_type.as_str()),
             format!("name: {}", result.name),
             format!("slug: {}", result.slug),
-            format!("trash: {}", result.trash_vault_path),
+            format!("trash: {}", path_for_display(&result.trash_vault_path)),
             "tip: run undo to restore it.".to_string(),
         ]
         .join("\n");
@@ -789,7 +789,7 @@ pub(crate) async fn run_desktop_routed_command(
             format!("type: {}", result.entity_type.as_str()),
             format!("name: {}", result.name),
             format!("slug: {}", result.slug),
-            format!("vault: {}", result.vault_path),
+            format!("vault: {}", path_for_display(&result.vault_path)),
         ]
         .join("\n");
         return Ok(Some(ok_response(output, None)));
@@ -900,7 +900,7 @@ async fn build_load_response(
                         .location
                         .clone()
                         .unwrap_or_else(|| "Unknown".to_string()),
-                    entity.vault_path
+                    path_for_display(&entity.vault_path)
                 ),
                 Some(npc_event_from_draft(&draft)),
             )
@@ -910,7 +910,7 @@ async fn build_load_response(
                 id: entity.id.clone(),
                 name: entity.name.clone(),
                 slug: entity.slug.clone(),
-                vault_path: entity.vault_path.clone(),
+                vault_path: path_for_display(&entity.vault_path),
             };
             {
                 let mut editor = state.editor_session.lock().await;
@@ -922,7 +922,9 @@ async fn build_load_response(
             (
                 format!(
                     "## Location\nname: {}\nslug: {}\npath: {}",
-                    entity.name, entity.slug, entity.vault_path
+                    entity.name,
+                    entity.slug,
+                    path_for_display(&entity.vault_path)
                 ),
                 Some(location_event_from_draft(&draft)),
             )

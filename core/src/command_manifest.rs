@@ -429,13 +429,11 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
         ],
-        aliases: vec![
-            CommandAlias {
-                from: vec!["history".to_string(), "clear".to_string()],
-                to: vec!["clear".to_string(), "--history".to_string()],
-                summary: "history clear alias".to_string(),
-            },
-        ],
+        aliases: vec![CommandAlias {
+            from: vec!["history".to_string(), "clear".to_string()],
+            to: vec!["clear".to_string(), "--history".to_string()],
+            summary: "history clear alias".to_string(),
+        }],
     }
 }
 
