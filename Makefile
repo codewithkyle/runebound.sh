@@ -1,4 +1,4 @@
-.PHONY: run build rust frontend tauri-backend deps clean
+.PHONY: run build rust frontend tauri-backend deps clean release release-watch release-download
 
 .DEFAULT_GOAL := run
 
@@ -28,3 +28,23 @@ tauri-backend:
 clean:
 	cargo clean
 	rm -rf "$(DESKTOP_DIR)/dist" "$(DESKTOP_DIR)/node_modules" "$(TAURI_DIR)/target"
+
+release:
+	gh workflow run release-windows.yml
+
+release-watch:
+	@RUN_ID=$$(gh run list --workflow release-windows.yml --limit 1 --json databaseId --jq '.[0].databaseId'); \
+	if [ -z "$$RUN_ID" ]; then \
+		echo "No runs found for release-windows.yml"; \
+		exit 1; \
+	fi; \
+	gh run watch "$$RUN_ID"
+
+release-download:
+	@RUN_ID=$$(gh run list --workflow release-windows.yml --limit 1 --json databaseId --jq '.[0].databaseId'); \
+	if [ -z "$$RUN_ID" ]; then \
+		echo "No runs found for release-windows.yml"; \
+		exit 1; \
+	fi; \
+	mkdir -p "$(ROOT_DIR)/release"; \
+	gh run download "$$RUN_ID" --dir "$(ROOT_DIR)/release"

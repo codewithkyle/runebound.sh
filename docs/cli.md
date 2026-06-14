@@ -65,3 +65,18 @@
   - output/help examples and clickable refs
 - Phrase help is required (`help <command>` and `<command> help`), and `-h`/`--help` should not be introduced.
 - Validate command changes with `make build` before closing work.
+
+## Manual Windows Release (CI)
+
+- Releases are manual-only via GitHub Actions workflow `release-windows.yml`.
+- Prerequisite: GitHub CLI authenticated for this repo (`gh auth login`).
+- Trigger a release build:
+  - `make release`
+- Watch latest release run:
+  - `make release-watch`
+- Download latest release artifacts into local `release/`:
+  - `make release-download`
+- Produced artifact targets:
+  - NSIS installer (`windows-nsis-installer`)
+  - raw executable (`windows-executable`, when present)
+- Windows artifacts are unsigned for manual distribution, so SmartScreen warnings are expected.
