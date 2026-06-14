@@ -332,25 +332,6 @@ impl EntityType {
     }
 }
 
-impl From<EntityType> for crate::EntityType {
-    fn from(value: EntityType) -> Self {
-        match value {
-            EntityType::Npc => crate::EntityType::Npc,
-            EntityType::Location => crate::EntityType::Location,
-            EntityType::Faction => crate::EntityType::Faction,
-        }
-    }
-}
-
-impl From<crate::EntityType> for EntityType {
-    fn from(value: crate::EntityType) -> Self {
-        match value {
-            crate::EntityType::Npc => EntityType::Npc,
-            crate::EntityType::Location => EntityType::Location,
-            crate::EntityType::Faction => EntityType::Faction,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityDetails {
@@ -395,97 +376,6 @@ pub struct EntityDetails {
     pub created_at: Option<String>,
 }
 
-impl From<crate::EntityDetails> for EntityDetails {
-    fn from(value: crate::EntityDetails) -> Self {
-        Self {
-            id: value.id,
-            entity_type: value.entity_type.into(),
-            name: value.name,
-            slug: value.slug,
-            race: value.race,
-            occupation: value.occupation,
-            sex: value.sex,
-            age: value.age,
-            height: value.height,
-            weight_lbs: value.weight_lbs,
-            background: value.background,
-            want_need: value.want_need,
-            secret_obstacle: value.secret_obstacle,
-            carrying: value.carrying,
-            location: value.location,
-            vault_path: value.vault_path,
-            kind_type: value.kind_type,
-            kind_custom: value.kind_custom,
-            visual_description: value.visual_description,
-            history_background: value.history_background,
-            exports: value.exports,
-            tone: value.tone,
-            authority: value.authority,
-            danger_level: value.danger_level,
-            current_tension: value.current_tension,
-            public_description: value.public_description,
-            true_agenda: value.true_agenda,
-            methods: value.methods,
-            leadership: value.leadership,
-            headquarters: value.headquarters,
-            sphere_of_influence: value.sphere_of_influence,
-            resources_assets: value.resources_assets,
-            allies: value.allies,
-            rivals_enemies: value.rivals_enemies,
-            reputation: value.reputation,
-            goals_short_term: value.goals_short_term,
-            goals_long_term: value.goals_long_term,
-            symbol_description: value.symbol_description,
-            created_at: value.created_at,
-        }
-    }
-}
-
-impl From<EntityDetails> for crate::EntityDetails {
-    fn from(value: EntityDetails) -> Self {
-        Self {
-            id: value.id,
-            entity_type: value.entity_type.into(),
-            name: value.name,
-            slug: value.slug,
-            race: value.race,
-            occupation: value.occupation,
-            sex: value.sex,
-            age: value.age,
-            height: value.height,
-            weight_lbs: value.weight_lbs,
-            background: value.background,
-            want_need: value.want_need,
-            secret_obstacle: value.secret_obstacle,
-            carrying: value.carrying,
-            location: value.location,
-            vault_path: value.vault_path,
-            kind_type: value.kind_type,
-            kind_custom: value.kind_custom,
-            visual_description: value.visual_description,
-            history_background: value.history_background,
-            exports: value.exports,
-            tone: value.tone,
-            authority: value.authority,
-            danger_level: value.danger_level,
-            current_tension: value.current_tension,
-            public_description: value.public_description,
-            true_agenda: value.true_agenda,
-            methods: value.methods,
-            leadership: value.leadership,
-            headquarters: value.headquarters,
-            sphere_of_influence: value.sphere_of_influence,
-            resources_assets: value.resources_assets,
-            allies: value.allies,
-            rivals_enemies: value.rivals_enemies,
-            reputation: value.reputation,
-            goals_short_term: value.goals_short_term,
-            goals_long_term: value.goals_long_term,
-            symbol_description: value.symbol_description,
-            created_at: value.created_at,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SoftDeleteEntityResult {
@@ -505,35 +395,6 @@ pub struct UndoSoftDeleteResult {
     pub vault_path: String,
 }
 
-impl From<SoftDeleteEntityInput> for crate::SoftDeleteEntityInput {
-    fn from(value: SoftDeleteEntityInput) -> Self {
-        Self { target: value.target }
-    }
-}
-
-impl From<crate::SoftDeleteEntityResult> for SoftDeleteEntityResult {
-    fn from(value: crate::SoftDeleteEntityResult) -> Self {
-        Self {
-            entity_type: value.entity_type.into(),
-            id: value.id,
-            name: value.name,
-            slug: value.slug,
-            trash_vault_path: value.trash_vault_path,
-        }
-    }
-}
-
-impl From<crate::UndoSoftDeleteResult> for UndoSoftDeleteResult {
-    fn from(value: crate::UndoSoftDeleteResult) -> Self {
-        Self {
-            entity_type: value.entity_type.into(),
-            id: value.id,
-            name: value.name,
-            slug: value.slug,
-            vault_path: value.vault_path,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct EnsureLocationInput {
@@ -549,23 +410,6 @@ pub struct EnsureLocationResult {
     pub created_record: bool,
 }
 
-impl From<EnsureLocationInput> for crate::EnsureLocationInput {
-    fn from(value: EnsureLocationInput) -> Self {
-        Self { name: value.name }
-    }
-}
-
-impl From<crate::EnsureLocationResult> for EnsureLocationResult {
-    fn from(value: crate::EnsureLocationResult) -> Self {
-        Self {
-            name: value.name,
-            slug: value.slug,
-            vault_path: value.vault_path,
-            created_file: value.created_file,
-            created_record: value.created_record,
-        }
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct LocationRerollContext {
@@ -812,6 +656,14 @@ pub fn parse_carrying_csv(value: &str) -> Vec<String> {
     normalize_unknown_list(items)
 }
 
+pub fn parse_list_csv(value: &str) -> Vec<String> {
+    value
+        .split(',')
+        .map(|item| item.trim().to_string())
+        .filter(|item| !item.is_empty())
+        .collect()
+}
+
 pub fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
     prompt.map(|p| {
         let trimmed = p.trim();
@@ -880,6 +732,39 @@ pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
         vec!["Unknown".to_string()]
     } else {
         cleaned
+    }
+}
+
+pub fn exports_to_db_text(items: &[String]) -> Result<String, String> {
+    serde_json::to_string(items).map_err(|err| err.to_string())
+}
+
+pub fn exports_from_db_text(value: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(items) => normalize_exports(items),
+        Err(_) => normalize_exports(parse_list_csv(value)),
+    }
+}
+
+pub fn carrying_to_db_text(items: &[String]) -> Result<String, String> {
+    serde_json::to_string(items).map_err(|err| err.to_string())
+}
+
+pub fn carrying_from_db_text(value: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(items) => normalize_unknown_list(items),
+        Err(_) => parse_carrying_csv(value),
+    }
+}
+
+pub fn faction_list_to_db_text(items: &[String]) -> Result<String, String> {
+    serde_json::to_string(items).map_err(|err| err.to_string())
+}
+
+pub fn faction_list_from_db_text(value: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(items) => normalize_unknown_list(items),
+        Err(_) => normalize_unknown_list(parse_list_csv(value)),
     }
 }
 
@@ -1083,28 +968,22 @@ pub async fn save_faction_draft_impl(input: SaveFactionDraftInput, state: tauri:
 }
 
 pub async fn ensure_location_exists(input: EnsureLocationInput, state: tauri::State<'_, AppState>) -> Result<EnsureLocationResult, String> {
-    let internal_input: crate::EnsureLocationInput = input.into();
-    let result = crate::ensure_location_exists(internal_input, state).await?;
-    Ok(result.into())
+    crate::ensure_location_exists(input, state).await
 }
 
 pub async fn resolve_entity(
     name: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<EntityDetails>, String> {
-    let result = crate::resolve_entity(name, state.inner()).await?;
-    Ok(result.map(Into::into))
+    crate::resolve_entity(name, state.inner()).await
 }
 
 pub async fn soft_delete_entity(input: SoftDeleteEntityInput, state: tauri::State<'_, AppState>) -> Result<SoftDeleteEntityResult, String> {
-    let internal_input: crate::SoftDeleteEntityInput = input.into();
-    let result = crate::soft_delete_entity(internal_input, state).await?;
-    Ok(result.into())
+    crate::soft_delete_entity(input, state).await
 }
 
 pub async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
-    let result = crate::undo_last_soft_delete(state).await?;
-    Ok(result.into())
+    crate::undo_last_soft_delete(state).await
 }
 
 #[cfg(test)]

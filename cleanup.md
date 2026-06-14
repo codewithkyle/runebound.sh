@@ -240,7 +240,7 @@ These functions deal with:
 
 ---
 
-## Phase 5: Move Autocomplete Engine into `services/suggestions.rs`
+## Phase 5: Move Autocomplete Engine into `services/suggestions.rs` *(✅ Completed 2026-06-14)*
 
 ### What's in `main.rs`
 
