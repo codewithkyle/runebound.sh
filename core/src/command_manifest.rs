@@ -189,6 +189,28 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "show".to_string(),
+                summary: "Preview an NPC or location without entering editor".to_string(),
+                examples: vec!["show Elara Meadowlight".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
+                name: "preview".to_string(),
+                summary: "Alias for show; previews entity card only".to_string(),
+                examples: vec!["preview Neverwinter Harbor".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "npc".to_string(),
                 summary: "Edit active NPC draft".to_string(),
                 examples: vec![

@@ -1,4 +1,5 @@
 use dnd_core::command::{CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind};
+use dnd_core::output::{OutputDoc, entity_card, entity_row};
 use tauri::State;
 
 use crate::app_state::{AppState, EditorMode, LocationDraftSession, NpcDraftSession};
@@ -999,6 +1000,13 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered == "show" || lowered == "preview" {
+        return Ok(Some(ok_response(
+            "usage: show <npc-or-location-name>".to_string(),
+            None,
+        )));
+    }
+
     if lowered.starts_with("load ") {
         let target = trimmed[4..].trim();
         if target.is_empty() {
@@ -1019,6 +1027,32 @@ pub(crate) async fn run_desktop_routed_command(
         let (output, event) = build_load_response(entity, state.clone()).await;
 
         return Ok(Some(ok_response(output, event)));
+    }
+
+    if lowered.starts_with("show ") || lowered.starts_with("preview ") {
+        let target = if lowered.starts_with("show ") {
+            trimmed[4..].trim()
+        } else {
+            trimmed[7..].trim()
+        };
+        if target.is_empty() {
+            return Ok(Some(ok_response(
+                "usage: show <npc-or-location-name>".to_string(),
+                None,
+            )));
+        }
+
+        let entity = resolve_entity(target.to_string()).await?;
+        let Some(entity) = entity else {
+            return Ok(Some(ok_response(
+                format!("no npc or location found for: {target}"),
+                None,
+            )));
+        };
+
+        let preview_text = build_preview_response(entity.clone());
+        let preview_doc = build_entity_card_doc(&entity);
+        return Ok(Some(ok_response_with_doc(preview_text, Some(preview_doc), None)));
     }
 
     if lowered == "delete" {
@@ -1157,47 +1191,8 @@ async fn build_load_response(
                 editor.npc_draft = Some(draft.clone());
             }
 
-            let carrying = entity
-                .carrying
-                .as_ref()
-                .map(|items| items.join(", "))
-                .unwrap_or_else(|| "Unknown".to_string());
             (
-                format!(
-                    "## NPC\nname: {}\nslug: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}\npath: {}",
-                    entity.name,
-                    entity.slug,
-                    entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    entity
-                        .occupation
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    entity.sex.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    entity
-                        .weight_lbs
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    entity
-                        .background
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    entity
-                        .want_need
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    entity
-                        .secret_obstacle
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    carrying,
-                    entity
-                        .location
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    path_for_display(&entity.vault_path)
-                ),
+                build_entity_card_text(&entity),
                 Some(npc_event_from_draft(&draft)),
             )
         }
@@ -1242,26 +1237,260 @@ async fn build_load_response(
                 editor.location_draft = Some(draft.clone());
             }
 
-            (
-                format!(
-                    "## Location\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
-                    entity.name,
-                    entity.slug,
-                    draft.kind_type,
-                    draft
-                        .kind_custom
-                        .clone()
-                        .unwrap_or_else(|| "(none)".to_string()),
-                    draft.visual_description,
-                    draft.history_background,
-                    draft.exports.join(", "),
-                    draft.tone,
-                    draft.authority,
-                    draft.danger_level,
-                    draft.current_tension,
-                    path_for_display(&entity.vault_path)
-                ),
-                Some(location_event_from_draft(&draft)),
+            (build_entity_card_text(&entity), Some(location_event_from_draft(&draft)))
+        }
+    }
+}
+
+fn build_preview_response(entity: EntityDetails) -> String {
+    build_entity_card_text(&entity)
+}
+
+fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
+    let mut rows = vec![
+        entity_row("name", entity.name.clone()),
+        entity_row("slug", entity.slug.clone()),
+    ];
+
+    match entity.entity_type {
+        EntityType::Npc => {
+            rows.push(entity_row(
+                "race",
+                entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "occupation",
+                entity
+                    .occupation
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "sex",
+                entity.sex.clone().unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "age",
+                entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "height",
+                entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "weight",
+                entity
+                    .weight_lbs
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "background",
+                entity
+                    .background
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "want",
+                entity
+                    .want_need
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "secret",
+                entity
+                    .secret_obstacle
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "carrying",
+                entity
+                    .carrying
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row(
+                "location",
+                entity
+                    .location
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+
+            OutputDoc {
+                blocks: vec![entity_card("NPC", rows)],
+            }
+        }
+        EntityType::Location => {
+            rows.push(entity_row(
+                "kind",
+                entity
+                    .kind_type
+                    .clone()
+                    .unwrap_or_else(|| "other".to_string()),
+            ));
+            rows.push(entity_row(
+                "kind_custom",
+                entity
+                    .kind_custom
+                    .clone()
+                    .unwrap_or_else(|| "(none)".to_string()),
+            ));
+            rows.push(entity_row(
+                "visual",
+                entity
+                    .visual_description
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "history",
+                entity
+                    .history_background
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "exports",
+                entity
+                    .exports
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row(
+                "tone",
+                entity.tone.clone().unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "authority",
+                entity
+                    .authority
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "danger",
+                entity
+                    .danger_level
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "tension",
+                entity
+                    .current_tension
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+
+            OutputDoc {
+                blocks: vec![entity_card("Location", rows)],
+            }
+        }
+    }
+}
+
+fn build_entity_card_text(entity: &EntityDetails) -> String {
+    match entity.entity_type {
+        EntityType::Npc => {
+            let carrying = entity
+                .carrying
+                .as_ref()
+                .map(|items| items.join(", "))
+                .unwrap_or_else(|| "Unknown".to_string());
+            format!(
+                "## NPC\nname: {}\nslug: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}\npath: {}",
+                entity.name,
+                entity.slug,
+                entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity
+                    .occupation
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                entity.sex.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity
+                    .weight_lbs
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                entity
+                    .background
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                entity
+                    .want_need
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                entity
+                    .secret_obstacle
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                carrying,
+                entity
+                    .location
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                path_for_display(&entity.vault_path)
+            )
+        }
+        EntityType::Location => {
+            let kind_type = entity
+                .kind_type
+                .clone()
+                .unwrap_or_else(|| "other".to_string());
+            let kind_custom = entity
+                .kind_custom
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string());
+            let visual_description = entity
+                .visual_description
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let history_background = entity
+                .history_background
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let exports = entity
+                .exports
+                .clone()
+                .unwrap_or_else(|| vec!["Unknown".to_string()])
+                .join(", ");
+            let tone = entity.tone.clone().unwrap_or_else(|| "Unknown".to_string());
+            let authority = entity
+                .authority
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let danger_level = entity
+                .danger_level
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let current_tension = entity
+                .current_tension
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            format!(
+                "## Location\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
+                entity.name,
+                entity.slug,
+                kind_type,
+                kind_custom,
+                visual_description,
+                history_background,
+                exports,
+                tone,
+                authority,
+                danger_level,
+                current_tension,
+                path_for_display(&entity.vault_path)
             )
         }
     }
@@ -1373,6 +1602,14 @@ fn canonical_npc_set_field(raw: &str) -> Option<&'static str> {
 }
 
 fn ok_response(output: String, client_event: Option<CommandClientEvent>) -> CommandResponse {
+    ok_response_with_doc(output, None, client_event)
+}
+
+fn ok_response_with_doc(
+    output: String,
+    output_doc: Option<OutputDoc>,
+    client_event: Option<CommandClientEvent>,
+) -> CommandResponse {
     CommandResponse {
         ok: true,
         output: output.clone(),
@@ -1383,7 +1620,7 @@ fn ok_response(output: String, client_event: Option<CommandClientEvent>) -> Comm
             text: output,
             command_ref: None,
         }],
-        output_doc: None,
+        output_doc,
         client_event,
     }
 }

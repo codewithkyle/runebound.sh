@@ -1133,6 +1133,20 @@ fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> String {
     anchors.join(", ")
 }
 
+fn npc_travel_location_query(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+
+    if lowered == "npc travel to" {
+        return Some(String::new());
+    }
+    if lowered.starts_with("npc travel to ") {
+        return Some(trimmed[14..].trim().to_string());
+    }
+
+    None
+}
+
 #[tauri::command]
 async fn suggest_command_input(
     input: String,
@@ -1206,10 +1220,16 @@ async fn suggest_command_input(
     let lowered = trimmed.to_ascii_lowercase();
     let is_load_context = lowered == "load" || lowered.starts_with("load ");
     let is_delete_context = lowered == "delete" || lowered.starts_with("delete ");
+    let is_show_context = lowered == "show" || lowered.starts_with("show ");
+    let is_preview_context = lowered == "preview" || lowered.starts_with("preview ");
     let search_query = if is_load_context {
         trimmed[4..].trim()
     } else if is_delete_context {
         trimmed[6..].trim()
+    } else if is_show_context {
+        trimmed[4..].trim()
+    } else if is_preview_context {
+        trimmed[7..].trim()
     } else {
         trimmed
     };
@@ -1217,6 +1237,8 @@ async fn suggest_command_input(
     if !search_query.is_empty()
         && (is_load_context
             || is_delete_context
+            || is_show_context
+            || is_preview_context
             || !starts_with_known_command_root(trimmed, &manifest))
     {
         let entity_results = search_entities(search_query.to_string(), Some(6)).await?;
@@ -1224,6 +1246,10 @@ async fn suggest_command_input(
             Some("load")
         } else if is_delete_context {
             Some("delete")
+        } else if is_show_context {
+            Some("show")
+        } else if is_preview_context {
+            Some("preview")
         } else {
             None
         };
@@ -1243,6 +1269,25 @@ async fn suggest_command_input(
             });
         }
     }
+
+    if mode == app_state::EditorMode::Npc {
+        if let Some(location_query) = npc_travel_location_query(trimmed) {
+            let location_names = search_location_names(location_query, Some(8)).await?;
+            for location_name in location_names {
+                suggestions.push(CommandSuggestion {
+                    label: location_name.clone(),
+                    completion: format!("npc travel to {} ", location_name),
+                    helper_text: Some(SuggestionHelperText::Location),
+                });
+            }
+        }
+    }
+
+    let mut seen = HashSet::new();
+    suggestions.retain(|suggestion| {
+        let key = suggestion.completion.trim().to_ascii_lowercase();
+        seen.insert(key)
+    });
 
     Ok(suggestions)
 }
@@ -3350,6 +3395,29 @@ async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<Entity
     Ok(items)
 }
 
+async fn search_location_names(query: String, limit: Option<u32>) -> Result<Vec<String>, String> {
+    let limit = i64::from(limit.unwrap_or(8)).clamp(1, 20);
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let rows = db::search_locations_by_name(&database.pool, query.trim(), limit)
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+    for row in rows {
+        let name = row.name.trim().to_string();
+        if name.is_empty() {
+            continue;
+        }
+        let key = name.to_ascii_lowercase();
+        if seen.insert(key) {
+            out.push(name);
+        }
+    }
+
+    Ok(out)
+}
+
 async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -3747,9 +3815,10 @@ mod tests {
         ActiveReferenceQuery, LocationSeed, VaultReferenceEntry,
         build_reference_suggestions_from_entries, extract_active_reference_query,
         extract_prompt_reference_keys, extract_runebound_toml, normalize_input_for_dispatch,
-        normalize_location_seed, normalize_relative_path_for_storage, occupation_anchor,
-        path_for_display, recent_occupation_anchor_set, scan_npc_row_from_markdown,
-        validate_location_details, describe_recent_npc_occupation_anchors,
+        normalize_location_seed, normalize_relative_path_for_storage, npc_travel_location_query,
+        occupation_anchor, path_for_display, recent_occupation_anchor_set,
+        scan_npc_row_from_markdown, validate_location_details,
+        describe_recent_npc_occupation_anchors,
     };
 
     #[test]
@@ -4018,6 +4087,16 @@ mod tests {
 
         let described = describe_recent_npc_occupation_anchors(&seeds);
         assert_eq!(described, "cartographer");
+    }
+
+    #[test]
+    fn parses_npc_travel_location_query_for_typeahead() {
+        assert_eq!(
+            npc_travel_location_query("npc travel to Aegis Isle"),
+            Some("Aegis Isle".to_string())
+        );
+        assert_eq!(npc_travel_location_query("npc travel to"), Some(String::new()));
+        assert_eq!(npc_travel_location_query("npc travel"), None);
     }
 }
 

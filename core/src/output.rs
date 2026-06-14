@@ -45,6 +45,16 @@ pub enum OutputBlock {
         state: SpinnerState,
         text: String,
     },
+    EntityCard {
+        title: String,
+        rows: Vec<EntityCardRow>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EntityCardRow {
+    pub label: String,
+    pub value: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -115,6 +125,20 @@ pub fn spinner(state: SpinnerState, text: impl Into<String>) -> OutputBlock {
     OutputBlock::Spinner {
         state,
         text: text.into(),
+    }
+}
+
+pub fn entity_card(title: impl Into<String>, rows: Vec<EntityCardRow>) -> OutputBlock {
+    OutputBlock::EntityCard {
+        title: title.into(),
+        rows,
+    }
+}
+
+pub fn entity_row(label: impl Into<String>, value: impl Into<String>) -> EntityCardRow {
+    EntityCardRow {
+        label: label.into(),
+        value: value.into(),
     }
 }
 
