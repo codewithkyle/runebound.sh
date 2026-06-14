@@ -1,52 +1,27 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod app_state;
+mod router;
+
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dnd_core::command::CommandResponse;
-use dnd_core::command_manifest::{CommandManifest, command_manifest};
-use dnd_core::command_parse::{ParseResult, parse_command_input as parse_shared_command_input};
-use dnd_core::config::{load_effective, required_issues, save_config, validate_for_runtime};
+use dnd_core::command::{CommandClientEvent, CommandResponse};
+use dnd_core::command_manifest::{CommandManifest, CommandSpec};
+use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input, parse_command_input};
+use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
-use dnd_core::health;
 use dnd_core::npc::{
     LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp,
     merge_runebound_block, normalize_markdown_file_stem, render_location_markdown,
     render_npc_markdown, slugify,
     unique_slug_for_dir,
 };
-use dnd_core::vault::{Vault, is_path_writable};
+use dnd_core::vault::Vault;
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 
-#[derive(Debug, Clone, Serialize)]
-struct SetupState {
-    needs_setup: bool,
-    issues: Vec<String>,
-    global_config_path: String,
-    default_ollama_base_url: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct OllamaProbeResult {
-    ok: bool,
-    detail: String,
-    models: Vec<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct SaveOnboardingInput {
-    vault_path: String,
-    ollama_base_url: String,
-    model: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-struct SaveOnboardingResult {
-    config_path: String,
-    vault_path: String,
-    db_path: String,
-    warnings: Vec<String>,
-}
+use crate::app_state::{AppState, EditorSession};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct NpcSeed {
@@ -145,11 +120,35 @@ enum EntityType {
     Location,
 }
 
+impl EntityType {
+    fn as_str(&self) -> &'static str {
+        match self {
+            EntityType::Npc => "npc",
+            EntityType::Location => "location",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 struct EntitySuggestion {
     entity_type: EntityType,
     name: String,
     slug: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CommandSuggestion {
+    label: String,
+    completion: String,
+    helper_text: Option<SuggestionHelperText>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SuggestionHelperText {
+    Command,
+    Npc,
+    Location,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -242,23 +241,6 @@ struct LocationDeletePayload {
     vault_path: String,
     created_at: String,
     updated_at: String,
-}
-
-struct AppState {
-    workspace_root: PathBuf,
-}
-
-fn normalize_ollama_base_url(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        return String::new();
-    }
-
-    if trimmed.contains("://") {
-        trimmed.to_string()
-    } else {
-        format!("http://{trimmed}")
-    }
 }
 
 fn normalize_sex(value: &str) -> Result<String, String> {
@@ -478,143 +460,359 @@ fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
 }
 
 #[tauri::command]
+async fn suggest_command_input(
+    input: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CommandSuggestion>, String> {
+    if input.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let manifest = dnd_core::command_manifest::command_manifest();
+    let parsed = dnd_core::command_parse::parse_command_input(&input);
+    let mut suggestions = build_command_suggestions(&manifest, &parsed, &input);
+
+    let mode = {
+        let editor = state.editor_session.lock().await;
+        editor.mode
+    };
+
+    suggestions.retain(|suggestion| {
+        let completion = suggestion.completion.trim().to_ascii_lowercase();
+        let label = suggestion.label.trim().to_ascii_lowercase();
+
+        if mode != app_state::EditorMode::Npc {
+            if completion == "npc"
+                || completion.starts_with("npc ")
+                || label == "npc"
+                || label.starts_with("npc ")
+            {
+                return false;
+            }
+            if completion == "reroll" || label == "reroll" {
+                return false;
+            }
+        }
+
+        if mode != app_state::EditorMode::Location
+            && (completion == "location"
+                || completion.starts_with("location ")
+                || label == "location"
+                || label.starts_with("location "))
+        {
+            return false;
+        }
+
+        if mode == app_state::EditorMode::None && (completion == "cancel" || label == "cancel") {
+            return false;
+        }
+
+        true
+    });
+
+    let trimmed = input.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    let is_load_context = lowered == "load" || lowered.starts_with("load ");
+    let is_delete_context = lowered == "delete" || lowered.starts_with("delete ");
+    let search_query = if is_load_context {
+        trimmed[4..].trim()
+    } else if is_delete_context {
+        trimmed[6..].trim()
+    } else {
+        trimmed
+    };
+
+    if !search_query.is_empty()
+        && (is_load_context
+            || is_delete_context
+            || !starts_with_known_command_root(trimmed, &manifest))
+    {
+        let entity_results = search_entities(search_query.to_string(), Some(6)).await?;
+        let prefix = if is_load_context {
+            Some("load")
+        } else if is_delete_context {
+            Some("delete")
+        } else {
+            None
+        };
+
+        for entity in entity_results {
+            let completion = match prefix {
+                Some(value) => format!("{value} {}", entity.name),
+                None => entity.name.clone(),
+            };
+            suggestions.push(CommandSuggestion {
+                label: entity.name,
+                completion,
+                helper_text: Some(match entity.entity_type {
+                    EntityType::Npc => SuggestionHelperText::Npc,
+                    EntityType::Location => SuggestionHelperText::Location,
+                }),
+            });
+        }
+    }
+
+    Ok(suggestions)
+}
+
+fn build_command_suggestions(
+    manifest: &CommandManifest,
+    parsed: &ParseResult,
+    input: &str,
+) -> Vec<CommandSuggestion> {
+    if matches!(parsed.completion.stage, ParseStage::Root) {
+        return build_root_suggestions(manifest, &parsed.completion.current_token);
+    }
+
+    if matches!(parsed.completion.stage, ParseStage::Subcommand) {
+        return build_subcommand_suggestions(
+            manifest,
+            parsed.completion.root.as_deref(),
+            input,
+            &parsed.completion.current_token,
+        );
+    }
+
+    build_argument_suggestions(manifest, parsed, input)
+}
+
+fn build_root_suggestions(manifest: &CommandManifest, token: &str) -> Vec<CommandSuggestion> {
+    let prefix = token.to_ascii_lowercase();
+    manifest
+        .commands
+        .iter()
+        .filter(|cmd| cmd.show_in_autocomplete)
+        .filter(|cmd| cmd.name.starts_with(&prefix))
+        .map(|cmd| CommandSuggestion {
+            label: cmd.name.clone(),
+            completion: format!("{}{}", cmd.name, completion_suffix(cmd)),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
+}
+
+fn build_subcommand_suggestions(
+    manifest: &CommandManifest,
+    root: Option<&str>,
+    input: &str,
+    token: &str,
+) -> Vec<CommandSuggestion> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let Some(command) = find_command(manifest, root) else {
+        return Vec::new();
+    };
+
+    let prefix = token.to_ascii_lowercase();
+    let base = replace_current_token(input, token);
+    command
+        .subcommands
+        .iter()
+        .filter(|subcommand| subcommand.name.starts_with(&prefix))
+        .map(|subcommand| CommandSuggestion {
+            label: format!("{} {}", command.name, subcommand.name),
+            completion: format!("{base}{} ", subcommand.name),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
+}
+
+fn build_argument_suggestions(
+    manifest: &CommandManifest,
+    parsed: &ParseResult,
+    input: &str,
+) -> Vec<CommandSuggestion> {
+    let Some(root) = parsed.completion.root.as_deref() else {
+        return Vec::new();
+    };
+    let Some(command) = find_command(manifest, root) else {
+        return Vec::new();
+    };
+
+    let subcommand = parsed
+        .completion
+        .subcommand
+        .as_ref()
+        .and_then(|item| command.subcommands.iter().find(|sub| sub.name == *item));
+
+    if command.name == "npc" && subcommand.is_some_and(|item| item.name == "travel") {
+        let normalized: Vec<String> = parsed
+            .normalized_tokens
+            .iter()
+            .map(|token| token.to_ascii_lowercase())
+            .collect();
+        let has_to = normalized.len() >= 3 && normalized[2] == "to";
+        if !has_to {
+            return vec![CommandSuggestion {
+                label: "npc travel to".to_string(),
+                completion: "npc travel to ".to_string(),
+                helper_text: Some(SuggestionHelperText::Command),
+            }];
+        }
+    }
+
+    if command.name == "npc"
+        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
+    {
+        let field_names = [
+            "name",
+            "race",
+            "occupation",
+            "sex",
+            "age",
+            "height",
+            "weight",
+            "background",
+            "want",
+            "secret",
+            "carrying",
+        ];
+        let args = &parsed.normalized_tokens[2..];
+        let should_suggest_fields =
+            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
+
+        if should_suggest_fields {
+            let prefix = parsed.completion.current_token.to_ascii_lowercase();
+            let base = replace_current_token(input, &parsed.completion.current_token);
+            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
+                "npc set"
+            } else {
+                "npc reroll"
+            };
+
+            return field_names
+                .iter()
+                .filter(|field| field.starts_with(&prefix))
+                .map(|field| CommandSuggestion {
+                    label: format!("{prefix_label} {field}"),
+                    completion: format!("{base}{field} "),
+                    helper_text: Some(SuggestionHelperText::Command),
+                })
+                .collect();
+        }
+    }
+
+    let options = match subcommand {
+        Some(item) => &item.options,
+        None => &command.options,
+    };
+    if options.is_empty() {
+        return Vec::new();
+    }
+
+    let current = parsed.completion.current_token.to_ascii_lowercase();
+    let used: std::collections::HashSet<String> = parsed
+        .normalized_tokens
+        .iter()
+        .filter(|token| token.starts_with('-'))
+        .cloned()
+        .collect();
+    let base = replace_current_token(input, &parsed.completion.current_token);
+    let should_filter_prefix = current.starts_with('-') || !current.is_empty();
+
+    options
+        .iter()
+        .filter(|option| !used.contains(&option.name) || option.takes_value)
+        .filter(|option| !should_filter_prefix || option.name.starts_with(&current))
+        .map(|option| {
+            let label = match subcommand {
+                Some(item) => format!("{} {} {}", command.name, item.name, option.name),
+                None => format!("{} {}", command.name, option.name),
+            };
+            let suffix = if option.takes_value { " " } else { "" };
+            CommandSuggestion {
+                label,
+                completion: format!("{base}{}{suffix}", option.name),
+                helper_text: Some(SuggestionHelperText::Command),
+            }
+        })
+        .collect()
+}
+
+fn find_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {
+    let normalized = root.to_ascii_lowercase();
+    manifest
+        .commands
+        .iter()
+        .find(|command| command.name == normalized)
+}
+
+fn replace_current_token(input: &str, current_token: &str) -> String {
+    if current_token.is_empty() {
+        return input.to_string();
+    }
+
+    let suffix_len = current_token.len();
+    if input.len() < suffix_len {
+        return input.to_string();
+    }
+
+    input[..input.len() - suffix_len].to_string()
+}
+
+fn completion_suffix(command: &CommandSpec) -> &'static str {
+    if !command.subcommands.is_empty() || !command.options.is_empty() || command.requires_subcommand
+    {
+        " "
+    } else {
+        ""
+    }
+}
+
+fn starts_with_known_command_root(input: &str, manifest: &CommandManifest) -> bool {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Some(first) = trimmed.split_whitespace().next() else {
+        return false;
+    };
+    let lowered = first.to_ascii_lowercase();
+    manifest.commands.iter().any(|command| command.name == lowered)
+}
+
+#[tauri::command]
 async fn run_command(
     input: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<CommandResponse, String> {
-    Ok(dnd_core::command::execute_line(&state.workspace_root, &input).await)
-}
+    let normalized_input = normalize_input_for_dispatch(&input);
 
-#[tauri::command]
-fn get_setup_state(state: tauri::State<'_, AppState>) -> Result<SetupState, String> {
-    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-    let issues = required_issues(&loaded.effective);
-
-    Ok(SetupState {
-        needs_setup: !issues.is_empty(),
-        issues,
-        global_config_path: loaded.paths.global.display().to_string(),
-        default_ollama_base_url: loaded.effective.ollama.base_url,
-    })
-}
-
-#[tauri::command]
-fn validate_vault_path(path: String) -> Result<(), String> {
-    let normalized = path.trim();
-    if normalized.is_empty() {
-        return Err("vault path cannot be empty".to_string());
-    }
-
-    let resolved = shellexpand::tilde(normalized).to_string();
-    let path = PathBuf::from(resolved);
-
-    if !path.exists() {
-        return Err(format!("vault path does not exist: {}", path.display()));
-    }
-    if !path.is_dir() {
-        return Err(format!("vault path is not a directory: {}", path.display()));
-    }
-    is_path_writable(&path).map_err(|err| err.to_string())
-}
-
-#[tauri::command]
-async fn probe_ollama(base_url: String, timeout_seconds: u64) -> Result<OllamaProbeResult, String> {
-    let normalized_base_url = normalize_ollama_base_url(&base_url);
-    health::validate_ollama_url(&normalized_base_url).map_err(|err| err.to_string())?;
-
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
-        .build()
-        .map_err(|err| err.to_string())?;
-
-    let url = format!("{}/api/tags", normalized_base_url.trim_end_matches('/'));
-    let response = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|err| err.to_string())?;
-
-    if !response.status().is_success() {
-        return Ok(OllamaProbeResult {
-            ok: false,
-            detail: format!("ollama responded with {}", response.status()),
-            models: Vec::new(),
-        });
-    }
-
-    let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-    let mut names = Vec::new();
-    if let Some(models) = value.get("models").and_then(|m| m.as_array()) {
-        for model in models {
-            if let Some(name) = model.get("name").and_then(|n| n.as_str()) {
-                names.push(name.to_string());
+    if let Some(response) =
+        router::run_desktop_routed_command(&normalized_input, state.clone()).await?
+    {
+        let skip_history_push = matches!(
+            response.client_event,
+            Some(CommandClientEvent::ClearTerminal {
+                clear_history: true
+            })
+        );
+        if !skip_history_push {
+            let trimmed = normalized_input.trim();
+            if !trimmed.is_empty() {
+                let mut service = state.command_service.lock().await;
+                service.session_mut().push_history(trimmed, 50);
             }
         }
+        return Ok(response);
     }
 
-    Ok(OllamaProbeResult {
-        ok: true,
-        detail: if names.is_empty() {
-            "connected (no models returned)".to_string()
-        } else {
-            format!("connected ({} model(s) found)", names.len())
-        },
-        models: names,
-    })
+    let mut service = state.command_service.lock().await;
+    Ok(service.execute_line(&normalized_input).await)
 }
 
-#[tauri::command]
-async fn save_onboarding_config(
-    input: SaveOnboardingInput,
-    state: tauri::State<'_, AppState>,
-) -> Result<SaveOnboardingResult, String> {
-    validate_vault_path(input.vault_path.clone())?;
-    let normalized_base_url = normalize_ollama_base_url(&input.ollama_base_url);
-    health::validate_ollama_url(&normalized_base_url).map_err(|err| err.to_string())?;
-
-    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-    let mut config = loaded.effective;
-    config.vault.path = Some(PathBuf::from(
-        shellexpand::tilde(input.vault_path.trim()).to_string(),
-    ));
-    config.ollama.base_url = normalized_base_url;
-    config.ollama.model = Some(input.model.trim().to_string());
-
-    let issues = required_issues(&config);
-    if !issues.is_empty() {
-        return Err(format!(
-            "missing required config:\n- {}",
-            issues.join("\n- ")
-        ));
+fn normalize_input_for_dispatch(input: &str) -> String {
+    let normalized = normalize_command_input(input);
+    let parsed = parse_command_input(&normalized);
+    if parsed.canonical_input.is_empty() {
+        normalized
+    } else {
+        parsed.canonical_input
     }
-
-    let config_path = save_config(&state.workspace_root, &config).map_err(|err| err.to_string())?;
-    let vault_path = config
-        .vault
-        .path
-        .clone()
-        .ok_or_else(|| "vault.path is not configured".to_string())?;
-    let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
-    let db = db::init_database().await.map_err(|err| err.to_string())?;
-
-    let report = health::run_quick_checks(&config).await;
-    let warnings = report
-        .items
-        .into_iter()
-        .filter(|item| !item.ok)
-        .map(|item| format!("{}: {}", item.name, item.detail))
-        .collect();
-
-    Ok(SaveOnboardingResult {
-        config_path: config_path.display().to_string(),
-        vault_path: vault.root().display().to_string(),
-        db_path: db.path.display().to_string(),
-        warnings,
-    })
 }
 
-#[tauri::command]
 async fn generate_npc_seed(
     input: GenerateNpcSeedInput,
     state: tauri::State<'_, AppState>,
@@ -770,7 +968,6 @@ async fn generate_npc_seed(
     Err("failed to generate valid structured NPC output from ollama".to_string())
 }
 
-#[tauri::command]
 async fn reroll_npc_field(
     input: RerollNpcFieldInput,
     state: tauri::State<'_, AppState>,
@@ -963,7 +1160,6 @@ async fn reroll_npc_field(
     Err(format!("failed to reroll npc field: {}", field))
 }
 
-#[tauri::command]
 async fn ensure_location_exists(
     input: EnsureLocationInput,
     state: tauri::State<'_, AppState>,
@@ -1078,7 +1274,6 @@ async fn ensure_location_exists(
     })
 }
 
-#[tauri::command]
 async fn save_npc_draft(
     input: SaveNpcDraftInput,
     state: tauri::State<'_, AppState>,
@@ -1276,7 +1471,6 @@ async fn save_npc_draft(
     })
 }
 
-#[tauri::command]
 async fn save_location_draft(
     input: SaveLocationDraftInput,
     state: tauri::State<'_, AppState>,
@@ -1436,7 +1630,6 @@ async fn save_location_draft(
     })
 }
 
-#[tauri::command]
 async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<EntitySuggestion>, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -1472,7 +1665,6 @@ async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<Entity
     Ok(items)
 }
 
-#[tauri::command]
 async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -1533,7 +1725,6 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
     Ok(None)
 }
 
-#[tauri::command]
 async fn soft_delete_entity(
     input: SoftDeleteEntityInput,
     state: tauri::State<'_, AppState>,
@@ -1669,7 +1860,6 @@ async fn soft_delete_entity(
     Err(format!("no npc or location found for: {target}"))
 }
 
-#[tauri::command]
 async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
     let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
     validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
@@ -1818,12 +2008,7 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
 
 #[tauri::command]
 fn get_command_manifest() -> CommandManifest {
-    command_manifest()
-}
-
-#[tauri::command]
-fn parse_command_input(input: String) -> ParseResult {
-    parse_shared_command_input(&input)
+    dnd_core::command_manifest::command_manifest()
 }
 
 #[tauri::command]
@@ -1833,26 +2018,18 @@ fn exit_app(app: tauri::AppHandle) {
 
 fn main() {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+    let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
 
     tauri::Builder::default()
-        .manage(AppState { workspace_root })
+        .manage(AppState {
+            workspace_root,
+            command_service: Mutex::new(command_service),
+            editor_session: Mutex::new(EditorSession::default()),
+        })
         .invoke_handler(tauri::generate_handler![
             run_command,
-            get_setup_state,
-            validate_vault_path,
-            probe_ollama,
-            save_onboarding_config,
-            generate_npc_seed,
-            reroll_npc_field,
-            ensure_location_exists,
-            save_npc_draft,
-            save_location_draft,
-            search_entities,
-            resolve_entity,
-            soft_delete_entity,
-            undo_last_soft_delete,
+            suggest_command_input,
             get_command_manifest,
-            parse_command_input,
             exit_app
         ])
         .run(tauri::generate_context!())

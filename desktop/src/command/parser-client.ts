@@ -13,8 +13,7 @@ export type CommandSpec = {
   options: OptionSpec[];
   requires_subcommand: boolean;
   canonical_help_command?: string | null;
-  execution: "core" | "client";
-  clap_managed: boolean;
+  execution: "core" | "desktop";
   show_in_autocomplete: boolean;
 };
 
@@ -23,7 +22,6 @@ export type SubcommandSpec = {
   summary: string;
   options: OptionSpec[];
   examples: string[];
-  clap_managed: boolean;
 };
 
 export type OptionSpec = {
@@ -41,33 +39,18 @@ export type CommandAlias = {
   summary: string;
 };
 
-export type ParseResult = {
-  raw_input: string;
-  raw_tokens: string[];
-  normalized_tokens: string[];
-  canonical_input: string;
-  valid: boolean;
-  diagnostics: ParseDiagnostic[];
-  completion: CompletionContext;
-};
+export type SuggestionHelperText = "command" | "npc" | "location";
 
-export type ParseDiagnostic = {
-  code: string;
-  message: string;
-};
-
-export type CompletionContext = {
-  stage: "root" | "subcommand" | "argument";
-  root?: string | null;
-  subcommand?: string | null;
-  current_token: string;
-  ends_with_space: boolean;
+export type CommandSuggestion = {
+  label: string;
+  completion: string;
+  helper_text?: SuggestionHelperText | null;
 };
 
 export async function loadManifest(): Promise<CommandManifest> {
   return invoke<CommandManifest>("get_command_manifest");
 }
 
-export async function parseInput(input: string): Promise<ParseResult> {
-  return invoke<ParseResult>("parse_command_input", { input });
+export async function suggestInput(input: string): Promise<CommandSuggestion[]> {
+  return invoke<CommandSuggestion[]>("suggest_command_input", { input });
 }

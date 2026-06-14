@@ -1,34 +1,9 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
-import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
-import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
-import {
-  resolveEntity,
-  saveLocationDraft,
-  searchEntities,
-  softDeleteEntity,
-  undoLastSoftDelete,
-  type EntityDetails,
-  type EntitySuggestion,
-  type SaveLocationDraftInput
-} from "./entity/client";
+import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
-import {
-  ensureLocationExists,
-  generateNpcSeed,
-  rerollNpcField,
-  saveNpcDraft,
-  type NpcSeed,
-  type RerollNpcFieldResult
-} from "./npc/client";
-import {
-  getSetupState,
-  probeOllama,
-  saveOnboardingConfig,
-  validateVaultPath
-} from "./onboarding/client";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
 
@@ -46,7 +21,43 @@ type CommandResponse = {
   exit_code: number;
   segments?: OutputSegment[];
   output_doc?: OutputDoc | null;
+  client_event?: CommandClientEvent | null;
 };
+
+type CommandClientEvent =
+  | {
+      kind: "load_npc_draft";
+      id: string;
+      name: string;
+      race: string;
+      occupation: string;
+      sex: string;
+      age: string;
+      height: string;
+      weight_lbs: string;
+      background: string;
+      want_need: string;
+      secret_obstacle: string;
+      carrying: string[];
+      location: string;
+    }
+  | {
+      kind: "load_location_draft";
+      id: string;
+      name: string;
+      slug: string;
+      vault_path: string;
+    }
+  | {
+      kind: "clear_drafts";
+    }
+  | {
+      kind: "clear_terminal";
+      clear_history: boolean;
+    }
+  | {
+      kind: "exit_requested";
+    };
 
 type OutputSegment = {
   kind: "text" | "error";
@@ -55,12 +66,10 @@ type OutputSegment = {
 };
 
 type InlineCommandMeta = {
-  commands: Set<string>;
   commandMap: Map<string, CommandSpecMeta>;
 };
 
 type CommandSpecMeta = {
-  name: string;
   subcommands: Set<string>;
   requiresSubcommand: boolean;
   canonicalHelpCommand: string | null;
@@ -89,12 +98,10 @@ type LocationDraft = {
   vault_path: string;
 };
 
-type SuggestionViewItem = SuggestionItem & {
+type SuggestionViewItem = {
+  label: string;
+  completion: string;
   helperText?: "command" | "npc" | "location";
-};
-
-type EntitySuggestionItem = SuggestionViewItem & {
-  helperText: "npc" | "location";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -143,58 +150,14 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [parsedInput, setParsedInput] = createSignal<ParseResult | null>(null);
-  const [onboardingActive, setOnboardingActive] = createSignal(false);
-  const [onboardingStep, setOnboardingStep] = createSignal(0);
-  const [vaultPath, setVaultPath] = createSignal("");
-  const [ollamaBaseUrl, setOllamaBaseUrl] = createSignal("http://127.0.0.1:11434");
-  const [ollamaModels, setOllamaModels] = createSignal<string[]>([]);
-  const [selectedModel, setSelectedModel] = createSignal("");
   const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
-  const [entitySuggestions, setEntitySuggestions] = createSignal<EntitySuggestionItem[]>([]);
+  const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
-  const suggestionList = createMemo(() => {
-    if (command().trim().length === 0 || running() || suggestionsDismissed()) {
-      return [] as SuggestionViewItem[];
-    }
-
-    const commandSuggestions: SuggestionViewItem[] = buildAutocompleteSuggestions(command(), manifest(), parsedInput()).map((item) => ({
-      ...item,
-      helperText: "command"
-    }));
-    const mode = editorMode();
-    const filtered = commandSuggestions.filter((item) => {
-      const completion = item.completion.trim().toLowerCase();
-      const label = item.label.trim().toLowerCase();
-
-      if (mode !== "npc") {
-        if (completion === "npc" || completion.startsWith("npc ") || label === "npc" || label.startsWith("npc ")) {
-          return false;
-        }
-        if (completion === "reroll" || label === "reroll") {
-          return false;
-        }
-      }
-
-      if (mode !== "location") {
-        if (completion === "location" || completion.startsWith("location ") || label === "location" || label.startsWith("location ")) {
-          return false;
-        }
-      }
-
-      if (mode === "none" && (completion === "cancel" || label === "cancel")) {
-        return false;
-      }
-
-      return true;
-    });
-
-    return [...filtered, ...entitySuggestions()];
-  });
+  const suggestionList = createMemo(() => suggestions());
 
   createEffect(() => {
     const size = suggestionList().length;
@@ -209,73 +172,38 @@ export default function App() {
 
   let outputRef: HTMLDivElement | undefined;
   let inputRef: HTMLInputElement | undefined;
-  let parseGeneration = 0;
-  let entitySuggestionGeneration = 0;
+  let suggestionGeneration = 0;
 
   createEffect(() => {
+    if (!manifest()) {
+      setSuggestions([]);
+      return;
+    }
+
+    if (running() || suggestionsDismissed()) {
+      setSuggestions([]);
+      return;
+    }
+
     const currentCommand = command();
-    const loadedManifest = manifest();
-
-    if (!loadedManifest) {
-      setParsedInput(null);
+    if (currentCommand.trim().length === 0) {
+      setSuggestions([]);
       return;
     }
 
-    const generation = parseGeneration + 1;
-    parseGeneration = generation;
+    const generation = suggestionGeneration + 1;
+    suggestionGeneration = generation;
 
-    void parseInput(currentCommand)
-      .then((result) => {
-        if (parseGeneration === generation) {
-          setParsedInput(result);
-        }
-      })
-      .catch(() => {
-        if (parseGeneration === generation) {
-          setParsedInput(null);
-        }
-      });
-  });
-
-  createEffect(() => {
-    const raw = command();
-    const query = raw.trim();
-    const meta = commandMeta();
-    const lowered = query.toLowerCase();
-
-    const isLoadContext = lowered === "load" || lowered.startsWith("load ");
-    const isDeleteContext = lowered === "delete" || lowered.startsWith("delete ");
-    const searchQuery = isLoadContext
-      ? query.slice(4).trim()
-      : isDeleteContext
-        ? query.slice(6).trim()
-        : query;
-
-    if (!query || (!isLoadContext && !isDeleteContext && startsWithKnownCommandRoot(query, meta))) {
-      setEntitySuggestions([]);
-      return;
-    }
-
-    if (!searchQuery) {
-      setEntitySuggestions([]);
-      return;
-    }
-
-    const generation = entitySuggestionGeneration + 1;
-    entitySuggestionGeneration = generation;
-
-    void searchEntities(searchQuery, 6)
+    void suggestInput(currentCommand)
       .then((results) => {
-        if (entitySuggestionGeneration !== generation) {
+        if (suggestionGeneration !== generation) {
           return;
         }
-
-        const completionPrefix = isLoadContext ? "load" : isDeleteContext ? "delete" : null;
-        setEntitySuggestions(results.map((result) => toEntitySuggestionItem(result, completionPrefix)));
+        setSuggestions(results.map(toSuggestionViewItem));
       })
       .catch(() => {
-        if (entitySuggestionGeneration === generation) {
-          setEntitySuggestions([]);
+        if (suggestionGeneration === generation) {
+          setSuggestions([]);
         }
       });
   });
@@ -350,42 +278,6 @@ export default function App() {
     );
   };
 
-  const normalizeOllamaInput = (value: string): string => {
-    const trimmed = value.trim();
-    if (!trimmed) {
-      return "";
-    }
-    if (trimmed.includes("://")) {
-      return trimmed;
-    }
-    return `http://${trimmed}`;
-  };
-
-  const probeOllamaWithSpinner = async (baseUrl: string) => {
-    const normalized = normalizeOllamaInput(baseUrl);
-    const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} checking Ollama at ${normalized} ...`);
-    let frame = 0;
-    const timer = window.setInterval(() => {
-      frame = (frame + 1) % SPINNER_FRAMES.length;
-      updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} checking Ollama at ${normalized} ...`);
-    }, 100);
-
-    try {
-      const result = await probeOllama(normalized, 15);
-      if (result.ok) {
-        updateEntry(spinnerId, "spinner", `OK connected to Ollama at ${normalized}`);
-      } else {
-        updateEntry(spinnerId, "spinner", `FAILED to connect to Ollama at ${normalized}`);
-      }
-      return { normalized, result };
-    } catch (error) {
-      updateEntry(spinnerId, "spinner", `FAILED to connect to Ollama at ${normalized}`);
-      throw error;
-    } finally {
-      window.clearInterval(timer);
-    }
-  };
-
   const pushCommandHistory = (raw: string) => {
     const value = raw.trim();
     if (!value) {
@@ -455,331 +347,40 @@ export default function App() {
     setActiveSuggestionIndex(0);
   };
 
-  const historyOutput = (limit: number): string => {
-    const history = commandHistory();
-    if (history.length === 0) {
-      return "(no history)";
-    }
-
-    const safeLimit = Math.max(1, Math.min(MAX_COMMAND_HISTORY, limit));
-    const start = Math.max(0, history.length - safeLimit);
-    return history
-      .slice(start)
-      .map((item, idx) => `${start + idx + 1}: ${item}`)
-      .join("\n");
-  };
-
-  const parseHistoryExpansion = (raw: string): { ok: true; command: string } | { ok: false; error: string } | null => {
-    const trimmed = raw.trim();
-    if (trimmed === "!!") {
-      const history = commandHistory();
-      if (history.length === 0) {
-        return { ok: false, error: "no command history available" };
-      }
-      return { ok: true, command: history[history.length - 1] };
-    }
-
-    const match = trimmed.match(/^!(\d+)$/);
-    if (!match) {
-      return null;
-    }
-
-    const index = Number.parseInt(match[1], 10);
-    const history = commandHistory();
-    if (Number.isNaN(index) || index < 1 || index > history.length) {
-      return { ok: false, error: `history index out of range: ${index}` };
-    }
-
-    return { ok: true, command: history[index - 1] };
-  };
-
-  const runBuiltInCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
-    const tokens = raw.trim().split(/\s+/);
-    const head = tokens[0]?.toLowerCase();
-    if (!head) {
-      return { handled: true, ok: true, recordHistory: false };
-    }
-
-    if (head === "exit") {
-      await invoke("exit_app");
-      return { handled: true, ok: true, recordHistory: false };
-    }
-
-    if (head === "clear") {
-      if (tokens.length === 1) {
-        setEntries([]);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-      if (tokens.length === 2 && tokens[1] === "--history") {
-        setEntries([]);
-        setCommandHistory([]);
-        resetHistoryNavigation();
-        return { handled: true, ok: true, recordHistory: false };
-      }
-
-      appendEntry("error", "usage: clear [--history]");
-      return { handled: true, ok: false, recordHistory: false };
-    }
-
-    if (head === "history") {
-      if (tokens.length === 2 && tokens[1] === "clear") {
-        setEntries([]);
-        setCommandHistory([]);
-        resetHistoryNavigation();
-        return { handled: true, ok: true, recordHistory: false };
-      }
-
-      const limit = tokens.length > 1 ? Number.parseInt(tokens[1], 10) : 20;
-      if (tokens.length > 1 && (Number.isNaN(limit) || limit < 1)) {
-        appendEntry("error", "usage: history [limit|clear]");
-        return { handled: true, ok: false, recordHistory: false };
-      }
-      appendEntry("output", historyOutput(limit));
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    return { handled: false, ok: false, recordHistory: false };
-  };
-
   const executeCommand = async (rawInput: string) => {
-    const expansion = parseHistoryExpansion(rawInput);
-    if (expansion && !expansion.ok) {
-      appendEntry("error", expansion.error);
-      return;
-    }
-
-    const raw = expansion && expansion.ok ? expansion.command : rawInput;
+    const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const builtIn = await runBuiltInCommand(raw);
-    if (builtIn.handled) {
-      if (builtIn.ok && builtIn.recordHistory) {
-        pushCommandHistory(raw);
-      }
-      return;
-    }
-
-    const loweredRaw = raw.trim().toLowerCase();
-
-    if (loweredRaw === "save") {
-      if (onboardingActive()) {
-        const onboardingSave = await runOnboardingCommand("save");
-        if (onboardingSave.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      if (npcDraft()) {
-        const npcSave = await runNpcEditorCommand("save");
-        if (npcSave.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      if (locationDraft()) {
-        const locationSave = await runLocationEditorCommand("save");
-        if (locationSave.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      appendEntry("info", "nothing to save right now.");
-      pushCommandHistory(raw);
-      return;
-    }
-
-    if (loweredRaw === "reroll") {
-      if (npcDraft()) {
-        const npcReroll = await runNpcEditorCommand("reroll");
-        if (npcReroll.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      appendEntry("info", "nothing to reroll right now.");
-      pushCommandHistory(raw);
-      return;
-    }
-
-    if (loweredRaw === "cancel") {
-      if (onboardingActive()) {
-        const onboardingCancel = await runOnboardingCommand("cancel setup");
-        if (onboardingCancel.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      if (npcDraft()) {
-        const npcCancel = await runNpcEditorCommand("cancel");
-        if (npcCancel.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      if (locationDraft()) {
-        const locationCancel = await runLocationEditorCommand("cancel");
-        if (locationCancel.recordHistory) {
-          pushCommandHistory(raw);
-        }
-        return;
-      }
-
-      appendEntry("info", "nothing to cancel right now.");
-      pushCommandHistory(raw);
-      return;
-    }
-
-    const loadMatch = raw.trim().match(/^load\s+(.+)$/i);
-    if (loweredRaw === "load") {
-      appendEntry("info", "usage: load <npc-or-location-name>");
-      pushCommandHistory(raw);
-      return;
-    }
-    if (loadMatch) {
-      const target = loadMatch[1].trim();
-      if (!target) {
-        appendEntry("info", "usage: load <npc-or-location-name>");
-        pushCommandHistory(raw);
-        return;
-      }
-
-      try {
-        const entity = await resolveEntity(target);
-        if (!entity) {
-          appendEntry("info", `no npc or location found for: ${target}`);
-          pushCommandHistory(raw);
-          return;
-        }
-        loadEntityIntoEditor(entity);
-        pushCommandHistory(raw);
-        return;
-      } catch (error) {
-        appendEntry("error", String(error));
-        return;
-      }
-    }
-
-    const deleteMatch = raw.trim().match(/^delete\s+(.+)$/i);
-    if (loweredRaw === "delete") {
-      appendEntry("info", "usage: delete <npc-or-location-name>");
-      pushCommandHistory(raw);
-      return;
-    }
-    if (deleteMatch) {
-      const target = deleteMatch[1].trim();
-      if (!target) {
-        appendEntry("info", "usage: delete <npc-or-location-name>");
-        pushCommandHistory(raw);
-        return;
-      }
-
-      try {
-        const result = await softDeleteEntity({ target });
-        appendEntry(
-          "output",
-          [
-            "## Deleted",
-            `type: ${result.entity_type}`,
-            `name: ${result.name}`,
-            `slug: ${result.slug}`,
-            `trash: ${result.trash_vault_path}`,
-            "tip: run undo to restore it."
-          ].join("\n")
-        );
-
-        if (result.entity_type === "npc" && npcDraft()?.id === result.id) {
-          setNpcDraft(null);
-          setEditorMode("none");
-          appendEntry("info", "deleted NPC was open in editor; editor closed.");
-        }
-        if (result.entity_type === "location" && locationDraft()?.id === result.id) {
-          setLocationDraft(null);
-          setEditorMode("none");
-          appendEntry("info", "deleted location was open in editor; editor closed.");
-        }
-
-        pushCommandHistory(raw);
-        return;
-      } catch (error) {
-        appendEntry("error", String(error));
-        return;
-      }
-    }
-
-    if (loweredRaw === "undo") {
-      try {
-        const result = await undoLastSoftDelete();
-        appendEntry(
-          "output",
-          [
-            "## Undo complete",
-            `type: ${result.entity_type}`,
-            `name: ${result.name}`,
-            `slug: ${result.slug}`,
-            `vault: ${result.vault_path}`
-          ].join("\n")
-        );
-        pushCommandHistory(raw);
-        return;
-      } catch (error) {
-        appendEntry("info", String(error));
-        pushCommandHistory(raw);
-        return;
-      }
-    }
-
-    const onboarding = await runOnboardingCommand(raw);
-    if (onboarding.handled) {
-      if (onboarding.recordHistory) {
-        pushCommandHistory(raw);
-      }
-      return;
-    }
-
-    const npcEditor = await runNpcEditorCommand(raw);
-    if (npcEditor.handled) {
-      if (npcEditor.recordHistory) {
-        pushCommandHistory(raw);
-      }
-      return;
-    }
-
-    const locationEditor = await runLocationEditorCommand(raw);
-    if (locationEditor.handled) {
-      if (locationEditor.recordHistory) {
-        pushCommandHistory(raw);
-      }
-      return;
-    }
-
-    const trimmedRaw = raw.trim();
-    if (trimmedRaw.length > 0 && !startsWithKnownCommandRoot(trimmedRaw, commandMeta())) {
-      try {
-        const entity = await resolveEntity(trimmedRaw);
-        if (entity) {
-          appendEntry("output", entity.name, entityDetailsDoc(entity));
-          pushCommandHistory(raw);
-          return;
-        }
-      } catch {
-        // ignore resolution failures and continue to normal command execution
-      }
-    }
+    const spinnerLabel = commandSpinnerLabel(raw);
+    const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
+    let spinnerFrame = 0;
+    const spinnerTimer = spinnerId
+      ? window.setInterval(() => {
+          spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
+          updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[spinnerFrame]} ${spinnerLabel} ...`);
+        }, 100)
+      : null;
 
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
       const rendered = responseToRenderableModel(response, commandMeta());
       if (response.ok) {
-        appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
+        if (spinnerId !== null) {
+          updateEntry(spinnerId, "spinner", `OK ${spinnerLabel}`);
+        }
+        applyClientEvent(response.client_event);
+        const outputDocOverride = outputDocFromClientEvent(response.client_event);
+        const suppressOutput =
+          response.client_event?.kind === "clear_terminal" && rendered.text.trim().length === 0;
+        if (!suppressOutput) {
+          appendEntry("output", rendered.text || "(ok)", outputDocOverride ?? rendered.outputDoc);
+        }
         pushCommandHistory(raw);
       } else {
+        if (spinnerId !== null) {
+          updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
+        }
         const errorText = response.error || rendered.text || "command failed";
         if (isBootstrapSetupMessage(errorText)) {
           appendEntry("output", errorText, rendered.outputDoc);
@@ -788,8 +389,14 @@ export default function App() {
         }
       }
     } catch (error) {
+      if (spinnerId !== null) {
+        updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
+      }
       appendEntry("error", `invoke error: ${String(error)}`);
     } finally {
+      if (spinnerTimer !== null) {
+        window.clearInterval(spinnerTimer);
+      }
       setRunning(false);
     }
   };
@@ -843,6 +450,7 @@ export default function App() {
       const response = await invoke<CommandResponse>("run_command", { input: "status" });
       const rendered = responseToRenderableModel(response, commandMeta());
       if (response.ok) {
+        applyClientEvent(response.client_event);
         appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
         return;
       }
@@ -864,939 +472,92 @@ export default function App() {
     }
   };
 
-  const makeNpcDraftFromSeed = (seed: NpcSeed): NpcDraft => ({
-    id: `npc_${Date.now()}`,
-    name: seed.name.trim(),
-    race: seed.race.trim(),
-    occupation: normalizeUnknown(seed.occupation),
-    sex: seed.sex,
-    age: normalizeUnknown(seed.age),
-    height: normalizeUnknown(seed.height),
-    weightLbs: normalizeUnknown(seed.weight_lbs),
-    background: normalizeUnknown(seed.background),
-    wantNeed: normalizeUnknown(seed.want_need),
-    secretObstacle: normalizeUnknown(seed.secret_obstacle),
-    carrying: normalizeUnknownList(seed.carrying),
-    location: "Unknown"
-  });
-
-  const appendNpcHelp = () => {
-    appendEntry(
-      "output",
-      [
-        "## NPC editor commands",
-        "create npc",
-        "npc show",
-        "npc rename <name>",
-        "npc set name <name>",
-        "npc set race <race>",
-        "npc set occupation <occupation>",
-        "npc set sex <male|female>",
-        "npc set age <age>",
-        "npc set height <height>",
-        "npc set weight <value>",
-        "npc set background <text>",
-        "npc set want <text>",
-        "npc set secret <text>",
-        "npc set carrying <item1, item2>",
-        "npc travel to <location>",
-        "npc reroll <field> [prompt]",
-        "reroll",
-        "cancel",
-        "npc save",
-        "npc cancel"
-      ].join("\n")
-    );
-  };
-
-  const appendNpcSummary = (draft: NpcDraft) => {
-    appendEntry("output", draft.name, npcDraftDoc(draft));
-  };
-
-  const appendLocationSummary = (draft: LocationDraft) => {
-    appendEntry(
-      "output",
-      [
-        "## Active Location draft",
-        `name: ${draft.name}`,
-        `slug: ${draft.slug}`,
-        `path: ${draft.vault_path}`,
-        "",
-        "Use save to persist this location."
-      ].join("\n")
-    );
-  };
-
-  const loadEntityIntoEditor = (entity: EntityDetails) => {
-    if (entity.entity_type === "npc") {
-      const sex = entity.sex?.toLowerCase() === "female" ? "female" : "male";
-      setLocationDraft(null);
-      setNpcDraft({
-        id: entity.id,
-        name: entity.name,
-        race: normalizeUnknown(entity.race),
-        occupation: normalizeUnknown(entity.occupation),
-        sex,
-        age: normalizeUnknown(entity.age),
-        height: normalizeUnknown(entity.height),
-        weightLbs: normalizeUnknown(entity.weight_lbs),
-        background: normalizeUnknown(entity.background),
-        wantNeed: normalizeUnknown(entity.want_need),
-        secretObstacle: normalizeUnknown(entity.secret_obstacle),
-        carrying: normalizeUnknownList(entity.carrying ?? undefined),
-        location: normalizeUnknown(entity.location)
-      });
-      setEditorMode("npc");
-      appendEntry("info", `loaded npc into editor: ${entity.name}`);
-      appendNpcSummary({
-        id: entity.id,
-        name: entity.name,
-        race: normalizeUnknown(entity.race),
-        occupation: normalizeUnknown(entity.occupation),
-        sex,
-        age: normalizeUnknown(entity.age),
-        height: normalizeUnknown(entity.height),
-        weightLbs: normalizeUnknown(entity.weight_lbs),
-        background: normalizeUnknown(entity.background),
-        wantNeed: normalizeUnknown(entity.want_need),
-        secretObstacle: normalizeUnknown(entity.secret_obstacle),
-        carrying: normalizeUnknownList(entity.carrying ?? undefined),
-        location: normalizeUnknown(entity.location)
-      });
+  const applyClientEvent = (event: CommandClientEvent | null | undefined) => {
+    if (!event) {
       return;
     }
 
-    const draft: LocationDraft = {
-      id: entity.id,
-      name: entity.name,
-      slug: entity.slug,
-      vault_path: entity.vault_path
-    };
-    setNpcDraft(null);
-    setLocationDraft(draft);
-    setEditorMode("location");
-    appendEntry("info", `loaded location into editor: ${entity.name}`);
-    appendLocationSummary(draft);
-  };
-
-  const runNpcEditorCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
-    const trimmed = raw.trim();
-    const lowered = trimmed.toLowerCase();
-
-    if (lowered === "create help" || lowered === "create --help") {
-      appendEntry(
-        "output",
-        [
-          "## Create commands",
-          "create npc",
-          "create npc <prompt text>"
-        ].join("\n")
-      );
-      return { handled: true, ok: true, recordHistory: true };
+    if (event.kind === "load_npc_draft") {
+      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
+      setLocationDraft(null);
+      const draft: NpcDraft = {
+        id: event.id,
+        name: event.name,
+        race: normalizeUnknown(event.race),
+        occupation: normalizeUnknown(event.occupation),
+        sex,
+        age: normalizeUnknown(event.age),
+        height: normalizeUnknown(event.height),
+        weightLbs: normalizeUnknown(event.weight_lbs),
+        background: normalizeUnknown(event.background),
+        wantNeed: normalizeUnknown(event.want_need),
+        secretObstacle: normalizeUnknown(event.secret_obstacle),
+        carrying: normalizeUnknownList(event.carrying),
+        location: normalizeUnknown(event.location)
+      };
+      setNpcDraft(draft);
+      setEditorMode("npc");
+      return;
     }
 
-    const createNpcMatch = trimmed.match(/^create\s+npc(?:\s+(.+))?$/i);
-    if (createNpcMatch) {
-      const prompt = createNpcMatch[1]?.trim();
-      const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} generating npc ...`);
-      let frame = 0;
-      const timer = window.setInterval(() => {
-        frame = (frame + 1) % SPINNER_FRAMES.length;
-        updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} generating npc ...`);
-      }, 100);
-
-      try {
-        const seed = await generateNpcSeed(prompt);
-        const draft = makeNpcDraftFromSeed(seed);
-        setLocationDraft(null);
-        setNpcDraft(draft);
-        setEditorMode("npc");
-        updateEntry(spinnerId, "spinner", "OK generated npc draft");
-        appendNpcSummary(draft);
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        updateEntry(spinnerId, "spinner", "FAILED npc generation");
-        appendEntry("error", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      } finally {
-        window.clearInterval(timer);
-      }
-    }
-
-    if (lowered === "npc help" || lowered === "npc --help") {
-      if (!npcDraft()) {
-        return { handled: false, ok: false, recordHistory: false };
-      }
-      appendNpcHelp();
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (lowered === "npc show") {
-      const draft = npcDraft();
-      if (!draft) {
-        return { handled: false, ok: false, recordHistory: false };
-      }
-      appendNpcSummary(draft);
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (lowered === "npc cancel" || lowered === "cancel") {
-      if (!npcDraft()) {
-        return { handled: false, ok: false, recordHistory: false };
-      }
+    if (event.kind === "clear_drafts") {
       setNpcDraft(null);
-      setEditorMode("none");
-      appendEntry("info", "npc draft discarded.");
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    const draft = npcDraft();
-    const isNpcCommand = lowered.startsWith("npc ");
-    if (!draft && isNpcCommand) {
-      return { handled: false, ok: false, recordHistory: false };
-    }
-
-    const renameMatch = trimmed.match(/^npc\s+rename\s+(.+)$/i);
-    if (renameMatch && draft) {
-      const name = renameMatch[1].trim();
-      if (!name) {
-        appendEntry("info", "npc name cannot be empty.");
-        return { handled: true, ok: false, recordHistory: true };
-      }
-      const next = { ...draft, name };
-      setNpcDraft(next);
-      appendNpcSummary(next);
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    const setFieldMatch = trimmed.match(/^npc\s+set\s+([a-z_]+)\s+(.+)$/i);
-    if (setFieldMatch && draft) {
-      const field = setFieldMatch[1].trim().toLowerCase();
-      const value = setFieldMatch[2].trim();
-      if (!value) {
-        appendEntry("info", "npc set value cannot be empty.");
-        return { handled: true, ok: false, recordHistory: true };
-      }
-
-      if (field === "location") {
-        appendEntry("info", "use npc travel to <location> to change location.");
-        return { handled: true, ok: false, recordHistory: true };
-      }
-
-      if (field === "sex") {
-        const sexRaw = value.toLowerCase();
-        if (sexRaw !== "male" && sexRaw !== "female") {
-          appendEntry("info", "sex must be one of: male, female");
-          return { handled: true, ok: false, recordHistory: true };
-        }
-        const next = { ...draft, sex: sexRaw as "male" | "female" };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "name") {
-        const next = { ...draft, name: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "race") {
-        const next = { ...draft, race: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "occupation") {
-        const next = { ...draft, occupation: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "age") {
-        const next = { ...draft, age: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "height") {
-        const next = { ...draft, height: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "weight" || field === "weight_lbs") {
-        const next = { ...draft, weightLbs: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "background") {
-        const next = { ...draft, background: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "want" || field === "need" || field === "want_need") {
-        const next = { ...draft, wantNeed: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "secret" || field === "obstacle" || field === "secret_obstacle") {
-        const next = { ...draft, secretObstacle: value };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      if (field === "carrying") {
-        const next = { ...draft, carrying: parseCarryingInput(value) };
-        setNpcDraft(next);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      appendEntry("info", `unknown npc field: ${field}. valid fields: name, race, occupation, sex, age, height, weight, background, want, secret, carrying`);
-      return { handled: true, ok: false, recordHistory: true };
-    }
-
-    const malformedTravelMatch = trimmed.match(/^npc\s+travel\s+(.+)$/i);
-    if (malformedTravelMatch && !/^npc\s+travel\s+to\s+(.+)$/i.test(trimmed)) {
-      appendEntry("info", "usage: npc travel to <location>");
-      return { handled: true, ok: false, recordHistory: true };
-    }
-
-    const travelMatch = trimmed.match(/^npc\s+travel\s+to\s+(.+)$/i);
-    if (travelMatch && draft) {
-      const locationName = travelMatch[1].trim();
-      if (!locationName) {
-        appendEntry("info", "location cannot be empty.");
-        return { handled: true, ok: false, recordHistory: true };
-      }
-
-      try {
-        const result = await ensureLocationExists(locationName);
-        const next = { ...draft, location: result.name || locationName };
-        setNpcDraft(next);
-
-        if (result.created_file || result.created_record) {
-          appendEntry(
-            "info",
-            `location bootstrap completed: file=${result.created_file ? "created" : "existing"}, record=${result.created_record ? "created" : "existing"}`
-          );
-        }
-
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("error", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    if (lowered === "npc reroll") {
-      appendEntry("info", "usage: npc reroll <field> [prompt]");
-      return { handled: true, ok: false, recordHistory: true };
-    }
-
-    const rerollFieldMatch = trimmed.match(/^npc\s+reroll\s+([a-z_]+)(?:\s+(.+))?$/i);
-    if (rerollFieldMatch && draft) {
-      const field = rerollFieldMatch[1].trim().toLowerCase();
-      const prompt = rerollFieldMatch[2]?.trim();
-      const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} rerolling npc ${field} ...`);
-      let frame = 0;
-      const timer = window.setInterval(() => {
-        frame = (frame + 1) % SPINNER_FRAMES.length;
-        updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} rerolling npc ${field} ...`);
-      }, 100);
-
-      try {
-        const result = await rerollNpcField({
-          field,
-          prompt: prompt ?? null,
-          npc: {
-            name: draft.name,
-            race: draft.race,
-            occupation: draft.occupation,
-            sex: draft.sex,
-            age: draft.age,
-            height: draft.height,
-            weight_lbs: draft.weightLbs,
-            background: draft.background,
-            want_need: draft.wantNeed,
-            secret_obstacle: draft.secretObstacle,
-            carrying: normalizeUnknownList(draft.carrying),
-            location: draft.location
-          }
-        });
-
-        const next = applyNpcRerolledField(draft, result);
-        setNpcDraft(next);
-        updateEntry(spinnerId, "spinner", `OK rerolled ${field}`);
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        updateEntry(spinnerId, "spinner", `FAILED reroll ${field}`);
-        appendEntry("error", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      } finally {
-        window.clearInterval(timer);
-      }
-    }
-
-    if (lowered === "reroll" || lowered === "npc reroll") {
-      if (!draft) {
-        return { handled: false, ok: false, recordHistory: false };
-      }
-
-      const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} generating npc ...`);
-      let frame = 0;
-      const timer = window.setInterval(() => {
-        frame = (frame + 1) % SPINNER_FRAMES.length;
-        updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} generating npc ...`);
-      }, 100);
-
-      try {
-        const seed = await generateNpcSeed();
-        const next = {
-          ...draft,
-          name: seed.name.trim(),
-          race: seed.race.trim(),
-          occupation: normalizeUnknown(seed.occupation),
-          sex: seed.sex,
-          age: normalizeUnknown(seed.age),
-          height: normalizeUnknown(seed.height),
-          weightLbs: normalizeUnknown(seed.weight_lbs),
-          background: normalizeUnknown(seed.background),
-          wantNeed: normalizeUnknown(seed.want_need),
-          secretObstacle: normalizeUnknown(seed.secret_obstacle),
-          carrying: normalizeUnknownList(seed.carrying)
-        };
-        setNpcDraft(next);
-        updateEntry(spinnerId, "spinner", "OK generated npc draft");
-        appendNpcSummary(next);
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        updateEntry(spinnerId, "spinner", "FAILED npc generation");
-        appendEntry("error", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      } finally {
-        window.clearInterval(timer);
-      }
-    }
-
-    if ((lowered === "npc save" || lowered === "save") && draft) {
-      try {
-        const result = await saveNpcDraft({
-          id: draft.id,
-          name: draft.name,
-          race: draft.race,
-          occupation: normalizeUnknown(draft.occupation),
-          sex: draft.sex,
-          age: normalizeUnknown(draft.age),
-          height: normalizeUnknown(draft.height),
-          weight_lbs: normalizeUnknown(draft.weightLbs),
-          background: normalizeUnknown(draft.background),
-          want_need: normalizeUnknown(draft.wantNeed),
-          secret_obstacle: normalizeUnknown(draft.secretObstacle),
-          carrying: normalizeUnknownList(draft.carrying),
-          location: normalizeUnknown(draft.location)
-        });
-        appendEntry(
-          "output",
-          [
-            "## NPC saved",
-            `id: ${result.id}`,
-            `slug: ${result.slug}`,
-            `vault: ${result.vault_path}`,
-            `updated: ${result.updated_at}`
-          ].join("\n")
-        );
-        setNpcDraft(null);
-        setEditorMode("none");
-        appendEntry("info", "npc editor closed");
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("error", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    if (isNpcCommand) {
-      appendEntry("info", "unknown npc command.");
-      return { handled: true, ok: false, recordHistory: true };
-    }
-
-    return { handled: false, ok: false, recordHistory: false };
-  };
-
-  const runLocationEditorCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
-    const trimmed = raw.trim();
-    const lowered = trimmed.toLowerCase();
-
-    if (lowered === "location help" || lowered === "location --help") {
-      if (!locationDraft()) {
-        return { handled: false, ok: false, recordHistory: false };
-      }
-      appendEntry(
-        "output",
-        ["## Location editor commands", "location show", "location rename <name>", "save", "cancel"].join("\n")
-      );
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    const draft = locationDraft();
-    const isLocationCommand = lowered.startsWith("location ");
-    if (!draft && isLocationCommand) {
-      return { handled: false, ok: false, recordHistory: false };
-    }
-
-    if (lowered === "location show" && draft) {
-      appendLocationSummary(draft);
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if ((lowered === "location cancel" || lowered === "cancel") && draft) {
       setLocationDraft(null);
       setEditorMode("none");
-      appendEntry("info", "location draft discarded.");
-      return { handled: true, ok: true, recordHistory: true };
+      return;
     }
 
-    const renameMatch = trimmed.match(/^location\s+rename\s+(.+)$/i);
-    if (renameMatch && draft) {
-      const name = renameMatch[1].trim();
-      if (!name) {
-        appendEntry("info", "location name cannot be empty.");
-        return { handled: true, ok: false, recordHistory: true };
+    if (event.kind === "clear_terminal") {
+      setEntries([]);
+      if (event.clear_history) {
+        setCommandHistory([]);
+        resetHistoryNavigation();
       }
-      const next = { ...draft, name };
-      setLocationDraft(next);
-      appendLocationSummary(next);
-      return { handled: true, ok: true, recordHistory: true };
+      return;
     }
 
-    if ((lowered === "location save" || lowered === "save") && draft) {
-      const payload: SaveLocationDraftInput = {
-        id: draft.id,
-        name: draft.name,
-        slug: draft.slug,
-        vault_path: draft.vault_path
+    if (event.kind === "exit_requested") {
+      void invoke("exit_app");
+      return;
+    }
+
+    setNpcDraft(null);
+    const draft: LocationDraft = {
+      id: event.id,
+      name: event.name,
+      slug: event.slug,
+      vault_path: event.vault_path
+    };
+    setLocationDraft(draft);
+    setEditorMode("location");
+  };
+
+  const outputDocFromClientEvent = (event: CommandClientEvent | null | undefined): OutputDoc | null => {
+    if (!event) {
+      return null;
+    }
+
+    if (event.kind === "load_npc_draft") {
+      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
+      const draft: NpcDraft = {
+        id: event.id,
+        name: event.name,
+        race: normalizeUnknown(event.race),
+        occupation: normalizeUnknown(event.occupation),
+        sex,
+        age: normalizeUnknown(event.age),
+        height: normalizeUnknown(event.height),
+        weightLbs: normalizeUnknown(event.weight_lbs),
+        background: normalizeUnknown(event.background),
+        wantNeed: normalizeUnknown(event.want_need),
+        secretObstacle: normalizeUnknown(event.secret_obstacle),
+        carrying: normalizeUnknownList(event.carrying),
+        location: normalizeUnknown(event.location)
       };
-
-      try {
-        const result = await saveLocationDraft(payload);
-        appendEntry(
-          "output",
-          [
-            "## Location saved",
-            `id: ${result.id}`,
-            `slug: ${result.slug}`,
-            `vault: ${result.vault_path}`,
-            `updated: ${result.updated_at}`
-          ].join("\n")
-        );
-        setLocationDraft(null);
-        setEditorMode("none");
-        appendEntry("info", "location editor closed.");
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("error", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
+      return npcDraftDoc(draft);
     }
 
-    if (isLocationCommand) {
-      appendEntry("info", "unknown location command.");
-      return { handled: true, ok: false, recordHistory: true };
-    }
-
-    return { handled: false, ok: false, recordHistory: false };
-  };
-
-  const appendOnboardingIntro = () => {
-    appendEntry(
-      "output",
-      [
-        "## First-Time Setup",
-        "runebound.sh integrates with your Obsidian vault and a local Ollama model.",
-        "Type start setup to begin guided onboarding.",
-        "Type setup help to see available setup commands."
-      ].join("\n")
-    );
-  };
-
-  const appendOnboardingHelp = () => {
-    appendEntry(
-      "output",
-      [
-        "## Setup commands",
-        "start setup",
-        "set vault <path>",
-        "set ollama <url>",
-        "test ollama",
-        "set model <name>",
-        "use model <index>",
-        "show setup",
-        "save",
-        "cancel setup"
-      ].join("\n")
-    );
-  };
-
-  const appendOnboardingSummary = () => {
-    appendEntry(
-      "output",
-      [
-        "## Current setup",
-        `vault: ${vaultPath() || "(not set)"}`,
-        `ollama: ${ollamaBaseUrl() || "(not set)"}`,
-        `model: ${selectedModel() || "(not set)"}`
-      ].join("\n")
-    );
-  };
-
-  const startOnboardingFlow = () => {
-    setOnboardingStep(1);
-    appendEntry(
-      "output",
-      [
-        "## Step 1: Vault Path",
-        "runebound.sh needs your Obsidian vault directory so it can read and write your campaign content.",
-        "Enter your vault directory path and press Enter.",
-        "Example: /path/to/your/Obsidian/Vault"
-      ].join("\n")
-    );
-  };
-
-  const runOnboardingCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
-    const trimmed = raw.trim();
-    const lowered = trimmed.toLowerCase();
-
-    if (lowered === "start setup") {
-      if (!onboardingActive()) {
-        setOnboardingActive(true);
-      }
-      if (onboardingStep() === 0) {
-        startOnboardingFlow();
-      } else {
-        appendEntry("info", "setup already started. use show setup or continue with next step.");
-      }
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (lowered === "setup help") {
-      if (!onboardingActive()) {
-        setOnboardingActive(true);
-        setOnboardingStep(0);
-        appendOnboardingIntro();
-      }
-      appendOnboardingHelp();
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (!onboardingActive()) {
-      return { handled: false, ok: false, recordHistory: false };
-    }
-
-    if (lowered === "show setup") {
-      appendOnboardingSummary();
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (lowered === "cancel setup") {
-      setOnboardingActive(false);
-      setOnboardingStep(0);
-      appendEntry("info", "setup cancelled. run start setup anytime to continue.");
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    const vaultMatch = trimmed.match(/^set\s+vault\s+(.+)$/i);
-    if (vaultMatch) {
-      const value = vaultMatch[1].trim();
-      try {
-        await validateVaultPath(value);
-        setVaultPath(value);
-        if (onboardingStep() < 2) {
-          setOnboardingStep(2);
-        }
-        appendEntry(
-          "output",
-          [
-            "## Step 2: Ollama server",
-            `vault set to: ${value}`,
-            "Enter your Ollama URL and press Enter.",
-            "Example: http://127.0.0.1:11434"
-          ].join("\n")
-        );
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("info", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    const ollamaMatch = trimmed.match(/^set\s+ollama\s+(.+)$/i);
-    if (ollamaMatch) {
-      const value = normalizeOllamaInput(ollamaMatch[1]);
-      setOllamaBaseUrl(value);
-      if (onboardingStep() < 2) {
-        setOnboardingStep(2);
-      }
-      appendEntry("output", `ollama URL set to: ${value}\nrun test ollama to verify connection.`);
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (lowered === "test ollama") {
-      try {
-        const { normalized, result } = await probeOllamaWithSpinner(ollamaBaseUrl().trim());
-        setOllamaBaseUrl(normalized);
-        if (!result.ok) {
-          appendEntry("info", result.detail);
-          return { handled: true, ok: false, recordHistory: true };
-        }
-
-        setOllamaModels(result.models);
-        if (!selectedModel()) {
-          if (result.models.length > 0) {
-            setSelectedModel(result.models[0]);
-          }
-        }
-        setOnboardingStep(3);
-
-        const modelLines = result.models.length
-          ? result.models.map((model, index) => `${index + 1}: ${model}`)
-          : ["(no models returned)"];
-        appendEntry(
-          "output",
-          [
-            "## Step 3: Model",
-            result.detail,
-            "Enter a model name and press Enter.",
-            "Or enter a model number from the list below.",
-            ...modelLines
-          ].join("\n")
-        );
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("info", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    const useModelMatch = trimmed.match(/^use\s+model\s+(\d+)$/i);
-    if (useModelMatch) {
-      const index = Number.parseInt(useModelMatch[1], 10);
-      const models = ollamaModels();
-      if (Number.isNaN(index) || index < 1 || index > models.length) {
-        appendEntry("info", `model index out of range: ${useModelMatch[1]}`);
-        return { handled: true, ok: false, recordHistory: true };
-      }
-      setSelectedModel(models[index - 1]);
-      if (onboardingStep() < 4) {
-        setOnboardingStep(4);
-      }
-      appendEntry(
-        "output",
-        [
-          `model selected: ${models[index - 1]}`,
-          "## Step 4: Save config",
-          "Type save to finish."
-        ].join("\n")
-      );
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    const setModelMatch = trimmed.match(/^set\s+model\s+(.+)$/i);
-    if (setModelMatch) {
-      const value = setModelMatch[1].trim();
-      if (!value) {
-        appendEntry("info", "model name cannot be empty");
-        return { handled: true, ok: false, recordHistory: true };
-      }
-      setSelectedModel(value);
-      if (onboardingStep() < 4) {
-        setOnboardingStep(4);
-      }
-      appendEntry(
-        "output",
-        [
-          `model set to: ${value}`,
-          "## Step 4: Save config",
-          "Type save to finish."
-        ].join("\n")
-      );
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (onboardingStep() === 1) {
-      if (!trimmed) {
-        appendEntry("info", "Enter a vault directory path to continue setup.");
-        return { handled: true, ok: false, recordHistory: false };
-      }
-
-      try {
-        await validateVaultPath(trimmed);
-        setVaultPath(trimmed);
-        if (onboardingStep() < 2) {
-          setOnboardingStep(2);
-        }
-        appendEntry(
-          "output",
-          [
-            "## Step 2: Ollama server",
-            `vault set to: ${trimmed}`,
-            "Enter your Ollama URL and press Enter.",
-            "Example: http://127.0.0.1:11434"
-          ].join("\n")
-        );
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("info", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    if (onboardingStep() === 2) {
-      if (!trimmed) {
-        appendEntry("info", "Enter your Ollama URL to continue setup.");
-        return { handled: true, ok: false, recordHistory: false };
-      }
-
-      const normalized = normalizeOllamaInput(trimmed);
-      setOllamaBaseUrl(normalized);
-      try {
-        const { result } = await probeOllamaWithSpinner(normalized);
-        if (!result.ok) {
-          appendEntry("info", result.detail);
-          return { handled: true, ok: false, recordHistory: true };
-        }
-
-        setOllamaModels(result.models);
-        if (!selectedModel() && result.models.length > 0) {
-          setSelectedModel(result.models[0]);
-        }
-        setOnboardingStep(3);
-
-        const modelLines = result.models.length
-          ? result.models.map((model, index) => `${index + 1}: ${model}`)
-          : ["(no models returned)"];
-
-        appendEntry(
-          "output",
-          [
-            "## Step 3: Model",
-            result.detail,
-            "Enter a model name and press Enter.",
-            "Or enter a model number from the list below.",
-            ...modelLines
-          ].join("\n")
-        );
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("info", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    if (onboardingStep() === 3) {
-      if (!trimmed) {
-        appendEntry("info", "Enter a model name or number to continue setup.");
-        return { handled: true, ok: false, recordHistory: false };
-      }
-
-      const index = Number.parseInt(trimmed, 10);
-      if (!Number.isNaN(index) && index >= 1 && index <= ollamaModels().length) {
-        const picked = ollamaModels()[index - 1];
-        setSelectedModel(picked);
-        setOnboardingStep(4);
-        appendEntry(
-          "output",
-          [
-            `model selected: ${picked}`,
-            "## Step 4: Save config",
-            "Type save to finish."
-          ].join("\n")
-        );
-        return { handled: true, ok: true, recordHistory: true };
-      }
-
-      setSelectedModel(trimmed);
-      setOnboardingStep(4);
-      appendEntry(
-        "output",
-        [
-          `model set to: ${trimmed}`,
-          "## Step 4: Save config",
-          "Type save to finish."
-        ].join("\n")
-      );
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    if (onboardingStep() === 4) {
-      const loweredStepInput = trimmed.toLowerCase();
-      if (loweredStepInput === "save") {
-        const saveResult = await runOnboardingCommand("save");
-        return { handled: true, ok: saveResult.ok, recordHistory: true };
-      }
-    }
-
-    if (lowered === "save" || lowered === "save setup") {
-      if (!vaultPath().trim()) {
-        appendEntry("info", "vault path is missing. run set vault <path>." );
-        return { handled: true, ok: false, recordHistory: true };
-      }
-      if (!ollamaBaseUrl().trim()) {
-        appendEntry("info", "ollama URL is missing. run set ollama <url>." );
-        return { handled: true, ok: false, recordHistory: true };
-      }
-      if (!selectedModel().trim()) {
-        appendEntry("info", "model is missing. run set model <name> or use model <index>." );
-        return { handled: true, ok: false, recordHistory: true };
-      }
-
-      try {
-        const result = await saveOnboardingConfig({
-          vault_path: vaultPath().trim(),
-          ollama_base_url: ollamaBaseUrl().trim(),
-          model: selectedModel().trim()
-        });
-
-        appendEntry(
-          "output",
-          [
-            "## Onboarding complete",
-            `config saved: ${result.config_path}`,
-            `vault ready: ${result.vault_path}`,
-            `database ready: ${result.db_path}`
-          ].join("\n")
-        );
-        if (result.warnings.length > 0) {
-          appendEntry("info", `setup warnings:\n- ${result.warnings.join("\n- ")}`);
-        }
-
-        setOnboardingActive(false);
-        setOnboardingStep(0);
-        void runStartupStatusCheck();
-        return { handled: true, ok: true, recordHistory: true };
-      } catch (error) {
-        appendEntry("info", String(error));
-        return { handled: true, ok: false, recordHistory: true };
-      }
-    }
-
-    appendEntry("info", "setup mode is active. use setup help to continue guided onboarding.");
-    return { handled: true, ok: false, recordHistory: true };
+    return null;
   };
 
   onMount(() => {
@@ -1826,24 +587,7 @@ export default function App() {
     }
 
     inputRef?.focus();
-    void getSetupState()
-      .then((setup) => {
-        setOllamaBaseUrl(setup.default_ollama_base_url || "http://127.0.0.1:11434");
-        if (setup.needs_setup) {
-          setOnboardingActive(true);
-          setOnboardingStep(0);
-          appendOnboardingIntro();
-          if (setup.issues.length > 0) {
-            appendEntry("info", `missing: ${setup.issues.join("; ")}`);
-          }
-          return;
-        }
-
-        void runStartupStatusCheck();
-      })
-      .catch(() => {
-        void runStartupStatusCheck();
-      });
+    void runStartupStatusCheck();
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
@@ -2087,13 +831,6 @@ function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
     return false;
   }
 
-  if (trimmed === "!!") {
-    return true;
-  }
-  if (/^!\d+$/.test(trimmed)) {
-    return true;
-  }
-
   const tokens = trimmed.split(/\s+/);
   const lowered = tokens.map((token) => token.toLowerCase());
   const root = lowered[0];
@@ -2135,22 +872,11 @@ function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
   return false;
 }
 
-function startsWithKnownCommandRoot(input: string, meta: InlineCommandMeta): boolean {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  const first = trimmed.split(/\s+/)[0].toLowerCase();
-  return meta.commandMap.has(first);
-}
-
-function toEntitySuggestionItem(entity: EntitySuggestion, commandPrefix: "load" | "delete" | null): EntitySuggestionItem {
-  const completion = commandPrefix ? `${commandPrefix} ${entity.name}` : entity.name;
+function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem {
   return {
-    label: entity.name,
-    completion,
-    helperText: entity.entity_type
+    label: suggestion.label,
+    completion: suggestion.completion,
+    helperText: suggestion.helper_text ?? undefined
   };
 }
 
@@ -2181,57 +907,8 @@ function normalizeUnknownList(values: string[] | null | undefined): string[] {
   return cleaned;
 }
 
-function parseCarryingInput(value: string): string[] {
-  return normalizeUnknownList(value.split(",").map((item) => item.trim()));
-}
-
 function carryingToDisplay(values: string[] | null | undefined): string {
   return normalizeUnknownList(values).join(", ");
-}
-
-function applyNpcRerolledField(draft: NpcDraft, rerolled: RerollNpcFieldResult): NpcDraft {
-  const field = (rerolled.field || "").toLowerCase();
-  if (field === "carrying") {
-    return {
-      ...draft,
-      carrying: normalizeUnknownList(rerolled.carrying ?? undefined)
-    };
-  }
-
-  const value = normalizeUnknown(rerolled.value);
-  if (field === "name") {
-    return { ...draft, name: value };
-  }
-  if (field === "race") {
-    return { ...draft, race: value };
-  }
-  if (field === "occupation") {
-    return { ...draft, occupation: value };
-  }
-  if (field === "sex") {
-    const normalizedSex = value.toLowerCase() === "female" ? "female" : "male";
-    return { ...draft, sex: normalizedSex };
-  }
-  if (field === "age") {
-    return { ...draft, age: value };
-  }
-  if (field === "height") {
-    return { ...draft, height: value };
-  }
-  if (field === "weight_lbs") {
-    return { ...draft, weightLbs: value };
-  }
-  if (field === "background") {
-    return { ...draft, background: value };
-  }
-  if (field === "want_need") {
-    return { ...draft, wantNeed: value };
-  }
-  if (field === "secret_obstacle") {
-    return { ...draft, secretObstacle: value };
-  }
-
-  return draft;
 }
 
 function npcDraftDoc(draft: NpcDraft): OutputDoc {
@@ -2268,59 +945,16 @@ function npcDraftDoc(draft: NpcDraft): OutputDoc {
   };
 }
 
-function entityDetailsDoc(entity: EntityDetails): OutputDoc {
-  if (entity.entity_type === "npc") {
-    return {
-      blocks: [
-        {
-          kind: "entity_card",
-          title: entity.name,
-          rows: [
-            { label: "Race:", value: normalizeUnknown(entity.race) },
-            { label: "Occupation:", value: normalizeUnknown(entity.occupation) },
-            { label: "Gender:", value: titleCaseSex(normalizeUnknown(entity.sex)) },
-            { label: "Age:", value: normalizeUnknown(entity.age) },
-            { label: "Height:", value: normalizeUnknown(entity.height) },
-            { label: "Weight:", value: `${normalizeUnknown(entity.weight_lbs)} lbs` },
-            { label: "Background:", value: normalizeUnknown(entity.background) },
-            { label: "Want:", value: normalizeUnknown(entity.want_need) },
-            { label: "Secret:", value: normalizeUnknown(entity.secret_obstacle) },
-            { label: "Carrying:", value: carryingToDisplay(entity.carrying) },
-            { label: "Location:", value: normalizeUnknown(entity.location) }
-          ]
-        }
-      ]
-    };
-  }
-
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: entity.name,
-        rows: [
-          { label: "Type:", value: "Location" },
-          { label: "Slug:", value: entity.slug },
-          { label: "Path:", value: entity.vault_path }
-        ]
-      }
-    ]
-  };
-}
-
 function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
   if (!manifest) {
     return {
-      commands: new Set<string>(),
       commandMap: new Map<string, CommandSpecMeta>()
     };
   }
 
   const commandMap = new Map<string, CommandSpecMeta>();
   for (const command of manifest.commands) {
-    const name = command.name.toLowerCase();
-    commandMap.set(name, {
-      name,
+    commandMap.set(command.name.toLowerCase(), {
       subcommands: new Set(command.subcommands.map((subcommand) => subcommand.name.toLowerCase())),
       requiresSubcommand: command.requires_subcommand,
       canonicalHelpCommand: command.canonical_help_command ?? null
@@ -2328,7 +962,6 @@ function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
   }
 
   return {
-    commands: new Set([...commandMap.keys()]),
     commandMap
   };
 }
@@ -2347,4 +980,18 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isBootstrapSetupMessage(message: string): boolean {
   return message.toLowerCase().includes("first-time setup required");
+}
+
+function commandSpinnerLabel(raw: string): string | null {
+  const lowered = raw.trim().toLowerCase();
+  if (lowered === "create npc" || lowered.startsWith("create npc ")) {
+    return "generating npc";
+  }
+  if (lowered === "reroll" || lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
+    return "rerolling npc";
+  }
+  if (lowered.startsWith("npc save") || lowered.startsWith("location save") || lowered === "save") {
+    return "saving draft";
+  }
+  return null;
 }
