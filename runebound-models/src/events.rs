@@ -6,9 +6,6 @@ use super::output::OutputDoc;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandClientEvent {
-    LoadNpcDraft(NpcDraft),
-    LoadLocationDraft(LocationDraft),
-    LoadFactionDraft(FactionDraft),
     LoadNpcDraftWithCard {
         draft: NpcDraft,
         entity_card: OutputDoc,
@@ -26,20 +23,6 @@ pub enum CommandClientEvent {
         clear_history: bool,
     },
     ExitRequested,
-}
-
-impl CommandClientEvent {
-    pub fn load_npc_draft(draft: NpcDraft) -> Self {
-        CommandClientEvent::LoadNpcDraft(draft)
-    }
-
-    pub fn load_location_draft(draft: LocationDraft) -> Self {
-        CommandClientEvent::LoadLocationDraft(draft)
-    }
-
-    pub fn load_faction_draft(draft: FactionDraft) -> Self {
-        CommandClientEvent::LoadFactionDraft(draft)
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

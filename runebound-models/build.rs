@@ -167,9 +167,6 @@ fn generate_typescript() -> String {
     out.push_str("};\n\n");
 
     out.push_str("export type CommandClientEvent =\n");
-    out.push_str("  | { kind: \"load_npc_draft\" } & NpcDraft\n");
-    out.push_str("  | { kind: \"load_location_draft\" } & LocationDraft\n");
-    out.push_str("  | { kind: \"load_faction_draft\" } & FactionDraft\n");
     out.push_str("  | { kind: \"load_npc_draft_with_card\"; draft: NpcDraft; entity_card: OutputDoc }\n");
     out.push_str("  | { kind: \"load_location_draft_with_card\"; draft: LocationDraft; entity_card: OutputDoc }\n");
     out.push_str("  | { kind: \"load_faction_draft_with_card\"; draft: FactionDraft; entity_card: OutputDoc }\n");

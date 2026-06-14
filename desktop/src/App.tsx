@@ -485,11 +485,6 @@ export default function App() {
         setLocationDraft(null);
         setEditorMode("faction");
         return;
-      case "load_npc_draft":
-      case "load_location_draft":
-      case "load_faction_draft":
-        console.warn("Received legacy draft event without entity card", event);
-        return;
       case "clear_drafts":
         setNpcDraft(null);
         setLocationDraft(null);
@@ -523,11 +518,6 @@ export default function App() {
       case "load_location_draft_with_card":
       case "load_faction_draft_with_card":
         return event.entity_card;
-      case "load_npc_draft":
-      case "load_location_draft":
-      case "load_faction_draft":
-        console.warn("Legacy client event is missing entity_card", event);
-        return null;
       case "clear_drafts":
       case "clear_terminal":
       case "exit_requested":
