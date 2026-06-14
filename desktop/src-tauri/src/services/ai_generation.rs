@@ -1,6 +1,5 @@
 use crate::repositories::{Database, GenerationRepository};
 use dnd_core::config::{load_effective, validate_for_runtime};
-use dnd_core::npc::{slugify, UNKNOWN_LOCATION};
 use dnd_core::vault::Vault;
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -430,12 +429,6 @@ pub struct VaultReferenceEntry {
     pub is_dir: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct ActiveReferenceQuery {
-    pub at_index: usize,
-    pub query: String,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct PromptReferenceContext {
     pub system_context: String,
@@ -456,11 +449,6 @@ fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
     if cleaned.is_empty() { vec!["Unknown".to_string()] } else { cleaned }
 }
 
-fn parse_carrying_csv(value: &str) -> Vec<String> {
-    let items: Vec<String> = value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect();
-    normalize_unknown_list(items)
-}
-
 fn normalize_location_kind_type(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if LOCATION_KIND_TYPES.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("kind_type must be one of: {}", LOCATION_KIND_TYPES.join(", "))) }
@@ -470,10 +458,6 @@ fn normalize_location_danger_level(value: &str) -> Result<String, String> {
     let trimmed = value.trim();
     let normalized = if trimmed.eq_ignore_ascii_case("unknown") { "Unknown".to_string() } else { trimmed.to_ascii_lowercase() };
     if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("danger_level must be one of: {}", LOCATION_DANGER_LEVELS.join(", "))) }
-}
-
-fn parse_list_csv(value: &str) -> Vec<String> {
-    value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect()
 }
 
 fn normalize_exports(values: Vec<String>) -> Vec<String> {
@@ -643,15 +627,6 @@ fn can_start_reference_at(input: &str, at_index: usize) -> bool {
     before.is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '\''))
 }
 
-fn extract_active_reference_query(input: &str) -> Option<ActiveReferenceQuery> {
-    for (idx, ch) in input.char_indices().rev() {
-        if ch != '@' { continue; }
-        if !can_start_reference_at(input, idx) { continue; }
-        return Some(ActiveReferenceQuery { at_index: idx, query: input[idx + 1..].to_string() });
-    }
-    None
-}
-
 fn should_ignore_reference_component(component: &str) -> bool {
     component.split('/').any(|part| part.starts_with('.') || part.eq_ignore_ascii_case("target"))
 }
@@ -664,10 +639,6 @@ fn markdown_reference_key(relative_path: &str) -> Option<String> {
     let stem = path.file_stem().and_then(|value| value.to_str()).map(str::trim).filter(|value| !value.is_empty())?;
     let parent = path.parent().and_then(|value| value.to_str()).unwrap_or("");
     if parent.is_empty() { Some(stem.to_string()) } else { Some(format!("{parent}/{stem}")) }
-}
-
-fn is_top_level_reference_key(key: &str, is_dir: bool) -> bool {
-    if is_dir { let trimmed = key.trim_end_matches('/'); !trimmed.is_empty() && !trimmed.contains('/') } else { !key.contains('/') }
 }
 
 fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry>, String> {
@@ -704,24 +675,6 @@ fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry
     let mut out: Vec<VaultReferenceEntry> = entries.into_values().collect();
     out.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
     Ok(out)
-}
-
-fn build_reference_suggestions_from_entries(input: &str, active: &ActiveReferenceQuery, entries: &[VaultReferenceEntry]) -> Vec<CommandSuggestion> {
-    let query_lower = active.query.replace('\\', "/").to_lowercase();
-    let mut ranked: Vec<&VaultReferenceEntry> = entries.iter().filter(|entry| {
-        if query_lower.is_empty() { return is_top_level_reference_key(&entry.key, entry.is_dir); }
-        entry.key_lower.starts_with(&query_lower)
-    }).collect();
-
-    ranked.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
-    ranked.into_iter().take(12).map(|entry| {
-        let completion_suffix = if entry.is_dir { "" } else { " " };
-        CommandSuggestion {
-            label: format!("@{}", entry.key),
-            completion: format!("{}@{}{}", &input[..active.at_index], entry.key, completion_suffix),
-            helper_text: Some(SuggestionHelperText::Reference),
-        }
-    }).collect()
 }
 
 fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) -> Vec<String> {
@@ -788,23 +741,6 @@ fn extract_runebound_toml(contents: &str) -> Option<String> {
     let end = body.find("\n```").or_else(|| body.find("```"))?;
     let block = body[..end].trim();
     if block.is_empty() { None } else { Some(block.to_string()) }
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CommandSuggestion {
-    pub label: String,
-    pub completion: String,
-    pub helper_text: Option<SuggestionHelperText>,
-}
-
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SuggestionHelperText {
-    Command,
-    Npc,
-    Location,
-    Faction,
-    Reference,
 }
 
 #[cfg(test)]

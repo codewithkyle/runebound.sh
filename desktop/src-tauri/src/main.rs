@@ -9,9 +9,10 @@ mod utils;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::{MAIN_SEPARATOR, Path, PathBuf};
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Duration;
+#[cfg(test)]
+use std::path::MAIN_SEPARATOR;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse};
 use dnd_core::command_manifest::{CommandManifest, CommandSpec};
@@ -19,10 +20,8 @@ use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input, 
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
-    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id,
-    merge_runebound_block, normalize_markdown_file_stem, now_timestamp, render_faction_markdown,
-    render_location_markdown, render_npc_markdown, slugify,
-    unique_slug_for_dir,
+    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, normalize_markdown_file_stem, now_timestamp,
+    render_location_markdown, slugify, unique_slug_for_dir,
 };
 use dnd_core::vault::Vault;
 use serde::{Deserialize, Serialize};
@@ -84,16 +83,6 @@ enum EntityType {
     Npc,
     Location,
     Faction,
-}
-
-impl EntityType {
-    fn as_str(&self) -> &'static str {
-        match self {
-            EntityType::Npc => "npc",
-            EntityType::Location => "location",
-            EntityType::Faction => "faction",
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -167,6 +156,7 @@ struct EntityDetails {
 struct VaultReferenceEntry {
     key: String,
     key_lower: String,
+    #[allow(dead_code)]
     markdown_path: Option<String>,
     is_dir: bool,
 }
@@ -175,11 +165,6 @@ struct VaultReferenceEntry {
 struct ActiveReferenceQuery {
     at_index: usize,
     query: String,
-}
-
-#[derive(Debug, Clone, Default)]
-struct PromptReferenceContext {
-    system_context: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -269,15 +254,6 @@ struct FactionDeletePayload {
     symbol_description: String,
     created_at: String,
     updated_at: String,
-}
-
-fn normalize_sex(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized == "male" || normalized == "female" {
-        Ok(normalized)
-    } else {
-        Err("sex must be one of: male, female".to_string())
-    }
 }
 
 fn normalize_unknown_text(value: &str) -> String {
@@ -503,6 +479,7 @@ pub(crate) fn unique_markdown_path_for_name(
 }
 
 
+#[cfg(test)]
 fn is_reference_boundary_char(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"')
 }
@@ -669,6 +646,8 @@ fn build_reference_suggestions_from_entries(
         .collect()
 }
 
+#[cfg(test)]
+#[cfg(test)]
 fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) -> Vec<String> {
     let mut candidates: Vec<&VaultReferenceEntry> = entries
         .iter()
@@ -728,64 +707,6 @@ fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) 
         }
     }
     unique
-}
-
-fn build_prompt_reference_context(
-    prompt: &str,
-    entries: &[VaultReferenceEntry],
-    vault: &Vault,
-) -> PromptReferenceContext {
-    const MAX_REFERENCE_DOCS: usize = 5;
-    const MAX_METADATA_CHARS_PER_DOC: usize = 1800;
-
-    let keys = extract_prompt_reference_keys(prompt, entries);
-    if keys.is_empty() {
-        return PromptReferenceContext::default();
-    }
-
-    let path_by_key: HashMap<String, String> = entries
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .markdown_path
-                .as_ref()
-                .map(|path| (entry.key.to_lowercase(), path.clone()))
-        })
-        .collect();
-
-    let mut blocks = Vec::new();
-    for key in keys.into_iter().take(MAX_REFERENCE_DOCS) {
-        let Some(path) = path_by_key.get(&key.to_lowercase()) else {
-            continue;
-        };
-        let contents = match vault.read_relative(Path::new(path)) {
-            Ok(value) => value,
-            Err(err) => {
-                eprintln!("reference context warning: failed reading {}: {}", path, err);
-                continue;
-            }
-        };
-        let Some(runebound) = extract_runebound_toml(&contents) else {
-            continue;
-        };
-        let metadata = if runebound.len() > MAX_METADATA_CHARS_PER_DOC {
-            format!("{}...", &runebound[..MAX_METADATA_CHARS_PER_DOC])
-        } else {
-            runebound
-        };
-        blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
-    }
-
-    if blocks.is_empty() {
-        return PromptReferenceContext::default();
-    }
-
-    PromptReferenceContext {
-        system_context: format!(
-            "Referenced vault metadata (treat as authoritative setting context):\n\n{}",
-            blocks.join("\n\n")
-        ),
-    }
 }
 
 
@@ -1328,6 +1249,7 @@ pub(crate) fn normalize_relative_path_for_storage(path: &str) -> String {
     path.replace('\\', "/")
 }
 
+#[cfg(test)]
 pub(crate) fn path_for_display(path: &str) -> String {
     if MAIN_SEPARATOR == '\\' {
         path.replace('/', "\\")

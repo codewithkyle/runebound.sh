@@ -44,6 +44,7 @@ impl HandlerBridge for DesktopHandler {
 
 pub struct DesktopHandlerInvocation<'a> {
     pub raw_input: &'a str,
+    #[allow(dead_code)]
     pub tokens: &'a [String],
     pub lowered: &'a [String],
     pub state: State<'a, AppState>,

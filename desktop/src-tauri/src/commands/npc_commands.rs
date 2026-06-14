@@ -1,8 +1,7 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::utils::{
-    normalize_sex, normalize_unknown_list, normalize_unknown_text, parse_carrying_csv, reroll_npc_field,
-    NpcRerollContext, RerollNpcFieldInput,
+    normalize_sex, parse_carrying_csv, reroll_npc_field, NpcRerollContext, RerollNpcFieldInput,
 };
 use crate::app_state::NpcDraftSession;
 use dnd_core::command::CommandClientEvent;

@@ -23,21 +23,6 @@ use crate::services::entity_reroll::{
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct NpcSeed {
-    pub name: String,
-    pub race: String,
-    pub occupation: String,
-    pub sex: String,
-    pub age: String,
-    pub height: String,
-    pub weight_lbs: String,
-    pub background: String,
-    pub want_need: String,
-    pub secret_obstacle: String,
-    pub carrying: Vec<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcRerollContext {
     pub name: String,
     pub race: String,
@@ -133,11 +118,6 @@ impl From<ServiceRerollNpcFieldResult> for RerollNpcFieldResult {
             carrying: value.carrying,
         }
     }
-}
-
-#[derive(Debug, Clone, Deserialize)]
-pub struct GenerateNpcSeedInput {
-    pub prompt: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -842,82 +822,6 @@ pub fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
     })
 }
 
-pub fn canonical_npc_reroll_field(field: &str) -> String {
-    match field.to_ascii_lowercase().as_str() {
-        "name" => "name".to_string(),
-        "race" => "race".to_string(),
-        "occupation" | "job" => "occupation".to_string(),
-        "sex" | "gender" => "sex".to_string(),
-        "age" => "age".to_string(),
-        "height" => "height".to_string(),
-        "weight" | "weight_lbs" => "weight_lbs".to_string(),
-        "background" | "backstory" => "background".to_string(),
-        "want" | "wantneed" | "want_need" | "wants" | "needs" => "want_need".to_string(),
-        "secret" | "obstacle" | "secret_obstacle" => "secret_obstacle".to_string(),
-        "carrying" | "items" | "equipment" => "carrying".to_string(),
-        "location" => "location".to_string(),
-        _ => field.to_string(),
-    }
-}
-
-pub fn canonical_location_reroll_field(field: &str) -> String {
-    match field.to_ascii_lowercase().as_str() {
-        "name" => "name".to_string(),
-        "kind" | "kind_type" => "kind_type".to_string(),
-        "visual" | "visual_description" => "visual_description".to_string(),
-        "history" | "history_background" => "history_background".to_string(),
-        "tone" => "tone".to_string(),
-        "authority" => "authority".to_string(),
-        "danger" | "danger_level" => "danger_level".to_string(),
-        "exports" => "exports".to_string(),
-        "tension" | "current_tension" => "current_tension".to_string(),
-        _ => field.to_string(),
-    }
-}
-
-pub fn canonical_faction_reroll_field(field: &str) -> String {
-    match field.to_ascii_lowercase().as_str() {
-        "name" => "name".to_string(),
-        "kind" | "kind_type" => "kind_type".to_string(),
-        "description" | "public_description" => "public_description".to_string(),
-        "agenda" | "true_agenda" => "true_agenda".to_string(),
-        "methods" => "methods".to_string(),
-        "leadership" => "leadership".to_string(),
-        "headquarters" => "headquarters".to_string(),
-        "sphere" | "sphere_of_influence" => "sphere_of_influence".to_string(),
-        "resources" | "resources_assets" => "resources_assets".to_string(),
-        "reputation" => "reputation".to_string(),
-        "tension" | "current_tension" => "current_tension".to_string(),
-        _ => field.to_string(),
-    }
-}
-
-pub fn npc_context_summary(npc: &NpcRerollContext) -> String {
-    let carrying_str = if npc.carrying.is_empty() {
-        "nothing".to_string()
-    } else {
-        npc.carrying.join(", ")
-    };
-    format!(
-        "{} the {} {} {} from {} (carrying: {})",
-        npc.name, npc.age, npc.race, npc.occupation, npc.location, carrying_str
-    )
-}
-
-pub fn location_context_summary(location: &LocationRerollContext) -> String {
-    format!(
-        "{} ({}) - danger: {}, tone: {}",
-        location.name, location.kind_type, location.danger_level, location.tone
-    )
-}
-
-pub fn faction_context_summary(faction: &FactionRerollContext) -> String {
-    format!(
-        "{} ({}) - reputation: {}",
-        faction.name, faction.kind_type, faction.reputation
-    )
-}
-
 pub fn normalize_location_kind_type(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     let valid_types = ["hamlet", "town", "city", "dungeon", "hideout", "ruin", "guildhall", "landmark", "wilderness", "other"];
@@ -953,10 +857,6 @@ pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
     }
 }
 
-pub fn parse_list_csv(value: &str) -> Vec<String> {
-    value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect()
-}
-
 pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
@@ -970,6 +870,7 @@ pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
     }
 }
 
+#[cfg(test)]
 pub fn normalize_location_seed(mut seed: crate::services::ai_generation::LocationSeed) -> Result<crate::services::ai_generation::LocationSeed, String> {
     seed.name = seed.name.trim().to_string();
     seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
@@ -1033,6 +934,7 @@ pub fn validate_location_details(seed: &crate::services::ai_generation::Location
     Ok(())
 }
 
+#[cfg(test)]
 pub fn normalize_faction_seed(mut seed: crate::services::ai_generation::FactionSeed) -> Result<crate::services::ai_generation::FactionSeed, String> {
     seed.name = seed.name.trim().to_string();
     seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
@@ -1061,6 +963,7 @@ pub fn normalize_faction_seed(mut seed: crate::services::ai_generation::FactionS
     Ok(seed)
 }
 
+#[cfg(test)]
 pub fn validate_faction_details(seed: &crate::services::ai_generation::FactionSeed) -> Result<(), String> {
     if seed.name.trim().is_empty() {
         return Err("faction name cannot be empty".to_string());
