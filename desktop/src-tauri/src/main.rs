@@ -1,7 +1,10 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_state;
+mod repositories;
 mod router;
+mod services;
+mod utils;
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
