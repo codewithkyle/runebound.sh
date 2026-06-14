@@ -133,6 +133,12 @@ name = "command-handler"
 version = "0.2.1"
 dependencies = [
  "once_cell",
+]
+
+[[package]]
+name = "command-specs"
+version = "0.2.1"
+dependencies = [
  "serde",
 ]
 
@@ -268,6 +274,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "command-handler",
+ "command-specs",
  "dirs",
  "reqwest",
  "serde",

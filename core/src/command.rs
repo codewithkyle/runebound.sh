@@ -136,7 +136,7 @@ type CoreHandler =
 
 struct CoreHandlerInvocation<'a> {
     workspace_root: &'a Path,
-    tokens: &'a [String],
+    _tokens: &'a [String],
     lowered: &'a [String],
     manifest: &'a CommandManifest,
     session: &'a mut SessionState,
@@ -785,8 +785,7 @@ async fn execute_line_internal(
         shell_words::split(&normalized_input).map_err(|e| anyhow!("invalid command input: {e}"))?;
     let manifest = command_manifest();
     let normalized_words = normalize_alias_tokens(&parsed_words, &manifest);
-    let mut rewritten_tokens =
-        rewrite_onboarding_tokens(&normalized_words, &normalized_input, session);
+    let rewritten_tokens = rewrite_onboarding_tokens(&normalized_words, &normalized_input, session);
     let tokens_ref = if let Some(ref rewritten) = rewritten_tokens {
         rewritten.as_slice()
     } else {
@@ -863,7 +862,7 @@ async fn execute_dispatched(
     if let Some(entry) = registry.get(handler_name) {
         let invocation = CoreHandlerInvocation {
             workspace_root,
-            tokens,
+            _tokens: tokens,
             lowered: &lowered,
             manifest,
             session,
