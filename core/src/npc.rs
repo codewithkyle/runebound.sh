@@ -1,153 +1,11 @@
-use std::path::Path;
-
-use chrono::Utc;
-use serde::Serialize;
-
-pub const UNKNOWN_LOCATION: &str = "Unknown";
-
-#[derive(Debug, Clone, Serialize)]
-pub struct NpcFrontmatter {
-    pub doc_type: String,
-    pub id: String,
-    pub slug: String,
-    pub name: String,
-    pub race: String,
-    pub occupation: String,
-    pub sex: String,
-    pub age: String,
-    pub height: String,
-    pub weight_lbs: String,
-    pub background: String,
-    pub want_need: String,
-    pub secret_obstacle: String,
-    pub carrying: Vec<String>,
-    pub location: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct LocationFrontmatter {
-    pub doc_type: String,
-    pub id: String,
-    pub slug: String,
-    pub name: String,
-    pub kind_type: String,
-    pub kind_custom: Option<String>,
-    pub visual_description: String,
-    pub history_background: String,
-    pub exports: Vec<String>,
-    pub tone: String,
-    pub authority: String,
-    pub danger_level: String,
-    pub current_tension: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct FactionFrontmatter {
-    pub doc_type: String,
-    pub id: String,
-    pub slug: String,
-    pub name: String,
-    pub kind_type: String,
-    pub kind_custom: Option<String>,
-    pub public_description: String,
-    pub true_agenda: String,
-    pub methods: String,
-    pub leadership: String,
-    pub headquarters: String,
-    pub sphere_of_influence: String,
-    pub resources_assets: String,
-    pub allies: Vec<String>,
-    pub rivals_enemies: Vec<String>,
-    pub reputation: String,
-    pub current_tension: String,
-    pub goals_short_term: Vec<String>,
-    pub goals_long_term: Vec<String>,
-    pub symbol_description: String,
-    pub created_at: String,
-    pub updated_at: String,
-}
-
-pub fn now_timestamp() -> String {
-    Utc::now().to_rfc3339()
-}
-
-pub fn make_entity_id(prefix: &str) -> String {
-    format!("{}_{}", prefix, Utc::now().format("%Y%m%d%H%M%S%3f"))
-}
-
-pub fn slugify(value: &str) -> String {
-    let mut out = String::new();
-    let mut last_dash = false;
-
-    for ch in value.trim().chars() {
-        if ch.is_ascii_alphanumeric() {
-            out.push(ch.to_ascii_lowercase());
-            last_dash = false;
-        } else if (ch.is_ascii_whitespace() || ch == '-' || ch == '_' || ch == '.') && !last_dash {
-            out.push('-');
-            last_dash = true;
-        }
-    }
-
-    let trimmed = out.trim_matches('-');
-    if trimmed.is_empty() {
-        "untitled".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-pub fn unique_slug_for_dir(root: &Path, relative_dir: &str, base_slug: &str) -> String {
-    let mut candidate = base_slug.to_string();
-    let mut idx = 2;
-
-    loop {
-        let path = root.join(relative_dir).join(format!("{candidate}.md"));
-        if !path.exists() {
-            return candidate;
-        }
-
-        candidate = format!("{base_slug}-{idx}");
-        idx += 1;
-    }
-}
-
-pub fn normalize_markdown_file_stem(value: &str) -> String {
-    let mut out = String::new();
-    let mut last_was_space = false;
-
-    for ch in value.trim().chars() {
-        if ch.is_control() {
-            continue;
-        }
-
-        let invalid = matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
-        if invalid || ch.is_whitespace() {
-            if !out.is_empty() && !last_was_space {
-                out.push(' ');
-                last_was_space = true;
-            }
-            continue;
-        }
-
-        out.push(ch);
-        last_was_space = false;
-    }
-
-    let trimmed = out.trim().trim_matches('.').trim();
-    if trimmed.is_empty() {
-        "Untitled".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
+pub use runebound_models::{
+    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter,
+    now_timestamp, make_entity_id, slugify, unique_slug_for_dir, normalize_markdown_file_stem,
+    UNKNOWN_LOCATION, normalize_unknown_list, normalize_unknown_text,
+};
 
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml::ser::Error> {
-    #[derive(Serialize)]
+    #[derive(serde::Serialize)]
     struct Frontmatter<'a> {
         #[serde(rename = "type")]
         doc_type: &'a str,
@@ -199,7 +57,7 @@ pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml:
 pub fn render_location_markdown(
     frontmatter: &LocationFrontmatter,
 ) -> Result<String, toml::ser::Error> {
-    #[derive(Serialize)]
+    #[derive(serde::Serialize)]
     struct Frontmatter<'a> {
         #[serde(rename = "type")]
         doc_type: &'a str,
@@ -248,7 +106,7 @@ pub fn render_location_markdown(
 pub fn render_faction_markdown(
     frontmatter: &FactionFrontmatter,
 ) -> Result<String, toml::ser::Error> {
-    #[derive(Serialize)]
+    #[derive(serde::Serialize)]
     struct Frontmatter<'a> {
         #[serde(rename = "type")]
         doc_type: &'a str,

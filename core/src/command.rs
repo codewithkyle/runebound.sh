@@ -9,7 +9,6 @@ use command_handler::{
     CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry,
 };
 use reqwest::StatusCode;
-use serde::Serialize;
 
 use crate::command_manifest::{CommandManifest, CommandSpec, command_manifest};
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
@@ -17,99 +16,16 @@ use crate::config::{load_effective, required_issues, save_config, validate_for_r
 use crate::db;
 use crate::health::{self, CheckReport};
 use crate::output::{
-    InlineNode, OutputBlock, OutputDoc, StatusTone, command_ref, doc, heading, list,
-    paragraph_text, paragraph_with_inlines, status, text_node,
+    command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status, text_node,
 };
 use crate::session::SessionState;
 use crate::vault::{Vault, is_path_writable};
 use command_specs::handler_metadata_for;
 
-#[derive(Debug, Clone, Serialize)]
-pub struct CommandResponse {
-    pub ok: bool,
-    pub output: String,
-    pub error: Option<String>,
-    pub exit_code: i32,
-    pub segments: Vec<OutputSegment>,
-    pub output_doc: Option<OutputDoc>,
-    pub client_event: Option<CommandClientEvent>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-pub enum CommandClientEvent {
-    LoadNpcDraft {
-        id: String,
-        name: String,
-        race: String,
-        occupation: String,
-        sex: String,
-        age: String,
-        height: String,
-        weight_lbs: String,
-        background: String,
-        want_need: String,
-        secret_obstacle: String,
-        carrying: Vec<String>,
-        location: String,
-    },
-    LoadLocationDraft {
-        id: String,
-        name: String,
-        slug: String,
-        vault_path: String,
-        kind_type: String,
-        kind_custom: Option<String>,
-        visual_description: String,
-        history_background: String,
-        exports: Vec<String>,
-        tone: String,
-        authority: String,
-        danger_level: String,
-        current_tension: String,
-    },
-    LoadFactionDraft {
-        id: String,
-        name: String,
-        slug: String,
-        vault_path: String,
-        kind_type: String,
-        kind_custom: Option<String>,
-        public_description: String,
-        true_agenda: String,
-        methods: String,
-        leadership: String,
-        headquarters: String,
-        sphere_of_influence: String,
-        resources_assets: String,
-        allies: Vec<String>,
-        rivals_enemies: Vec<String>,
-        reputation: String,
-        current_tension: String,
-        goals_short_term: Vec<String>,
-        goals_long_term: Vec<String>,
-        symbol_description: String,
-    },
-    ClearDrafts,
-    ClearTerminal {
-        clear_history: bool,
-    },
-    ExitRequested,
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct OutputSegment {
-    pub kind: OutputSegmentKind,
-    pub text: String,
-    pub command_ref: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum OutputSegmentKind {
-    Text,
-    Error,
-}
+pub use runebound_models::events::{
+    CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind,
+};
+pub use runebound_models::output::{OutputDoc, InlineNode, OutputBlock, StatusTone};
 
 #[derive(Debug, Clone)]
 pub struct CommandOutput {

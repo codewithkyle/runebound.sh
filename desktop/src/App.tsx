@@ -3,7 +3,15 @@ import { For, Show, createEffect, createMemo, createSignal, onMount } from "soli
 import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
-import type { OutputDoc } from "./output/types";
+import type {
+  OutputDoc,
+  CommandClientEvent,
+  CommandResponse,
+  OutputSegment,
+  NpcDraft,
+  LocationDraft,
+  FactionDraft,
+} from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
 
@@ -14,89 +22,6 @@ type HistoryEntry = {
   outputDoc?: OutputDoc | null;
 };
 
-type CommandResponse = {
-  ok: boolean;
-  output: string;
-  error?: string | null;
-  exit_code: number;
-  segments?: OutputSegment[];
-  output_doc?: OutputDoc | null;
-  client_event?: CommandClientEvent | null;
-};
-
-type CommandClientEvent =
-  | {
-      kind: "load_npc_draft";
-      id: string;
-      name: string;
-      race: string;
-      occupation: string;
-      sex: string;
-      age: string;
-      height: string;
-      weight_lbs: string;
-      background: string;
-      want_need: string;
-      secret_obstacle: string;
-      carrying: string[];
-      location: string;
-    }
-  | {
-      kind: "load_location_draft";
-      id: string;
-      name: string;
-      slug: string;
-      vault_path: string;
-      kind_type: string;
-      kind_custom?: string | null;
-      visual_description: string;
-      history_background: string;
-      exports: string[];
-      tone: string;
-      authority: string;
-      danger_level: string;
-      current_tension: string;
-    }
-  | {
-      kind: "load_faction_draft";
-      id: string;
-      name: string;
-      slug: string;
-      vault_path: string;
-      kind_type: string;
-      kind_custom?: string | null;
-      public_description: string;
-      true_agenda: string;
-      methods: string;
-      leadership: string;
-      headquarters: string;
-      sphere_of_influence: string;
-      resources_assets: string;
-      allies: string[];
-      rivals_enemies: string[];
-      reputation: string;
-      current_tension: string;
-      goals_short_term: string[];
-      goals_long_term: string[];
-      symbol_description: string;
-    }
-  | {
-      kind: "clear_drafts";
-    }
-  | {
-      kind: "clear_terminal";
-      clear_history: boolean;
-    }
-  | {
-      kind: "exit_requested";
-    };
-
-type OutputSegment = {
-  kind: "text" | "error";
-  text: string;
-  command_ref?: string | null;
-};
-
 type InlineCommandMeta = {
   commandMap: Map<string, CommandSpecMeta>;
 };
@@ -105,61 +30,6 @@ type CommandSpecMeta = {
   subcommands: Set<string>;
   requiresSubcommand: boolean;
   canonicalHelpCommand: string | null;
-};
-
-type NpcDraft = {
-  id: string;
-  name: string;
-  race: string;
-  occupation: string;
-  sex: "male" | "female";
-  age: string;
-  height: string;
-  weightLbs: string;
-  background: string;
-  wantNeed: string;
-  secretObstacle: string;
-  carrying: string[];
-  location: string;
-};
-
-type LocationDraft = {
-  id: string;
-  name: string;
-  slug: string;
-  vault_path: string;
-  kind_type: string;
-  kind_custom?: string | null;
-  visual_description: string;
-  history_background: string;
-  exports: string[];
-  tone: string;
-  authority: string;
-  danger_level: string;
-  current_tension: string;
-};
-
-type FactionDraft = {
-  id: string;
-  name: string;
-  slug: string;
-  vault_path: string;
-  kind_type: string;
-  kind_custom?: string | null;
-  public_description: string;
-  true_agenda: string;
-  methods: string;
-  leadership: string;
-  headquarters: string;
-  sphere_of_influence: string;
-  resources_assets: string;
-  allies: string[];
-  rivals_enemies: string[];
-  reputation: string;
-  current_tension: string;
-  goals_short_term: string[];
-  goals_long_term: string[];
-  symbol_description: string;
 };
 
 type SuggestionViewItem = {
@@ -596,101 +466,46 @@ export default function App() {
       return;
     }
 
-    if (event.kind === "load_npc_draft") {
-      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
-      setLocationDraft(null);
-      const draft: NpcDraft = {
-        id: event.id,
-        name: event.name,
-        race: normalizeUnknown(event.race),
-        occupation: normalizeUnknown(event.occupation),
-        sex,
-        age: normalizeUnknown(event.age),
-        height: normalizeUnknown(event.height),
-        weightLbs: normalizeUnknown(event.weight_lbs),
-        background: normalizeUnknown(event.background),
-        wantNeed: normalizeUnknown(event.want_need),
-        secretObstacle: normalizeUnknown(event.secret_obstacle),
-        carrying: normalizeUnknownList(event.carrying),
-        location: normalizeUnknown(event.location)
-      };
-      setNpcDraft(draft);
-      setFactionDraft(null);
-      setEditorMode("npc");
-      return;
-    }
-
-    if (event.kind === "load_faction_draft") {
-      setNpcDraft(null);
-      setLocationDraft(null);
-      const draft: FactionDraft = {
-        id: event.id,
-        name: normalizeUnknown(event.name),
-        slug: normalizeUnknown(event.slug),
-        vault_path: normalizeUnknown(event.vault_path),
-        kind_type: normalizeUnknown(event.kind_type),
-        kind_custom: normalizeUnknown(event.kind_custom),
-        public_description: normalizeUnknown(event.public_description),
-        true_agenda: normalizeUnknown(event.true_agenda),
-        methods: normalizeUnknown(event.methods),
-        leadership: normalizeUnknown(event.leadership),
-        headquarters: normalizeUnknown(event.headquarters),
-        sphere_of_influence: normalizeUnknown(event.sphere_of_influence),
-        resources_assets: normalizeUnknown(event.resources_assets),
-        allies: normalizeUnknownList(event.allies),
-        rivals_enemies: normalizeUnknownList(event.rivals_enemies),
-        reputation: normalizeUnknown(event.reputation),
-        current_tension: normalizeUnknown(event.current_tension),
-        goals_short_term: normalizeUnknownList(event.goals_short_term),
-        goals_long_term: normalizeUnknownList(event.goals_long_term),
-        symbol_description: normalizeUnknown(event.symbol_description)
-      };
-      setFactionDraft(draft);
-      setEditorMode("faction");
-      return;
-    }
-
-    if (event.kind === "clear_drafts") {
-      setNpcDraft(null);
-      setLocationDraft(null);
-      setFactionDraft(null);
-      setEditorMode("none");
-      return;
-    }
-
-    if (event.kind === "clear_terminal") {
-      setEntries([]);
-      if (event.clear_history) {
-        setCommandHistory([]);
-        resetHistoryNavigation();
+    switch (event.kind) {
+      case "load_npc_draft_with_card":
+        setNpcDraft(event.draft);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setEditorMode("npc");
+        return;
+      case "load_location_draft_with_card":
+        setLocationDraft(event.draft);
+        setNpcDraft(null);
+        setFactionDraft(null);
+        setEditorMode("location");
+        return;
+      case "load_faction_draft_with_card":
+        setFactionDraft(event.draft);
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setEditorMode("faction");
+        return;
+      case "clear_drafts":
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setEditorMode("none");
+        return;
+      case "clear_terminal":
+        setEntries([]);
+        if (event.clear_history) {
+          setCommandHistory([]);
+          resetHistoryNavigation();
+        }
+        return;
+      case "exit_requested":
+        void invoke("exit_app");
+        return;
+      default: {
+        const exhaustiveCheck: never = event;
+        return exhaustiveCheck;
       }
-      return;
     }
-
-    if (event.kind === "exit_requested") {
-      void invoke("exit_app");
-      return;
-    }
-
-    setNpcDraft(null);
-    setFactionDraft(null);
-    const draft: LocationDraft = {
-      id: event.id,
-      name: event.name,
-      slug: event.slug,
-      vault_path: event.vault_path,
-      kind_type: event.kind_type,
-      kind_custom: event.kind_custom,
-      visual_description: event.visual_description,
-      history_background: event.history_background,
-      exports: event.exports,
-      tone: event.tone,
-      authority: event.authority,
-      danger_level: event.danger_level,
-      current_tension: event.current_tension
-    };
-    setLocationDraft(draft);
-    setEditorMode("location");
   };
 
   const outputDocFromClientEvent = (event: CommandClientEvent | null | undefined): OutputDoc | null => {
@@ -698,72 +513,20 @@ export default function App() {
       return null;
     }
 
-    if (event.kind === "load_npc_draft") {
-      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
-      const draft: NpcDraft = {
-        id: event.id,
-        name: event.name,
-        race: normalizeUnknown(event.race),
-        occupation: normalizeUnknown(event.occupation),
-        sex,
-        age: normalizeUnknown(event.age),
-        height: normalizeUnknown(event.height),
-        weightLbs: normalizeUnknown(event.weight_lbs),
-        background: normalizeUnknown(event.background),
-        wantNeed: normalizeUnknown(event.want_need),
-        secretObstacle: normalizeUnknown(event.secret_obstacle),
-        carrying: normalizeUnknownList(event.carrying),
-        location: normalizeUnknown(event.location)
-      };
-      return npcDraftDoc(draft);
+    switch (event.kind) {
+      case "load_npc_draft_with_card":
+      case "load_location_draft_with_card":
+      case "load_faction_draft_with_card":
+        return event.entity_card;
+      case "clear_drafts":
+      case "clear_terminal":
+      case "exit_requested":
+        return null;
+      default: {
+        const exhaustiveCheck: never = event;
+        return exhaustiveCheck;
+      }
     }
-
-    if (event.kind === "load_location_draft") {
-      const draft: LocationDraft = {
-        id: event.id,
-        name: normalizeUnknown(event.name),
-        slug: normalizeUnknown(event.slug),
-        vault_path: normalizeUnknown(event.vault_path),
-        kind_type: normalizeUnknown(event.kind_type),
-        kind_custom: normalizeUnknown(event.kind_custom),
-        visual_description: normalizeUnknown(event.visual_description),
-        history_background: normalizeUnknown(event.history_background),
-        exports: normalizeUnknownList(event.exports),
-        tone: normalizeUnknown(event.tone),
-        authority: normalizeUnknown(event.authority),
-        danger_level: normalizeUnknown(event.danger_level),
-        current_tension: normalizeUnknown(event.current_tension)
-      };
-      return locationDraftDoc(draft);
-    }
-
-    if (event.kind === "load_faction_draft") {
-      const draft: FactionDraft = {
-        id: event.id,
-        name: normalizeUnknown(event.name),
-        slug: normalizeUnknown(event.slug),
-        vault_path: normalizeUnknown(event.vault_path),
-        kind_type: normalizeUnknown(event.kind_type),
-        kind_custom: normalizeUnknown(event.kind_custom),
-        public_description: normalizeUnknown(event.public_description),
-        true_agenda: normalizeUnknown(event.true_agenda),
-        methods: normalizeUnknown(event.methods),
-        leadership: normalizeUnknown(event.leadership),
-        headquarters: normalizeUnknown(event.headquarters),
-        sphere_of_influence: normalizeUnknown(event.sphere_of_influence),
-        resources_assets: normalizeUnknown(event.resources_assets),
-        allies: normalizeUnknownList(event.allies),
-        rivals_enemies: normalizeUnknownList(event.rivals_enemies),
-        reputation: normalizeUnknown(event.reputation),
-        current_tension: normalizeUnknown(event.current_tension),
-        goals_short_term: normalizeUnknownList(event.goals_short_term),
-        goals_long_term: normalizeUnknownList(event.goals_long_term),
-        symbol_description: normalizeUnknown(event.symbol_description)
-      };
-      return factionDraftDoc(draft);
-    }
-
-    return null;
   };
 
   onMount(() => {
@@ -1129,165 +892,9 @@ function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem
   };
 }
 
-function titleCaseSex(value: string): string {
-  const lowered = value.toLowerCase();
-  if (lowered === "male") {
-    return "Male";
-  }
-  if (lowered === "female") {
-    return "Female";
-  }
-  return value;
-}
-
-function normalizeUnknown(value: string | null | undefined): string {
-  const normalized = (value ?? "").trim();
-  if (!normalized) {
-    return "Unknown";
-  }
-  return normalized;
-}
-
-function normalizeUnknownList(values: string[] | null | undefined): string[] {
-  const cleaned = (values ?? []).map((value) => value.trim()).filter((value) => value.length > 0);
-  if (cleaned.length === 0) {
-    return ["Unknown"];
-  }
-  return cleaned;
-}
-
 function normalizeSubmittedCommand(value: string): string {
   return value.replace(/\r?\n/g, " ").trim();
 }
-
-function carryingToDisplay(values: string[] | null | undefined): string {
-  return normalizeUnknownList(values).join(", ");
-}
-
-function locationKindToDisplay(kindType: string | null | undefined, kindCustom: string | null | undefined): string {
-  const kind = normalizeUnknown(kindType);
-  if (kind.toLowerCase() !== "other") {
-    return kind;
-  }
-  const custom = normalizeUnknown(kindCustom);
-  if (custom === "Unknown") {
-    return "Other";
-  }
-  return `Other (${custom})`;
-}
-
-function exportsToDisplay(values: string[] | null | undefined): string {
-  return normalizeUnknownList(values).join(", ");
-}
-
-function npcDraftDoc(draft: NpcDraft): OutputDoc {
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: draft.name,
-        rows: [
-          { label: "Race:", value: normalizeUnknown(draft.race) },
-          { label: "Occupation:", value: normalizeUnknown(draft.occupation) },
-          { label: "Gender:", value: titleCaseSex(normalizeUnknown(draft.sex)) },
-          { label: "Age:", value: normalizeUnknown(draft.age) },
-          { label: "Height:", value: normalizeUnknown(draft.height) },
-          { label: "Weight:", value: `${normalizeUnknown(draft.weightLbs)} lbs` },
-          { label: "Background:", value: normalizeUnknown(draft.background) },
-          { label: "Want:", value: normalizeUnknown(draft.wantNeed) },
-          { label: "Secret:", value: normalizeUnknown(draft.secretObstacle) },
-          { label: "Carrying:", value: carryingToDisplay(draft.carrying) },
-          { label: "Location:", value: normalizeUnknown(draft.location) }
-        ]
-      },
-      {
-        kind: "paragraph",
-        inlines: [
-          { kind: "text", text: "Use " },
-          { kind: "command_ref", label: "save", command: "save" },
-          { kind: "text", text: " to persist this NPC, or " },
-          { kind: "command_ref", label: "reroll", command: "reroll" },
-          { kind: "text", text: " to generate again." }
-        ]
-      }
-    ]
-  };
-}
-
-function locationDraftDoc(draft: LocationDraft): OutputDoc {
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: draft.name,
-        rows: [
-          { label: "Kind:", value: locationKindToDisplay(draft.kind_type, draft.kind_custom) },
-          { label: "Visual:", value: normalizeUnknown(draft.visual_description) },
-          { label: "History:", value: normalizeUnknown(draft.history_background) },
-          { label: "Exports:", value: exportsToDisplay(draft.exports) },
-          { label: "Tone:", value: normalizeUnknown(draft.tone) },
-          { label: "Authority:", value: normalizeUnknown(draft.authority) },
-          { label: "Danger:", value: normalizeUnknown(draft.danger_level) },
-          { label: "Tension:", value: normalizeUnknown(draft.current_tension) },
-          { label: "Path:", value: normalizeUnknown(draft.vault_path) }
-        ]
-      },
-      {
-        kind: "paragraph",
-        inlines: [
-          { kind: "text", text: "Use " },
-          { kind: "command_ref", label: "save", command: "save" },
-          { kind: "text", text: " to persist this location, or " },
-          { kind: "command_ref", label: "reroll", command: "reroll" },
-          { kind: "text", text: " to regenerate it." }
-        ]
-      }
-    ]
-  };
-}
-
-function factionDraftDoc(draft: FactionDraft): OutputDoc {
-  return {
-    blocks: [
-      {
-        kind: "entity_card",
-        title: "Faction Draft",
-        rows: [
-          { label: "name", value: draft.name },
-          { label: "slug", value: draft.slug },
-          { label: "kind", value: draft.kind_type },
-          { label: "kind_custom", value: draft.kind_custom ?? "(none)" },
-          { label: "public", value: draft.public_description },
-          { label: "agenda", value: draft.true_agenda },
-          { label: "methods", value: draft.methods },
-          { label: "leadership", value: draft.leadership },
-          { label: "headquarters", value: draft.headquarters },
-          { label: "influence", value: draft.sphere_of_influence },
-          { label: "resources", value: draft.resources_assets },
-          { label: "allies", value: draft.allies.join(", ") },
-          { label: "rivals", value: draft.rivals_enemies.join(", ") },
-          { label: "reputation", value: draft.reputation },
-          { label: "tension", value: draft.current_tension },
-          { label: "goals_short", value: draft.goals_short_term.join(", ") },
-          { label: "goals_long", value: draft.goals_long_term.join(", ") },
-          { label: "symbol", value: draft.symbol_description },
-          { label: "path", value: draft.vault_path }
-        ]
-      },
-      {
-        kind: "paragraph",
-        inlines: [
-          { kind: "text", text: "Use " },
-          { kind: "command_ref", label: "save", command: "save" },
-          { kind: "text", text: " to persist this faction, or " },
-          { kind: "command_ref", label: "reroll", command: "reroll" },
-          { kind: "text", text: " to regenerate it." }
-        ]
-      }
-    ]
-  };
-}
-
 function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
   if (!manifest) {
     return {
@@ -1336,7 +943,10 @@ function commandSpinnerLabel(raw: string): string | null {
   if (lowered === "create faction" || lowered.startsWith("create faction ")) {
     return "generating faction";
   }
-  if (lowered === "reroll" || lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
+  if (lowered === "reroll" || lowered.startsWith("reroll ")) {
+    return "rerolling draft";
+  }
+  if (lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
     return "rerolling npc";
   }
   if (lowered === "location reroll" || lowered.startsWith("location reroll ")) {

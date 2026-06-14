@@ -1,4 +1,4 @@
-import type { SpinnerState, StatusTone } from "./types";
+import type { SpinnerState, StatusTone } from "../generated/models";
 
 export function statusClass(tone: StatusTone): string {
   if (tone === "error") {
