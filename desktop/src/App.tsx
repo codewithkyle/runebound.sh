@@ -1,11 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
-import { buildSuggestions as buildAutocompleteSuggestions, type SuggestionItem } from "./command/autocomplete";
-import { loadManifest, parseInput, type CommandManifest, type ParseResult } from "./command/parser-client";
-import {
-  searchEntities,
-  type EntitySuggestion,
-} from "./entity/client";
+import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
@@ -55,6 +50,13 @@ type CommandClientEvent =
     }
   | {
       kind: "clear_drafts";
+    }
+  | {
+      kind: "clear_terminal";
+      clear_history: boolean;
+    }
+  | {
+      kind: "exit_requested";
     };
 
 type OutputSegment = {
@@ -64,12 +66,10 @@ type OutputSegment = {
 };
 
 type InlineCommandMeta = {
-  commands: Set<string>;
   commandMap: Map<string, CommandSpecMeta>;
 };
 
 type CommandSpecMeta = {
-  name: string;
   subcommands: Set<string>;
   requiresSubcommand: boolean;
   canonicalHelpCommand: string | null;
@@ -98,12 +98,10 @@ type LocationDraft = {
   vault_path: string;
 };
 
-type SuggestionViewItem = SuggestionItem & {
+type SuggestionViewItem = {
+  label: string;
+  completion: string;
   helperText?: "command" | "npc" | "location";
-};
-
-type EntitySuggestionItem = SuggestionViewItem & {
-  helperText: "npc" | "location";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -152,52 +150,14 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [parsedInput, setParsedInput] = createSignal<ParseResult | null>(null);
   const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
-  const [entitySuggestions, setEntitySuggestions] = createSignal<EntitySuggestionItem[]>([]);
+  const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
-  const suggestionList = createMemo(() => {
-    if (command().trim().length === 0 || running() || suggestionsDismissed()) {
-      return [] as SuggestionViewItem[];
-    }
-
-    const commandSuggestions: SuggestionViewItem[] = buildAutocompleteSuggestions(command(), manifest(), parsedInput()).map((item) => ({
-      ...item,
-      helperText: "command"
-    }));
-    const mode = editorMode();
-    const filtered = commandSuggestions.filter((item) => {
-      const completion = item.completion.trim().toLowerCase();
-      const label = item.label.trim().toLowerCase();
-
-      if (mode !== "npc") {
-        if (completion === "npc" || completion.startsWith("npc ") || label === "npc" || label.startsWith("npc ")) {
-          return false;
-        }
-        if (completion === "reroll" || label === "reroll") {
-          return false;
-        }
-      }
-
-      if (mode !== "location") {
-        if (completion === "location" || completion.startsWith("location ") || label === "location" || label.startsWith("location ")) {
-          return false;
-        }
-      }
-
-      if (mode === "none" && (completion === "cancel" || label === "cancel")) {
-        return false;
-      }
-
-      return true;
-    });
-
-    return [...filtered, ...entitySuggestions()];
-  });
+  const suggestionList = createMemo(() => suggestions());
 
   createEffect(() => {
     const size = suggestionList().length;
@@ -212,73 +172,38 @@ export default function App() {
 
   let outputRef: HTMLDivElement | undefined;
   let inputRef: HTMLInputElement | undefined;
-  let parseGeneration = 0;
-  let entitySuggestionGeneration = 0;
+  let suggestionGeneration = 0;
 
   createEffect(() => {
+    if (!manifest()) {
+      setSuggestions([]);
+      return;
+    }
+
+    if (running() || suggestionsDismissed()) {
+      setSuggestions([]);
+      return;
+    }
+
     const currentCommand = command();
-    const loadedManifest = manifest();
-
-    if (!loadedManifest) {
-      setParsedInput(null);
+    if (currentCommand.trim().length === 0) {
+      setSuggestions([]);
       return;
     }
 
-    const generation = parseGeneration + 1;
-    parseGeneration = generation;
+    const generation = suggestionGeneration + 1;
+    suggestionGeneration = generation;
 
-    void parseInput(currentCommand)
-      .then((result) => {
-        if (parseGeneration === generation) {
-          setParsedInput(result);
-        }
-      })
-      .catch(() => {
-        if (parseGeneration === generation) {
-          setParsedInput(null);
-        }
-      });
-  });
-
-  createEffect(() => {
-    const raw = command();
-    const query = raw.trim();
-    const meta = commandMeta();
-    const lowered = query.toLowerCase();
-
-    const isLoadContext = lowered === "load" || lowered.startsWith("load ");
-    const isDeleteContext = lowered === "delete" || lowered.startsWith("delete ");
-    const searchQuery = isLoadContext
-      ? query.slice(4).trim()
-      : isDeleteContext
-        ? query.slice(6).trim()
-        : query;
-
-    if (!query || (!isLoadContext && !isDeleteContext && startsWithKnownCommandRoot(query, meta))) {
-      setEntitySuggestions([]);
-      return;
-    }
-
-    if (!searchQuery) {
-      setEntitySuggestions([]);
-      return;
-    }
-
-    const generation = entitySuggestionGeneration + 1;
-    entitySuggestionGeneration = generation;
-
-    void searchEntities(searchQuery, 6)
+    void suggestInput(currentCommand)
       .then((results) => {
-        if (entitySuggestionGeneration !== generation) {
+        if (suggestionGeneration !== generation) {
           return;
         }
-
-        const completionPrefix = isLoadContext ? "load" : isDeleteContext ? "delete" : null;
-        setEntitySuggestions(results.map((result) => toEntitySuggestionItem(result, completionPrefix)));
+        setSuggestions(results.map(toSuggestionViewItem));
       })
       .catch(() => {
-        if (entitySuggestionGeneration === generation) {
-          setEntitySuggestions([]);
+        if (suggestionGeneration === generation) {
+          setSuggestions([]);
         }
       });
   });
@@ -422,79 +347,9 @@ export default function App() {
     setActiveSuggestionIndex(0);
   };
 
-  const historyOutput = (limit: number): string => {
-    const history = commandHistory();
-    if (history.length === 0) {
-      return "(no history)";
-    }
-
-    const safeLimit = Math.max(1, Math.min(MAX_COMMAND_HISTORY, limit));
-    const start = Math.max(0, history.length - safeLimit);
-    return history
-      .slice(start)
-      .map((item, idx) => `${start + idx + 1}: ${item}`)
-      .join("\n");
-  };
-
-  const runBuiltInCommand = async (raw: string): Promise<{ handled: boolean; ok: boolean; recordHistory: boolean }> => {
-    const tokens = raw.trim().split(/\s+/);
-    const head = tokens[0]?.toLowerCase();
-    if (!head) {
-      return { handled: true, ok: true, recordHistory: false };
-    }
-
-    if (head === "exit") {
-      await invoke("exit_app");
-      return { handled: true, ok: true, recordHistory: false };
-    }
-
-    if (head === "clear") {
-      if (tokens.length === 1) {
-        setEntries([]);
-        return { handled: true, ok: true, recordHistory: true };
-      }
-      if (tokens.length === 2 && tokens[1] === "--history") {
-        setEntries([]);
-        setCommandHistory([]);
-        resetHistoryNavigation();
-        return { handled: true, ok: true, recordHistory: false };
-      }
-
-      appendEntry("error", "usage: clear [--history]");
-      return { handled: true, ok: false, recordHistory: false };
-    }
-
-    if (head === "history") {
-      if (tokens.length === 2 && tokens[1] === "clear") {
-        setEntries([]);
-        setCommandHistory([]);
-        resetHistoryNavigation();
-        return { handled: true, ok: true, recordHistory: false };
-      }
-
-      const limit = tokens.length > 1 ? Number.parseInt(tokens[1], 10) : 20;
-      if (tokens.length > 1 && (Number.isNaN(limit) || limit < 1)) {
-        appendEntry("error", "usage: history [limit|clear]");
-        return { handled: true, ok: false, recordHistory: false };
-      }
-      appendEntry("output", historyOutput(limit));
-      return { handled: true, ok: true, recordHistory: true };
-    }
-
-    return { handled: false, ok: false, recordHistory: false };
-  };
-
   const executeCommand = async (rawInput: string) => {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
-
-    const builtIn = await runBuiltInCommand(raw);
-    if (builtIn.handled) {
-      if (builtIn.ok && builtIn.recordHistory) {
-        pushCommandHistory(raw);
-      }
-      return;
-    }
 
     const spinnerLabel = commandSpinnerLabel(raw);
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
@@ -516,7 +371,11 @@ export default function App() {
         }
         applyClientEvent(response.client_event);
         const outputDocOverride = outputDocFromClientEvent(response.client_event);
-        appendEntry("output", rendered.text || "(ok)", outputDocOverride ?? rendered.outputDoc);
+        const suppressOutput =
+          response.client_event?.kind === "clear_terminal" && rendered.text.trim().length === 0;
+        if (!suppressOutput) {
+          appendEntry("output", rendered.text || "(ok)", outputDocOverride ?? rendered.outputDoc);
+        }
         pushCommandHistory(raw);
       } else {
         if (spinnerId !== null) {
@@ -613,24 +472,6 @@ export default function App() {
     }
   };
 
-  const appendNpcSummary = (draft: NpcDraft) => {
-    appendEntry("output", draft.name, npcDraftDoc(draft));
-  };
-
-  const appendLocationSummary = (draft: LocationDraft) => {
-    appendEntry(
-      "output",
-      [
-        "## Active Location draft",
-        `name: ${draft.name}`,
-        `slug: ${draft.slug}`,
-        `path: ${draft.vault_path}`,
-        "",
-        "Use save to persist this location."
-      ].join("\n")
-    );
-  };
-
   const applyClientEvent = (event: CommandClientEvent | null | undefined) => {
     if (!event) {
       return;
@@ -663,6 +504,20 @@ export default function App() {
       setNpcDraft(null);
       setLocationDraft(null);
       setEditorMode("none");
+      return;
+    }
+
+    if (event.kind === "clear_terminal") {
+      setEntries([]);
+      if (event.clear_history) {
+        setCommandHistory([]);
+        resetHistoryNavigation();
+      }
+      return;
+    }
+
+    if (event.kind === "exit_requested") {
+      void invoke("exit_app");
       return;
     }
 
@@ -1017,22 +872,11 @@ function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
   return false;
 }
 
-function startsWithKnownCommandRoot(input: string, meta: InlineCommandMeta): boolean {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  const first = trimmed.split(/\s+/)[0].toLowerCase();
-  return meta.commandMap.has(first);
-}
-
-function toEntitySuggestionItem(entity: EntitySuggestion, commandPrefix: "load" | "delete" | null): EntitySuggestionItem {
-  const completion = commandPrefix ? `${commandPrefix} ${entity.name}` : entity.name;
+function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem {
   return {
-    label: entity.name,
-    completion,
-    helperText: entity.entity_type
+    label: suggestion.label,
+    completion: suggestion.completion,
+    helperText: suggestion.helper_text ?? undefined
   };
 }
 
@@ -1104,16 +948,13 @@ function npcDraftDoc(draft: NpcDraft): OutputDoc {
 function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
   if (!manifest) {
     return {
-      commands: new Set<string>(),
       commandMap: new Map<string, CommandSpecMeta>()
     };
   }
 
   const commandMap = new Map<string, CommandSpecMeta>();
   for (const command of manifest.commands) {
-    const name = command.name.toLowerCase();
-    commandMap.set(name, {
-      name,
+    commandMap.set(command.name.toLowerCase(), {
       subcommands: new Set(command.subcommands.map((subcommand) => subcommand.name.toLowerCase())),
       requiresSubcommand: command.requires_subcommand,
       canonicalHelpCommand: command.canonical_help_command ?? null
@@ -1121,7 +962,6 @@ function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
   }
 
   return {
-    commands: new Set([...commandMap.keys()]),
     commandMap
   };
 }

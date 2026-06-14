@@ -16,6 +16,64 @@ pub(crate) async fn run_desktop_routed_command(
 
     let lowered = trimmed.to_ascii_lowercase();
 
+    if lowered == "exit" {
+        return Ok(Some(ok_response(
+            "exiting".to_string(),
+            Some(CommandClientEvent::ExitRequested),
+        )));
+    }
+
+    if lowered == "clear" {
+        return Ok(Some(ok_response(
+            String::new(),
+            Some(CommandClientEvent::ClearTerminal {
+                clear_history: false,
+            }),
+        )));
+    }
+
+    if lowered == "clear --history" || lowered == "history clear" {
+        let mut service = state.command_service.lock().await;
+        service.session_mut().clear_history();
+        return Ok(Some(ok_response(
+            String::new(),
+            Some(CommandClientEvent::ClearTerminal {
+                clear_history: true,
+            }),
+        )));
+    }
+
+    if lowered == "history" || lowered.starts_with("history ") {
+        let mut tokens = trimmed.split_whitespace();
+        let _ = tokens.next();
+        let value = tokens.next();
+        if tokens.next().is_some() {
+            return Ok(Some(ok_response(
+                "usage: history [limit|clear]".to_string(),
+                None,
+            )));
+        }
+
+        let limit = match value {
+            None => 20,
+            Some(raw) => match raw.parse::<usize>() {
+                Ok(parsed) if parsed > 0 => parsed,
+                _ => {
+                    return Ok(Some(ok_response(
+                        "usage: history [limit|clear]".to_string(),
+                        None,
+                    )));
+                }
+            },
+        };
+
+        let history = {
+            let service = state.command_service.lock().await;
+            service.session().command_history.clone()
+        };
+        return Ok(Some(ok_response(render_history_output(&history, limit), None)));
+    }
+
     if lowered == "create help" || lowered == "create --help" {
         return Ok(Some(ok_response(
             ["## Create commands", "create npc", "create npc <prompt text>"].join("\n"),
@@ -940,4 +998,19 @@ fn ok_response(output: String, client_event: Option<CommandClientEvent>) -> Comm
         output_doc: None,
         client_event,
     }
+}
+
+fn render_history_output(history: &[String], limit: usize) -> String {
+    if history.is_empty() {
+        return "(no history)".to_string();
+    }
+
+    let safe_limit = limit.clamp(1, 50);
+    let start = history.len().saturating_sub(safe_limit);
+    history[start..]
+        .iter()
+        .enumerate()
+        .map(|(index, value)| format!("{}: {}", start + index + 1, value))
+        .collect::<Vec<_>>()
+        .join("\n")
 }

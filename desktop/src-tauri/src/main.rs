@@ -6,9 +6,9 @@ mod router;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use dnd_core::command::CommandResponse;
-use dnd_core::command_manifest::CommandManifest;
-use dnd_core::command_parse::ParseResult;
+use dnd_core::command::{CommandClientEvent, CommandResponse};
+use dnd_core::command_manifest::{CommandManifest, CommandSpec};
+use dnd_core::command_parse::{ParseResult, ParseStage};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
@@ -134,6 +134,21 @@ struct EntitySuggestion {
     entity_type: EntityType,
     name: String,
     slug: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct CommandSuggestion {
+    label: String,
+    completion: String,
+    helper_text: Option<SuggestionHelperText>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum SuggestionHelperText {
+    Command,
+    Npc,
+    Location,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -445,11 +460,338 @@ fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
 }
 
 #[tauri::command]
+async fn suggest_command_input(
+    input: String,
+    state: tauri::State<'_, AppState>,
+) -> Result<Vec<CommandSuggestion>, String> {
+    if input.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let manifest = dnd_core::command_manifest::command_manifest();
+    let parsed = dnd_core::command_parse::parse_command_input(&input);
+    let mut suggestions = build_command_suggestions(&manifest, &parsed, &input);
+
+    let mode = {
+        let editor = state.editor_session.lock().await;
+        editor.mode
+    };
+
+    suggestions.retain(|suggestion| {
+        let completion = suggestion.completion.trim().to_ascii_lowercase();
+        let label = suggestion.label.trim().to_ascii_lowercase();
+
+        if mode != app_state::EditorMode::Npc {
+            if completion == "npc"
+                || completion.starts_with("npc ")
+                || label == "npc"
+                || label.starts_with("npc ")
+            {
+                return false;
+            }
+            if completion == "reroll" || label == "reroll" {
+                return false;
+            }
+        }
+
+        if mode != app_state::EditorMode::Location
+            && (completion == "location"
+                || completion.starts_with("location ")
+                || label == "location"
+                || label.starts_with("location "))
+        {
+            return false;
+        }
+
+        if mode == app_state::EditorMode::None && (completion == "cancel" || label == "cancel") {
+            return false;
+        }
+
+        true
+    });
+
+    let trimmed = input.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    let is_load_context = lowered == "load" || lowered.starts_with("load ");
+    let is_delete_context = lowered == "delete" || lowered.starts_with("delete ");
+    let search_query = if is_load_context {
+        trimmed[4..].trim()
+    } else if is_delete_context {
+        trimmed[6..].trim()
+    } else {
+        trimmed
+    };
+
+    if !search_query.is_empty()
+        && (is_load_context
+            || is_delete_context
+            || !starts_with_known_command_root(trimmed, &manifest))
+    {
+        let entity_results = search_entities(search_query.to_string(), Some(6)).await?;
+        let prefix = if is_load_context {
+            Some("load")
+        } else if is_delete_context {
+            Some("delete")
+        } else {
+            None
+        };
+
+        for entity in entity_results {
+            let completion = match prefix {
+                Some(value) => format!("{value} {}", entity.name),
+                None => entity.name.clone(),
+            };
+            suggestions.push(CommandSuggestion {
+                label: entity.name,
+                completion,
+                helper_text: Some(match entity.entity_type {
+                    EntityType::Npc => SuggestionHelperText::Npc,
+                    EntityType::Location => SuggestionHelperText::Location,
+                }),
+            });
+        }
+    }
+
+    Ok(suggestions)
+}
+
+fn build_command_suggestions(
+    manifest: &CommandManifest,
+    parsed: &ParseResult,
+    input: &str,
+) -> Vec<CommandSuggestion> {
+    if matches!(parsed.completion.stage, ParseStage::Root) {
+        return build_root_suggestions(manifest, &parsed.completion.current_token);
+    }
+
+    if matches!(parsed.completion.stage, ParseStage::Subcommand) {
+        return build_subcommand_suggestions(
+            manifest,
+            parsed.completion.root.as_deref(),
+            input,
+            &parsed.completion.current_token,
+        );
+    }
+
+    build_argument_suggestions(manifest, parsed, input)
+}
+
+fn build_root_suggestions(manifest: &CommandManifest, token: &str) -> Vec<CommandSuggestion> {
+    let prefix = token.to_ascii_lowercase();
+    manifest
+        .commands
+        .iter()
+        .filter(|cmd| cmd.show_in_autocomplete)
+        .filter(|cmd| cmd.name.starts_with(&prefix))
+        .map(|cmd| CommandSuggestion {
+            label: cmd.name.clone(),
+            completion: format!("{}{}", cmd.name, completion_suffix(cmd)),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
+}
+
+fn build_subcommand_suggestions(
+    manifest: &CommandManifest,
+    root: Option<&str>,
+    input: &str,
+    token: &str,
+) -> Vec<CommandSuggestion> {
+    let Some(root) = root else {
+        return Vec::new();
+    };
+    let Some(command) = find_command(manifest, root) else {
+        return Vec::new();
+    };
+
+    let prefix = token.to_ascii_lowercase();
+    let base = replace_current_token(input, token);
+    command
+        .subcommands
+        .iter()
+        .filter(|subcommand| subcommand.name.starts_with(&prefix))
+        .map(|subcommand| CommandSuggestion {
+            label: format!("{} {}", command.name, subcommand.name),
+            completion: format!("{base}{} ", subcommand.name),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
+}
+
+fn build_argument_suggestions(
+    manifest: &CommandManifest,
+    parsed: &ParseResult,
+    input: &str,
+) -> Vec<CommandSuggestion> {
+    let Some(root) = parsed.completion.root.as_deref() else {
+        return Vec::new();
+    };
+    let Some(command) = find_command(manifest, root) else {
+        return Vec::new();
+    };
+
+    let subcommand = parsed
+        .completion
+        .subcommand
+        .as_ref()
+        .and_then(|item| command.subcommands.iter().find(|sub| sub.name == *item));
+
+    if command.name == "npc" && subcommand.is_some_and(|item| item.name == "travel") {
+        let normalized: Vec<String> = parsed
+            .normalized_tokens
+            .iter()
+            .map(|token| token.to_ascii_lowercase())
+            .collect();
+        let has_to = normalized.len() >= 3 && normalized[2] == "to";
+        if !has_to {
+            return vec![CommandSuggestion {
+                label: "npc travel to".to_string(),
+                completion: "npc travel to ".to_string(),
+                helper_text: Some(SuggestionHelperText::Command),
+            }];
+        }
+    }
+
+    if command.name == "npc"
+        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
+    {
+        let field_names = [
+            "name",
+            "race",
+            "occupation",
+            "sex",
+            "age",
+            "height",
+            "weight",
+            "background",
+            "want",
+            "secret",
+            "carrying",
+        ];
+        let args = &parsed.normalized_tokens[2..];
+        let should_suggest_fields =
+            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
+
+        if should_suggest_fields {
+            let prefix = parsed.completion.current_token.to_ascii_lowercase();
+            let base = replace_current_token(input, &parsed.completion.current_token);
+            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
+                "npc set"
+            } else {
+                "npc reroll"
+            };
+
+            return field_names
+                .iter()
+                .filter(|field| field.starts_with(&prefix))
+                .map(|field| CommandSuggestion {
+                    label: format!("{prefix_label} {field}"),
+                    completion: format!("{base}{field} "),
+                    helper_text: Some(SuggestionHelperText::Command),
+                })
+                .collect();
+        }
+    }
+
+    let options = match subcommand {
+        Some(item) => &item.options,
+        None => &command.options,
+    };
+    if options.is_empty() {
+        return Vec::new();
+    }
+
+    let current = parsed.completion.current_token.to_ascii_lowercase();
+    let used: std::collections::HashSet<String> = parsed
+        .normalized_tokens
+        .iter()
+        .filter(|token| token.starts_with('-'))
+        .cloned()
+        .collect();
+    let base = replace_current_token(input, &parsed.completion.current_token);
+    let should_filter_prefix = current.starts_with('-') || !current.is_empty();
+
+    options
+        .iter()
+        .filter(|option| !used.contains(&option.name) || option.takes_value)
+        .filter(|option| !should_filter_prefix || option.name.starts_with(&current))
+        .map(|option| {
+            let label = match subcommand {
+                Some(item) => format!("{} {} {}", command.name, item.name, option.name),
+                None => format!("{} {}", command.name, option.name),
+            };
+            let suffix = if option.takes_value { " " } else { "" };
+            CommandSuggestion {
+                label,
+                completion: format!("{base}{}{suffix}", option.name),
+                helper_text: Some(SuggestionHelperText::Command),
+            }
+        })
+        .collect()
+}
+
+fn find_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {
+    let normalized = root.to_ascii_lowercase();
+    manifest
+        .commands
+        .iter()
+        .find(|command| command.name == normalized)
+}
+
+fn replace_current_token(input: &str, current_token: &str) -> String {
+    if current_token.is_empty() {
+        return input.to_string();
+    }
+
+    let suffix_len = current_token.len();
+    if input.len() < suffix_len {
+        return input.to_string();
+    }
+
+    input[..input.len() - suffix_len].to_string()
+}
+
+fn completion_suffix(command: &CommandSpec) -> &'static str {
+    if !command.subcommands.is_empty() || !command.options.is_empty() || command.requires_subcommand
+    {
+        " "
+    } else {
+        ""
+    }
+}
+
+fn starts_with_known_command_root(input: &str, manifest: &CommandManifest) -> bool {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    let Some(first) = trimmed.split_whitespace().next() else {
+        return false;
+    };
+    let lowered = first.to_ascii_lowercase();
+    manifest.commands.iter().any(|command| command.name == lowered)
+}
+
+#[tauri::command]
 async fn run_command(
     input: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<CommandResponse, String> {
     if let Some(response) = router::run_desktop_routed_command(&input, state.clone()).await? {
+        let skip_history_push = matches!(
+            response.client_event,
+            Some(CommandClientEvent::ClearTerminal {
+                clear_history: true
+            })
+        );
+        if !skip_history_push {
+            let trimmed = input.trim();
+            if !trimmed.is_empty() {
+                let mut service = state.command_service.lock().await;
+                service.session_mut().push_history(trimmed, 50);
+            }
+        }
         return Ok(response);
     }
 
@@ -457,7 +799,6 @@ async fn run_command(
     Ok(service.execute_line(&input).await)
 }
 
-#[tauri::command]
 async fn generate_npc_seed(
     input: GenerateNpcSeedInput,
     state: tauri::State<'_, AppState>,
@@ -613,7 +954,6 @@ async fn generate_npc_seed(
     Err("failed to generate valid structured NPC output from ollama".to_string())
 }
 
-#[tauri::command]
 async fn reroll_npc_field(
     input: RerollNpcFieldInput,
     state: tauri::State<'_, AppState>,
@@ -806,7 +1146,6 @@ async fn reroll_npc_field(
     Err(format!("failed to reroll npc field: {}", field))
 }
 
-#[tauri::command]
 async fn ensure_location_exists(
     input: EnsureLocationInput,
     state: tauri::State<'_, AppState>,
@@ -921,7 +1260,6 @@ async fn ensure_location_exists(
     })
 }
 
-#[tauri::command]
 async fn save_npc_draft(
     input: SaveNpcDraftInput,
     state: tauri::State<'_, AppState>,
@@ -1119,7 +1457,6 @@ async fn save_npc_draft(
     })
 }
 
-#[tauri::command]
 async fn save_location_draft(
     input: SaveLocationDraftInput,
     state: tauri::State<'_, AppState>,
@@ -1279,7 +1616,6 @@ async fn save_location_draft(
     })
 }
 
-#[tauri::command]
 async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<EntitySuggestion>, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -1315,7 +1651,6 @@ async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<Entity
     Ok(items)
 }
 
-#[tauri::command]
 async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> {
     let trimmed = input.trim();
     if trimmed.is_empty() {
@@ -1376,7 +1711,6 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
     Ok(None)
 }
 
-#[tauri::command]
 async fn soft_delete_entity(
     input: SoftDeleteEntityInput,
     state: tauri::State<'_, AppState>,
@@ -1512,7 +1846,6 @@ async fn soft_delete_entity(
     Err(format!("no npc or location found for: {target}"))
 }
 
-#[tauri::command]
 async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
     let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
     validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
@@ -1665,11 +1998,6 @@ fn get_command_manifest() -> CommandManifest {
 }
 
 #[tauri::command]
-fn parse_command_input(input: String) -> ParseResult {
-    dnd_core::command_parse::parse_command_input(&input)
-}
-
-#[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
 }
@@ -1686,9 +2014,8 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             run_command,
-            search_entities,
+            suggest_command_input,
             get_command_manifest,
-            parse_command_input,
             exit_app
         ])
         .run(tauri::generate_context!())

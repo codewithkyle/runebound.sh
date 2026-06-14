@@ -78,6 +78,8 @@ pub enum CommandClientEvent {
         vault_path: String,
     },
     ClearDrafts,
+    ClearTerminal { clear_history: bool },
+    ExitRequested,
 }
 
 #[derive(Debug, Clone, Serialize)]
