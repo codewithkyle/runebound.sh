@@ -45,6 +45,32 @@ pub struct LocationFrontmatter {
     pub updated_at: String,
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct FactionFrontmatter {
+    pub doc_type: String,
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub kind_type: String,
+    pub kind_custom: Option<String>,
+    pub public_description: String,
+    pub true_agenda: String,
+    pub methods: String,
+    pub leadership: String,
+    pub headquarters: String,
+    pub sphere_of_influence: String,
+    pub resources_assets: String,
+    pub allies: Vec<String>,
+    pub rivals_enemies: Vec<String>,
+    pub reputation: String,
+    pub current_tension: String,
+    pub goals_short_term: Vec<String>,
+    pub goals_long_term: Vec<String>,
+    pub symbol_description: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 pub fn now_timestamp() -> String {
     Utc::now().to_rfc3339()
 }
@@ -208,6 +234,67 @@ pub fn render_location_markdown(
         authority: &frontmatter.authority,
         danger_level: &frontmatter.danger_level,
         current_tension: &frontmatter.current_tension,
+        created_at: &frontmatter.created_at,
+        updated_at: &frontmatter.updated_at,
+    };
+
+    let mut out = String::new();
+    out.push_str("```runebound\n");
+    out.push_str(&toml::to_string_pretty(&fm)?);
+    out.push_str("```\n");
+    Ok(out)
+}
+
+pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> Result<String, toml::ser::Error> {
+    #[derive(Serialize)]
+    struct Frontmatter<'a> {
+        #[serde(rename = "type")]
+        doc_type: &'a str,
+        id: &'a str,
+        slug: &'a str,
+        name: &'a str,
+        kind_type: &'a str,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        kind_custom: Option<&'a str>,
+        public_description: &'a str,
+        true_agenda: &'a str,
+        methods: &'a str,
+        leadership: &'a str,
+        headquarters: &'a str,
+        sphere_of_influence: &'a str,
+        resources_assets: &'a str,
+        allies: &'a [String],
+        rivals_enemies: &'a [String],
+        reputation: &'a str,
+        current_tension: &'a str,
+        goals_short_term: &'a [String],
+        goals_long_term: &'a [String],
+        symbol_description: &'a str,
+        created_at: &'a str,
+        updated_at: &'a str,
+    }
+
+    let fm = Frontmatter {
+        doc_type: &frontmatter.doc_type,
+        id: &frontmatter.id,
+        slug: &frontmatter.slug,
+        name: &frontmatter.name,
+        kind_type: &frontmatter.kind_type,
+        kind_custom: frontmatter.kind_custom.as_deref(),
+        public_description: &frontmatter.public_description,
+        true_agenda: &frontmatter.true_agenda,
+        methods: &frontmatter.methods,
+        leadership: &frontmatter.leadership,
+        headquarters: &frontmatter.headquarters,
+        sphere_of_influence: &frontmatter.sphere_of_influence,
+        resources_assets: &frontmatter.resources_assets,
+        allies: &frontmatter.allies,
+        rivals_enemies: &frontmatter.rivals_enemies,
+        reputation: &frontmatter.reputation,
+        current_tension: &frontmatter.current_tension,
+        goals_short_term: &frontmatter.goals_short_term,
+        goals_long_term: &frontmatter.goals_long_term,
+        symbol_description: &frontmatter.symbol_description,
         created_at: &frontmatter.created_at,
         updated_at: &frontmatter.updated_at,
     };

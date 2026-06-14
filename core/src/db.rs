@@ -33,6 +33,32 @@ pub struct LocationRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct FactionRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub kind_type: String,
+    pub kind_custom: Option<String>,
+    pub public_description: String,
+    pub true_agenda: String,
+    pub methods: String,
+    pub leadership: String,
+    pub headquarters: String,
+    pub sphere_of_influence: String,
+    pub resources_assets: String,
+    pub allies: String,
+    pub rivals_enemies: String,
+    pub reputation: String,
+    pub current_tension: String,
+    pub goals_short_term: String,
+    pub goals_long_term: String,
+    pub symbol_description: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct NpcRow {
     pub id: String,
     pub slug: String,
@@ -111,6 +137,28 @@ pub async fn search_locations_by_name(
     rows.into_iter().map(row_to_location).collect()
 }
 
+pub async fn search_factions_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<FactionRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
+         FROM factions
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search factions by name")?;
+
+    rows.into_iter().map(row_to_faction).collect()
+}
+
 pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
@@ -162,6 +210,24 @@ pub async fn find_location_by_name_or_slug(
     row.map(row_to_location).transpose()
 }
 
+pub async fn find_faction_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<FactionRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
+         FROM factions
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find faction by name or slug")?;
+
+    row.map(row_to_faction).transpose()
+}
+
 pub async fn list_locations(pool: &SqlitePool) -> Result<Vec<LocationRow>> {
     let rows = sqlx::query(
         "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
@@ -172,6 +238,18 @@ pub async fn list_locations(pool: &SqlitePool) -> Result<Vec<LocationRow>> {
     .context("failed to list locations")?;
 
     rows.into_iter().map(row_to_location).collect()
+}
+
+pub async fn list_factions(pool: &SqlitePool) -> Result<Vec<FactionRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
+         FROM factions",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list factions")?;
+
+    rows.into_iter().map(row_to_faction).collect()
 }
 
 pub async fn init_database() -> Result<Database> {
@@ -252,6 +330,30 @@ pub async fn find_location_by_id(pool: &SqlitePool, id: &str) -> Result<Option<L
     row.map(row_to_location).transpose()
 }
 
+pub async fn find_faction_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<FactionRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at FROM factions WHERE slug = ?1",
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query faction by slug")?;
+
+    row.map(row_to_faction).transpose()
+}
+
+pub async fn find_faction_by_id(pool: &SqlitePool, id: &str) -> Result<Option<FactionRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at FROM factions WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query faction by id")?;
+
+    row.map(row_to_faction).transpose()
+}
+
 pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Result<()> {
     sqlx::query(
         "INSERT INTO locations (id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at)
@@ -289,6 +391,61 @@ pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Resul
     .execute(pool)
     .await
     .context("failed to upsert location")?;
+
+    Ok(())
+}
+
+pub async fn upsert_faction(pool: &SqlitePool, faction: &FactionRow) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO factions (id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
+         ON CONFLICT(id) DO UPDATE SET
+            slug = excluded.slug,
+            name = excluded.name,
+            vault_path = excluded.vault_path,
+            kind_type = excluded.kind_type,
+            kind_custom = excluded.kind_custom,
+            public_description = excluded.public_description,
+            true_agenda = excluded.true_agenda,
+            methods = excluded.methods,
+            leadership = excluded.leadership,
+            headquarters = excluded.headquarters,
+            sphere_of_influence = excluded.sphere_of_influence,
+            resources_assets = excluded.resources_assets,
+            allies = excluded.allies,
+            rivals_enemies = excluded.rivals_enemies,
+            reputation = excluded.reputation,
+            current_tension = excluded.current_tension,
+            goals_short_term = excluded.goals_short_term,
+            goals_long_term = excluded.goals_long_term,
+            symbol_description = excluded.symbol_description,
+            updated_at = excluded.updated_at",
+    )
+    .bind(&faction.id)
+    .bind(&faction.slug)
+    .bind(&faction.name)
+    .bind(&faction.vault_path)
+    .bind(&faction.kind_type)
+    .bind(&faction.kind_custom)
+    .bind(&faction.public_description)
+    .bind(&faction.true_agenda)
+    .bind(&faction.methods)
+    .bind(&faction.leadership)
+    .bind(&faction.headquarters)
+    .bind(&faction.sphere_of_influence)
+    .bind(&faction.resources_assets)
+    .bind(&faction.allies)
+    .bind(&faction.rivals_enemies)
+    .bind(&faction.reputation)
+    .bind(&faction.current_tension)
+    .bind(&faction.goals_short_term)
+    .bind(&faction.goals_long_term)
+    .bind(&faction.symbol_description)
+    .bind(&faction.created_at)
+    .bind(&faction.updated_at)
+    .execute(pool)
+    .await
+    .context("failed to upsert faction")?;
 
     Ok(())
 }
@@ -398,6 +555,16 @@ pub async fn delete_location_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
         .execute(pool)
         .await
         .context("failed to delete location row")?;
+
+    Ok(())
+}
+
+pub async fn delete_faction_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM factions WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete faction row")?;
 
     Ok(())
 }
@@ -550,6 +717,69 @@ fn row_to_location(row: sqlx::sqlite::SqliteRow) -> Result<LocationRow> {
         updated_at: row
             .try_get("updated_at")
             .context("locations.updated_at missing")?,
+    })
+}
+
+fn row_to_faction(row: sqlx::sqlite::SqliteRow) -> Result<FactionRow> {
+    Ok(FactionRow {
+        id: row.try_get("id").context("factions.id missing")?,
+        slug: row.try_get("slug").context("factions.slug missing")?,
+        name: row.try_get("name").context("factions.name missing")?,
+        vault_path: row
+            .try_get("vault_path")
+            .context("factions.vault_path missing")?,
+        kind_type: row
+            .try_get("kind_type")
+            .unwrap_or_else(|_| "other".to_string()),
+        kind_custom: row.try_get("kind_custom").ok(),
+        public_description: row
+            .try_get("public_description")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        true_agenda: row
+            .try_get("true_agenda")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        methods: row
+            .try_get("methods")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        leadership: row
+            .try_get("leadership")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        headquarters: row
+            .try_get("headquarters")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        sphere_of_influence: row
+            .try_get("sphere_of_influence")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        resources_assets: row
+            .try_get("resources_assets")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        allies: row
+            .try_get("allies")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        rivals_enemies: row
+            .try_get("rivals_enemies")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        reputation: row
+            .try_get("reputation")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        current_tension: row
+            .try_get("current_tension")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        goals_short_term: row
+            .try_get("goals_short_term")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        goals_long_term: row
+            .try_get("goals_long_term")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        symbol_description: row
+            .try_get("symbol_description")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        created_at: row
+            .try_get("created_at")
+            .context("factions.created_at missing")?,
+        updated_at: row
+            .try_get("updated_at")
+            .context("factions.updated_at missing")?,
     })
 }
 

@@ -58,6 +58,29 @@ type CommandClientEvent =
       current_tension: string;
     }
   | {
+      kind: "load_faction_draft";
+      id: string;
+      name: string;
+      slug: string;
+      vault_path: string;
+      kind_type: string;
+      kind_custom?: string | null;
+      public_description: string;
+      true_agenda: string;
+      methods: string;
+      leadership: string;
+      headquarters: string;
+      sphere_of_influence: string;
+      resources_assets: string;
+      allies: string[];
+      rivals_enemies: string[];
+      reputation: string;
+      current_tension: string;
+      goals_short_term: string[];
+      goals_long_term: string[];
+      symbol_description: string;
+    }
+  | {
       kind: "clear_drafts";
     }
   | {
@@ -116,10 +139,33 @@ type LocationDraft = {
   current_tension: string;
 };
 
+type FactionDraft = {
+  id: string;
+  name: string;
+  slug: string;
+  vault_path: string;
+  kind_type: string;
+  kind_custom?: string | null;
+  public_description: string;
+  true_agenda: string;
+  methods: string;
+  leadership: string;
+  headquarters: string;
+  sphere_of_influence: string;
+  resources_assets: string;
+  allies: string[];
+  rivals_enemies: string[];
+  reputation: string;
+  current_tension: string;
+  goals_short_term: string[];
+  goals_long_term: string[];
+  symbol_description: string;
+};
+
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "reference";
+  helperText?: "command" | "npc" | "location" | "faction" | "reference";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -168,9 +214,10 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location">("none");
+  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
+  const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
 
   const commandMeta = createMemo(() => buildCommandMeta(manifest()));
@@ -510,13 +557,45 @@ export default function App() {
         location: normalizeUnknown(event.location)
       };
       setNpcDraft(draft);
+      setFactionDraft(null);
       setEditorMode("npc");
+      return;
+    }
+
+    if (event.kind === "load_faction_draft") {
+      setNpcDraft(null);
+      setLocationDraft(null);
+      const draft: FactionDraft = {
+        id: event.id,
+        name: normalizeUnknown(event.name),
+        slug: normalizeUnknown(event.slug),
+        vault_path: normalizeUnknown(event.vault_path),
+        kind_type: normalizeUnknown(event.kind_type),
+        kind_custom: normalizeUnknown(event.kind_custom),
+        public_description: normalizeUnknown(event.public_description),
+        true_agenda: normalizeUnknown(event.true_agenda),
+        methods: normalizeUnknown(event.methods),
+        leadership: normalizeUnknown(event.leadership),
+        headquarters: normalizeUnknown(event.headquarters),
+        sphere_of_influence: normalizeUnknown(event.sphere_of_influence),
+        resources_assets: normalizeUnknown(event.resources_assets),
+        allies: normalizeUnknownList(event.allies),
+        rivals_enemies: normalizeUnknownList(event.rivals_enemies),
+        reputation: normalizeUnknown(event.reputation),
+        current_tension: normalizeUnknown(event.current_tension),
+        goals_short_term: normalizeUnknownList(event.goals_short_term),
+        goals_long_term: normalizeUnknownList(event.goals_long_term),
+        symbol_description: normalizeUnknown(event.symbol_description)
+      };
+      setFactionDraft(draft);
+      setEditorMode("faction");
       return;
     }
 
     if (event.kind === "clear_drafts") {
       setNpcDraft(null);
       setLocationDraft(null);
+      setFactionDraft(null);
       setEditorMode("none");
       return;
     }
@@ -536,6 +615,7 @@ export default function App() {
     }
 
     setNpcDraft(null);
+    setFactionDraft(null);
     const draft: LocationDraft = {
       id: event.id,
       name: event.name,
@@ -597,6 +677,32 @@ export default function App() {
         current_tension: normalizeUnknown(event.current_tension)
       };
       return locationDraftDoc(draft);
+    }
+
+    if (event.kind === "load_faction_draft") {
+      const draft: FactionDraft = {
+        id: event.id,
+        name: normalizeUnknown(event.name),
+        slug: normalizeUnknown(event.slug),
+        vault_path: normalizeUnknown(event.vault_path),
+        kind_type: normalizeUnknown(event.kind_type),
+        kind_custom: normalizeUnknown(event.kind_custom),
+        public_description: normalizeUnknown(event.public_description),
+        true_agenda: normalizeUnknown(event.true_agenda),
+        methods: normalizeUnknown(event.methods),
+        leadership: normalizeUnknown(event.leadership),
+        headquarters: normalizeUnknown(event.headquarters),
+        sphere_of_influence: normalizeUnknown(event.sphere_of_influence),
+        resources_assets: normalizeUnknown(event.resources_assets),
+        allies: normalizeUnknownList(event.allies),
+        rivals_enemies: normalizeUnknownList(event.rivals_enemies),
+        reputation: normalizeUnknown(event.reputation),
+        current_tension: normalizeUnknown(event.current_tension),
+        goals_short_term: normalizeUnknownList(event.goals_short_term),
+        goals_long_term: normalizeUnknownList(event.goals_long_term),
+        symbol_description: normalizeUnknown(event.symbol_description)
+      };
+      return factionDraftDoc(draft);
     }
 
     return null;
@@ -1029,6 +1135,38 @@ function locationDraftDoc(draft: LocationDraft): OutputDoc {
           { kind: "text", text: " to persist this location, or " },
           { kind: "command_ref", label: "reroll", command: "reroll" },
           { kind: "text", text: " to regenerate it." }
+        ]
+      }
+    ]
+  };
+}
+
+function factionDraftDoc(draft: FactionDraft): OutputDoc {
+  return {
+    blocks: [
+      {
+        kind: "entity_card",
+        title: "Faction Draft",
+        rows: [
+          { label: "name", value: draft.name },
+          { label: "slug", value: draft.slug },
+          { label: "kind", value: draft.kind_type },
+          { label: "kind_custom", value: draft.kind_custom ?? "(none)" },
+          { label: "public", value: draft.public_description },
+          { label: "agenda", value: draft.true_agenda },
+          { label: "methods", value: draft.methods },
+          { label: "leadership", value: draft.leadership },
+          { label: "headquarters", value: draft.headquarters },
+          { label: "influence", value: draft.sphere_of_influence },
+          { label: "resources", value: draft.resources_assets },
+          { label: "allies", value: draft.allies.join(", ") },
+          { label: "rivals", value: draft.rivals_enemies.join(", ") },
+          { label: "reputation", value: draft.reputation },
+          { label: "tension", value: draft.current_tension },
+          { label: "goals_short", value: draft.goals_short_term.join(", ") },
+          { label: "goals_long", value: draft.goals_long_term.join(", ") },
+          { label: "symbol", value: draft.symbol_description },
+          { label: "path", value: draft.vault_path }
         ]
       }
     ]

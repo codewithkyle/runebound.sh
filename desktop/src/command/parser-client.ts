@@ -39,7 +39,7 @@ export type CommandAlias = {
   summary: string;
 };
 
-export type SuggestionHelperText = "command" | "npc" | "location" | "reference";
+export type SuggestionHelperText = "command" | "npc" | "location" | "faction" | "reference";
 
 export type CommandSuggestion = {
   label: string;

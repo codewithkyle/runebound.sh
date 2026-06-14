@@ -14,9 +14,9 @@ use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
-    LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp,
-    merge_runebound_block, normalize_markdown_file_stem, render_location_markdown,
-    render_npc_markdown, slugify,
+    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id,
+    merge_runebound_block, normalize_markdown_file_stem, now_timestamp, render_faction_markdown,
+    render_location_markdown, render_npc_markdown, slugify,
     unique_slug_for_dir,
 };
 use dnd_core::vault::Vault;
@@ -116,6 +116,19 @@ const LOCATION_KIND_TYPES: [&str; 10] = [
 
 const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
 
+const FACTION_KIND_TYPES: [&str; 10] = [
+    "guild",
+    "cult",
+    "military_order",
+    "noble_house",
+    "criminal_syndicate",
+    "mercantile_league",
+    "religious_order",
+    "arcane_circle",
+    "revolutionary_cell",
+    "other",
+];
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct LocationSeed {
     name: String,
@@ -163,6 +176,67 @@ struct RerollLocationFieldResult {
     exports: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FactionSeed {
+    name: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    public_description: String,
+    true_agenda: String,
+    methods: String,
+    leadership: String,
+    headquarters: String,
+    sphere_of_influence: String,
+    resources_assets: String,
+    allies: Vec<String>,
+    rivals_enemies: Vec<String>,
+    reputation: String,
+    current_tension: String,
+    goals_short_term: Vec<String>,
+    goals_long_term: Vec<String>,
+    symbol_description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct GenerateFactionSeedInput {
+    prompt: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FactionRerollContext {
+    name: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    public_description: String,
+    true_agenda: String,
+    methods: String,
+    leadership: String,
+    headquarters: String,
+    sphere_of_influence: String,
+    resources_assets: String,
+    allies: Vec<String>,
+    rivals_enemies: Vec<String>,
+    reputation: String,
+    current_tension: String,
+    goals_short_term: Vec<String>,
+    goals_long_term: Vec<String>,
+    symbol_description: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RerollFactionFieldInput {
+    field: String,
+    prompt: Option<String>,
+    faction: FactionRerollContext,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RerollFactionFieldResult {
+    field: String,
+    value: Option<String>,
+    list_value: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct EnsureLocationInput {
     name: String,
@@ -182,6 +256,7 @@ struct EnsureLocationResult {
 enum EntityType {
     Npc,
     Location,
+    Faction,
 }
 
 impl EntityType {
@@ -189,6 +264,7 @@ impl EntityType {
         match self {
             EntityType::Npc => "npc",
             EntityType::Location => "location",
+            EntityType::Faction => "faction",
         }
     }
 }
@@ -213,6 +289,7 @@ enum SuggestionHelperText {
     Command,
     Npc,
     Location,
+    Faction,
     Reference,
 }
 
@@ -243,6 +320,19 @@ struct EntityDetails {
     authority: Option<String>,
     danger_level: Option<String>,
     current_tension: Option<String>,
+    public_description: Option<String>,
+    true_agenda: Option<String>,
+    methods: Option<String>,
+    leadership: Option<String>,
+    headquarters: Option<String>,
+    sphere_of_influence: Option<String>,
+    resources_assets: Option<String>,
+    allies: Option<Vec<String>>,
+    rivals_enemies: Option<Vec<String>>,
+    reputation: Option<String>,
+    goals_short_term: Option<Vec<String>>,
+    goals_long_term: Option<Vec<String>>,
+    symbol_description: Option<String>,
     created_at: Option<String>,
 }
 
@@ -265,6 +355,37 @@ struct SaveLocationDraftInput {
 
 #[derive(Debug, Clone, Serialize)]
 struct SaveLocationDraftResult {
+    id: String,
+    slug: String,
+    vault_path: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct SaveFactionDraftInput {
+    id: String,
+    name: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    public_description: String,
+    true_agenda: String,
+    methods: String,
+    leadership: String,
+    headquarters: String,
+    sphere_of_influence: String,
+    resources_assets: String,
+    allies: Vec<String>,
+    rivals_enemies: Vec<String>,
+    reputation: String,
+    current_tension: String,
+    goals_short_term: Vec<String>,
+    goals_long_term: Vec<String>,
+    symbol_description: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct SaveFactionDraftResult {
     id: String,
     slug: String,
     vault_path: String,
@@ -350,6 +471,32 @@ struct LocationDeletePayload {
     authority: String,
     danger_level: String,
     current_tension: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct FactionDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
+    kind_type: String,
+    kind_custom: Option<String>,
+    public_description: String,
+    true_agenda: String,
+    methods: String,
+    leadership: String,
+    headquarters: String,
+    sphere_of_influence: String,
+    resources_assets: String,
+    allies: String,
+    rivals_enemies: String,
+    reputation: String,
+    current_tension: String,
+    goals_short_term: String,
+    goals_long_term: String,
+    symbol_description: String,
     created_at: String,
     updated_at: String,
 }
@@ -533,6 +680,70 @@ fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
     Ok(())
 }
 
+fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    if FACTION_KIND_TYPES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "kind_type must be one of: {}",
+            FACTION_KIND_TYPES.join(", ")
+        ))
+    }
+}
+
+fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, String> {
+    seed.name = seed.name.trim().to_string();
+    seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
+    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
+    if seed.kind_type == "other" {
+        if seed
+            .kind_custom
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
+            return Err("kind_custom is required when kind_type is other".to_string());
+        }
+    } else {
+        seed.kind_custom = None;
+    }
+
+    seed.public_description = normalize_unknown_text(&seed.public_description);
+    seed.true_agenda = normalize_unknown_text(&seed.true_agenda);
+    seed.methods = normalize_unknown_text(&seed.methods);
+    seed.leadership = normalize_unknown_text(&seed.leadership);
+    seed.headquarters = normalize_unknown_text(&seed.headquarters);
+    seed.sphere_of_influence = normalize_unknown_text(&seed.sphere_of_influence);
+    seed.resources_assets = normalize_unknown_text(&seed.resources_assets);
+    seed.allies = normalize_unknown_list(seed.allies);
+    seed.rivals_enemies = normalize_unknown_list(seed.rivals_enemies);
+    seed.reputation = normalize_unknown_text(&seed.reputation);
+    seed.current_tension = normalize_unknown_text(&seed.current_tension);
+    seed.goals_short_term = normalize_unknown_list(seed.goals_short_term);
+    seed.goals_long_term = normalize_unknown_list(seed.goals_long_term);
+    seed.symbol_description = normalize_unknown_text(&seed.symbol_description);
+    Ok(seed)
+}
+
+fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
+    if seed.name.trim().is_empty() {
+        return Err("faction name cannot be empty".to_string());
+    }
+    if seed.public_description != "Unknown" {
+        validate_sentence_range(&seed.public_description, 1, 3, "public_description")?;
+    }
+    if seed.true_agenda != "Unknown" {
+        validate_sentence_range(&seed.true_agenda, 1, 3, "true_agenda")?;
+    }
+    if seed.current_tension != "Unknown" {
+        validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?;
+    }
+    if seed.symbol_description != "Unknown" {
+        validate_sentence_range(&seed.symbol_description, 1, 1, "symbol_description")?;
+    }
+    Ok(())
+}
+
 fn carrying_to_db_text(items: &[String]) -> Result<String, String> {
     serde_json::to_string(items).map_err(|err| err.to_string())
 }
@@ -541,6 +752,17 @@ fn carrying_from_db_text(value: &str) -> Vec<String> {
     match serde_json::from_str::<Vec<String>>(value) {
         Ok(items) => normalize_unknown_list(items),
         Err(_) => parse_carrying_csv(value),
+    }
+}
+
+fn faction_list_to_db_text(items: &[String]) -> Result<String, String> {
+    serde_json::to_string(items).map_err(|err| err.to_string())
+}
+
+fn faction_list_from_db_text(value: &str) -> Vec<String> {
+    match serde_json::from_str::<Vec<String>>(value) {
+        Ok(items) => normalize_unknown_list(items),
+        Err(_) => normalize_unknown_list(parse_list_csv(value)),
     }
 }
 
@@ -719,6 +941,60 @@ fn location_context_summary(context: &LocationRerollContext) -> String {
         context.authority,
         context.danger_level,
         context.current_tension
+    )
+}
+
+fn canonical_faction_reroll_field(raw: &str) -> Result<&'static str, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let field = match normalized.as_str() {
+        "name" => "name",
+        "kind" | "kind_type" => "kind_type",
+        "kind_custom" => "kind_custom",
+        "public" | "public_description" => "public_description",
+        "agenda" | "true_agenda" => "true_agenda",
+        "methods" => "methods",
+        "leadership" => "leadership",
+        "hq" | "headquarters" => "headquarters",
+        "influence" | "sphere_of_influence" => "sphere_of_influence",
+        "resources" | "resources_assets" => "resources_assets",
+        "allies" => "allies",
+        "rivals" | "rivals_enemies" => "rivals_enemies",
+        "reputation" => "reputation",
+        "tension" | "current_tension" => "current_tension",
+        "goals_short" | "goals_short_term" => "goals_short_term",
+        "goals_long" | "goals_long_term" => "goals_long_term",
+        "symbol" | "sigil" | "banner" | "symbol_description" => "symbol_description",
+        _ => {
+            return Err(format!(
+                "unknown faction reroll field: {}. valid fields: name, kind, kind_custom, public, agenda, methods, leadership, headquarters, influence, resources, allies, rivals, reputation, tension, goals_short, goals_long, symbol",
+                raw
+            ))
+        }
+    };
+
+    Ok(field)
+}
+
+fn faction_context_summary(context: &FactionRerollContext) -> String {
+    format!(
+        "name={}, kind_type={}, kind_custom={}, public_description={}, true_agenda={}, methods={}, leadership={}, headquarters={}, sphere_of_influence={}, resources_assets={}, allies={}, rivals_enemies={}, reputation={}, current_tension={}, goals_short_term={}, goals_long_term={}, symbol_description={}",
+        context.name,
+        context.kind_type,
+        context.kind_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+        context.public_description,
+        context.true_agenda,
+        context.methods,
+        context.leadership,
+        context.headquarters,
+        context.sphere_of_influence,
+        context.resources_assets,
+        context.allies.join(", "),
+        context.rivals_enemies.join(", "),
+        context.reputation,
+        context.current_tension,
+        context.goals_short_term.join(", "),
+        context.goals_long_term.join(", "),
+        context.symbol_description,
     )
 }
 
@@ -1014,6 +1290,33 @@ fn parse_recent_location_seeds(payloads: Vec<String>) -> Vec<LocationSeed> {
         .collect()
 }
 
+fn parse_recent_faction_seeds(payloads: Vec<String>) -> Vec<FactionSeed> {
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<FactionSeed>(&payload).ok())
+        .collect()
+}
+
+fn recent_faction_name_set(seeds: &[FactionSeed]) -> std::collections::HashSet<String> {
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
+}
+
+fn describe_recent_faction_seeds(seeds: &[FactionSeed]) -> String {
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.reputation))
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
 fn describe_recent_location_seeds(seeds: &[LocationSeed]) -> String {
     if seeds.is_empty() {
         return "none".to_string();
@@ -1194,6 +1497,7 @@ async fn suggest_command_input(
                 return false;
             }
             if mode != app_state::EditorMode::Location
+                && mode != app_state::EditorMode::Faction
                 && (completion == "reroll" || label == "reroll")
             {
                 return false;
@@ -1205,6 +1509,15 @@ async fn suggest_command_input(
                 || completion.starts_with("location ")
                 || label == "location"
                 || label.starts_with("location "))
+        {
+            return false;
+        }
+
+        if mode != app_state::EditorMode::Faction
+            && (completion == "faction"
+                || completion.starts_with("faction ")
+                || label == "faction"
+                || label.starts_with("faction "))
         {
             return false;
         }
@@ -1265,6 +1578,7 @@ async fn suggest_command_input(
                 helper_text: Some(match entity.entity_type {
                     EntityType::Npc => SuggestionHelperText::Npc,
                     EntityType::Location => SuggestionHelperText::Location,
+                    EntityType::Faction => SuggestionHelperText::Faction,
                 }),
             });
         }
@@ -1456,6 +1770,53 @@ fn build_argument_suggestions(
                 "location set"
             } else {
                 "location reroll"
+            };
+
+            return field_names
+                .iter()
+                .filter(|field| field.starts_with(&prefix))
+                .map(|field| CommandSuggestion {
+                    label: format!("{prefix_label} {field}"),
+                    completion: format!("{base}{field} "),
+                    helper_text: Some(SuggestionHelperText::Command),
+                })
+                .collect();
+        }
+    }
+
+    if command.name == "faction"
+        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
+    {
+        let field_names = [
+            "name",
+            "kind",
+            "kind_custom",
+            "public",
+            "agenda",
+            "methods",
+            "leadership",
+            "headquarters",
+            "influence",
+            "resources",
+            "allies",
+            "rivals",
+            "reputation",
+            "tension",
+            "goals_short",
+            "goals_long",
+            "symbol",
+        ];
+        let args = &parsed.normalized_tokens[2..];
+        let should_suggest_fields =
+            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
+
+        if should_suggest_fields {
+            let prefix = parsed.completion.current_token.to_ascii_lowercase();
+            let base = replace_current_token(input, &parsed.completion.current_token);
+            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
+                "faction set"
+            } else {
+                "faction reroll"
             };
 
             return field_names
@@ -1930,6 +2291,154 @@ fn scan_location_row_from_markdown(relative_path: &str, contents: &str) -> db::L
     }
 }
 
+fn scan_faction_row_from_markdown(relative_path: &str, contents: &str) -> db::FactionRow {
+    let parsed = extract_runebound_toml(contents)
+        .and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
+    let now = now_timestamp();
+    let fallback_name = file_stem_name(relative_path);
+
+    let name = parsed
+        .as_ref()
+        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&fallback_name)
+        .to_string();
+    let slug = parsed
+        .as_ref()
+        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| slugify(&name));
+    let id = parsed
+        .as_ref()
+        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| stable_id_from_relative("fac", relative_path));
+
+    let kind_raw = parsed
+        .as_ref()
+        .and_then(|value| {
+            value
+                .get("kind_type")
+                .or_else(|| value.get("kind"))
+                .and_then(toml::Value::as_str)
+        })
+        .unwrap_or("other");
+    let kind_type = normalize_faction_kind_type(kind_raw).unwrap_or_else(|_| "other".to_string());
+
+    let mut kind_custom = parsed
+        .as_ref()
+        .and_then(|value| value.get("kind_custom").and_then(toml::Value::as_str))
+        .map(normalize_unknown_text);
+    if kind_type == "other" && kind_custom.is_none() {
+        kind_custom = Some("Unknown".to_string());
+    }
+    if kind_type != "other" {
+        kind_custom = None;
+    }
+
+    let parse_list_field = |field: &str| {
+        parsed
+            .as_ref()
+            .and_then(|value| value.get(field))
+            .and_then(|raw| {
+                if let Some(items) = raw.as_array() {
+                    let out: Vec<String> = items
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .map(str::trim)
+                        .filter(|item| !item.is_empty())
+                        .map(ToString::to_string)
+                        .collect();
+                    return Some(out);
+                }
+                raw.as_str().map(parse_list_csv)
+            })
+            .unwrap_or_else(|| vec!["Unknown".to_string()])
+    };
+
+    db::FactionRow {
+        id,
+        slug,
+        name,
+        vault_path: normalize_relative_path_for_storage(relative_path),
+        kind_type,
+        kind_custom,
+        public_description: parsed
+            .as_ref()
+            .and_then(|value| value.get("public_description").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        true_agenda: parsed
+            .as_ref()
+            .and_then(|value| value.get("true_agenda").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        methods: parsed
+            .as_ref()
+            .and_then(|value| value.get("methods").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        leadership: parsed
+            .as_ref()
+            .and_then(|value| value.get("leadership").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        headquarters: parsed
+            .as_ref()
+            .and_then(|value| value.get("headquarters").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        sphere_of_influence: parsed
+            .as_ref()
+            .and_then(|value| value.get("sphere_of_influence").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        resources_assets: parsed
+            .as_ref()
+            .and_then(|value| value.get("resources_assets").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        allies: serde_json::to_string(&normalize_unknown_list(parse_list_field("allies")))
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        rivals_enemies: serde_json::to_string(&normalize_unknown_list(parse_list_field("rivals_enemies")))
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        reputation: parsed
+            .as_ref()
+            .and_then(|value| value.get("reputation").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        current_tension: parsed
+            .as_ref()
+            .and_then(|value| value.get("current_tension").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        goals_short_term: serde_json::to_string(&normalize_unknown_list(parse_list_field("goals_short_term")))
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        goals_long_term: serde_json::to_string(&normalize_unknown_list(parse_list_field("goals_long_term")))
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        symbol_description: parsed
+            .as_ref()
+            .and_then(|value| value.get("symbol_description").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        created_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| now.clone()),
+        updated_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or(now),
+    }
+}
+
 async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
     let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
     if !loaded.effective.vault.autoscan_on_start {
@@ -2012,6 +2521,43 @@ async fn sync_database_from_vault(workspace_root: &Path) -> Result<(), String> {
                 .await
                 .map_err(|err| err.to_string())?;
             db::delete_document_by_vault_path(&database.pool, &location.vault_path)
+                .await
+                .map_err(|err| err.to_string())?;
+        }
+    }
+
+    let faction_files = collect_markdown_files_under(vault.root(), "factions")?;
+    let mut scanned_faction_paths = HashSet::new();
+    for (relative_path, contents) in faction_files {
+        let row = scan_faction_row_from_markdown(&relative_path, &contents);
+        scanned_faction_paths.insert(row.vault_path.clone());
+        db::upsert_faction(&database.pool, &row)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::upsert_document_index(
+            &database.pool,
+            "faction",
+            &row.slug,
+            Some(&row.name),
+            &row.vault_path,
+            &row.created_at,
+            &row.updated_at,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+    }
+
+    let existing_factions = db::list_factions(&database.pool)
+        .await
+        .map_err(|err| err.to_string())?;
+    for faction in existing_factions {
+        if faction.vault_path.starts_with("factions/")
+            && !scanned_faction_paths.contains(&faction.vault_path)
+        {
+            db::delete_faction_by_id(&database.pool, &faction.id)
+                .await
+                .map_err(|err| err.to_string())?;
+            db::delete_document_by_vault_path(&database.pool, &faction.vault_path)
                 .await
                 .map_err(|err| err.to_string())?;
         }
@@ -2790,6 +3336,362 @@ async fn reroll_location_field(
     Err(format!("failed to reroll location field: {}", field))
 }
 
+async fn generate_faction_seed(
+    input: GenerateFactionSeedInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<FactionSeed, String> {
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let config = loaded.effective;
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+    let user_prompt = input
+        .prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let recent_payloads = db::recent_generation_prompts(&database.pool, "faction_seed", 20)
+        .await
+        .map_err(|err| err.to_string())?;
+    let recent_seeds = parse_recent_faction_seeds(recent_payloads);
+    let recent_names = recent_faction_name_set(&recent_seeds);
+    let recent_context = describe_recent_faction_seeds(&recent_seeds);
+
+    let schema = serde_json::json!({
+        "type": "object",
+        "required": [
+            "name", "kind_type", "public_description", "true_agenda", "methods", "leadership", "headquarters", "sphere_of_influence", "resources_assets", "allies", "rivals_enemies", "reputation", "current_tension", "goals_short_term", "goals_long_term", "symbol_description"
+        ],
+        "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "kind_type": { "type": "string", "enum": FACTION_KIND_TYPES },
+            "kind_custom": { "type": ["string", "null"] },
+            "public_description": { "type": "string", "minLength": 1 },
+            "true_agenda": { "type": "string", "minLength": 1 },
+            "methods": { "type": "string", "minLength": 1 },
+            "leadership": { "type": "string", "minLength": 1 },
+            "headquarters": { "type": "string", "minLength": 1 },
+            "sphere_of_influence": { "type": "string", "minLength": 1 },
+            "resources_assets": { "type": "string", "minLength": 1 },
+            "allies": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
+            "rivals_enemies": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
+            "reputation": { "type": "string", "minLength": 1 },
+            "current_tension": { "type": "string", "minLength": 1 },
+            "goals_short_term": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
+            "goals_long_term": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
+            "symbol_description": { "type": "string", "minLength": 1 }
+        },
+        "additionalProperties": false
+    });
+
+    let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    let mut seen_attempt_names = HashSet::new();
+
+    for attempt in 0..5 {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_micros() as i64)
+            .unwrap_or(0);
+        let run_seed = (base_seed + i64::from(attempt)) as i32;
+        let repair_note = if attempt == 0 {
+            ""
+        } else {
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
+        };
+
+        let payload = serde_json::json!({
+            "model": model,
+            "stream": false,
+            "format": schema,
+            "options": {
+                "temperature": 1.08,
+                "top_p": 0.93,
+                "repeat_penalty": 1.12,
+                "seed": run_seed
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": format!(
+                        "You generate concise, usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. public_description, true_agenda, and methods should be 1-3 sentences. current_tension should be 1-2 sentences. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. Avoid these recent seeds: {}.{}",
+                        recent_context,
+                        repair_note,
+                    )
+                },
+                {
+                    "role": "user",
+                    "content": user_prompt
+                }
+            ]
+        });
+
+        let response = client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+
+        if !response.status().is_success() {
+            return Err(format!("ollama chat failed with status {}", response.status()));
+        }
+
+        let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+        let Some(content) = value
+            .get("message")
+            .and_then(|msg| msg.get("content"))
+            .and_then(|content| content.as_str())
+        else {
+            continue;
+        };
+
+        let parsed: Result<FactionSeed, _> = serde_json::from_str(content);
+        let Ok(seed) = parsed else {
+            continue;
+        };
+
+        let seed = match normalize_faction_seed(seed) {
+            Ok(seed) => seed,
+            Err(_) => continue,
+        };
+        if validate_faction_details(&seed).is_err() {
+            continue;
+        }
+
+        let normalized_name = seed.name.to_ascii_lowercase();
+        if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) {
+            continue;
+        }
+        seen_attempt_names.insert(normalized_name);
+
+        let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+        db::insert_generation(&database.pool, "faction_seed", None, &serialized_seed)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(seed);
+    }
+
+    Err("failed to generate valid structured faction output from ollama".to_string())
+}
+
+async fn reroll_faction_field(
+    input: RerollFactionFieldInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<RerollFactionFieldResult, String> {
+    let field = canonical_faction_reroll_field(&input.field)?;
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let config = loaded.effective;
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+    let extra_prompt = input
+        .prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+
+    let context_summary = faction_context_summary(&input.faction);
+    let field_instructions = match field {
+        "name" => "Generate a concise fantasy faction name.",
+        "kind_type" => "Generate one kind_type enum value from: guild, cult, military_order, noble_house, criminal_syndicate, mercantile_league, religious_order, arcane_circle, revolutionary_cell, other.",
+        "kind_custom" => "Generate a concise custom faction kind label.",
+        "public_description" => "Generate a public-facing description in 1-3 sentences.",
+        "true_agenda" => "Generate the hidden agenda in 1-3 sentences.",
+        "methods" => "Generate methods in 1-3 concise sentences.",
+        "leadership" => "Generate concise leadership details.",
+        "headquarters" => "Generate concise headquarters details.",
+        "sphere_of_influence" => "Generate concise sphere of influence details.",
+        "resources_assets" => "Generate concise resources/assets details.",
+        "allies" => "Generate 1-5 ally strings.",
+        "rivals_enemies" => "Generate 1-5 rival or enemy strings.",
+        "reputation" => "Generate concise public reputation.",
+        "current_tension" => "Generate current tension in 1-2 sentences.",
+        "goals_short_term" => "Generate 1-5 short-term goals.",
+        "goals_long_term" => "Generate 1-5 long-term goals.",
+        "symbol_description" => "Generate exactly 1 sentence describing symbol/sigil/colors/banner/iconography.",
+        _ => "Generate a concise field value.",
+    };
+
+    let schema = if ["allies", "rivals_enemies", "goals_short_term", "goals_long_term"]
+        .contains(&field)
+    {
+        serde_json::json!({
+            "type": "object",
+            "required": ["list"],
+            "properties": {
+                "list": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 5,
+                    "items": { "type": "string", "minLength": 1 }
+                }
+            },
+            "additionalProperties": false
+        })
+    } else {
+        serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "properties": {
+                "value": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        })
+    };
+
+    let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    for attempt in 0..4 {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_micros() as i64)
+            .unwrap_or(0);
+        let run_seed = (base_seed + i64::from(attempt)) as i32;
+
+        let payload = serde_json::json!({
+            "model": model,
+            "stream": false,
+            "format": schema,
+            "options": {
+                "temperature": 1.03,
+                "top_p": 0.92,
+                "repeat_penalty": 1.1,
+                "seed": run_seed
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                },
+                {
+                    "role": "user",
+                    "content": format!(
+                        "Faction context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
+                        context_summary,
+                        field,
+                        field_instructions,
+                        if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                    )
+                }
+            ]
+        });
+
+        let response = client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("ollama chat failed with status {}", response.status()));
+        }
+
+        let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+        let Some(content) = value
+            .get("message")
+            .and_then(|msg| msg.get("content"))
+            .and_then(|content| content.as_str())
+        else {
+            continue;
+        };
+
+        let parsed: serde_json::Value = match serde_json::from_str(content) {
+            Ok(parsed) => parsed,
+            Err(_) => continue,
+        };
+
+        if ["allies", "rivals_enemies", "goals_short_term", "goals_long_term"].contains(&field) {
+            let Some(items) = parsed.get("list").and_then(|item| item.as_array()) else {
+                continue;
+            };
+            let next = normalize_unknown_list(
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                    .collect(),
+            );
+            let current = match field {
+                "allies" => input.faction.allies.clone(),
+                "rivals_enemies" => input.faction.rivals_enemies.clone(),
+                "goals_short_term" => input.faction.goals_short_term.clone(),
+                "goals_long_term" => input.faction.goals_long_term.clone(),
+                _ => Vec::new(),
+            };
+            if attempt < 3 && next == normalize_unknown_list(current) {
+                continue;
+            }
+            return Ok(RerollFactionFieldResult {
+                field: field.to_string(),
+                value: None,
+                list_value: Some(next),
+            });
+        }
+
+        let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
+            continue;
+        };
+        let normalized = if field == "kind_type" {
+            match normalize_faction_kind_type(raw_value) {
+                Ok(value) => value,
+                Err(_) => continue,
+            }
+        } else {
+            normalize_unknown_text(raw_value)
+        };
+
+        let current = match field {
+            "name" => input.faction.name.clone(),
+            "kind_type" => input.faction.kind_type.clone(),
+            "kind_custom" => input.faction.kind_custom.clone().unwrap_or_default(),
+            "public_description" => input.faction.public_description.clone(),
+            "true_agenda" => input.faction.true_agenda.clone(),
+            "methods" => input.faction.methods.clone(),
+            "leadership" => input.faction.leadership.clone(),
+            "headquarters" => input.faction.headquarters.clone(),
+            "sphere_of_influence" => input.faction.sphere_of_influence.clone(),
+            "resources_assets" => input.faction.resources_assets.clone(),
+            "reputation" => input.faction.reputation.clone(),
+            "current_tension" => input.faction.current_tension.clone(),
+            "symbol_description" => input.faction.symbol_description.clone(),
+            _ => String::new(),
+        };
+
+        if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
+            continue;
+        }
+
+        return Ok(RerollFactionFieldResult {
+            field: field.to_string(),
+            value: Some(normalized),
+            list_value: None,
+        });
+    }
+
+    Err(format!("failed to reroll faction field: {}", field))
+}
+
 async fn ensure_location_exists(
     input: EnsureLocationInput,
     state: tauri::State<'_, AppState>,
@@ -3360,6 +4262,198 @@ async fn save_location_draft(
     })
 }
 
+async fn save_faction_draft(
+    input: SaveFactionDraftInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<SaveFactionDraftResult, String> {
+    if input.id.trim().is_empty() {
+        return Err("faction id cannot be empty".to_string());
+    }
+    if input.name.trim().is_empty() {
+        return Err("faction name cannot be empty".to_string());
+    }
+
+    let kind_type = normalize_faction_kind_type(&input.kind_type)?;
+    let kind_custom = if kind_type == "other" {
+        let value = input
+            .kind_custom
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| "kind_custom is required when kind_type is other".to_string())?;
+        Some(value.to_string())
+    } else {
+        None
+    };
+
+    let public_description = normalize_unknown_text(&input.public_description);
+    let true_agenda = normalize_unknown_text(&input.true_agenda);
+    let methods = normalize_unknown_text(&input.methods);
+    let leadership = normalize_unknown_text(&input.leadership);
+    let headquarters = normalize_unknown_text(&input.headquarters);
+    let sphere_of_influence = normalize_unknown_text(&input.sphere_of_influence);
+    let resources_assets = normalize_unknown_text(&input.resources_assets);
+    let allies = normalize_unknown_list(input.allies);
+    let rivals_enemies = normalize_unknown_list(input.rivals_enemies);
+    let reputation = normalize_unknown_text(&input.reputation);
+    let current_tension = normalize_unknown_text(&input.current_tension);
+    let goals_short_term = normalize_unknown_list(input.goals_short_term);
+    let goals_long_term = normalize_unknown_list(input.goals_long_term);
+    let symbol_description = normalize_unknown_text(&input.symbol_description);
+
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let vault_path = loaded
+        .effective
+        .vault
+        .path
+        .clone()
+        .ok_or_else(|| "vault.path is not configured".to_string())?;
+    let vault = Vault::new(vault_path);
+    vault.ensure_structure().map_err(|err| err.to_string())?;
+
+    let database = db::init_database().await.map_err(|err| err.to_string())?;
+    let now = now_timestamp();
+    let existing = db::find_faction_by_id(&database.pool, input.id.trim())
+        .await
+        .map_err(|err| err.to_string())?;
+
+    let previous_path = existing
+        .as_ref()
+        .map(|row| normalize_relative_path_for_storage(&row.vault_path));
+    let created_at = existing
+        .as_ref()
+        .map(|row| row.created_at.clone())
+        .unwrap_or_else(|| now.clone());
+
+    let base_slug = slugify(&input.name);
+    let slug;
+    if let Some(row) = existing.as_ref() {
+        if row.slug != base_slug {
+            slug = base_slug;
+        } else {
+            slug = row.slug.clone();
+        }
+    } else {
+        slug = unique_slug_for_dir(vault.root(), "factions", &base_slug);
+    }
+
+    let desired_path = unique_markdown_path_for_name(
+        &vault,
+        "factions",
+        &input.name,
+        previous_path.as_deref(),
+    )?;
+
+    let frontmatter = FactionFrontmatter {
+        doc_type: "faction".to_string(),
+        id: input.id.trim().to_string(),
+        slug: slug.clone(),
+        name: input.name.trim().to_string(),
+        kind_type: kind_type.clone(),
+        kind_custom: kind_custom.clone(),
+        public_description: public_description.clone(),
+        true_agenda: true_agenda.clone(),
+        methods: methods.clone(),
+        leadership: leadership.clone(),
+        headquarters: headquarters.clone(),
+        sphere_of_influence: sphere_of_influence.clone(),
+        resources_assets: resources_assets.clone(),
+        allies: allies.clone(),
+        rivals_enemies: rivals_enemies.clone(),
+        reputation: reputation.clone(),
+        current_tension: current_tension.clone(),
+        goals_short_term: goals_short_term.clone(),
+        goals_long_term: goals_long_term.clone(),
+        symbol_description: symbol_description.clone(),
+        created_at: created_at.clone(),
+        updated_at: now.clone(),
+    };
+
+    let runebound_block = render_faction_markdown(&frontmatter).map_err(|err| err.to_string())?;
+    let existing_file = read_vault_file_if_exists(&vault, &desired_path)?;
+    let content = if let Some(current) = existing_file {
+        merge_runebound_block(&current, &runebound_block)
+    } else {
+        runebound_block
+    };
+    vault
+        .write_relative(&PathBuf::from(&desired_path), &content)
+        .map_err(|err| err.to_string())?;
+
+    let allies_db = faction_list_to_db_text(&allies)?;
+    let rivals_db = faction_list_to_db_text(&rivals_enemies)?;
+    let goals_short_db = faction_list_to_db_text(&goals_short_term)?;
+    let goals_long_db = faction_list_to_db_text(&goals_long_term)?;
+
+    let faction_row = db::FactionRow {
+        id: input.id.trim().to_string(),
+        slug,
+        name: input.name.trim().to_string(),
+        vault_path: desired_path,
+        kind_type,
+        kind_custom,
+        public_description,
+        true_agenda,
+        methods,
+        leadership,
+        headquarters,
+        sphere_of_influence,
+        resources_assets,
+        allies: allies_db,
+        rivals_enemies: rivals_db,
+        reputation,
+        current_tension,
+        goals_short_term: goals_short_db,
+        goals_long_term: goals_long_db,
+        symbol_description,
+        created_at: created_at.clone(),
+        updated_at: now.clone(),
+    };
+
+    db::upsert_faction(&database.pool, &faction_row)
+        .await
+        .map_err(|err| err.to_string())?;
+    db::upsert_document_index(
+        &database.pool,
+        "faction",
+        &faction_row.slug,
+        Some(&faction_row.name),
+        &faction_row.vault_path,
+        &faction_row.created_at,
+        &faction_row.updated_at,
+    )
+    .await
+    .map_err(|err| err.to_string())?;
+
+    if let Some(old_path) = previous_path {
+        if old_path != faction_row.vault_path {
+            db::delete_document_by_vault_path(&database.pool, &old_path)
+                .await
+                .map_err(|err| err.to_string())?;
+            if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
+                if old_full_path.exists() {
+                    std::fs::remove_file(&old_full_path).map_err(|err| {
+                        format!(
+                            "failed to remove old faction file {}: {}",
+                            old_full_path.display(),
+                            err
+                        )
+                    })?;
+                }
+            }
+        }
+    }
+
+    Ok(SaveFactionDraftResult {
+        id: faction_row.id,
+        slug: faction_row.slug,
+        vault_path: faction_row.vault_path,
+        created_at: faction_row.created_at,
+        updated_at: faction_row.updated_at,
+    })
+}
+
 async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<EntitySuggestion>, String> {
     let trimmed = query.trim();
     if trimmed.is_empty() {
@@ -3375,6 +4469,9 @@ async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<Entity
     let locations = db::search_locations_by_name(&database.pool, trimmed, limit)
         .await
         .map_err(|err| err.to_string())?;
+    let factions = db::search_factions_by_name(&database.pool, trimmed, limit)
+        .await
+        .map_err(|err| err.to_string())?;
 
     let mut items: Vec<EntitySuggestion> = npcs
         .into_iter()
@@ -3387,6 +4484,11 @@ async fn search_entities(query: String, limit: Option<u32>) -> Result<Vec<Entity
             entity_type: EntityType::Location,
             name: location.name,
             slug: location.slug,
+        }))
+        .chain(factions.into_iter().map(|faction| EntitySuggestion {
+            entity_type: EntityType::Faction,
+            name: faction.name,
+            slug: faction.slug,
         }))
         .collect();
 
@@ -3455,6 +4557,19 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             authority: None,
             danger_level: None,
             current_tension: None,
+            public_description: None,
+            true_agenda: None,
+            methods: None,
+            leadership: None,
+            headquarters: None,
+            sphere_of_influence: None,
+            resources_assets: None,
+            allies: None,
+            rivals_enemies: None,
+            reputation: None,
+            goals_short_term: None,
+            goals_long_term: None,
+            symbol_description: None,
             created_at: Some(npc.created_at),
         }));
     }
@@ -3489,7 +4604,67 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             authority: Some(location.authority),
             danger_level: Some(location.danger_level),
             current_tension: Some(location.current_tension),
+            public_description: None,
+            true_agenda: None,
+            methods: None,
+            leadership: None,
+            headquarters: None,
+            sphere_of_influence: None,
+            resources_assets: None,
+            allies: None,
+            rivals_enemies: None,
+            reputation: None,
+            goals_short_term: None,
+            goals_long_term: None,
+            symbol_description: None,
             created_at: Some(location.created_at),
+        }));
+    }
+
+    if let Some(faction) = db::find_faction_by_name_or_slug(&database.pool, trimmed)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        return Ok(Some(EntityDetails {
+            id: faction.id,
+            entity_type: EntityType::Faction,
+            name: faction.name,
+            slug: faction.slug,
+            race: None,
+            occupation: None,
+            sex: None,
+            age: None,
+            height: None,
+            weight_lbs: None,
+            background: None,
+            want_need: None,
+            secret_obstacle: None,
+            carrying: None,
+            location: None,
+            vault_path: normalize_relative_path_for_storage(&faction.vault_path),
+            kind_type: Some(faction.kind_type),
+            kind_custom: faction.kind_custom,
+            visual_description: None,
+            history_background: None,
+            exports: None,
+            tone: None,
+            authority: None,
+            danger_level: None,
+            current_tension: Some(faction.current_tension),
+            public_description: Some(faction.public_description),
+            true_agenda: Some(faction.true_agenda),
+            methods: Some(faction.methods),
+            leadership: Some(faction.leadership),
+            headquarters: Some(faction.headquarters),
+            sphere_of_influence: Some(faction.sphere_of_influence),
+            resources_assets: Some(faction.resources_assets),
+            allies: Some(faction_list_from_db_text(&faction.allies)),
+            rivals_enemies: Some(faction_list_from_db_text(&faction.rivals_enemies)),
+            reputation: Some(faction.reputation),
+            goals_short_term: Some(faction_list_from_db_text(&faction.goals_short_term)),
+            goals_long_term: Some(faction_list_from_db_text(&faction.goals_long_term)),
+            symbol_description: Some(faction.symbol_description),
+            created_at: Some(faction.created_at),
         }));
     }
 
@@ -3639,7 +4814,73 @@ async fn soft_delete_entity(
         });
     }
 
-    Err(format!("no npc or location found for: {target}"))
+    if let Some(faction) = db::find_faction_by_name_or_slug(&database.pool, target)
+        .await
+        .map_err(|err| err.to_string())?
+    {
+        let normalized_vault_path = normalize_relative_path_for_storage(&faction.vault_path);
+        let trash_path = unique_trash_path(&vault, "factions", &faction.slug, &now)?;
+        move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
+
+        db::delete_faction_by_id(&database.pool, &faction.id)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::delete_document_by_vault_path(&database.pool, &faction.vault_path)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        let payload = FactionDeletePayload {
+            id: faction.id.clone(),
+            slug: faction.slug.clone(),
+            name: faction.name.clone(),
+            vault_path: normalized_vault_path.clone(),
+            kind_type: faction.kind_type,
+            kind_custom: faction.kind_custom,
+            public_description: faction.public_description,
+            true_agenda: faction.true_agenda,
+            methods: faction.methods,
+            leadership: faction.leadership,
+            headquarters: faction.headquarters,
+            sphere_of_influence: faction.sphere_of_influence,
+            resources_assets: faction.resources_assets,
+            allies: faction.allies,
+            rivals_enemies: faction.rivals_enemies,
+            reputation: faction.reputation,
+            current_tension: faction.current_tension,
+            goals_short_term: faction.goals_short_term,
+            goals_long_term: faction.goals_long_term,
+            symbol_description: faction.symbol_description,
+            created_at: faction.created_at,
+            updated_at: faction.updated_at,
+        };
+
+        let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+        let soft_delete_row = db::SoftDeleteRow {
+            id: 0,
+            entity_type: "faction".to_string(),
+            entity_id: faction.id.clone(),
+            name: faction.name.clone(),
+            slug: faction.slug.clone(),
+            original_vault_path: normalized_vault_path,
+            trash_vault_path: trash_path.clone(),
+            payload_json,
+            created_at: now,
+            undone_at: None,
+        };
+        db::insert_soft_delete(&database.pool, &soft_delete_row)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(SoftDeleteEntityResult {
+            entity_type: EntityType::Faction,
+            id: faction.id,
+            name: faction.name,
+            slug: faction.slug,
+            trash_vault_path: trash_path,
+        });
+    }
+
+    Err(format!("no npc, location, or faction found for: {target}"))
 }
 
 async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
@@ -3786,6 +5027,77 @@ async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<Undo
 
         return Ok(UndoSoftDeleteResult {
             entity_type: EntityType::Location,
+            id: payload.id,
+            name: payload.name,
+            slug: restored_slug,
+            vault_path: restored_vault_path,
+        });
+    }
+
+    if soft_delete.entity_type == "faction" {
+        let payload: FactionDeletePayload =
+            serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+        let mut restored_slug = payload.slug;
+        let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+        let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+        let preferred_full = vault
+            .resolve_relative(&PathBuf::from(&restored_vault_path))
+            .map_err(|err| err.to_string())?;
+        if preferred_full.exists() {
+            restored_slug = unique_slug_for_dir(vault.root(), "factions", &restored_slug);
+            restored_vault_path =
+                unique_markdown_path_for_name(&vault, "factions", &payload.name, None)?;
+        }
+
+        move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
+
+        let faction_row = db::FactionRow {
+            id: payload.id.clone(),
+            slug: restored_slug.clone(),
+            name: payload.name.clone(),
+            vault_path: restored_vault_path.clone(),
+            kind_type: payload.kind_type,
+            kind_custom: payload.kind_custom,
+            public_description: payload.public_description,
+            true_agenda: payload.true_agenda,
+            methods: payload.methods,
+            leadership: payload.leadership,
+            headquarters: payload.headquarters,
+            sphere_of_influence: payload.sphere_of_influence,
+            resources_assets: payload.resources_assets,
+            allies: payload.allies,
+            rivals_enemies: payload.rivals_enemies,
+            reputation: payload.reputation,
+            current_tension: payload.current_tension,
+            goals_short_term: payload.goals_short_term,
+            goals_long_term: payload.goals_long_term,
+            symbol_description: payload.symbol_description,
+            created_at: payload.created_at,
+            updated_at: now.clone(),
+        };
+
+        db::upsert_faction(&database.pool, &faction_row)
+            .await
+            .map_err(|err| err.to_string())?;
+        db::upsert_document_index(
+            &database.pool,
+            "faction",
+            &faction_row.slug,
+            Some(&faction_row.name),
+            &faction_row.vault_path,
+            &faction_row.created_at,
+            &faction_row.updated_at,
+        )
+        .await
+        .map_err(|err| err.to_string())?;
+
+        db::mark_soft_delete_undone(&database.pool, soft_delete.id, &now)
+            .await
+            .map_err(|err| err.to_string())?;
+
+        return Ok(UndoSoftDeleteResult {
+            entity_type: EntityType::Faction,
             id: payload.id,
             name: payload.name,
             slug: restored_slug,

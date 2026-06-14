@@ -36,11 +36,36 @@ pub(crate) struct LocationDraftSession {
     pub(crate) current_tension: String,
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct FactionDraftSession {
+    pub(crate) id: String,
+    pub(crate) name: String,
+    pub(crate) slug: String,
+    pub(crate) vault_path: String,
+    pub(crate) kind_type: String,
+    pub(crate) kind_custom: Option<String>,
+    pub(crate) public_description: String,
+    pub(crate) true_agenda: String,
+    pub(crate) methods: String,
+    pub(crate) leadership: String,
+    pub(crate) headquarters: String,
+    pub(crate) sphere_of_influence: String,
+    pub(crate) resources_assets: String,
+    pub(crate) allies: Vec<String>,
+    pub(crate) rivals_enemies: Vec<String>,
+    pub(crate) reputation: String,
+    pub(crate) current_tension: String,
+    pub(crate) goals_short_term: Vec<String>,
+    pub(crate) goals_long_term: Vec<String>,
+    pub(crate) symbol_description: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum EditorMode {
     None,
     Npc,
     Location,
+    Faction,
 }
 
 impl Default for EditorMode {
@@ -54,6 +79,7 @@ pub(crate) struct EditorSession {
     pub(crate) mode: EditorMode,
     pub(crate) npc_draft: Option<NpcDraftSession>,
     pub(crate) location_draft: Option<LocationDraftSession>,
+    pub(crate) faction_draft: Option<FactionDraftSession>,
 }
 
 pub(crate) struct AppState {

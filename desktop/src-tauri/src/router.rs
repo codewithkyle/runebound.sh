@@ -2,7 +2,9 @@ use dnd_core::command::{CommandClientEvent, CommandResponse, OutputSegment, Outp
 use dnd_core::output::{OutputDoc, entity_card, entity_row};
 use tauri::State;
 
-use crate::app_state::{AppState, EditorMode, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{
+    AppState, EditorMode, FactionDraftSession, LocationDraftSession, NpcDraftSession,
+};
 
 use super::*;
 
@@ -83,6 +85,8 @@ pub(crate) async fn run_desktop_routed_command(
                 "create npc <prompt text>",
                 "create location",
                 "create location <prompt text>",
+                "create faction",
+                "create faction <prompt text>",
             ]
             .join("\n"),
             None,
@@ -173,6 +177,56 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered == "create faction" || lowered.starts_with("create faction ") {
+        let prompt = if trimmed.len() > 14 {
+            let value = trimmed[14..].trim();
+            if value.is_empty() {
+                None
+            } else {
+                Some(value.to_string())
+            }
+        } else {
+            None
+        };
+
+        let seed = generate_faction_seed(GenerateFactionSeedInput { prompt }, state.clone()).await?;
+        let draft = FactionDraftSession {
+            id: make_entity_id("fac"),
+            slug: slugify(&seed.name),
+            name: seed.name,
+            vault_path: String::new(),
+            kind_type: seed.kind_type,
+            kind_custom: seed.kind_custom,
+            public_description: seed.public_description,
+            true_agenda: seed.true_agenda,
+            methods: seed.methods,
+            leadership: seed.leadership,
+            headquarters: seed.headquarters,
+            sphere_of_influence: seed.sphere_of_influence,
+            resources_assets: seed.resources_assets,
+            allies: seed.allies,
+            rivals_enemies: seed.rivals_enemies,
+            reputation: seed.reputation,
+            current_tension: seed.current_tension,
+            goals_short_term: seed.goals_short_term,
+            goals_long_term: seed.goals_long_term,
+            symbol_description: seed.symbol_description,
+        };
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Faction;
+            editor.npc_draft = None;
+            editor.location_draft = None;
+            editor.faction_draft = Some(draft.clone());
+        }
+
+        return Ok(Some(ok_response(
+            faction_summary_text(&draft),
+            Some(faction_event_from_draft(&draft)),
+        )));
+    }
+
     if lowered == "npc help" {
         let has_draft = {
             let editor = state.editor_session.lock().await;
@@ -228,6 +282,33 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered == "faction help" {
+        let has_draft = {
+            let editor = state.editor_session.lock().await;
+            editor.faction_draft.is_some()
+        };
+        if !has_draft {
+            return Ok(Some(ok_response(
+                "no active faction draft. run create faction or load <name>.".to_string(),
+                None,
+            )));
+        }
+        return Ok(Some(ok_response(
+            [
+                "## Faction editor commands",
+                "faction show",
+                "faction rename <name>",
+                "faction set <field> <value>",
+                "faction reroll <field> [prompt]",
+                "reroll",
+                "faction save",
+                "faction cancel",
+            ]
+            .join("\n"),
+            None,
+        )));
+    }
+
     if lowered == "npc show" {
         let draft = {
             let editor = state.editor_session.lock().await;
@@ -262,6 +343,23 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered == "faction show" {
+        let draft = {
+            let editor = state.editor_session.lock().await;
+            editor.faction_draft.clone()
+        };
+        let Some(draft) = draft else {
+            return Ok(Some(ok_response(
+                "no active faction draft. run create faction or load <name>.".to_string(),
+                None,
+            )));
+        };
+        return Ok(Some(ok_response(
+            faction_summary_text(&draft),
+            Some(faction_event_from_draft(&draft)),
+        )));
+    }
+
     if lowered == "npc cancel" {
         let had_draft = {
             let mut editor = state.editor_session.lock().await;
@@ -270,6 +368,8 @@ pub(crate) async fn run_desktop_routed_command(
                 editor.npc_draft = None;
                 editor.mode = if editor.location_draft.is_some() {
                     EditorMode::Location
+                } else if editor.faction_draft.is_some() {
+                    EditorMode::Faction
                 } else {
                     EditorMode::None
                 };
@@ -296,6 +396,8 @@ pub(crate) async fn run_desktop_routed_command(
                 editor.location_draft = None;
                 editor.mode = if editor.npc_draft.is_some() {
                     EditorMode::Npc
+                } else if editor.faction_draft.is_some() {
+                    EditorMode::Faction
                 } else {
                     EditorMode::None
                 };
@@ -314,6 +416,34 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered == "faction cancel" {
+        let had_draft = {
+            let mut editor = state.editor_session.lock().await;
+            let had = editor.faction_draft.is_some();
+            if had {
+                editor.faction_draft = None;
+                editor.mode = if editor.npc_draft.is_some() {
+                    EditorMode::Npc
+                } else if editor.location_draft.is_some() {
+                    EditorMode::Location
+                } else {
+                    EditorMode::None
+                };
+            }
+            had
+        };
+        if !had_draft {
+            return Ok(Some(ok_response(
+                "no active faction draft. run create faction or load <name>.".to_string(),
+                None,
+            )));
+        }
+        return Ok(Some(ok_response(
+            "faction draft discarded.".to_string(),
+            Some(CommandClientEvent::ClearDrafts),
+        )));
+    }
+
     if lowered == "cancel" {
         let mode = {
             let editor = state.editor_session.lock().await;
@@ -324,6 +454,8 @@ pub(crate) async fn run_desktop_routed_command(
             editor.npc_draft = None;
             editor.mode = if editor.location_draft.is_some() {
                 EditorMode::Location
+            } else if editor.faction_draft.is_some() {
+                EditorMode::Faction
             } else {
                 EditorMode::None
             };
@@ -337,6 +469,8 @@ pub(crate) async fn run_desktop_routed_command(
             editor.location_draft = None;
             editor.mode = if editor.npc_draft.is_some() {
                 EditorMode::Npc
+            } else if editor.faction_draft.is_some() {
+                EditorMode::Faction
             } else {
                 EditorMode::None
             };
@@ -345,9 +479,28 @@ pub(crate) async fn run_desktop_routed_command(
                 Some(CommandClientEvent::ClearDrafts),
             )));
         }
+        if mode == EditorMode::Faction {
+            let mut editor = state.editor_session.lock().await;
+            editor.faction_draft = None;
+            editor.mode = if editor.npc_draft.is_some() {
+                EditorMode::Npc
+            } else if editor.location_draft.is_some() {
+                EditorMode::Location
+            } else {
+                EditorMode::None
+            };
+            return Ok(Some(ok_response(
+                "faction draft discarded.".to_string(),
+                Some(CommandClientEvent::ClearDrafts),
+            )));
+        }
     }
 
-    if lowered == "reroll" || lowered == "npc reroll" {
+    if lowered == "reroll"
+        || lowered == "npc reroll"
+        || lowered == "location reroll"
+        || lowered == "faction reroll"
+    {
         let mode = {
             let editor = state.editor_session.lock().await;
             editor.mode
@@ -421,6 +574,49 @@ pub(crate) async fn run_desktop_routed_command(
             return Ok(Some(ok_response(
                 location_summary_text(&draft),
                 Some(location_event_from_draft(&draft)),
+            )));
+        }
+
+        if mode == EditorMode::Faction {
+            let draft = {
+                let editor = state.editor_session.lock().await;
+                editor.faction_draft.clone()
+            };
+            let Some(mut draft) = draft else {
+                return Ok(None);
+            };
+
+            let seed = generate_faction_seed(GenerateFactionSeedInput { prompt: None }, state.clone())
+                .await?;
+            draft.name = seed.name;
+            draft.kind_type = seed.kind_type;
+            draft.kind_custom = seed.kind_custom;
+            draft.public_description = seed.public_description;
+            draft.true_agenda = seed.true_agenda;
+            draft.methods = seed.methods;
+            draft.leadership = seed.leadership;
+            draft.headquarters = seed.headquarters;
+            draft.sphere_of_influence = seed.sphere_of_influence;
+            draft.resources_assets = seed.resources_assets;
+            draft.allies = seed.allies;
+            draft.rivals_enemies = seed.rivals_enemies;
+            draft.reputation = seed.reputation;
+            draft.current_tension = seed.current_tension;
+            draft.goals_short_term = seed.goals_short_term;
+            draft.goals_long_term = seed.goals_long_term;
+            draft.symbol_description = seed.symbol_description;
+
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::Faction;
+                editor.npc_draft = None;
+                editor.location_draft = None;
+                editor.faction_draft = Some(draft.clone());
+            }
+
+            return Ok(Some(ok_response(
+                faction_summary_text(&draft),
+                Some(faction_event_from_draft(&draft)),
             )));
         }
 
@@ -551,7 +747,11 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
-    if lowered == "npc save" || lowered == "save" {
+    if lowered == "npc save"
+        || lowered == "location save"
+        || lowered == "faction save"
+        || lowered == "save"
+    {
         let mode = {
             let editor = state.editor_session.lock().await;
             editor.mode
@@ -589,6 +789,7 @@ pub(crate) async fn run_desktop_routed_command(
                 editor.mode = EditorMode::None;
                 editor.npc_draft = None;
                 editor.location_draft = None;
+                editor.faction_draft = None;
             }
 
             let output = [
@@ -637,10 +838,65 @@ pub(crate) async fn run_desktop_routed_command(
                 editor.mode = EditorMode::None;
                 editor.npc_draft = None;
                 editor.location_draft = None;
+                editor.faction_draft = None;
             }
 
             let output = [
                 "## Location saved".to_string(),
+                format!("id: {}", result.id),
+                format!("slug: {}", result.slug),
+                format!("vault: {}", path_for_display(&result.vault_path)),
+                format!("updated: {}", result.updated_at),
+            ]
+            .join("\n");
+
+            return Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))));
+        }
+
+        if mode == EditorMode::Faction {
+            let draft = {
+                let editor = state.editor_session.lock().await;
+                editor.faction_draft.clone()
+            }
+            .ok_or_else(|| {
+                "no active faction draft. run create faction or load <name>.".to_string()
+            })?;
+
+            let result = save_faction_draft(
+                SaveFactionDraftInput {
+                    id: draft.id.clone(),
+                    name: draft.name.clone(),
+                    kind_type: draft.kind_type.clone(),
+                    kind_custom: draft.kind_custom.clone(),
+                    public_description: draft.public_description.clone(),
+                    true_agenda: draft.true_agenda.clone(),
+                    methods: draft.methods.clone(),
+                    leadership: draft.leadership.clone(),
+                    headquarters: draft.headquarters.clone(),
+                    sphere_of_influence: draft.sphere_of_influence.clone(),
+                    resources_assets: draft.resources_assets.clone(),
+                    allies: draft.allies.clone(),
+                    rivals_enemies: draft.rivals_enemies.clone(),
+                    reputation: draft.reputation.clone(),
+                    current_tension: draft.current_tension.clone(),
+                    goals_short_term: draft.goals_short_term.clone(),
+                    goals_long_term: draft.goals_long_term.clone(),
+                    symbol_description: draft.symbol_description.clone(),
+                },
+                state.clone(),
+            )
+            .await?;
+
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::None;
+                editor.npc_draft = None;
+                editor.location_draft = None;
+                editor.faction_draft = None;
+            }
+
+            let output = [
+                "## Faction saved".to_string(),
                 format!("id: {}", result.id),
                 format!("slug: {}", result.slug),
                 format!("vault: {}", path_for_display(&result.vault_path)),
@@ -982,6 +1238,270 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered.starts_with("faction rename ") {
+        let name = trimmed[15..].trim();
+        if name.is_empty() {
+            return Ok(Some(ok_response(
+                "faction name cannot be empty.".to_string(),
+                None,
+            )));
+        }
+
+        let mut draft = {
+            let editor = state.editor_session.lock().await;
+            editor.faction_draft.clone()
+        }
+        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+        draft.name = name.to_string();
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Faction;
+            editor.faction_draft = Some(draft.clone());
+            editor.npc_draft = None;
+            editor.location_draft = None;
+        }
+
+        return Ok(Some(ok_response(
+            faction_summary_text(&draft),
+            Some(faction_event_from_draft(&draft)),
+        )));
+    }
+
+    if lowered.starts_with("faction set ") {
+        let mut parts = trimmed.splitn(4, char::is_whitespace);
+        let _ = parts.next();
+        let _ = parts.next();
+        let field = parts.next().unwrap_or_default();
+        let value = parts.next().unwrap_or_default().trim();
+        if value.is_empty() {
+            return Ok(Some(ok_response(
+                "faction set value cannot be empty.".to_string(),
+                None,
+            )));
+        }
+
+        let mut draft = {
+            let editor = state.editor_session.lock().await;
+            editor.faction_draft.clone()
+        }
+        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+
+        let field = canonical_faction_reroll_field(field)?;
+        match field {
+            "name" => draft.name = value.to_string(),
+            "kind_type" => {
+                draft.kind_type = normalize_faction_kind_type(value)?;
+                if draft.kind_type == "other" && draft.kind_custom.is_none() {
+                    draft.kind_custom = Some("Unknown".to_string());
+                }
+            }
+            "kind_custom" => draft.kind_custom = Some(value.to_string()),
+            "public_description" => draft.public_description = value.to_string(),
+            "true_agenda" => draft.true_agenda = value.to_string(),
+            "methods" => draft.methods = value.to_string(),
+            "leadership" => draft.leadership = value.to_string(),
+            "headquarters" => draft.headquarters = value.to_string(),
+            "sphere_of_influence" => draft.sphere_of_influence = value.to_string(),
+            "resources_assets" => draft.resources_assets = value.to_string(),
+            "allies" => draft.allies = normalize_unknown_list(parse_list_csv(value)),
+            "rivals_enemies" => draft.rivals_enemies = normalize_unknown_list(parse_list_csv(value)),
+            "reputation" => draft.reputation = value.to_string(),
+            "current_tension" => draft.current_tension = value.to_string(),
+            "goals_short_term" => {
+                draft.goals_short_term = normalize_unknown_list(parse_list_csv(value))
+            }
+            "goals_long_term" => {
+                draft.goals_long_term = normalize_unknown_list(parse_list_csv(value))
+            }
+            "symbol_description" => draft.symbol_description = value.to_string(),
+            _ => {}
+        }
+
+        if draft.kind_type == "other"
+            && draft
+                .kind_custom
+                .as_ref()
+                .is_none_or(|item| item.trim().is_empty())
+        {
+            return Ok(Some(ok_response(
+                "kind_custom is required when kind is other. use faction set kind_custom <value>."
+                    .to_string(),
+                None,
+            )));
+        }
+        if draft.kind_type != "other" {
+            draft.kind_custom = None;
+        }
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Faction;
+            editor.faction_draft = Some(draft.clone());
+            editor.npc_draft = None;
+            editor.location_draft = None;
+        }
+
+        return Ok(Some(ok_response(
+            faction_summary_text(&draft),
+            Some(faction_event_from_draft(&draft)),
+        )));
+    }
+
+    if lowered.starts_with("faction reroll ") {
+        let args = trimmed[15..].trim();
+        if args.is_empty() {
+            return Ok(Some(ok_response(
+                "usage: faction reroll <field> [prompt]".to_string(),
+                None,
+            )));
+        }
+        let mut split = args.splitn(2, char::is_whitespace);
+        let field = split.next().unwrap_or_default().trim().to_string();
+        let prompt = split.next().map(|value| value.trim().to_string());
+
+        let mut draft = {
+            let editor = state.editor_session.lock().await;
+            editor.faction_draft.clone()
+        }
+        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+
+        let rerolled = reroll_faction_field(
+            RerollFactionFieldInput {
+                field,
+                prompt,
+                faction: FactionRerollContext {
+                    name: draft.name.clone(),
+                    kind_type: draft.kind_type.clone(),
+                    kind_custom: draft.kind_custom.clone(),
+                    public_description: draft.public_description.clone(),
+                    true_agenda: draft.true_agenda.clone(),
+                    methods: draft.methods.clone(),
+                    leadership: draft.leadership.clone(),
+                    headquarters: draft.headquarters.clone(),
+                    sphere_of_influence: draft.sphere_of_influence.clone(),
+                    resources_assets: draft.resources_assets.clone(),
+                    allies: draft.allies.clone(),
+                    rivals_enemies: draft.rivals_enemies.clone(),
+                    reputation: draft.reputation.clone(),
+                    current_tension: draft.current_tension.clone(),
+                    goals_short_term: draft.goals_short_term.clone(),
+                    goals_long_term: draft.goals_long_term.clone(),
+                    symbol_description: draft.symbol_description.clone(),
+                },
+            },
+            state.clone(),
+        )
+        .await?;
+
+        match rerolled.field.as_str() {
+            "name" => {
+                if let Some(value) = rerolled.value {
+                    draft.name = value;
+                }
+            }
+            "kind_type" => {
+                if let Some(value) = rerolled.value {
+                    draft.kind_type = normalize_faction_kind_type(&value)?;
+                    if draft.kind_type != "other" {
+                        draft.kind_custom = None;
+                    } else if draft.kind_custom.is_none() {
+                        draft.kind_custom = Some("Unknown".to_string());
+                    }
+                }
+            }
+            "kind_custom" => {
+                if let Some(value) = rerolled.value {
+                    draft.kind_custom = Some(value);
+                }
+            }
+            "public_description" => {
+                if let Some(value) = rerolled.value {
+                    draft.public_description = value;
+                }
+            }
+            "true_agenda" => {
+                if let Some(value) = rerolled.value {
+                    draft.true_agenda = value;
+                }
+            }
+            "methods" => {
+                if let Some(value) = rerolled.value {
+                    draft.methods = value;
+                }
+            }
+            "leadership" => {
+                if let Some(value) = rerolled.value {
+                    draft.leadership = value;
+                }
+            }
+            "headquarters" => {
+                if let Some(value) = rerolled.value {
+                    draft.headquarters = value;
+                }
+            }
+            "sphere_of_influence" => {
+                if let Some(value) = rerolled.value {
+                    draft.sphere_of_influence = value;
+                }
+            }
+            "resources_assets" => {
+                if let Some(value) = rerolled.value {
+                    draft.resources_assets = value;
+                }
+            }
+            "allies" => {
+                if let Some(value) = rerolled.list_value {
+                    draft.allies = value;
+                }
+            }
+            "rivals_enemies" => {
+                if let Some(value) = rerolled.list_value {
+                    draft.rivals_enemies = value;
+                }
+            }
+            "reputation" => {
+                if let Some(value) = rerolled.value {
+                    draft.reputation = value;
+                }
+            }
+            "current_tension" => {
+                if let Some(value) = rerolled.value {
+                    draft.current_tension = value;
+                }
+            }
+            "goals_short_term" => {
+                if let Some(value) = rerolled.list_value {
+                    draft.goals_short_term = value;
+                }
+            }
+            "goals_long_term" => {
+                if let Some(value) = rerolled.list_value {
+                    draft.goals_long_term = value;
+                }
+            }
+            "symbol_description" => {
+                if let Some(value) = rerolled.value {
+                    draft.symbol_description = value;
+                }
+            }
+            _ => {}
+        }
+
+        {
+            let mut editor = state.editor_session.lock().await;
+            editor.mode = EditorMode::Faction;
+            editor.faction_draft = Some(draft.clone());
+            editor.npc_draft = None;
+            editor.location_draft = None;
+        }
+
+        return Ok(Some(ok_response(
+            faction_summary_text(&draft),
+            Some(faction_event_from_draft(&draft)),
+        )));
+    }
+
     if lowered.starts_with("npc ") {
         return Ok(Some(ok_response("unknown npc command.".to_string(), None)));
     }
@@ -993,16 +1513,23 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
+    if lowered.starts_with("faction ") {
+        return Ok(Some(ok_response(
+            "unknown faction command.".to_string(),
+            None,
+        )));
+    }
+
     if lowered == "load" {
         return Ok(Some(ok_response(
-            "usage: load <npc-or-location-name>".to_string(),
+            "usage: load <npc-or-location-or-faction-name>".to_string(),
             None,
         )));
     }
 
     if lowered == "show" || lowered == "preview" {
         return Ok(Some(ok_response(
-            "usage: show <npc-or-location-name>".to_string(),
+            "usage: show <npc-or-location-or-faction-name>".to_string(),
             None,
         )));
     }
@@ -1011,7 +1538,7 @@ pub(crate) async fn run_desktop_routed_command(
         let target = trimmed[4..].trim();
         if target.is_empty() {
             return Ok(Some(ok_response(
-                "usage: load <npc-or-location-name>".to_string(),
+                "usage: load <npc-or-location-or-faction-name>".to_string(),
                 None,
             )));
         }
@@ -1019,7 +1546,7 @@ pub(crate) async fn run_desktop_routed_command(
         let entity = resolve_entity(target.to_string()).await?;
         let Some(entity) = entity else {
             return Ok(Some(ok_response(
-                format!("no npc or location found for: {target}"),
+                format!("no npc, location, or faction found for: {target}"),
                 None,
             )));
         };
@@ -1037,7 +1564,7 @@ pub(crate) async fn run_desktop_routed_command(
         };
         if target.is_empty() {
             return Ok(Some(ok_response(
-                "usage: show <npc-or-location-name>".to_string(),
+                "usage: show <npc-or-location-or-faction-name>".to_string(),
                 None,
             )));
         }
@@ -1045,7 +1572,7 @@ pub(crate) async fn run_desktop_routed_command(
         let entity = resolve_entity(target.to_string()).await?;
         let Some(entity) = entity else {
             return Ok(Some(ok_response(
-                format!("no npc or location found for: {target}"),
+                format!("no npc, location, or faction found for: {target}"),
                 None,
             )));
         };
@@ -1057,7 +1584,7 @@ pub(crate) async fn run_desktop_routed_command(
 
     if lowered == "delete" {
         return Ok(Some(ok_response(
-            "usage: delete <npc-or-location-name>".to_string(),
+            "usage: delete <npc-or-location-or-faction-name>".to_string(),
             None,
         )));
     }
@@ -1066,7 +1593,7 @@ pub(crate) async fn run_desktop_routed_command(
         let target = trimmed[6..].trim();
         if target.is_empty() {
             return Ok(Some(ok_response(
-                "usage: delete <npc-or-location-name>".to_string(),
+                "usage: delete <npc-or-location-or-faction-name>".to_string(),
                 None,
             )));
         }
@@ -1239,6 +1766,81 @@ async fn build_load_response(
 
             (build_entity_card_text(&entity), Some(location_event_from_draft(&draft)))
         }
+        EntityType::Faction => {
+            let draft = FactionDraftSession {
+                id: entity.id.clone(),
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                vault_path: path_for_display(&entity.vault_path),
+                kind_type: entity
+                    .kind_type
+                    .clone()
+                    .unwrap_or_else(|| "other".to_string()),
+                kind_custom: entity.kind_custom.clone(),
+                public_description: entity
+                    .public_description
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                true_agenda: entity
+                    .true_agenda
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                methods: entity.methods.clone().unwrap_or_else(|| "Unknown".to_string()),
+                leadership: entity
+                    .leadership
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                headquarters: entity
+                    .headquarters
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                sphere_of_influence: entity
+                    .sphere_of_influence
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                resources_assets: entity
+                    .resources_assets
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                allies: entity
+                    .allies
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()]),
+                rivals_enemies: entity
+                    .rivals_enemies
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()]),
+                reputation: entity
+                    .reputation
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                current_tension: entity
+                    .current_tension
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                goals_short_term: entity
+                    .goals_short_term
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()]),
+                goals_long_term: entity
+                    .goals_long_term
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()]),
+                symbol_description: entity
+                    .symbol_description
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::Faction;
+                editor.npc_draft = None;
+                editor.location_draft = None;
+                editor.faction_draft = Some(draft.clone());
+            }
+
+            (build_entity_card_text(&entity), Some(faction_event_from_draft(&draft)))
+        }
     }
 }
 
@@ -1394,6 +1996,126 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
                 blocks: vec![entity_card("Location", rows)],
             }
         }
+        EntityType::Faction => {
+            rows.push(entity_row(
+                "kind",
+                entity
+                    .kind_type
+                    .clone()
+                    .unwrap_or_else(|| "other".to_string()),
+            ));
+            rows.push(entity_row(
+                "kind_custom",
+                entity
+                    .kind_custom
+                    .clone()
+                    .unwrap_or_else(|| "(none)".to_string()),
+            ));
+            rows.push(entity_row(
+                "public",
+                entity
+                    .public_description
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "agenda",
+                entity
+                    .true_agenda
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "methods",
+                entity.methods.clone().unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "leadership",
+                entity
+                    .leadership
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "headquarters",
+                entity
+                    .headquarters
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "influence",
+                entity
+                    .sphere_of_influence
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "resources",
+                entity
+                    .resources_assets
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "allies",
+                entity
+                    .allies
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row(
+                "rivals",
+                entity
+                    .rivals_enemies
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row(
+                "reputation",
+                entity
+                    .reputation
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "tension",
+                entity
+                    .current_tension
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row(
+                "goals_short",
+                entity
+                    .goals_short_term
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row(
+                "goals_long",
+                entity
+                    .goals_long_term
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row(
+                "symbol",
+                entity
+                    .symbol_description
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            ));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+
+            OutputDoc {
+                blocks: vec![entity_card("Faction", rows)],
+            }
+        }
     }
 }
 
@@ -1493,6 +2215,96 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
+        EntityType::Faction => {
+            let kind_type = entity
+                .kind_type
+                .clone()
+                .unwrap_or_else(|| "other".to_string());
+            let kind_custom = entity
+                .kind_custom
+                .clone()
+                .unwrap_or_else(|| "(none)".to_string());
+            let public_description = entity
+                .public_description
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let true_agenda = entity
+                .true_agenda
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let methods = entity.methods.clone().unwrap_or_else(|| "Unknown".to_string());
+            let leadership = entity
+                .leadership
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let headquarters = entity
+                .headquarters
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let sphere_of_influence = entity
+                .sphere_of_influence
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let resources_assets = entity
+                .resources_assets
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let allies = entity
+                .allies
+                .clone()
+                .unwrap_or_else(|| vec!["Unknown".to_string()])
+                .join(", ");
+            let rivals = entity
+                .rivals_enemies
+                .clone()
+                .unwrap_or_else(|| vec!["Unknown".to_string()])
+                .join(", ");
+            let reputation = entity
+                .reputation
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let current_tension = entity
+                .current_tension
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let goals_short = entity
+                .goals_short_term
+                .clone()
+                .unwrap_or_else(|| vec!["Unknown".to_string()])
+                .join(", ");
+            let goals_long = entity
+                .goals_long_term
+                .clone()
+                .unwrap_or_else(|| vec!["Unknown".to_string()])
+                .join(", ");
+            let symbol_description = entity
+                .symbol_description
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+
+            format!(
+                "## Faction\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\npublic: {}\nagenda: {}\nmethods: {}\nleadership: {}\nheadquarters: {}\ninfluence: {}\nresources: {}\nallies: {}\nrivals: {}\nreputation: {}\ntension: {}\ngoals_short: {}\ngoals_long: {}\nsymbol: {}\npath: {}",
+                entity.name,
+                entity.slug,
+                kind_type,
+                kind_custom,
+                public_description,
+                true_agenda,
+                methods,
+                leadership,
+                headquarters,
+                sphere_of_influence,
+                resources_assets,
+                allies,
+                rivals,
+                reputation,
+                current_tension,
+                goals_short,
+                goals_long,
+                symbol_description,
+                path_for_display(&entity.vault_path)
+            )
+        }
     }
 }
 
@@ -1532,6 +2344,31 @@ fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent
     }
 }
 
+fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
+    CommandClientEvent::LoadFactionDraft {
+        id: draft.id.clone(),
+        name: draft.name.clone(),
+        slug: draft.slug.clone(),
+        vault_path: draft.vault_path.clone(),
+        kind_type: draft.kind_type.clone(),
+        kind_custom: draft.kind_custom.clone(),
+        public_description: draft.public_description.clone(),
+        true_agenda: draft.true_agenda.clone(),
+        methods: draft.methods.clone(),
+        leadership: draft.leadership.clone(),
+        headquarters: draft.headquarters.clone(),
+        sphere_of_influence: draft.sphere_of_influence.clone(),
+        resources_assets: draft.resources_assets.clone(),
+        allies: draft.allies.clone(),
+        rivals_enemies: draft.rivals_enemies.clone(),
+        reputation: draft.reputation.clone(),
+        current_tension: draft.current_tension.clone(),
+        goals_short_term: draft.goals_short_term.clone(),
+        goals_long_term: draft.goals_long_term.clone(),
+        symbol_description: draft.symbol_description.clone(),
+    }
+}
+
 fn npc_summary_text(draft: &NpcDraftSession) -> String {
     format!(
         "## NPC Draft\nname: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}",
@@ -1565,6 +2402,31 @@ fn location_summary_text(draft: &LocationDraftSession) -> String {
         draft.danger_level,
         draft.current_tension,
         draft.vault_path
+    )
+}
+
+fn faction_summary_text(draft: &FactionDraftSession) -> String {
+    format!(
+        "## Faction Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\npublic: {}\nagenda: {}\nmethods: {}\nleadership: {}\nheadquarters: {}\ninfluence: {}\nresources: {}\nallies: {}\nrivals: {}\nreputation: {}\ntension: {}\ngoals_short: {}\ngoals_long: {}\nsymbol: {}\npath: {}",
+        draft.name,
+        draft.slug,
+        draft.kind_type,
+        draft.kind_custom.as_deref().unwrap_or("(none)"),
+        draft.public_description,
+        draft.true_agenda,
+        draft.methods,
+        draft.leadership,
+        draft.headquarters,
+        draft.sphere_of_influence,
+        draft.resources_assets,
+        draft.allies.join(", "),
+        draft.rivals_enemies.join(", "),
+        draft.reputation,
+        draft.current_tension,
+        draft.goals_short_term.join(", "),
+        draft.goals_long_term.join(", "),
+        draft.symbol_description,
+        draft.vault_path,
     )
 }
 

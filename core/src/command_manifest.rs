@@ -92,6 +92,7 @@ pub fn command_manifest() -> CommandManifest {
                         .to_string(),
                     "create location".to_string(),
                     "create location a swamp trade post controlled by smugglers".to_string(),
+                    "create faction a secretive maritime trade cartel".to_string(),
                     "create help".to_string(),
                 ],
                 subcommands: vec![
@@ -106,6 +107,12 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Start guided location creation".to_string(),
                         options: Vec::new(),
                         examples: vec!["create location".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "faction".to_string(),
+                        summary: "Start guided faction creation".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["create faction".to_string()],
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
@@ -179,7 +186,7 @@ pub fn command_manifest() -> CommandManifest {
             },
             CommandSpec {
                 name: "load".to_string(),
-                summary: "Load an NPC or location into editor".to_string(),
+                summary: "Load an NPC, location, or faction into editor".to_string(),
                 examples: vec!["load Elara Meadowlight".to_string()],
                 subcommands: Vec::new(),
                 options: Vec::new(),
@@ -190,7 +197,8 @@ pub fn command_manifest() -> CommandManifest {
             },
             CommandSpec {
                 name: "show".to_string(),
-                summary: "Preview an NPC or location without entering editor".to_string(),
+                summary: "Preview an NPC, location, or faction without entering editor"
+                    .to_string(),
                 examples: vec!["show Elara Meadowlight".to_string()],
                 subcommands: Vec::new(),
                 options: Vec::new(),
@@ -369,6 +377,78 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "faction".to_string(),
+                summary: "Edit active faction draft".to_string(),
+                examples: vec![
+                    "faction show".to_string(),
+                    "faction rename Crimson Lantern Syndicate".to_string(),
+                    "faction set agenda Control every harbor tax office.".to_string(),
+                    "faction reroll symbol".to_string(),
+                    "faction save".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "show".to_string(),
+                        summary: "Show active faction draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["faction show".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "rename".to_string(),
+                        summary: "Update faction name".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["faction rename Crimson Lantern Syndicate".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "set".to_string(),
+                        summary: "Update faction fields".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "faction set kind guild".to_string(),
+                            "faction set public Smugglers posing as licensed traders.".to_string(),
+                            "faction set agenda Control every harbor tax office.".to_string(),
+                            "faction set goals_short bribe customs, sabotage rivals"
+                                .to_string(),
+                            "faction set symbol A crimson lantern on black sails."
+                                .to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "reroll".to_string(),
+                        summary: "Reroll one faction field with optional prompt".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "faction reroll methods".to_string(),
+                            "faction reroll goals_long seize inland trade routes".to_string(),
+                            "faction reroll symbol nautical but menacing".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "save".to_string(),
+                        summary: "Save active faction draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["faction save".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "cancel".to_string(),
+                        summary: "Discard active faction draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["faction cancel".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show faction editor command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["faction help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("faction help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "save".to_string(),
                 summary: "Save active guided flow context".to_string(),
                 examples: vec!["save".to_string()],
@@ -403,7 +483,7 @@ pub fn command_manifest() -> CommandManifest {
             },
             CommandSpec {
                 name: "delete".to_string(),
-                summary: "Soft delete an NPC or location".to_string(),
+                summary: "Soft delete an NPC, location, or faction".to_string(),
                 examples: vec!["delete Elara Meadowlight".to_string()],
                 subcommands: Vec::new(),
                 options: Vec::new(),

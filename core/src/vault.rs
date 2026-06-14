@@ -3,13 +3,14 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-const REQUIRED_TOP_LEVEL_DIRS: [&str; 6] = [
+const REQUIRED_TOP_LEVEL_DIRS: [&str; 7] = [
     "npcs",
     "locations",
     "items",
     "factions",
     ".trash/npcs",
     ".trash/locations",
+    ".trash/factions",
 ];
 
 #[derive(Debug, Clone)]
