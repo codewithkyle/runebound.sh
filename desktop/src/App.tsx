@@ -13,7 +13,14 @@ import {
 import { parseOutputEntry } from "./output/markdown";
 import { OutputRenderer } from "./output/renderer";
 import type { OutputDoc } from "./output/types";
-import { ensureLocationExists, generateNpcSeed, saveNpcDraft, type NpcSeed } from "./npc/client";
+import {
+  ensureLocationExists,
+  generateNpcSeed,
+  rerollNpcField,
+  saveNpcDraft,
+  type NpcSeed,
+  type RerollNpcFieldResult
+} from "./npc/client";
 import {
   getSetupState,
   probeOllama,
@@ -813,6 +820,7 @@ export default function App() {
         "npc set secret <text>",
         "npc set carrying <item1, item2>",
         "npc travel to <location>",
+        "npc reroll <field> [prompt]",
         "reroll",
         "cancel",
         "npc save",
@@ -894,11 +902,20 @@ export default function App() {
     const lowered = trimmed.toLowerCase();
 
     if (lowered === "create help" || lowered === "create --help") {
-      appendEntry("output", ["## Create commands", "create npc"].join("\n"));
+      appendEntry(
+        "output",
+        [
+          "## Create commands",
+          "create npc",
+          "create npc <prompt text>"
+        ].join("\n")
+      );
       return { handled: true, ok: true, recordHistory: true };
     }
 
-    if (lowered === "create npc") {
+    const createNpcMatch = trimmed.match(/^create\s+npc(?:\s+(.+))?$/i);
+    if (createNpcMatch) {
+      const prompt = createNpcMatch[1]?.trim();
       const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} generating npc ...`);
       let frame = 0;
       const timer = window.setInterval(() => {
@@ -907,7 +924,7 @@ export default function App() {
       }, 100);
 
       try {
-        const seed = await generateNpcSeed();
+        const seed = await generateNpcSeed(prompt);
         const draft = makeNpcDraftFromSeed(seed);
         setLocationDraft(null);
         setNpcDraft(draft);
@@ -1094,6 +1111,55 @@ export default function App() {
       } catch (error) {
         appendEntry("error", String(error));
         return { handled: true, ok: false, recordHistory: true };
+      }
+    }
+
+    if (lowered === "npc reroll") {
+      appendEntry("info", "usage: npc reroll <field> [prompt]");
+      return { handled: true, ok: false, recordHistory: true };
+    }
+
+    const rerollFieldMatch = trimmed.match(/^npc\s+reroll\s+([a-z_]+)(?:\s+(.+))?$/i);
+    if (rerollFieldMatch && draft) {
+      const field = rerollFieldMatch[1].trim().toLowerCase();
+      const prompt = rerollFieldMatch[2]?.trim();
+      const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} rerolling npc ${field} ...`);
+      let frame = 0;
+      const timer = window.setInterval(() => {
+        frame = (frame + 1) % SPINNER_FRAMES.length;
+        updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[frame]} rerolling npc ${field} ...`);
+      }, 100);
+
+      try {
+        const result = await rerollNpcField({
+          field,
+          prompt: prompt ?? null,
+          npc: {
+            name: draft.name,
+            race: draft.race,
+            sex: draft.sex,
+            age: draft.age,
+            height: draft.height,
+            weight_lbs: draft.weightLbs,
+            background: draft.background,
+            want_need: draft.wantNeed,
+            secret_obstacle: draft.secretObstacle,
+            carrying: normalizeUnknownList(draft.carrying),
+            location: draft.location
+          }
+        });
+
+        const next = applyNpcRerolledField(draft, result);
+        setNpcDraft(next);
+        updateEntry(spinnerId, "spinner", `OK rerolled ${field}`);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      } catch (error) {
+        updateEntry(spinnerId, "spinner", `FAILED reroll ${field}`);
+        appendEntry("error", String(error));
+        return { handled: true, ok: false, recordHistory: true };
+      } finally {
+        window.clearInterval(timer);
       }
     }
 
@@ -2028,6 +2094,48 @@ function parseCarryingInput(value: string): string[] {
 
 function carryingToDisplay(values: string[] | null | undefined): string {
   return normalizeUnknownList(values).join(", ");
+}
+
+function applyNpcRerolledField(draft: NpcDraft, rerolled: RerollNpcFieldResult): NpcDraft {
+  const field = (rerolled.field || "").toLowerCase();
+  if (field === "carrying") {
+    return {
+      ...draft,
+      carrying: normalizeUnknownList(rerolled.carrying ?? undefined)
+    };
+  }
+
+  const value = normalizeUnknown(rerolled.value);
+  if (field === "name") {
+    return { ...draft, name: value };
+  }
+  if (field === "race") {
+    return { ...draft, race: value };
+  }
+  if (field === "sex") {
+    const normalizedSex = value.toLowerCase() === "female" ? "female" : "male";
+    return { ...draft, sex: normalizedSex };
+  }
+  if (field === "age") {
+    return { ...draft, age: value };
+  }
+  if (field === "height") {
+    return { ...draft, height: value };
+  }
+  if (field === "weight_lbs") {
+    return { ...draft, weightLbs: value };
+  }
+  if (field === "background") {
+    return { ...draft, background: value };
+  }
+  if (field === "want_need") {
+    return { ...draft, wantNeed: value };
+  }
+  if (field === "secret_obstacle") {
+    return { ...draft, secretObstacle: value };
+  }
+
+  return draft;
 }
 
 function npcDraftDoc(draft: NpcDraft): OutputDoc {

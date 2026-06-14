@@ -89,7 +89,12 @@ pub fn command_manifest() -> CommandManifest {
             CommandSpec {
                 name: "create".to_string(),
                 summary: "Create world entities in guided editor flows".to_string(),
-                examples: vec!["create npc".to_string(), "create help".to_string()],
+                examples: vec![
+                    "create npc".to_string(),
+                    "create npc an inexperienced town guard trying to make a name for himself"
+                        .to_string(),
+                    "create help".to_string(),
+                ],
                 subcommands: vec![
                     SubcommandSpec {
                         name: "npc".to_string(),
@@ -250,6 +255,17 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Move NPC to a location".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc travel to Waterdeep".to_string()],
+                        clap_managed: false,
+                    },
+                    SubcommandSpec {
+                        name: "reroll".to_string(),
+                        summary: "Reroll one NPC field with optional prompt".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "npc reroll name".to_string(),
+                            "npc reroll name a rough and tough hill troll".to_string(),
+                            "npc reroll background distrustful of nobles".to_string(),
+                        ],
                         clap_managed: false,
                     },
                     SubcommandSpec {

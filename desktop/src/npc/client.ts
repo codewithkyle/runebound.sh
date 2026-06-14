@@ -44,6 +44,32 @@ export type SaveNpcDraftResult = {
   updated_at: string;
 };
 
+export type NpcRerollContext = {
+  name: string;
+  race: string;
+  sex: "male" | "female";
+  age: string;
+  height: string;
+  weight_lbs: string;
+  background: string;
+  want_need: string;
+  secret_obstacle: string;
+  carrying: string[];
+  location: string;
+};
+
+export type RerollNpcFieldInput = {
+  field: string;
+  prompt?: string | null;
+  npc: NpcRerollContext;
+};
+
+export type RerollNpcFieldResult = {
+  field: string;
+  value?: string | null;
+  carrying?: string[] | null;
+};
+
 export async function generateNpcSeed(prompt?: string): Promise<NpcSeed> {
   return invoke<NpcSeed>("generate_npc_seed", {
     input: {
@@ -60,6 +86,12 @@ export async function ensureLocationExists(name: string): Promise<EnsureLocation
 
 export async function saveNpcDraft(input: SaveNpcDraftInput): Promise<SaveNpcDraftResult> {
   return invoke<SaveNpcDraftResult>("save_npc_draft", {
+    input
+  });
+}
+
+export async function rerollNpcField(input: RerollNpcFieldInput): Promise<RerollNpcFieldResult> {
+  return invoke<RerollNpcFieldResult>("reroll_npc_field", {
     input
   });
 }

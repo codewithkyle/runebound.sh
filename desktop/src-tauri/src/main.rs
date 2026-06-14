@@ -60,6 +60,35 @@ struct NpcSeed {
     carrying: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct NpcRerollContext {
+    name: String,
+    race: String,
+    sex: String,
+    age: String,
+    height: String,
+    weight_lbs: String,
+    background: String,
+    want_need: String,
+    secret_obstacle: String,
+    carrying: Vec<String>,
+    location: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct RerollNpcFieldInput {
+    field: String,
+    prompt: Option<String>,
+    npc: NpcRerollContext,
+}
+
+#[derive(Debug, Clone, Serialize)]
+struct RerollNpcFieldResult {
+    field: String,
+    value: Option<String>,
+    carrying: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct GenerateNpcSeedInput {
     prompt: Option<String>,
@@ -222,6 +251,50 @@ fn carrying_from_db_text(value: &str) -> Vec<String> {
         Ok(items) => normalize_unknown_list(items),
         Err(_) => parse_carrying_csv(value),
     }
+}
+
+fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let field = match normalized.as_str() {
+        "name" => "name",
+        "race" => "race",
+        "sex" => "sex",
+        "age" => "age",
+        "height" => "height",
+        "weight" | "weight_lbs" => "weight_lbs",
+        "background" => "background",
+        "want" | "need" | "want_need" => "want_need",
+        "secret" | "obstacle" | "secret_obstacle" => "secret_obstacle",
+        "carrying" => "carrying",
+        "location" => {
+            return Err("npc reroll location is not supported; use npc travel to <location>".to_string())
+        }
+        _ => {
+            return Err(format!(
+                "unknown npc reroll field: {}. valid fields: name, race, sex, age, height, weight, background, want, secret, carrying",
+                raw
+            ))
+        }
+    };
+
+    Ok(field)
+}
+
+fn npc_context_summary(context: &NpcRerollContext) -> String {
+    format!(
+        "name={}, race={}, sex={}, age={}, height={}, weight_lbs={}, background={}, want_need={}, secret_obstacle={}, carrying={}, location={}",
+        context.name,
+        context.race,
+        context.sex,
+        context.age,
+        context.height,
+        context.weight_lbs,
+        context.background,
+        context.want_need,
+        context.secret_obstacle,
+        context.carrying.join(", "),
+        context.location
+    )
 }
 
 fn recent_name_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
@@ -541,6 +614,197 @@ async fn generate_npc_seed(
     }
 
     Err("failed to generate valid structured NPC output from ollama".to_string())
+}
+
+#[tauri::command]
+async fn reroll_npc_field(
+    input: RerollNpcFieldInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<RerollNpcFieldResult, String> {
+    let field = canonical_npc_reroll_field(&input.field)?;
+    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+    let config = loaded.effective;
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+    let extra_prompt = input
+        .prompt
+        .as_ref()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .unwrap_or("");
+
+    let context_summary = npc_context_summary(&input.npc);
+    let field_instructions = match field {
+        "name" => "Generate a single fitting fantasy NPC name.",
+        "race" => "Generate a fitting fantasy race for this NPC.",
+        "sex" => "Generate sex as exactly male or female.",
+        "age" => "Generate a concise age value (typically in years).",
+        "height" => "Generate a height in imperial format like 5'11\".",
+        "weight_lbs" => "Generate a weight in lbs as text, for example 185.",
+        "background" => "Generate a coherent background in 1-3 sentences.",
+        "want_need" => "Generate one concise Want.",
+        "secret_obstacle" => "Generate one concise Secret.",
+        "carrying" => "Generate a carrying list as practical comma-like item strings.",
+        _ => "Generate a concise field value.",
+    };
+
+    let schema = if field == "carrying" {
+        serde_json::json!({
+            "type": "object",
+            "required": ["carrying"],
+            "properties": {
+                "carrying": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": { "type": "string", "minLength": 1 }
+                }
+            },
+            "additionalProperties": false
+        })
+    } else if field == "sex" {
+        serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "properties": {
+                "value": { "type": "string", "enum": ["male", "female"] }
+            },
+            "additionalProperties": false
+        })
+    } else {
+        serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "properties": {
+                "value": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        })
+    };
+
+    let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+        .build()
+        .map_err(|err| err.to_string())?;
+
+    for attempt in 0..4 {
+        let base_seed = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_micros() as i64)
+            .unwrap_or(0);
+        let run_seed = (base_seed + i64::from(attempt)) as i32;
+
+        let payload = serde_json::json!({
+            "model": model,
+            "stream": false,
+            "format": schema,
+            "options": {
+                "temperature": 1.05,
+                "top_p": 0.92,
+                "repeat_penalty": 1.12,
+                "seed": run_seed
+            },
+            "messages": [
+                {
+                    "role": "system",
+                    "content": "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                },
+                {
+                    "role": "user",
+                    "content": format!(
+                        "NPC context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
+                        context_summary,
+                        field,
+                        field_instructions,
+                        if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                    )
+                }
+            ]
+        });
+
+        let response = client
+            .post(&url)
+            .json(&payload)
+            .send()
+            .await
+            .map_err(|err| err.to_string())?;
+        if !response.status().is_success() {
+            return Err(format!("ollama chat failed with status {}", response.status()));
+        }
+
+        let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+        let Some(content) = value
+            .get("message")
+            .and_then(|msg| msg.get("content"))
+            .and_then(|content| content.as_str())
+        else {
+            continue;
+        };
+
+        let parsed: serde_json::Value = match serde_json::from_str(content) {
+            Ok(parsed) => parsed,
+            Err(_) => continue,
+        };
+
+        if field == "carrying" {
+            let Some(items) = parsed.get("carrying").and_then(|item| item.as_array()) else {
+                continue;
+            };
+            let next = normalize_unknown_list(
+                items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                    .collect(),
+            );
+            if attempt < 3 && next == normalize_unknown_list(input.npc.carrying.clone()) {
+                continue;
+            }
+            return Ok(RerollNpcFieldResult {
+                field: field.to_string(),
+                value: None,
+                carrying: Some(next),
+            });
+        }
+
+        let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
+            continue;
+        };
+        let normalized = if field == "sex" {
+            normalize_sex(raw_value)?
+        } else {
+            normalize_unknown_text(raw_value)
+        };
+
+        let current = match field {
+            "name" => input.npc.name.clone(),
+            "race" => input.npc.race.clone(),
+            "sex" => input.npc.sex.clone(),
+            "age" => input.npc.age.clone(),
+            "height" => input.npc.height.clone(),
+            "weight_lbs" => input.npc.weight_lbs.clone(),
+            "background" => input.npc.background.clone(),
+            "want_need" => input.npc.want_need.clone(),
+            "secret_obstacle" => input.npc.secret_obstacle.clone(),
+            _ => String::new(),
+        };
+
+        if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
+            continue;
+        }
+
+        return Ok(RerollNpcFieldResult {
+            field: field.to_string(),
+            value: Some(normalized),
+            carrying: None,
+        });
+    }
+
+    Err(format!("failed to reroll npc field: {}", field))
 }
 
 #[tauri::command]
@@ -1041,6 +1305,7 @@ fn main() {
             probe_ollama,
             save_onboarding_config,
             generate_npc_seed,
+            reroll_npc_field,
             ensure_location_exists,
             save_npc_draft,
             save_location_draft,
