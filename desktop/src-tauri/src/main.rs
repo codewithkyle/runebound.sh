@@ -1460,6 +1460,15 @@ async fn suggest_command_input(
     }
 
     if let Some(active_ref) = extract_active_reference_query(&input) {
+        if active_ref
+            .query
+            .chars()
+            .next_back()
+            .is_some_and(char::is_whitespace)
+        {
+            return Ok(Vec::new());
+        }
+
         if !active_ref.query.trim().starts_with('-') {
             let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
             if let Some(vault_path) = loaded.effective.vault.path {

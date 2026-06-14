@@ -236,8 +236,43 @@ export default function App() {
   });
 
   let outputRef: HTMLDivElement | undefined;
-  let inputRef: HTMLInputElement | undefined;
+  let inputRef: HTMLTextAreaElement | undefined;
   let suggestionGeneration = 0;
+
+  const resizeCommandInput = () => {
+    if (!inputRef) {
+      return;
+    }
+    inputRef.style.height = "auto";
+    inputRef.style.height = `${inputRef.scrollHeight}px`;
+  };
+
+  const handleCommandInputChange = (nextValue: string) => {
+    setCommand(nextValue);
+    resetHistoryNavigation();
+    setSuggestionsDismissed(false);
+    setActiveSuggestionIndex(0);
+  };
+
+  const insertCommandNewlineAtCursor = () => {
+    if (!inputRef) {
+      return;
+    }
+    const currentValue = command();
+    const start = inputRef.selectionStart ?? currentValue.length;
+    const end = inputRef.selectionEnd ?? currentValue.length;
+    const nextValue = `${currentValue.slice(0, start)}\n${currentValue.slice(end)}`;
+    handleCommandInputChange(nextValue);
+    queueMicrotask(() => {
+      if (!inputRef) {
+        return;
+      }
+      const nextCursor = start + 1;
+      inputRef.selectionStart = nextCursor;
+      inputRef.selectionEnd = nextCursor;
+      resizeCommandInput();
+    });
+  };
 
   createEffect(() => {
     if (!manifest()) {
@@ -271,6 +306,13 @@ export default function App() {
           setSuggestions([]);
         }
       });
+  });
+
+  createEffect(() => {
+    command();
+    queueMicrotask(() => {
+      resizeCommandInput();
+    });
   });
 
   const appendEntry = (kind: EntryKind, text: string, outputDoc?: OutputDoc | null) => {
@@ -479,7 +521,7 @@ export default function App() {
   };
 
   const submitCommand = async () => {
-    const raw = command().trim();
+    const raw = normalizeSubmittedCommand(command());
     if (!raw || running()) {
       return;
     }
@@ -735,6 +777,7 @@ export default function App() {
     }
 
     inputRef?.focus();
+    resizeCommandInput();
     void runStartupStatusCheck();
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
@@ -841,19 +884,16 @@ export default function App() {
               void submitCommand();
             }}
           >
-            <div class="w-full bg-surface2 px-3 py-[2px] flex items-center gap-2">
-              <span class="text-accent">&gt;</span>
-              <input
+            <div class="w-full bg-surface2 px-3 py-[2px] flex items-start gap-2">
+              <span class="text-accent pt-[1px]">&gt;</span>
+              <textarea
                 ref={inputRef}
-                class="w-full bg-transparent p-0 text-text focus:outline-none"
-                type="text"
+                class="w-full bg-transparent p-0 text-text focus:outline-none resize-none overflow-hidden whitespace-pre-wrap break-words"
                 disabled={running()}
+                rows={1}
                 value={command()}
                 onInput={(event) => {
-                  setCommand(event.currentTarget.value);
-                  resetHistoryNavigation();
-                  setSuggestionsDismissed(false);
-                  setActiveSuggestionIndex(0);
+                  handleCommandInputChange(event.currentTarget.value);
                 }}
                 onKeyDown={(event) => {
                   if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
@@ -870,28 +910,52 @@ export default function App() {
                     return;
                   }
 
-                  const suggestions = suggestionList();
-                  const shouldNavigateHistory = historyCursor() !== null || (command().trim().length === 0 && commandHistory().length > 0);
+                  if (event.key.toLowerCase() === "j" && event.ctrlKey && !event.metaKey && !event.altKey) {
+                    event.preventDefault();
+                    insertCommandNewlineAtCursor();
+                    return;
+                  }
 
-                  if (event.key === "ArrowUp" && shouldNavigateHistory) {
+                  if (event.key === "Enter" && !event.shiftKey && !event.ctrlKey && !event.metaKey && !event.altKey) {
+                    event.preventDefault();
+                    void submitCommand();
+                    return;
+                  }
+
+                  const suggestions = suggestionList();
+                  const caretStart = event.currentTarget.selectionStart ?? 0;
+                  const caretEnd = event.currentTarget.selectionEnd ?? 0;
+                  const atTextStart = caretStart === 0 && caretEnd === 0;
+                  const atTextEnd =
+                    caretStart === event.currentTarget.value.length &&
+                    caretEnd === event.currentTarget.value.length;
+                  const shouldNavigateHistoryUp =
+                    atTextStart &&
+                    (historyCursor() !== null || (command().trim().length === 0 && commandHistory().length > 0));
+                  const shouldNavigateHistoryDown =
+                    atTextEnd &&
+                    (historyCursor() !== null || (command().trim().length === 0 && commandHistory().length > 0));
+                  const allowSuggestionArrowNav = !command().includes("\n");
+
+                  if (event.key === "ArrowUp" && shouldNavigateHistoryUp) {
                     event.preventDefault();
                     navigateHistoryUp();
                     return;
                   }
 
-                  if (event.key === "ArrowDown" && shouldNavigateHistory) {
+                  if (event.key === "ArrowDown" && shouldNavigateHistoryDown) {
                     event.preventDefault();
                     navigateHistoryDown();
                     return;
                   }
 
-                  if (event.key === "ArrowDown" && suggestions.length > 1) {
+                  if (allowSuggestionArrowNav && event.key === "ArrowDown" && suggestions.length > 1) {
                     event.preventDefault();
                     setActiveSuggestionIndex((previous) => (previous + 1) % suggestions.length);
                     return;
                   }
 
-                  if (event.key === "ArrowUp" && suggestions.length > 1) {
+                  if (allowSuggestionArrowNav && event.key === "ArrowUp" && suggestions.length > 1) {
                     event.preventDefault();
                     setActiveSuggestionIndex((previous) => (previous - 1 + suggestions.length) % suggestions.length);
                     return;
@@ -1053,6 +1117,10 @@ function normalizeUnknownList(values: string[] | null | undefined): string[] {
     return ["Unknown"];
   }
   return cleaned;
+}
+
+function normalizeSubmittedCommand(value: string): string {
+  return value.replace(/\r?\n/g, " ").trim();
 }
 
 function carryingToDisplay(values: string[] | null | undefined): string {
