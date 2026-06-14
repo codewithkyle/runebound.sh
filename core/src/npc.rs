@@ -12,6 +12,7 @@ pub struct NpcFrontmatter {
     pub slug: String,
     pub name: String,
     pub race: String,
+    pub occupation: String,
     pub sex: String,
     pub age: String,
     pub height: String,
@@ -89,6 +90,7 @@ pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml:
         slug: &'a str,
         name: &'a str,
         race: &'a str,
+        occupation: &'a str,
         sex: &'a str,
         age: &'a str,
         height: &'a str,
@@ -108,6 +110,7 @@ pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml:
         slug: &frontmatter.slug,
         name: &frontmatter.name,
         race: &frontmatter.race,
+        occupation: &frontmatter.occupation,
         sex: &frontmatter.sex,
         age: &frontmatter.age,
         height: &frontmatter.height,
@@ -156,4 +159,56 @@ pub fn render_location_markdown(
     out.push_str(&toml::to_string_pretty(&fm)?);
     out.push_str("```\n");
     Ok(out)
+}
+
+pub fn merge_runebound_block(existing: &str, runebound_block: &str) -> String {
+    let Some(block_start) = existing.find("```runebound") else {
+        if existing.trim().is_empty() {
+            return runebound_block.to_string();
+        }
+        return format!("{}\n{}", runebound_block, existing);
+    };
+
+    let search_from = block_start + "```runebound".len();
+    let Some(relative_end) = existing[search_from..].find("\n```") else {
+        if existing.trim().is_empty() {
+            return runebound_block.to_string();
+        }
+        return format!("{}\n{}", runebound_block, existing);
+    };
+
+    let block_end = search_from + relative_end + "\n```".len();
+    let mut merged = String::with_capacity(existing.len() + runebound_block.len());
+    merged.push_str(&existing[..block_start]);
+    merged.push_str(runebound_block);
+    merged.push_str(&existing[block_end..]);
+    merged
+}
+
+#[cfg(test)]
+mod tests {
+    use super::merge_runebound_block;
+
+    #[test]
+    fn merge_replaces_existing_runebound_block() {
+        let existing = "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Old\"\n```\n\nPlayer notes here.\n";
+        let replacement = "```runebound\ntype = \"npc\"\nname = \"New\"\n```\n";
+
+        let merged = merge_runebound_block(existing, replacement);
+
+        assert!(merged.contains("name = \"New\""));
+        assert!(!merged.contains("name = \"Old\""));
+        assert!(merged.contains("Player notes here."));
+    }
+
+    #[test]
+    fn merge_prepends_block_when_missing() {
+        let existing = "# Story\nThis should remain.\n";
+        let replacement = "```runebound\ntype = \"location\"\nname = \"Neverwinter\"\n```\n";
+
+        let merged = merge_runebound_block(existing, replacement);
+
+        assert!(merged.starts_with(replacement));
+        assert!(merged.contains("# Story"));
+    }
 }

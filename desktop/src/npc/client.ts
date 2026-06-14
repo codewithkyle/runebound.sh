@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 export type NpcSeed = {
   name: string;
   race: string;
+  occupation: string;
   sex: "male" | "female";
   age: string;
   height: string;
@@ -25,6 +26,7 @@ export type SaveNpcDraftInput = {
   id: string;
   name: string;
   race: string;
+  occupation: string;
   sex: "male" | "female";
   age: string;
   height: string;
@@ -47,6 +49,7 @@ export type SaveNpcDraftResult = {
 export type NpcRerollContext = {
   name: string;
   race: string;
+  occupation: string;
   sex: "male" | "female";
   age: string;
   height: string;

@@ -68,6 +68,7 @@ type NpcDraft = {
   id: string;
   name: string;
   race: string;
+  occupation: string;
   sex: "male" | "female";
   age: string;
   height: string;
@@ -790,6 +791,7 @@ export default function App() {
     id: `npc_${Date.now()}`,
     name: seed.name.trim(),
     race: seed.race.trim(),
+    occupation: normalizeUnknown(seed.occupation),
     sex: seed.sex,
     age: normalizeUnknown(seed.age),
     height: normalizeUnknown(seed.height),
@@ -811,6 +813,7 @@ export default function App() {
         "npc rename <name>",
         "npc set name <name>",
         "npc set race <race>",
+        "npc set occupation <occupation>",
         "npc set sex <male|female>",
         "npc set age <age>",
         "npc set height <height>",
@@ -855,6 +858,7 @@ export default function App() {
         id: entity.id,
         name: entity.name,
         race: normalizeUnknown(entity.race),
+        occupation: normalizeUnknown(entity.occupation),
         sex,
         age: normalizeUnknown(entity.age),
         height: normalizeUnknown(entity.height),
@@ -871,6 +875,7 @@ export default function App() {
         id: entity.id,
         name: entity.name,
         race: normalizeUnknown(entity.race),
+        occupation: normalizeUnknown(entity.occupation),
         sex,
         age: normalizeUnknown(entity.age),
         height: normalizeUnknown(entity.height),
@@ -1027,6 +1032,13 @@ export default function App() {
         return { handled: true, ok: true, recordHistory: true };
       }
 
+      if (field === "occupation") {
+        const next = { ...draft, occupation: value };
+        setNpcDraft(next);
+        appendNpcSummary(next);
+        return { handled: true, ok: true, recordHistory: true };
+      }
+
       if (field === "age") {
         const next = { ...draft, age: value };
         setNpcDraft(next);
@@ -1076,7 +1088,7 @@ export default function App() {
         return { handled: true, ok: true, recordHistory: true };
       }
 
-      appendEntry("info", `unknown npc field: ${field}. valid fields: name, race, sex, age, height, weight, background, want, secret, carrying`);
+      appendEntry("info", `unknown npc field: ${field}. valid fields: name, race, occupation, sex, age, height, weight, background, want, secret, carrying`);
       return { handled: true, ok: false, recordHistory: true };
     }
 
@@ -1137,6 +1149,7 @@ export default function App() {
           npc: {
             name: draft.name,
             race: draft.race,
+            occupation: draft.occupation,
             sex: draft.sex,
             age: draft.age,
             height: draft.height,
@@ -1181,6 +1194,7 @@ export default function App() {
           ...draft,
           name: seed.name.trim(),
           race: seed.race.trim(),
+          occupation: normalizeUnknown(seed.occupation),
           sex: seed.sex,
           age: normalizeUnknown(seed.age),
           height: normalizeUnknown(seed.height),
@@ -1209,6 +1223,7 @@ export default function App() {
           id: draft.id,
           name: draft.name,
           race: draft.race,
+          occupation: normalizeUnknown(draft.occupation),
           sex: draft.sex,
           age: normalizeUnknown(draft.age),
           height: normalizeUnknown(draft.height),
@@ -2112,6 +2127,9 @@ function applyNpcRerolledField(draft: NpcDraft, rerolled: RerollNpcFieldResult):
   if (field === "race") {
     return { ...draft, race: value };
   }
+  if (field === "occupation") {
+    return { ...draft, occupation: value };
+  }
   if (field === "sex") {
     const normalizedSex = value.toLowerCase() === "female" ? "female" : "male";
     return { ...draft, sex: normalizedSex };
@@ -2146,6 +2164,7 @@ function npcDraftDoc(draft: NpcDraft): OutputDoc {
         title: draft.name,
         rows: [
           { label: "Race:", value: normalizeUnknown(draft.race) },
+          { label: "Occupation:", value: normalizeUnknown(draft.occupation) },
           { label: "Gender:", value: titleCaseSex(normalizeUnknown(draft.sex)) },
           { label: "Age:", value: normalizeUnknown(draft.age) },
           { label: "Height:", value: normalizeUnknown(draft.height) },
@@ -2180,6 +2199,7 @@ function entityDetailsDoc(entity: EntityDetails): OutputDoc {
           title: entity.name,
           rows: [
             { label: "Race:", value: normalizeUnknown(entity.race) },
+            { label: "Occupation:", value: normalizeUnknown(entity.occupation) },
             { label: "Gender:", value: titleCaseSex(normalizeUnknown(entity.sex)) },
             { label: "Age:", value: normalizeUnknown(entity.age) },
             { label: "Height:", value: normalizeUnknown(entity.height) },

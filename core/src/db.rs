@@ -29,6 +29,7 @@ pub struct NpcRow {
     pub slug: String,
     pub name: String,
     pub race: String,
+    pub occupation: String,
     pub sex: String,
     pub age: String,
     pub height: String,
@@ -46,7 +47,7 @@ pub struct NpcRow {
 pub async fn search_npcs_by_name(pool: &SqlitePool, query: &str, limit: i64) -> Result<Vec<NpcRow>> {
     let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
     let rows = sqlx::query(
-        "SELECT id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
+        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
          FROM npcs
          WHERE lower(name) LIKE ?1
          ORDER BY name COLLATE NOCASE ASC
@@ -86,7 +87,7 @@ pub async fn search_locations_by_name(
 pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
-        "SELECT id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
+        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
          FROM npcs
          WHERE lower(name) = ?1 OR lower(slug) = ?2
          ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
@@ -225,7 +226,7 @@ pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Resul
 
 pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
+        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -237,12 +238,13 @@ pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow
 
 pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     sqlx::query(
-        "INSERT INTO npcs (id, slug, name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
+        "INSERT INTO npcs (id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
          ON CONFLICT(id) DO UPDATE SET
             slug = excluded.slug,
             name = excluded.name,
             race = excluded.race,
+            occupation = excluded.occupation,
             sex = excluded.sex,
             age = excluded.age,
             height = excluded.height,
@@ -259,6 +261,7 @@ pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     .bind(&npc.slug)
     .bind(&npc.name)
     .bind(&npc.race)
+    .bind(&npc.occupation)
     .bind(&npc.sex)
     .bind(&npc.age)
     .bind(&npc.height)
@@ -389,6 +392,9 @@ fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
         slug: row.try_get("slug").context("npcs.slug missing")?,
         name: row.try_get("name").context("npcs.name missing")?,
         race: row.try_get("race").context("npcs.race missing")?,
+        occupation: row
+            .try_get("occupation")
+            .unwrap_or_else(|_| "Unknown".to_string()),
         sex: row.try_get("sex").context("npcs.sex missing")?,
         age: row
             .try_get("age")

@@ -1,0 +1,1 @@
+ALTER TABLE npcs ADD COLUMN occupation TEXT NOT NULL DEFAULT 'Unknown';

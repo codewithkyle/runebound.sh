@@ -14,6 +14,7 @@ export type EntityDetails = {
   name: string;
   slug: string;
   race?: string | null;
+  occupation?: string | null;
   sex?: string | null;
   age?: string | null;
   height?: string | null;

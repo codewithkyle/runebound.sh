@@ -50,6 +50,7 @@ struct SaveOnboardingResult {
 struct NpcSeed {
     name: String,
     race: String,
+    occupation: String,
     sex: String,
     age: String,
     height: String,
@@ -64,6 +65,7 @@ struct NpcSeed {
 struct NpcRerollContext {
     name: String,
     race: String,
+    occupation: String,
     sex: String,
     age: String,
     height: String,
@@ -99,6 +101,7 @@ struct SaveNpcDraftInput {
     id: String,
     name: String,
     race: String,
+    occupation: String,
     sex: String,
     age: String,
     height: String,
@@ -154,6 +157,7 @@ struct EntityDetails {
     name: String,
     slug: String,
     race: Option<String>,
+    occupation: Option<String>,
     sex: Option<String>,
     age: Option<String>,
     height: Option<String>,
@@ -258,6 +262,7 @@ fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
     let field = match normalized.as_str() {
         "name" => "name",
         "race" => "race",
+        "occupation" => "occupation",
         "sex" => "sex",
         "age" => "age",
         "height" => "height",
@@ -271,7 +276,7 @@ fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
         }
         _ => {
             return Err(format!(
-                "unknown npc reroll field: {}. valid fields: name, race, sex, age, height, weight, background, want, secret, carrying",
+                "unknown npc reroll field: {}. valid fields: name, race, occupation, sex, age, height, weight, background, want, secret, carrying",
                 raw
             ))
         }
@@ -282,9 +287,10 @@ fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
 
 fn npc_context_summary(context: &NpcRerollContext) -> String {
     format!(
-        "name={}, race={}, sex={}, age={}, height={}, weight_lbs={}, background={}, want_need={}, secret_obstacle={}, carrying={}, location={}",
+        "name={}, race={}, occupation={}, sex={}, age={}, height={}, weight_lbs={}, background={}, want_need={}, secret_obstacle={}, carrying={}, location={}",
         context.name,
         context.race,
+        context.occupation,
         context.sex,
         context.age,
         context.height,
@@ -493,10 +499,11 @@ async fn generate_npc_seed(
 
     let schema = serde_json::json!({
         "type": "object",
-        "required": ["name", "race", "sex", "age", "height", "weight_lbs", "background", "want_need", "secret_obstacle", "carrying"],
+        "required": ["name", "race", "occupation", "sex", "age", "height", "weight_lbs", "background", "want_need", "secret_obstacle", "carrying"],
         "properties": {
             "name": { "type": "string", "minLength": 1 },
             "race": { "type": "string", "minLength": 1 },
+            "occupation": { "type": "string", "minLength": 1 },
             "sex": { "type": "string", "enum": ["male", "female"] },
             "age": { "type": "string", "minLength": 1 },
             "height": { "type": "string", "minLength": 1 },
@@ -547,7 +554,7 @@ async fn generate_npc_seed(
                 {
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Avoid these recent seeds: {}.{}",
+                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Avoid these recent seeds: {}.{}",
                         recent_context,
                         repair_note,
                     )
@@ -586,6 +593,7 @@ async fn generate_npc_seed(
 
         seed.name = seed.name.trim().to_string();
         seed.race = seed.race.trim().to_string();
+        seed.occupation = normalize_unknown_text(&seed.occupation);
         seed.sex = normalize_sex(&seed.sex)?;
         seed.age = normalize_unknown_text(&seed.age);
         seed.height = normalize_unknown_text(&seed.height);
@@ -642,6 +650,7 @@ async fn reroll_npc_field(
     let field_instructions = match field {
         "name" => "Generate a single fitting fantasy NPC name.",
         "race" => "Generate a fitting fantasy race for this NPC.",
+        "occupation" => "Generate one concise occupation for this NPC.",
         "sex" => "Generate sex as exactly male or female.",
         "age" => "Generate a concise age value (typically in years).",
         "height" => "Generate a height in imperial format like 5'11\".",
@@ -783,6 +792,7 @@ async fn reroll_npc_field(
         let current = match field {
             "name" => input.npc.name.clone(),
             "race" => input.npc.race.clone(),
+            "occupation" => input.npc.occupation.clone(),
             "sex" => input.npc.sex.clone(),
             "age" => input.npc.age.clone(),
             "height" => input.npc.height.clone(),
@@ -935,6 +945,7 @@ async fn save_npc_draft(
     if race.is_empty() {
         return Err("npc race cannot be empty".to_string());
     }
+    let occupation = normalize_unknown_text(&input.occupation);
     let sex = normalize_sex(&input.sex)?;
     let age = normalize_unknown_text(&input.age);
     let height = normalize_unknown_text(&input.height);
@@ -1010,6 +1021,7 @@ async fn save_npc_draft(
         slug: slug.clone(),
         name: name.to_string(),
         race: race.to_string(),
+        occupation: occupation.clone(),
         sex: sex.clone(),
         age: age.clone(),
         height: height.clone(),
@@ -1033,6 +1045,7 @@ async fn save_npc_draft(
         slug: slug.clone(),
         name: name.to_string(),
         race: race.to_string(),
+        occupation,
         sex,
         age,
         height,
@@ -1237,6 +1250,7 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             name: npc.name,
             slug: npc.slug,
             race: Some(npc.race),
+            occupation: Some(npc.occupation),
             sex: Some(npc.sex),
             age: Some(npc.age),
             height: Some(npc.height),
@@ -1261,6 +1275,7 @@ async fn resolve_entity(input: String) -> Result<Option<EntityDetails>, String> 
             name: location.name,
             slug: location.slug,
             race: None,
+            occupation: None,
             sex: None,
             age: None,
             height: None,

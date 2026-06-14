@@ -87,7 +87,7 @@ function buildArgumentSuggestions(manifest: CommandManifest, parsed: ParseResult
   }
 
   if (command.name === "npc" && subcommand?.name === "set") {
-    const fieldNames = ["name", "race", "sex", "age", "height", "weight", "background", "want", "secret", "carrying"];
+    const fieldNames = ["name", "race", "occupation", "sex", "age", "height", "weight", "background", "want", "secret", "carrying"];
     const args = parsed.normalized_tokens.slice(2);
 
     const shouldSuggestFields =
@@ -107,7 +107,7 @@ function buildArgumentSuggestions(manifest: CommandManifest, parsed: ParseResult
   }
 
   if (command.name === "npc" && subcommand?.name === "reroll") {
-    const fieldNames = ["name", "race", "sex", "age", "height", "weight", "background", "want", "secret", "carrying"];
+    const fieldNames = ["name", "race", "occupation", "sex", "age", "height", "weight", "background", "want", "secret", "carrying"];
     const args = parsed.normalized_tokens.slice(2);
     const shouldSuggestFields =
       args.length === 0 ||

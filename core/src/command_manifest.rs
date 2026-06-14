@@ -239,6 +239,7 @@ pub fn command_manifest() -> CommandManifest {
                         examples: vec![
                             "npc set name Father Elen".to_string(),
                             "npc set race Human".to_string(),
+                            "npc set occupation Town Guard".to_string(),
                             "npc set sex female".to_string(),
                             "npc set age 42".to_string(),
                             "npc set height 5'11\"".to_string(),
@@ -263,6 +264,7 @@ pub fn command_manifest() -> CommandManifest {
                         options: Vec::new(),
                         examples: vec![
                             "npc reroll name".to_string(),
+                            "npc reroll occupation".to_string(),
                             "npc reroll name a rough and tough hill troll".to_string(),
                             "npc reroll background distrustful of nobles".to_string(),
                         ],
