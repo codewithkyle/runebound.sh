@@ -2,7 +2,7 @@ use std::future::Future;
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
-use command_handler::{ExecutionTarget, HandlerEntry, HandlerMetadata, HandlerRegistry};
+use command_handler::{CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry};
 use dnd_core::command::{CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind};
 use dnd_core::output::{OutputDoc, entity_card, entity_row};
 use tauri::State;
@@ -10,12 +10,36 @@ use tauri::State;
 use crate::app_state::{
     AppState, EditorMode, FactionDraftSession, LocationDraftSession, NpcDraftSession,
 };
+use command_specs::handler_metadata_for;
 
 use super::*;
 
 type DesktopHandlerFuture<'a> =
     Pin<Box<dyn Future<Output = Result<Option<CommandResponse>, String>> + Send + 'a>>;
-type DesktopHandler = Arc<dyn for<'a> Fn(DesktopHandlerInvocation<'a>) -> DesktopHandlerFuture<'a> + Send + Sync>;
+struct DesktopHandler {
+    inner:
+        Arc<dyn for<'a> Fn(DesktopHandlerInvocation<'a>) -> DesktopHandlerFuture<'a> + Send + Sync>,
+}
+
+impl DesktopHandler {
+    fn new<F>(handler: F) -> Self
+    where
+        F: for<'a> Fn(DesktopHandlerInvocation<'a>) -> DesktopHandlerFuture<'a> + Send + Sync + 'static,
+    {
+        Self {
+            inner: Arc::new(handler),
+        }
+    }
+}
+
+impl HandlerBridge for DesktopHandler {
+    type Output = Result<Option<CommandResponse>, String>;
+    type Invocation<'a> = DesktopHandlerInvocation<'a>;
+
+    fn invoke<'a>(&'a self, invocation: Self::Invocation<'a>) -> command_handler::HandlerFuture<'a, Self::Output> {
+        (self.inner)(invocation)
+    }
+}
 
 pub struct DesktopHandlerInvocation<'a> {
     pub raw_input: &'a str,
@@ -49,6 +73,12 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry
 }
 
+fn metadata_for(name: &str) -> HandlerMetadata {
+    handler_metadata_for(name)
+        .unwrap_or_else(|| panic!("missing handler metadata for {name}"))
+        .into()
+}
+
 pub(crate) async fn dispatch_desktop_command(
     input: &str,
     tokens: &[String],
@@ -71,7 +101,7 @@ pub(crate) async fn dispatch_desktop_command(
             lowered: &lowered,
             state,
         };
-        return (entry.handler)(invocation).await;
+        return entry.execute(invocation).await;
     }
 
     let trimmed = input.trim();
@@ -93,12 +123,8 @@ pub(crate) async fn dispatch_desktop_command(
 fn clear_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "clear",
-        HandlerMetadata::new(
-            "Clear terminal output in desktop UI",
-            ExecutionTarget::Desktop,
-        )
-        .with_examples(&["clear", "clear --history"]),
-        Arc::new(|invocation| {
+        metadata_for("clear"),
+        DesktopHandler::new(|invocation| {
             let state = invocation.state.clone();
             Box::pin(async move {
                 if invocation.lowered.len() == 1 {
@@ -135,9 +161,8 @@ fn clear_handler_entry() -> HandlerEntry<DesktopHandler> {
 fn history_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "history",
-        HandlerMetadata::new("Inspect command history", ExecutionTarget::Desktop)
-            .with_examples(&["history", "history 10", "history clear"]),
-        Arc::new(|invocation| {
+        metadata_for("history"),
+        DesktopHandler::new(|invocation| {
             let state = invocation.state.clone();
             Box::pin(async move {
                 if invocation.lowered.len() >= 2 && invocation.lowered[1] == "clear" {
@@ -182,25 +207,16 @@ fn history_handler_entry() -> HandlerEntry<DesktopHandler> {
 fn create_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "create",
-        HandlerMetadata::new("Create world entities in guided editor flows", ExecutionTarget::Desktop)
-            .with_examples(&[
-                "create npc",
-                "create npc an experienced scout",
-                "create location",
-                "create faction",
-            ])
-            .requires_subcommand()
-            .with_canonical_help("create help"),
-        Arc::new(|invocation| Box::pin(async move { handle_create(invocation).await })),
+        metadata_for("create"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_create(invocation).await })),
     )
 }
 
 fn exit_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "exit",
-        HandlerMetadata::new("Exit the application", ExecutionTarget::Desktop)
-            .with_examples(&["exit"]),
-        Arc::new(|_| {
+        metadata_for("exit"),
+        DesktopHandler::new(|_| {
             Box::pin(async {
                 Ok(Some(ok_response(
                     "exiting".to_string(),
@@ -258,20 +274,16 @@ async fn handle_create(
 fn npc_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "npc",
-        HandlerMetadata::new("Edit active NPC draft", ExecutionTarget::Desktop)
-            .requires_subcommand()
-            .with_canonical_help("npc help"),
-        Arc::new(|invocation| Box::pin(async move { handle_npc(invocation).await })),
+        metadata_for("npc"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_npc(invocation).await })),
     )
 }
 
 fn location_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "location",
-        HandlerMetadata::new("Edit active location draft", ExecutionTarget::Desktop)
-            .requires_subcommand()
-            .with_canonical_help("location help"),
-        Arc::new(|invocation| Box::pin(async move { handle_location(invocation).await })),
+        metadata_for("location"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_location(invocation).await })),
     )
 }
 
@@ -668,10 +680,8 @@ async fn location_save(state: State<'_, AppState>) -> Result<Option<CommandRespo
 fn faction_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "faction",
-        HandlerMetadata::new("Edit active faction draft", ExecutionTarget::Desktop)
-            .requires_subcommand()
-            .with_canonical_help("faction help"),
-        Arc::new(|invocation| Box::pin(async move { handle_faction(invocation).await })),
+        metadata_for("faction"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_faction(invocation).await })),
     )
 }
 
@@ -1123,9 +1133,8 @@ async fn faction_save(state: State<'_, AppState>) -> Result<Option<CommandRespon
 fn load_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "load",
-        HandlerMetadata::new("Load an entity into the editor", ExecutionTarget::Desktop)
-            .with_examples(&["load Elara Meadowlight"]),
-        Arc::new(|invocation| Box::pin(async move { handle_load(invocation).await })),
+        metadata_for("load"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_load(invocation).await })),
     )
 }
 
@@ -1169,9 +1178,8 @@ async fn handle_load(
 fn show_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "show",
-        HandlerMetadata::new("Preview an entity without editing", ExecutionTarget::Desktop)
-            .with_examples(&["show Elara Meadowlight"]),
-        Arc::new(|invocation| Box::pin(async move { handle_show(invocation).await })),
+        metadata_for("show"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_show(invocation).await })),
     )
 }
 
@@ -1184,9 +1192,8 @@ async fn handle_show(
 fn preview_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "preview",
-        HandlerMetadata::new("Alias for show; previews entity", ExecutionTarget::Desktop)
-            .with_examples(&["preview Neverwinter Harbor"]),
-        Arc::new(|invocation| Box::pin(async move { handle_preview(invocation).await })),
+        metadata_for("preview"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_preview(invocation).await })),
     )
 }
 
@@ -1238,9 +1245,8 @@ async fn entity_preview_response(
 fn delete_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "delete",
-        HandlerMetadata::new("Soft delete an entity", ExecutionTarget::Desktop)
-            .with_examples(&["delete Elara Meadowlight"]),
-        Arc::new(|invocation| Box::pin(async move { handle_delete(invocation).await })),
+        metadata_for("delete"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_delete(invocation).await })),
     )
 }
 
@@ -1318,18 +1324,16 @@ async fn handle_delete(
 fn undo_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "undo",
-        HandlerMetadata::new("Restore the most recently deleted entity", ExecutionTarget::Desktop)
-            .with_examples(&["undo"]),
-        Arc::new(|invocation| Box::pin(async move { handle_undo(invocation).await })),
+        metadata_for("undo"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_undo(invocation).await })),
     )
 }
 
 fn save_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "save",
-        HandlerMetadata::new("Save active guided flow", ExecutionTarget::Desktop)
-            .with_examples(&["save"]),
-        Arc::new(|invocation| Box::pin(async move { handle_save(invocation).await })),
+        metadata_for("save"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_save(invocation).await })),
     )
 }
 
@@ -1355,9 +1359,8 @@ async fn handle_save(
 fn reroll_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "reroll",
-        HandlerMetadata::new("Regenerate content in the active editor", ExecutionTarget::Desktop)
-            .with_examples(&["reroll"]),
-        Arc::new(|invocation| Box::pin(async move { handle_reroll(invocation).await })),
+        metadata_for("reroll"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_reroll(invocation).await })),
     )
 }
 
@@ -1518,9 +1521,8 @@ async fn reroll_current_faction(
 fn cancel_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "cancel",
-        HandlerMetadata::new("Cancel the active editor flow", ExecutionTarget::Desktop)
-            .with_examples(&["cancel"]),
-        Arc::new(|invocation| Box::pin(async move { handle_cancel(invocation).await })),
+        metadata_for("cancel"),
+        DesktopHandler::new(|invocation| Box::pin(async move { handle_cancel(invocation).await })),
     )
 }
 

@@ -1,4 +1,31 @@
+use command_handler::{ExecutionTarget as HandlerExecutionTarget, HandlerMetadata};
 use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone)]
+pub struct HandlerMetadataDescriptor {
+    pub name: String,
+    pub summary: String,
+    pub examples: Vec<String>,
+    pub show_in_autocomplete: bool,
+    pub requires_subcommand: bool,
+    pub canonical_help_command: Option<String>,
+    pub execution: CommandExecution,
+    pub aliases: Vec<String>,
+}
+
+impl From<HandlerMetadataDescriptor> for HandlerMetadata {
+    fn from(value: HandlerMetadataDescriptor) -> Self {
+        HandlerMetadata {
+            summary: value.summary,
+            examples: value.examples,
+            show_in_autocomplete: value.show_in_autocomplete,
+            requires_subcommand: value.requires_subcommand,
+            execution: value.execution.into(),
+            canonical_help: value.canonical_help_command,
+            aliases: value.aliases,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandManifest {
@@ -62,11 +89,52 @@ pub enum CommandExecution {
     Desktop,
 }
 
+impl From<CommandExecution> for HandlerExecutionTarget {
+    fn from(value: CommandExecution) -> Self {
+        match value {
+            CommandExecution::Core => HandlerExecutionTarget::Core,
+            CommandExecution::Desktop => HandlerExecutionTarget::Desktop,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandAlias {
     pub from: Vec<String>,
     pub to: Vec<String>,
     pub summary: String,
+}
+
+pub fn handler_metadata_for(root: &str) -> Option<HandlerMetadataDescriptor> {
+    let manifest = command_manifest();
+    let command = manifest
+        .commands
+        .into_iter()
+        .find(|command| command.name.eq_ignore_ascii_case(root))?;
+
+    let aliases = manifest
+        .aliases
+        .into_iter()
+        .filter(|alias| {
+            alias
+                .from
+                .first()
+                .map(|token| token.eq_ignore_ascii_case(&command.name))
+                .unwrap_or(false)
+        })
+        .map(|alias| alias.from.join(" "))
+        .collect();
+
+    Some(HandlerMetadataDescriptor {
+        name: command.name.clone(),
+        summary: command.summary,
+        examples: command.examples,
+        show_in_autocomplete: command.show_in_autocomplete,
+        requires_subcommand: command.requires_subcommand,
+        canonical_help_command: command.canonical_help_command,
+        execution: command.execution,
+        aliases,
+    })
 }
 
 pub fn command_manifest() -> CommandManifest {
@@ -513,7 +581,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("setup help".to_string()),
-                execution: CommandExecution::Desktop,
+                execution: CommandExecution::Core,
                 show_in_autocomplete: true,
             },
             CommandSpec {

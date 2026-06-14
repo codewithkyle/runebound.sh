@@ -5,7 +5,9 @@ use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use command_handler::{ExecutionTarget, HandlerEntry, HandlerMetadata, HandlerRegistry};
+use command_handler::{
+    CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry,
+};
 use reqwest::StatusCode;
 use serde::Serialize;
 
@@ -20,6 +22,7 @@ use crate::output::{
 };
 use crate::session::SessionState;
 use crate::vault::{Vault, is_path_writable};
+use command_specs::handler_metadata_for;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandResponse {
@@ -131,8 +134,33 @@ impl CommandOutput {
 }
 
 type CoreHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>>;
-type CoreHandler =
-    Arc<dyn for<'a> Fn(CoreHandlerInvocation<'a>) -> CoreHandlerFuture<'a> + Send + Sync>;
+
+struct CoreHandler {
+    inner: Arc<dyn for<'a> Fn(CoreHandlerInvocation<'a>) -> CoreHandlerFuture<'a> + Send + Sync>,
+}
+
+impl CoreHandler {
+    fn new<F>(handler: F) -> Self
+    where
+        F: for<'a> Fn(CoreHandlerInvocation<'a>) -> CoreHandlerFuture<'a> + Send + Sync + 'static,
+    {
+        Self {
+            inner: Arc::new(handler),
+        }
+    }
+}
+
+impl HandlerBridge for CoreHandler {
+    type Output = Result<CommandOutput>;
+    type Invocation<'a> = CoreHandlerInvocation<'a>;
+
+    fn invoke<'a>(
+        &'a self,
+        invocation: Self::Invocation<'a>,
+    ) -> command_handler::HandlerFuture<'a, Self::Output> {
+        (self.inner)(invocation)
+    }
+}
 
 struct CoreHandlerInvocation<'a> {
     workspace_root: &'a Path,
@@ -158,15 +186,17 @@ fn build_core_handler_registry() -> HandlerRegistry<CoreHandler> {
     registry
 }
 
+fn metadata_for(name: &str) -> HandlerMetadata {
+    handler_metadata_for(name)
+        .unwrap_or_else(|| panic!("missing handler metadata for {name}"))
+        .into()
+}
+
 fn status_handler_entry() -> HandlerEntry<CoreHandler> {
     HandlerEntry::new(
         "status",
-        HandlerMetadata::new(
-            "Run readiness checks for configured services",
-            ExecutionTarget::Core,
-        )
-        .with_examples(&["status"]),
-        Arc::new(|invocation| {
+        metadata_for("status"),
+        CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_status(invocation.workspace_root).await,
@@ -183,19 +213,18 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
 fn config_handler_entry() -> HandlerEntry<CoreHandler> {
     HandlerEntry::new(
         "config",
-        HandlerMetadata::new("Inspect and validate configuration", ExecutionTarget::Core)
-            .with_examples(&["config show", "config test"])
-            .with_canonical_help("config help")
-            .requires_subcommand(),
-        Arc::new(|invocation| Box::pin(async move { execute_config_command(invocation).await })),
+        metadata_for("config"),
+        CoreHandler::new(|invocation| {
+            Box::pin(async move { execute_config_command(invocation).await })
+        }),
     )
 }
 
 fn help_handler_entry() -> HandlerEntry<CoreHandler> {
     HandlerEntry::new(
         "help",
-        HandlerMetadata::new("Show top-level help", ExecutionTarget::Core).with_examples(&["help"]),
-        Arc::new(|invocation| {
+        metadata_for("help"),
+        CoreHandler::new(|invocation| {
             Box::pin(async move { Ok(CommandOutput::text(render_root_help(invocation.manifest))) })
         }),
     )
@@ -204,9 +233,8 @@ fn help_handler_entry() -> HandlerEntry<CoreHandler> {
 fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
     HandlerEntry::new(
         "exit",
-        HandlerMetadata::new("Exit the application", ExecutionTarget::Core)
-            .with_examples(&["exit"]),
-        Arc::new(|invocation| {
+        metadata_for("exit"),
+        CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
@@ -223,11 +251,8 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
 fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
     HandlerEntry::new(
         "setup",
-        HandlerMetadata::new("Guided setup helper commands", ExecutionTarget::Core)
-            .with_examples(&["start setup", "setup help", "setup show"])
-            .requires_subcommand()
-            .with_canonical_help("setup help"),
-        Arc::new(|invocation| {
+        metadata_for("setup"),
+        CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match try_execute_onboarding(
                     invocation.workspace_root,
@@ -868,7 +893,7 @@ async fn execute_dispatched(
             session,
             raw_input,
         };
-        return (entry.handler)(invocation).await;
+        return entry.execute(invocation).await;
     }
 
     if lowered.is_empty() {

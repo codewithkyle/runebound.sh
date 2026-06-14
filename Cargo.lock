@@ -139,6 +139,7 @@ dependencies = [
 name = "command-specs"
 version = "0.2.1"
 dependencies = [
+ "command-handler",
  "serde",
 ]
 
