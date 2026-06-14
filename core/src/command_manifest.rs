@@ -16,7 +16,6 @@ pub struct CommandSpec {
     pub requires_subcommand: bool,
     pub canonical_help_command: Option<String>,
     pub execution: CommandExecution,
-    pub clap_managed: bool,
     pub show_in_autocomplete: bool,
 }
 
@@ -26,7 +25,6 @@ pub struct SubcommandSpec {
     pub summary: String,
     pub options: Vec<OptionSpec>,
     pub examples: Vec<String>,
-    pub clap_managed: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -83,7 +81,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Core,
-                clap_managed: true,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -101,21 +98,18 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Start guided NPC creation".to_string(),
                         options: Vec::new(),
                         examples: vec!["create npc".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
                         summary: "Show create command help".to_string(),
                         options: Vec::new(),
                         examples: vec!["create help".to_string()],
-                        clap_managed: false,
                     },
                 ],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("create help".to_string()),
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -128,28 +122,24 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Display effective config".to_string(),
                         options: Vec::new(),
                         examples: vec!["config show".to_string()],
-                        clap_managed: true,
                     },
                     SubcommandSpec {
                         name: "test".to_string(),
                         summary: "Run full config diagnostics".to_string(),
                         options: Vec::new(),
                         examples: vec!["config test".to_string()],
-                        clap_managed: true,
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
                         summary: "Show config command help".to_string(),
                         options: Vec::new(),
                         examples: vec!["config help".to_string()],
-                        clap_managed: false,
                     },
                 ],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("config help".to_string()),
                 execution: CommandExecution::Core,
-                clap_managed: true,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -161,7 +151,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Core,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -173,13 +162,11 @@ pub fn command_manifest() -> CommandManifest {
                     summary: "Start guided first-time onboarding".to_string(),
                     options: Vec::new(),
                     examples: vec!["start setup".to_string()],
-                    clap_managed: false,
                 }],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -191,7 +178,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -209,14 +195,12 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Show active NPC draft".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc show".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "rename".to_string(),
                         summary: "Update NPC name".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc rename Father Elen".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "set".to_string(),
@@ -235,14 +219,12 @@ pub fn command_manifest() -> CommandManifest {
                             "npc set secret Owes a smuggler blood debt".to_string(),
                             "npc set carrying keys, ledger, hidden dagger".to_string(),
                         ],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "travel".to_string(),
                         summary: "Move NPC to a location".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc travel to Waterdeep".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "reroll".to_string(),
@@ -254,35 +236,30 @@ pub fn command_manifest() -> CommandManifest {
                             "npc reroll name a rough and tough hill troll".to_string(),
                             "npc reroll background distrustful of nobles".to_string(),
                         ],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "save".to_string(),
                         summary: "Save active NPC draft".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc save".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "cancel".to_string(),
                         summary: "Discard active NPC draft".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc cancel".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
                         summary: "Show NPC editor command help".to_string(),
                         options: Vec::new(),
                         examples: vec!["npc help".to_string()],
-                        clap_managed: false,
                     },
                 ],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("npc help".to_string()),
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -299,42 +276,36 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Show active location draft".to_string(),
                         options: Vec::new(),
                         examples: vec!["location show".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "rename".to_string(),
                         summary: "Update location name".to_string(),
                         options: Vec::new(),
                         examples: vec!["location rename Neverwinter Harbor".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "save".to_string(),
                         summary: "Save active location draft".to_string(),
                         options: Vec::new(),
                         examples: vec!["location save".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "cancel".to_string(),
                         summary: "Discard active location draft".to_string(),
                         options: Vec::new(),
                         examples: vec!["location cancel".to_string()],
-                        clap_managed: false,
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
                         summary: "Show location editor command help".to_string(),
                         options: Vec::new(),
                         examples: vec!["location help".to_string()],
-                        clap_managed: false,
                     },
                 ],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("location help".to_string()),
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -346,7 +317,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -358,7 +328,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -370,7 +339,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -382,7 +350,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -394,7 +361,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -406,13 +372,11 @@ pub fn command_manifest() -> CommandManifest {
                     summary: "Show guided setup command help".to_string(),
                     options: Vec::new(),
                     examples: vec!["setup help".to_string()],
-                    clap_managed: false,
                 }],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("setup help".to_string()),
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -428,13 +392,11 @@ pub fn command_manifest() -> CommandManifest {
                     summary: "Clear command history".to_string(),
                     options: Vec::new(),
                     examples: vec!["history clear".to_string()],
-                    clap_managed: false,
                 }],
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -453,7 +415,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                clap_managed: false,
                 show_in_autocomplete: true,
             },
             CommandSpec {
@@ -465,7 +426,6 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Core,
-                clap_managed: true,
                 show_in_autocomplete: true,
             },
         ],
@@ -484,21 +444,27 @@ mod tests {
     use super::{CommandExecution, command_manifest};
 
     #[test]
-    fn clap_managed_commands_execute_in_core() {
+    fn core_commands_include_expected_roots() {
         let manifest = command_manifest();
-        for command in manifest.commands {
-            if command.clap_managed {
-                assert!(matches!(command.execution, CommandExecution::Core));
-            }
-        }
+        let core_roots: Vec<String> = manifest
+            .commands
+            .iter()
+            .filter(|command| matches!(command.execution, CommandExecution::Core))
+            .map(|command| command.name.clone())
+            .collect();
+
+        assert!(core_roots.contains(&"status".to_string()));
+        assert!(core_roots.contains(&"config".to_string()));
+        assert!(core_roots.contains(&"help".to_string()));
+        assert!(core_roots.contains(&"exit".to_string()));
     }
 
     #[test]
-    fn desktop_commands_are_not_clap_managed() {
+    fn desktop_commands_are_not_core() {
         let manifest = command_manifest();
         for command in manifest.commands {
             if matches!(command.execution, CommandExecution::Desktop) {
-                assert!(!command.clap_managed);
+                assert!(!matches!(command.execution, CommandExecution::Core));
             }
         }
     }

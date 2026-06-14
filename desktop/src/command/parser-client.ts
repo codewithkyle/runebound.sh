@@ -14,7 +14,6 @@ export type CommandSpec = {
   requires_subcommand: boolean;
   canonical_help_command?: string | null;
   execution: "core" | "desktop";
-  clap_managed: boolean;
   show_in_autocomplete: boolean;
 };
 
@@ -23,7 +22,6 @@ export type SubcommandSpec = {
   summary: string;
   options: OptionSpec[];
   examples: string[];
-  clap_managed: boolean;
 };
 
 export type OptionSpec = {
