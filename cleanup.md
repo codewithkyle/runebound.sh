@@ -111,7 +111,7 @@ None. This is the first phase. The service already exists and is already used.
 
 ---
 
-## Phase 2: Move Reroll Logic into `services/entity_reroll.rs`
+## Phase 2: Move Reroll Logic into `services/entity_reroll.rs` *(✅ Completed 2026-06-14)*
 
 ### Alternative: Extend `services/ai_generation.rs`
 

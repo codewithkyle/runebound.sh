@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
-use crate::services::ai_generation::{
-    AiGenerationService,
+use crate::services::entity_reroll::{
+    EntityRerollService,
     FactionRerollContext as ServiceFactionRerollContext,
     LocationRerollContext as ServiceLocationRerollContext,
     NpcRerollContext as ServiceNpcRerollContext,
@@ -1086,7 +1086,7 @@ pub fn validate_faction_details(seed: &crate::services::ai_generation::FactionSe
 
 pub async fn reroll_npc_field(input: RerollNpcFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollNpcFieldResult, String> {
     let internal_input: ServiceRerollNpcFieldInput = input.into();
-    let service = AiGenerationService;
+    let service = EntityRerollService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let result = service
@@ -1102,7 +1102,7 @@ pub async fn reroll_npc_field(input: RerollNpcFieldInput, state: tauri::State<'_
 
 pub async fn reroll_location_field(input: RerollLocationFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollLocationFieldResult, String> {
     let internal_input: ServiceRerollLocationFieldInput = input.into();
-    let service = AiGenerationService;
+    let service = EntityRerollService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let result = service
@@ -1118,7 +1118,7 @@ pub async fn reroll_location_field(input: RerollLocationFieldInput, state: tauri
 
 pub async fn reroll_faction_field(input: RerollFactionFieldInput, state: tauri::State<'_, AppState>) -> Result<RerollFactionFieldResult, String> {
     let internal_input: ServiceRerollFactionFieldInput = input.into();
-    let service = AiGenerationService;
+    let service = EntityRerollService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let result = service
