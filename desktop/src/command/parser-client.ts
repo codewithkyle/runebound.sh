@@ -13,7 +13,7 @@ export type CommandSpec = {
   options: OptionSpec[];
   requires_subcommand: boolean;
   canonical_help_command?: string | null;
-  execution: "core" | "client";
+  execution: "core" | "desktop";
   clap_managed: boolean;
   show_in_autocomplete: boolean;
 };

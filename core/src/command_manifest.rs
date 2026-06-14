@@ -61,7 +61,7 @@ pub enum CompletionHint {
 #[serde(rename_all = "snake_case")]
 pub enum CommandExecution {
     Core,
-    Client,
+    Desktop,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +121,7 @@ pub fn command_manifest() -> CommandManifest {
                 }],
                 requires_subcommand: true,
                 canonical_help_command: Some("create help".to_string()),
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -192,7 +192,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -204,7 +204,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -302,7 +302,7 @@ pub fn command_manifest() -> CommandManifest {
                 }],
                 requires_subcommand: true,
                 canonical_help_command: Some("npc help".to_string()),
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -361,7 +361,7 @@ pub fn command_manifest() -> CommandManifest {
                 }],
                 requires_subcommand: true,
                 canonical_help_command: Some("location help".to_string()),
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -373,7 +373,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -385,7 +385,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -397,7 +397,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -409,7 +409,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -421,7 +421,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -439,7 +439,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("setup help".to_string()),
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -461,7 +461,7 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -480,7 +480,7 @@ pub fn command_manifest() -> CommandManifest {
                 }],
                 requires_subcommand: false,
                 canonical_help_command: None,
-                execution: CommandExecution::Client,
+                execution: CommandExecution::Desktop,
                 clap_managed: false,
                 show_in_autocomplete: true,
             },
@@ -533,7 +533,7 @@ mod tests {
 
     use clap::CommandFactory;
 
-    use super::command_manifest;
+    use super::{CommandExecution, command_manifest};
     use crate::command::Cli;
 
     #[test]
@@ -582,5 +582,25 @@ mod tests {
             .collect();
 
         assert_eq!(manifest_subcommands, clap_subcommands);
+    }
+
+    #[test]
+    fn clap_managed_commands_execute_in_core() {
+        let manifest = command_manifest();
+        for command in manifest.commands {
+            if command.clap_managed {
+                assert!(matches!(command.execution, CommandExecution::Core));
+            }
+        }
+    }
+
+    #[test]
+    fn desktop_commands_are_not_clap_managed() {
+        let manifest = command_manifest();
+        for command in manifest.commands {
+            if matches!(command.execution, CommandExecution::Desktop) {
+                assert!(!command.clap_managed);
+            }
+        }
     }
 }

@@ -2,7 +2,9 @@
 
 - Every time a command or subcommand is added, changed, or removed, the typeahead/autocomplete MUST be synced.
 - Every time a command is added, changed, or removed, the help output MUST be synced.
-- Every command and subcommand MUST support `-h`, `--help`, and `<cmd> <sub> help` to display command/subcommand-specific help.
+- Every command and subcommand MUST expose command-specific help through at least one stable path:
+  - Clap-managed commands: `-h` and `--help`.
+  - Routed desktop commands: explicit `help` subcommand/alias or equivalent documented help command.
 - If a command requires subcommands, clicking that root command in output MUST execute its help command (for example `config` click -> `config --help`).
 - Every command alias (for example `history clear` and `clear --history`) MUST be reflected in autocomplete and help output.
 - Every valid command and subcommand shown in output/help/history MUST be rendered as clickable and executable.

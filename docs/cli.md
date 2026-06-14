@@ -28,7 +28,7 @@
 ## Autocomplete and Typeahead
 
 - Command metadata is sourced from `core/src/command_manifest.rs`.
-- Root and subcommand suggestions are manifest-driven.
+- Suggestions are produced by backend `suggest_command_input` in `desktop/src-tauri/src/main.rs`.
 - `Tab` completes current suggestion.
 - Suggestions remain visible while refining input.
 
@@ -60,7 +60,8 @@
 ## Maintenance Rules for Future Changes
 
 - Any command add/remove/change must update all of:
-  - Clap command definitions
+  - backend runtime handler (`core/src/command.rs` or `desktop/src-tauri/src/router.rs`)
   - command manifest (autocomplete + help metadata)
   - output/help examples and clickable refs
+- If command is Clap-managed today, keep Clap definitions in sync until Clap runtime is retired.
 - Validate command changes with `make build` before closing work.

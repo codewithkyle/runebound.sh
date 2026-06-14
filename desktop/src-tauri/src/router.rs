@@ -720,124 +720,7 @@ pub(crate) async fn run_desktop_routed_command(
             )));
         };
 
-        let (output, event) = match entity.entity_type {
-            EntityType::Npc => {
-                let draft = NpcDraftSession {
-                    id: entity.id.clone(),
-                    name: entity.name.clone(),
-                    race: entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    occupation: entity
-                        .occupation
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    sex: normalize_sex(
-                        &entity
-                            .sex
-                            .clone()
-                            .unwrap_or_else(|| "male".to_string()),
-                    )
-                    .unwrap_or_else(|_| "male".to_string()),
-                    age: entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    height: entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
-                    weight_lbs: entity
-                        .weight_lbs
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    background: entity
-                        .background
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    want_need: entity
-                        .want_need
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    secret_obstacle: entity
-                        .secret_obstacle
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                    carrying: entity
-                        .carrying
-                        .clone()
-                        .unwrap_or_else(|| vec!["Unknown".to_string()]),
-                    location: entity
-                        .location
-                        .clone()
-                        .unwrap_or_else(|| "Unknown".to_string()),
-                };
-                {
-                    let mut editor = state.editor_session.lock().await;
-                    editor.mode = EditorMode::Npc;
-                    editor.location_draft = None;
-                    editor.npc_draft = Some(draft.clone());
-                }
-
-                let carrying = entity
-                    .carrying
-                    .as_ref()
-                    .map(|items| items.join(", "))
-                    .unwrap_or_else(|| "Unknown".to_string());
-                (
-                    format!(
-                        "## NPC\nname: {}\nslug: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}\npath: {}",
-                        entity.name,
-                        entity.slug,
-                        entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
-                        entity
-                            .occupation
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        entity.sex.clone().unwrap_or_else(|| "Unknown".to_string()),
-                        entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
-                        entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
-                        entity
-                            .weight_lbs
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        entity
-                            .background
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        entity
-                            .want_need
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        entity
-                            .secret_obstacle
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        carrying,
-                        entity
-                            .location
-                            .clone()
-                            .unwrap_or_else(|| "Unknown".to_string()),
-                        entity.vault_path
-                    ),
-                    Some(npc_event_from_draft(&draft)),
-                )
-            }
-            EntityType::Location => {
-                let draft = LocationDraftSession {
-                    id: entity.id.clone(),
-                    name: entity.name.clone(),
-                    slug: entity.slug.clone(),
-                    vault_path: entity.vault_path.clone(),
-                };
-                {
-                    let mut editor = state.editor_session.lock().await;
-                    editor.mode = EditorMode::Location;
-                    editor.npc_draft = None;
-                    editor.location_draft = Some(draft.clone());
-                }
-
-                (
-                    format!(
-                        "## Location\nname: {}\nslug: {}\npath: {}",
-                        entity.name, entity.slug, entity.vault_path
-                    ),
-                    Some(location_event_from_draft(&draft)),
-                )
-            }
-        };
+        let (output, event) = build_load_response(entity, state.clone()).await;
 
         return Ok(Some(ok_response(output, event)));
     }
@@ -912,7 +795,139 @@ pub(crate) async fn run_desktop_routed_command(
         return Ok(Some(ok_response(output, None)));
     }
 
+    let manifest = dnd_core::command_manifest::command_manifest();
+    if !starts_with_known_command_root(trimmed, &manifest)
+        && let Some(entity) = resolve_entity(trimmed.to_string()).await?
+    {
+        let (output, event) = build_load_response(entity, state).await;
+        return Ok(Some(ok_response(output, event)));
+    }
+
     Ok(None)
+}
+
+async fn build_load_response(
+    entity: EntityDetails,
+    state: State<'_, AppState>,
+) -> (String, Option<CommandClientEvent>) {
+    match entity.entity_type {
+        EntityType::Npc => {
+            let draft = NpcDraftSession {
+                id: entity.id.clone(),
+                name: entity.name.clone(),
+                race: entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
+                occupation: entity
+                    .occupation
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                sex: normalize_sex(
+                    &entity
+                        .sex
+                        .clone()
+                        .unwrap_or_else(|| "male".to_string()),
+                )
+                .unwrap_or_else(|_| "male".to_string()),
+                age: entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
+                height: entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
+                weight_lbs: entity
+                    .weight_lbs
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                background: entity
+                    .background
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                want_need: entity
+                    .want_need
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                secret_obstacle: entity
+                    .secret_obstacle
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+                carrying: entity
+                    .carrying
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()]),
+                location: entity
+                    .location
+                    .clone()
+                    .unwrap_or_else(|| "Unknown".to_string()),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::Npc;
+                editor.location_draft = None;
+                editor.npc_draft = Some(draft.clone());
+            }
+
+            let carrying = entity
+                .carrying
+                .as_ref()
+                .map(|items| items.join(", "))
+                .unwrap_or_else(|| "Unknown".to_string());
+            (
+                format!(
+                    "## NPC\nname: {}\nslug: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}\npath: {}",
+                    entity.name,
+                    entity.slug,
+                    entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
+                    entity
+                        .occupation
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    entity.sex.clone().unwrap_or_else(|| "Unknown".to_string()),
+                    entity.age.clone().unwrap_or_else(|| "Unknown".to_string()),
+                    entity.height.clone().unwrap_or_else(|| "Unknown".to_string()),
+                    entity
+                        .weight_lbs
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    entity
+                        .background
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    entity
+                        .want_need
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    entity
+                        .secret_obstacle
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    carrying,
+                    entity
+                        .location
+                        .clone()
+                        .unwrap_or_else(|| "Unknown".to_string()),
+                    entity.vault_path
+                ),
+                Some(npc_event_from_draft(&draft)),
+            )
+        }
+        EntityType::Location => {
+            let draft = LocationDraftSession {
+                id: entity.id.clone(),
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                vault_path: entity.vault_path.clone(),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.mode = EditorMode::Location;
+                editor.npc_draft = None;
+                editor.location_draft = Some(draft.clone());
+            }
+
+            (
+                format!(
+                    "## Location\nname: {}\nslug: {}\npath: {}",
+                    entity.name, entity.slug, entity.vault_path
+                ),
+                Some(location_event_from_draft(&draft)),
+            )
+        }
+    }
 }
 
 fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {

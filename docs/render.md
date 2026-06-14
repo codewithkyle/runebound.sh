@@ -57,11 +57,12 @@ This file is a handoff guide for future agents and contributors.
 
 When adding/removing/changing a command:
 
-- Update Clap definitions in `core/src/command.rs`.
+- Update backend runtime handling (`core/src/command.rs` and/or `desktop/src-tauri/src/router.rs`).
 - Update manifest in `core/src/command_manifest.rs`.
 - Ensure help output and examples are updated.
 - Ensure actionable command text is clickable.
 - Verify keyboard UX invariants (`Enter`, `Tab`, arrows, `Ctrl+C`).
+- Keep Clap definitions synchronized only for Clap-managed commands during transition.
 - Run `make build`.
 
 ## Spinner, Error, and Info Semantics
@@ -72,14 +73,14 @@ When adding/removing/changing a command:
 
 ## Current Known Constraints
 
-- Some client-generated onboarding strings are still converted via markdown-inspired parsing.
-- Goal state is full explicit `OutputDoc` emission for onboarding/client messages too.
+- Some onboarding/editor responses still rely on markdown-inspired text parsing fallback.
+- Goal state is full explicit `OutputDoc` emission for all command paths.
 
 ## Suggested Next Increment
 
-- Introduce frontend output builders (TS) for onboarding and client-side built-ins.
+- Expand backend `output_doc` coverage for routed desktop commands.
 - Emit explicit `OutputDoc` directly instead of passing raw strings to parser.
-- Reduce parser fallback to backend compatibility only.
+- Reduce parser fallback to compatibility only.
 
 ## Verification Checklist Before Merging
 
