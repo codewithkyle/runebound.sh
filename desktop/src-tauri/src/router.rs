@@ -74,7 +74,7 @@ pub(crate) async fn run_desktop_routed_command(
         return Ok(Some(ok_response(render_history_output(&history, limit), None)));
     }
 
-    if lowered == "create help" || lowered == "create --help" {
+    if lowered == "create help" {
         return Ok(Some(ok_response(
             ["## Create commands", "create npc", "create npc <prompt text>"].join("\n"),
             None,
@@ -123,7 +123,7 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
-    if lowered == "npc help" || lowered == "npc --help" {
+    if lowered == "npc help" {
         let has_draft = {
             let editor = state.editor_session.lock().await;
             editor.npc_draft.is_some()
@@ -151,7 +151,7 @@ pub(crate) async fn run_desktop_routed_command(
         )));
     }
 
-    if lowered == "location help" || lowered == "location --help" {
+    if lowered == "location help" {
         let has_draft = {
             let editor = state.editor_session.lock().await;
             editor.location_draft.is_some()

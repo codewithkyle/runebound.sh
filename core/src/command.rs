@@ -2,12 +2,10 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
-use clap::error::ErrorKind;
-use clap::{Parser, Subcommand};
 use reqwest::StatusCode;
 use serde::Serialize;
 
-use crate::command_manifest::command_manifest;
+use crate::command_manifest::{CommandManifest, CommandSpec, command_manifest};
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
 use crate::config::{load_effective, required_issues, save_config, validate_for_runtime};
 use crate::db;
@@ -18,29 +16,6 @@ use crate::output::{
 };
 use crate::session::SessionState;
 use crate::vault::{Vault, is_path_writable};
-
-#[derive(Debug, Parser)]
-#[command(name = "dnd-assistant")]
-pub struct Cli {
-    #[command(subcommand)]
-    pub command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum Command {
-    Config {
-        #[command(subcommand)]
-        command: ConfigCommand,
-    },
-    Status,
-    Exit,
-}
-
-#[derive(Debug, Subcommand)]
-pub enum ConfigCommand {
-    Show,
-    Test,
-}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct CommandResponse {
@@ -644,44 +619,83 @@ async fn probe_ollama_models(base_url: &str, timeout_seconds: u64) -> Result<(St
 
 pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {
     let normalized_input = normalize_command_input(input);
-    let mut argv = vec!["dnd-assistant".to_string()];
     let parsed_words =
         shell_words::split(&normalized_input).map_err(|e| anyhow!("invalid command input: {e}"))?;
-    let normalized_words = normalize_alias_tokens(&parsed_words, &command_manifest());
-    argv.extend(normalized_words);
-
-    let cli = match Cli::try_parse_from(argv) {
-        Ok(cli) => cli,
-        Err(err) => {
-            if matches!(
-                err.kind(),
-                ErrorKind::DisplayHelp
-                    | ErrorKind::DisplayVersion
-                    | ErrorKind::DisplayHelpOnMissingArgumentOrSubcommand
-            ) {
-                let text = strip_binary_name_from_help(&err.to_string());
-                return Ok(CommandOutput::text(text));
-            }
-            return Err(anyhow!(strip_binary_name_from_help(&err.to_string())));
-        }
-    };
-    execute_parsed(workspace_root, cli).await
+    let manifest = command_manifest();
+    let normalized_words = normalize_alias_tokens(&parsed_words, &manifest);
+    execute_dispatched(workspace_root, &normalized_words, &manifest).await
 }
 
-pub async fn execute_parsed(workspace_root: &Path, cli: Cli) -> Result<CommandOutput> {
-    match cli.command {
-        Some(Command::Config { command }) => execute_config_command(workspace_root, command).await,
-        Some(Command::Exit) => Ok(CommandOutput::text("exiting".to_string())),
-        Some(Command::Status) | None => execute_status(workspace_root).await,
+async fn execute_dispatched(
+    workspace_root: &Path,
+    tokens: &[String],
+    manifest: &CommandManifest,
+) -> Result<CommandOutput> {
+    if tokens.is_empty() {
+        return execute_status(workspace_root).await;
+    }
+
+    let lowered: Vec<String> = tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    if lowered.iter().any(|token| token == "-h" || token == "--help") {
+        let hint = lowered
+            .first()
+            .map(|root| format!("use `{root} help` or `help {root}`"))
+            .unwrap_or_else(|| "use `help`".to_string());
+        bail!("`-h`/`--help` is not supported; {hint}");
+    }
+
+    if lowered.len() == 1 && lowered[0] == "help" {
+        return Ok(CommandOutput::text(render_root_help(manifest)));
+    }
+
+    match lowered[0].as_str() {
+        "status" => {
+            if lowered.len() == 1 {
+                return execute_status(workspace_root).await;
+            }
+            if lowered.len() == 2 && lowered[1] == "help" {
+                return Ok(CommandOutput::text(render_command_help(manifest, "status")));
+            }
+            bail!("unknown status command. use `status help`");
+        }
+        "exit" => {
+            if lowered.len() == 1 {
+                return Ok(CommandOutput::text("exiting".to_string()));
+            }
+            if lowered.len() == 2 && lowered[1] == "help" {
+                return Ok(CommandOutput::text(render_command_help(manifest, "exit")));
+            }
+            bail!("unknown exit command. use `exit help`");
+        }
+        "config" => execute_config_command(workspace_root, &lowered, manifest).await,
+        "help" => Ok(CommandOutput::text(render_root_help(manifest))),
+        other => bail!("unknown command: {other}. use `help`"),
     }
 }
 
 async fn execute_config_command(
     workspace_root: &Path,
-    command: ConfigCommand,
+    lowered: &[String],
+    manifest: &CommandManifest,
 ) -> Result<CommandOutput> {
-    match command {
-        ConfigCommand::Show => {
+    if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
+        return Ok(CommandOutput::text(render_command_help(manifest, "config")));
+    }
+
+    if lowered.len() == 3 && lowered[2] == "help" {
+        return Ok(CommandOutput::text(render_subcommand_help(
+            manifest,
+            "config",
+            &lowered[1],
+        )));
+    }
+
+    match lowered[1].as_str() {
+        "show" if lowered.len() == 2 => {
             let loaded = load_effective(workspace_root)?;
             let mut out = String::new();
             out.push_str(&format!(
@@ -701,7 +715,7 @@ async fn execute_config_command(
 
             Ok(CommandOutput::text(out.trim_end().to_string()))
         }
-        ConfigCommand::Test => {
+        "test" if lowered.len() == 2 => {
             let loaded = load_effective(workspace_root)?;
             let report = health::run_doctor_checks(&loaded.effective, workspace_root).await;
             let out = format_report("config test", &report);
@@ -711,7 +725,80 @@ async fn execute_config_command(
             }
             Ok(CommandOutput::with_doc(out, output_doc))
         }
+        _ => bail!("unknown config command. use `config help`"),
     }
+}
+
+fn render_root_help(manifest: &CommandManifest) -> String {
+    let mut lines = vec!["## Commands".to_string()];
+    for command in manifest
+        .commands
+        .iter()
+        .filter(|command| command.execution == crate::command_manifest::CommandExecution::Core)
+    {
+        lines.push(format!("{} - {}", command.name, command.summary));
+    }
+    lines.push(String::new());
+    lines.push("Use `<command> help` or `help <command>` for details.".to_string());
+    lines.join("\n")
+}
+
+fn render_command_help(manifest: &CommandManifest, root: &str) -> String {
+    let Some(command) = find_manifest_command(manifest, root) else {
+        return format!("unknown command: {root}. use `help`");
+    };
+
+    let mut lines = vec![format!("## {}", command.name), command.summary.clone()];
+    if !command.subcommands.is_empty() {
+        lines.push(String::new());
+        lines.push("Subcommands:".to_string());
+        for subcommand in &command.subcommands {
+            lines.push(format!("- {} {} - {}", command.name, subcommand.name, subcommand.summary));
+        }
+    }
+
+    if !command.examples.is_empty() {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        for example in &command.examples {
+            lines.push(format!("- {example}"));
+        }
+    }
+
+    lines.join("\n")
+}
+
+fn render_subcommand_help(manifest: &CommandManifest, root: &str, subcommand: &str) -> String {
+    let Some(command) = find_manifest_command(manifest, root) else {
+        return format!("unknown command: {root}. use `help`");
+    };
+    let Some(sub) = command
+        .subcommands
+        .iter()
+        .find(|entry| entry.name.eq_ignore_ascii_case(subcommand))
+    else {
+        return format!("unknown {root} command. use `{root} help`");
+    };
+
+    let mut lines = vec![
+        format!("## {} {}", command.name, sub.name),
+        sub.summary.clone(),
+    ];
+    if !sub.examples.is_empty() {
+        lines.push(String::new());
+        lines.push("Examples:".to_string());
+        for example in &sub.examples {
+            lines.push(format!("- {example}"));
+        }
+    }
+    lines.join("\n")
+}
+
+fn find_manifest_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {
+    manifest
+        .commands
+        .iter()
+        .find(|command| command.name.eq_ignore_ascii_case(root))
 }
 
 async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
@@ -839,18 +926,25 @@ fn output_doc_from_error_text(message: String) -> OutputDoc {
     doc().with_block(status(StatusTone::Error, message))
 }
 
-fn strip_binary_name_from_help(text: &str) -> String {
-    let mut out = Vec::new();
+#[cfg(test)]
+mod tests {
+    use std::path::Path;
 
-    for line in text.lines() {
-        if line.starts_with("Usage: dnd-assistant ") {
-            out.push(line.replacen("Usage: dnd-assistant ", "Usage: ", 1));
-        } else if line == "Usage: dnd-assistant" {
-            out.push("Usage:".to_string());
-        } else {
-            out.push(line.to_string());
-        }
+    use super::execute_line_result;
+
+    #[tokio::test]
+    async fn rejects_help_flags_in_favor_of_phrase_help() {
+        let result = execute_line_result(Path::new("."), "config --help").await;
+        let error = result.expect_err("expected --help to be rejected");
+        assert!(error.to_string().contains("not supported"));
+        assert!(error.to_string().contains("config help"));
     }
 
-    out.join("\n")
+    #[tokio::test]
+    async fn supports_help_prefix_normalization() {
+        let result = execute_line_result(Path::new("."), "help config")
+            .await
+            .expect("expected help config to succeed");
+        assert!(result.output.contains("## config"));
+    }
 }

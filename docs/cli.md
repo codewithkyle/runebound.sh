@@ -63,5 +63,5 @@
   - backend runtime handler (`core/src/command.rs` or `desktop/src-tauri/src/router.rs`)
   - command manifest (autocomplete + help metadata)
   - output/help examples and clickable refs
-- If command is Clap-managed today, keep Clap definitions in sync until Clap runtime is retired.
+- Phrase help is required (`help <command>` and `<command> help`), and `-h`/`--help` should not be introduced.
 - Validate command changes with `make build` before closing work.

@@ -62,7 +62,7 @@ When adding/removing/changing a command:
 - Ensure help output and examples are updated.
 - Ensure actionable command text is clickable.
 - Verify keyboard UX invariants (`Enter`, `Tab`, arrows, `Ctrl+C`).
-- Keep Clap definitions synchronized only for Clap-managed commands during transition.
+- Keep phrase-based help paths synchronized (`help <command>` and `<command> help`).
 - Run `make build`.
 
 ## Spinner, Error, and Info Semantics

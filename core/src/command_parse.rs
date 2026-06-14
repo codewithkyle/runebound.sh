@@ -54,6 +54,11 @@ pub fn normalize_command_input(input: &str) -> String {
 }
 
 pub fn normalize_alias_tokens(tokens: &[String], manifest: &CommandManifest) -> Vec<String> {
+    let aliased = normalize_alias_tokens_only(tokens, manifest);
+    normalize_help_tokens(&aliased)
+}
+
+fn normalize_alias_tokens_only(tokens: &[String], manifest: &CommandManifest) -> Vec<String> {
     for alias in &manifest.aliases {
         if tokens.len() == alias.from.len()
             && tokens
@@ -63,6 +68,16 @@ pub fn normalize_alias_tokens(tokens: &[String], manifest: &CommandManifest) -> 
         {
             return alias.to.clone();
         }
+    }
+
+    tokens.to_vec()
+}
+
+fn normalize_help_tokens(tokens: &[String]) -> Vec<String> {
+    if tokens.len() > 1 && tokens[0].eq_ignore_ascii_case("help") {
+        let mut rewritten = tokens[1..].to_vec();
+        rewritten.push("help".to_string());
+        return rewritten;
     }
 
     tokens.to_vec()
@@ -230,6 +245,22 @@ mod tests {
         assert!(parsed.valid);
         assert_eq!(parsed.normalized_tokens, vec!["clear", "--history"]);
         assert_eq!(parsed.canonical_input, "clear --history");
+    }
+
+    #[test]
+    fn normalizes_help_prefix_for_command() {
+        let parsed = parse_command_input("help config");
+        assert!(parsed.valid);
+        assert_eq!(parsed.normalized_tokens, vec!["config", "help"]);
+        assert_eq!(parsed.canonical_input, "config help");
+    }
+
+    #[test]
+    fn normalizes_help_prefix_for_subcommand() {
+        let parsed = parse_command_input("help config show");
+        assert!(parsed.valid);
+        assert_eq!(parsed.normalized_tokens, vec!["config", "show", "help"]);
+        assert_eq!(parsed.canonical_input, "config show help");
     }
 
     #[test]

@@ -57,7 +57,7 @@ pub enum CompletionHint {
     DynamicProvider(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandExecution {
     Core,
@@ -111,14 +111,7 @@ pub fn command_manifest() -> CommandManifest {
                         clap_managed: false,
                     },
                 ],
-                options: vec![OptionSpec {
-                    name: "--help".to_string(),
-                    short: Some("-h".to_string()),
-                    takes_value: false,
-                    value_hint: None,
-                    summary: "Show help".to_string(),
-                    completion: CompletionHint::None,
-                }],
+                options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("create help".to_string()),
                 execution: CommandExecution::Desktop,
@@ -152,16 +145,9 @@ pub fn command_manifest() -> CommandManifest {
                         clap_managed: false,
                     },
                 ],
-                options: vec![OptionSpec {
-                    name: "--help".to_string(),
-                    short: Some("-h".to_string()),
-                    takes_value: false,
-                    value_hint: None,
-                    summary: "Show help".to_string(),
-                    completion: CompletionHint::None,
-                }],
+                options: Vec::new(),
                 requires_subcommand: true,
-                canonical_help_command: Some("config --help".to_string()),
+                canonical_help_command: Some("config help".to_string()),
                 execution: CommandExecution::Core,
                 clap_managed: true,
                 show_in_autocomplete: true,
@@ -292,14 +278,7 @@ pub fn command_manifest() -> CommandManifest {
                         clap_managed: false,
                     },
                 ],
-                options: vec![OptionSpec {
-                    name: "--help".to_string(),
-                    short: Some("-h".to_string()),
-                    takes_value: false,
-                    value_hint: None,
-                    summary: "Show help".to_string(),
-                    completion: CompletionHint::None,
-                }],
+                options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("npc help".to_string()),
                 execution: CommandExecution::Desktop,
@@ -351,14 +330,7 @@ pub fn command_manifest() -> CommandManifest {
                         clap_managed: false,
                     },
                 ],
-                options: vec![OptionSpec {
-                    name: "--help".to_string(),
-                    short: Some("-h".to_string()),
-                    takes_value: false,
-                    value_hint: None,
-                    summary: "Show help".to_string(),
-                    completion: CompletionHint::None,
-                }],
+                options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("location help".to_string()),
                 execution: CommandExecution::Desktop,
@@ -499,29 +471,9 @@ pub fn command_manifest() -> CommandManifest {
         ],
         aliases: vec![
             CommandAlias {
-                from: vec!["create".to_string(), "help".to_string()],
-                to: vec!["create".to_string(), "--help".to_string()],
-                summary: "create help alias".to_string(),
-            },
-            CommandAlias {
                 from: vec!["history".to_string(), "clear".to_string()],
                 to: vec!["clear".to_string(), "--history".to_string()],
                 summary: "history clear alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["npc".to_string(), "help".to_string()],
-                to: vec!["npc".to_string(), "--help".to_string()],
-                summary: "npc help alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["location".to_string(), "help".to_string()],
-                to: vec!["location".to_string(), "--help".to_string()],
-                summary: "location help alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["config".to_string(), "help".to_string()],
-                to: vec!["config".to_string(), "--help".to_string()],
-                summary: "config help alias".to_string(),
             },
         ],
     }
@@ -529,60 +481,7 @@ pub fn command_manifest() -> CommandManifest {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
-
-    use clap::CommandFactory;
-
     use super::{CommandExecution, command_manifest};
-    use crate::command::Cli;
-
-    #[test]
-    fn clap_managed_roots_match_manifest() {
-        let clap = Cli::command();
-        let clap_roots: BTreeSet<String> = clap
-            .get_subcommands()
-            .map(|cmd| cmd.get_name().to_string())
-            .collect();
-
-        let manifest = command_manifest();
-        let manifest_roots: BTreeSet<String> = manifest
-            .commands
-            .iter()
-            .filter(|cmd| cmd.clap_managed)
-            .map(|cmd| cmd.name.clone())
-            .collect();
-
-        assert_eq!(manifest_roots, clap_roots);
-    }
-
-    #[test]
-    fn clap_managed_subcommands_match_manifest() {
-        let clap = Cli::command();
-        let config_cmd = clap
-            .get_subcommands()
-            .find(|sub| sub.get_name() == "config")
-            .expect("config command should exist");
-
-        let clap_subcommands: BTreeSet<String> = config_cmd
-            .get_subcommands()
-            .map(|sub| sub.get_name().to_string())
-            .collect();
-
-        let manifest = command_manifest();
-        let manifest_config = manifest
-            .commands
-            .iter()
-            .find(|cmd| cmd.name == "config")
-            .expect("config command should exist in manifest");
-        let manifest_subcommands: BTreeSet<String> = manifest_config
-            .subcommands
-            .iter()
-            .filter(|sub| sub.clap_managed)
-            .map(|sub| sub.name.clone())
-            .collect();
-
-        assert_eq!(manifest_subcommands, clap_subcommands);
-    }
 
     #[test]
     fn clap_managed_commands_execute_in_core() {
@@ -600,6 +499,18 @@ mod tests {
         for command in manifest.commands {
             if matches!(command.execution, CommandExecution::Desktop) {
                 assert!(!command.clap_managed);
+            }
+        }
+    }
+
+    #[test]
+    fn canonical_help_commands_are_phrase_based() {
+        let manifest = command_manifest();
+        for command in manifest.commands {
+            if let Some(help) = command.canonical_help_command {
+                assert!(!help.contains("--help"));
+                assert!(!help.contains("-h"));
+                assert!(help.ends_with(" help") || help == "help");
             }
         }
     }

@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse};
 use dnd_core::command_manifest::{CommandManifest, CommandSpec};
-use dnd_core::command_parse::{ParseResult, ParseStage};
+use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input, parse_command_input};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
@@ -778,7 +778,11 @@ async fn run_command(
     input: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<CommandResponse, String> {
-    if let Some(response) = router::run_desktop_routed_command(&input, state.clone()).await? {
+    let normalized_input = normalize_input_for_dispatch(&input);
+
+    if let Some(response) =
+        router::run_desktop_routed_command(&normalized_input, state.clone()).await?
+    {
         let skip_history_push = matches!(
             response.client_event,
             Some(CommandClientEvent::ClearTerminal {
@@ -786,7 +790,7 @@ async fn run_command(
             })
         );
         if !skip_history_push {
-            let trimmed = input.trim();
+            let trimmed = normalized_input.trim();
             if !trimmed.is_empty() {
                 let mut service = state.command_service.lock().await;
                 service.session_mut().push_history(trimmed, 50);
@@ -796,7 +800,17 @@ async fn run_command(
     }
 
     let mut service = state.command_service.lock().await;
-    Ok(service.execute_line(&input).await)
+    Ok(service.execute_line(&normalized_input).await)
+}
+
+fn normalize_input_for_dispatch(input: &str) -> String {
+    let normalized = normalize_command_input(input);
+    let parsed = parse_command_input(&normalized);
+    if parsed.canonical_input.is_empty() {
+        normalized
+    } else {
+        parsed.canonical_input
+    }
 }
 
 async fn generate_npc_seed(
