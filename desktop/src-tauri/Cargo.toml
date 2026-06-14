@@ -3,6 +3,12 @@ name = "dnd-desktop"
 version = "0.1.0"
 edition = "2024"
 
+[package.metadata.tauri-winres]
+ProductName = "Runebound"
+FileDescription = "runebound.sh desktop app"
+OriginalFilename = "dnd-desktop.exe"
+LegalCopyright = "Copyright (c) 2026"
+
 [build-dependencies]
 tauri-build = { version = "2.0", features = [] }
 
