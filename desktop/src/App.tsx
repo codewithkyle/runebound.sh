@@ -1218,13 +1218,22 @@ function commandSpinnerLabel(raw: string): string | null {
   if (lowered === "create location" || lowered.startsWith("create location ")) {
     return "generating location";
   }
+  if (lowered === "create faction" || lowered.startsWith("create faction ")) {
+    return "generating faction";
+  }
   if (lowered === "reroll" || lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
     return "rerolling npc";
   }
   if (lowered === "location reroll" || lowered.startsWith("location reroll ")) {
     return "rerolling location";
   }
+  if (lowered === "faction reroll" || lowered.startsWith("faction reroll ")) {
+    return "rerolling faction";
+  }
   if (lowered.startsWith("npc save") || lowered.startsWith("location save") || lowered === "save") {
+    return "saving draft";
+  }
+  if (lowered.startsWith("faction save")) {
     return "saving draft";
   }
   return null;

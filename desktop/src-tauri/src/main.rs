@@ -3356,6 +3356,23 @@ async fn generate_faction_seed(
         .filter(|value| !value.is_empty())
         .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
+    let reference_context = if let Some(vault_path) = config.vault.path.clone() {
+        let vault = Vault::new(vault_path);
+        if vault.ensure_root_exists().is_ok() {
+            match load_vault_reference_entries(&vault) {
+                Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault),
+                Err(err) => {
+                    eprintln!("reference context warning: {err}");
+                    PromptReferenceContext::default()
+                }
+            }
+        } else {
+            PromptReferenceContext::default()
+        }
+    } else {
+        PromptReferenceContext::default()
+    };
+
     let database = db::init_database().await.map_err(|err| err.to_string())?;
     let recent_payloads = db::recent_generation_prompts(&database.pool, "faction_seed", 20)
         .await
@@ -3425,9 +3442,14 @@ async fn generate_faction_seed(
                 {
                     "role": "system",
                     "content": format!(
-                        "You generate concise, usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. public_description, true_agenda, and methods should be 1-3 sentences. current_tension should be 1-2 sentences. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. Avoid these recent seeds: {}.{}",
+                        "You generate concise, usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. public_description, true_agenda, and methods should be 1-3 sentences. current_tension should be 1-2 sentences. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}",
                         recent_context,
                         repair_note,
+                        if reference_context.system_context.is_empty() {
+                            String::new()
+                        } else {
+                            format!("\n\n{}", reference_context.system_context)
+                        },
                     )
                 },
                 {
