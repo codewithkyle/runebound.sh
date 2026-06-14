@@ -1,7 +1,8 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::utils::{
-    normalize_sex, parse_carrying_csv, reroll_npc_field, NpcRerollContext, RerollNpcFieldInput,
+    normalize_sex, parse_carrying_csv, path_for_display, reroll_npc_field, NpcRerollContext,
+    RerollNpcFieldInput,
 };
 use crate::app_state::NpcDraftSession;
 use dnd_core::command::CommandClientEvent;
@@ -419,8 +420,4 @@ pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
         draft: normalized_draft,
         entity_card: entity_card_doc,
     }
-}
-
-pub fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }

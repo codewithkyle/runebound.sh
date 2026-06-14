@@ -4,7 +4,7 @@ use dnd_core::command::CommandClientEvent;
 use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
 
 use crate::utils::{
-    resolve_entity, soft_delete_entity, undo_last_soft_delete,
+    path_for_display, resolve_entity, soft_delete_entity, undo_last_soft_delete,
     EntityDetails, EntityType, SoftDeleteEntityInput,
 };
 use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
@@ -419,10 +419,6 @@ fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
     };
     let entity_card_doc = faction_entity_card(&normalized_draft);
     CommandClientEvent::LoadFactionDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }
 
 fn normalize_sex(value: &str) -> Result<String, String> {

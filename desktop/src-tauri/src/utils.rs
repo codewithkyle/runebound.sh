@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::path::MAIN_SEPARATOR;
 use crate::app_state::AppState;
 use crate::services::entity_persistence::{
     EntityPersistenceService,
@@ -822,6 +823,18 @@ pub fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
     })
 }
 
+pub fn normalize_relative_path_for_storage(path: &str) -> String {
+    path.replace('\\', "/")
+}
+
+pub fn path_for_display(path: &str) -> String {
+    if MAIN_SEPARATOR == '\\' {
+        path.replace('/', "\\")
+    } else {
+        path.replace('\\', "/")
+    }
+}
+
 pub fn normalize_location_kind_type(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     let valid_types = ["hamlet", "town", "city", "dungeon", "hideout", "ruin", "guildhall", "landmark", "wilderness", "other"];
@@ -1092,4 +1105,27 @@ pub async fn soft_delete_entity(input: SoftDeleteEntityInput, state: tauri::Stat
 pub async fn undo_last_soft_delete(state: tauri::State<'_, AppState>) -> Result<UndoSoftDeleteResult, String> {
     let result = crate::undo_last_soft_delete(state).await?;
     Ok(result.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_relative_path_for_storage, path_for_display};
+
+    #[test]
+    fn normalizes_storage_paths_to_forward_slashes() {
+        assert_eq!(
+            normalize_relative_path_for_storage(r"npcs\\grave cleric.md"),
+            "npcs/grave cleric.md"
+        );
+    }
+
+    #[test]
+    fn displays_paths_with_host_separator() {
+        let displayed = path_for_display("locations/frostholm.md");
+        if std::path::MAIN_SEPARATOR == '\\' {
+            assert_eq!(displayed, r"locations\\frostholm.md");
+        } else {
+            assert_eq!(displayed, "locations/frostholm.md");
+        }
+    }
 }

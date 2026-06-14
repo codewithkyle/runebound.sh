@@ -6,6 +6,7 @@ use runebound_models::CommandResponse;
 use crate::utils::{
     reroll_faction_field, FactionRerollContext, RerollFactionFieldInput,
 };
+use crate::utils::path_for_display;
 use crate::app_state::FactionDraftSession;
 
 pub async fn handle_faction(
@@ -404,8 +405,4 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
     };
     let entity_card_doc = faction_entity_card(&normalized_draft);
     CommandClientEvent::LoadFactionDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-pub fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }

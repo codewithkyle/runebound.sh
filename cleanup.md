@@ -177,7 +177,7 @@ These functions:
 
 ---
 
-## Phase 4: Move Vault Sync & Markdown Scanning into `services/vault_sync.rs`
+## Phase 4: Move Vault Sync & Markdown Scanning into `services/vault_sync.rs` *(✅ Completed 2026-06-14)*
 
 ### What's in `main.rs`
 

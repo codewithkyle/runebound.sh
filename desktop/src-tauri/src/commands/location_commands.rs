@@ -6,6 +6,7 @@ use runebound_models::CommandResponse;
 use crate::utils::{
     reroll_location_field, LocationRerollContext, RerollLocationFieldInput,
 };
+use crate::utils::path_for_display;
 use crate::app_state::LocationDraftSession;
 
 pub async fn handle_location(
@@ -372,8 +373,4 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
     };
     let entity_card_doc = location_entity_card(&normalized_draft);
     CommandClientEvent::LoadLocationDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-pub fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }

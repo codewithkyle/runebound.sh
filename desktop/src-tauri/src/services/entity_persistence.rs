@@ -13,19 +13,13 @@ use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::ai_generation::LocationSeed;
+use crate::services::vault_sync::{read_vault_file_if_exists, unique_markdown_path_for_name};
 use crate::utils::{
     normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_sex, normalize_unknown_list, normalize_unknown_text,
-    validate_location_details,
+    normalize_location_kind_type, normalize_relative_path_for_storage, normalize_sex,
+    normalize_unknown_list, normalize_unknown_text, validate_location_details,
 };
-use crate::{
-    carrying_to_db_text,
-    exports_to_db_text,
-    faction_list_to_db_text,
-    normalize_relative_path_for_storage,
-    read_vault_file_if_exists,
-    unique_markdown_path_for_name,
-};
+use crate::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 
 pub struct EntityPersistenceService;
 

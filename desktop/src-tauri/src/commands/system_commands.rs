@@ -1,6 +1,7 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::services::ai_generation::AiGenerationService;
+use crate::utils::path_for_display;
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
@@ -382,10 +383,6 @@ pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
 pub fn normalize_sex(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized == "male" || normalized == "female" { Ok(normalized) } else { Err("sex must be one of: male, female".to_string()) }
-}
-
-pub fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }
 
 async fn save_npc_draft(input: crate::utils::SaveNpcDraftInput, state: tauri::State<'_, AppState>) -> Result<crate::utils::SaveNpcDraftResult, String> {

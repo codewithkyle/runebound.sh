@@ -20,8 +20,8 @@ use dnd_core::command_parse::{ParseResult, ParseStage, normalize_command_input, 
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
 use dnd_core::npc::{
-    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, normalize_markdown_file_stem, now_timestamp,
-    render_location_markdown, slugify, unique_slug_for_dir,
+    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, render_location_markdown,
+    slugify, unique_slug_for_dir,
 };
 use dnd_core::vault::Vault;
 use serde::{Deserialize, Serialize};
@@ -29,39 +29,16 @@ use tokio::sync::Mutex;
 
 use crate::app_state::{AppState, EditorSession};
 use crate::repositories::{
-    Database, DocumentRepository, FactionRepository, GenerationRepository, LocationRepository,
-    NpcRepository, ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository,
-    ProdLocationRepository, ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository,
-    SoftDeleteRepository, VaultRepository,
+    DocumentRepository, FactionRepository, GenerationRepository, LocationRepository, NpcRepository,
+    ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository, ProdLocationRepository,
+    ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository,
+    VaultRepository,
 };
+use crate::services::vault_sync::{
+    move_vault_file, unique_markdown_path_for_name, unique_trash_path, VaultSyncService,
+};
+use crate::utils::normalize_relative_path_for_storage;
 
-const LOCATION_KIND_TYPES: [&str; 10] = [
-    "hamlet",
-    "town",
-    "city",
-    "dungeon",
-    "hideout",
-    "ruin",
-    "guildhall",
-    "landmark",
-    "wilderness",
-    "other",
-];
-
-const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
-
-const FACTION_KIND_TYPES: [&str; 10] = [
-    "guild",
-    "cult",
-    "military_order",
-    "noble_house",
-    "criminal_syndicate",
-    "mercantile_league",
-    "religious_order",
-    "arcane_circle",
-    "revolutionary_cell",
-    "other",
-];
 
 #[derive(Debug, Clone, Deserialize)]
 struct EnsureLocationInput {
@@ -256,15 +233,6 @@ struct FactionDeletePayload {
     updated_at: String,
 }
 
-fn normalize_unknown_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        "Unknown".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
 fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
@@ -286,35 +254,6 @@ fn parse_carrying_csv(value: &str) -> Vec<String> {
         .filter(|item| !item.is_empty())
         .collect();
     normalize_unknown_list(items)
-}
-
-fn normalize_location_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if LOCATION_KIND_TYPES.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "kind_type must be one of: {}",
-            LOCATION_KIND_TYPES.join(", ")
-        ))
-    }
-}
-
-fn normalize_location_danger_level(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    let normalized = if trimmed.eq_ignore_ascii_case("unknown") {
-        "Unknown".to_string()
-    } else {
-        trimmed.to_ascii_lowercase()
-    };
-    if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "danger_level must be one of: {}",
-            LOCATION_DANGER_LEVELS.join(", ")
-        ))
-    }
 }
 
 fn parse_list_csv(value: &str) -> Vec<String> {
@@ -350,19 +289,6 @@ pub(crate) fn exports_from_db_text(value: &str) -> Vec<String> {
 }
 
 
-fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    if FACTION_KIND_TYPES.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "kind_type must be one of: {}",
-            FACTION_KIND_TYPES.join(", ")
-        ))
-    }
-}
-
-
 pub(crate) fn carrying_to_db_text(items: &[String]) -> Result<String, String> {
     serde_json::to_string(items).map_err(|err| err.to_string())
 }
@@ -384,100 +310,6 @@ pub(crate) fn faction_list_from_db_text(value: &str) -> Vec<String> {
         Err(_) => normalize_unknown_list(parse_list_csv(value)),
     }
 }
-
-pub(crate) fn read_vault_file_if_exists(vault: &Vault, relative_path: &str) -> Result<Option<String>, String> {
-    let relative = PathBuf::from(normalize_relative_path_for_storage(relative_path));
-    let full = vault.resolve_relative(&relative).map_err(|err| err.to_string())?;
-    if !full.exists() {
-        return Ok(None);
-    }
-
-    std::fs::read_to_string(&full)
-        .map(Some)
-        .map_err(|err| format!("failed to read vault file {}: {}", full.display(), err))
-}
-
-fn unique_trash_path(vault: &Vault, entity_dir: &str, slug: &str, timestamp: &str) -> Result<String, String> {
-    let base = format!("{}-{}", slug, timestamp.replace(':', "").replace('-', ""));
-    let mut candidate = format!(".trash/{entity_dir}/{base}.md");
-    let mut index = 2;
-
-    loop {
-        let full = vault
-            .resolve_relative(&PathBuf::from(&candidate))
-            .map_err(|err| err.to_string())?;
-        if !full.exists() {
-            return Ok(candidate);
-        }
-        candidate = format!(".trash/{entity_dir}/{base}-{index}.md");
-        index += 1;
-    }
-}
-
-fn move_vault_file(vault: &Vault, source_relative: &str, target_relative: &str) -> Result<(), String> {
-    let source_relative = normalize_relative_path_for_storage(source_relative);
-    let target_relative = normalize_relative_path_for_storage(target_relative);
-    let source_full = vault
-        .resolve_relative(&PathBuf::from(&source_relative))
-        .map_err(|err| err.to_string())?;
-    if !source_full.exists() {
-        return Err(format!(
-            "source file does not exist: {}",
-            source_full.display()
-        ));
-    }
-
-    let target_full = vault
-        .resolve_relative(&PathBuf::from(&target_relative))
-        .map_err(|err| err.to_string())?;
-    if let Some(parent) = target_full.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create trash directory {}: {}", parent.display(), err))?;
-    }
-
-    std::fs::rename(&source_full, &target_full).map_err(|err| {
-        format!(
-            "failed to move file from {} to {}: {}",
-            source_full.display(),
-            target_full.display(),
-            err
-        )
-    })
-}
-
-pub(crate) fn unique_markdown_path_for_name(
-    vault: &Vault,
-    relative_dir: &str,
-    display_name: &str,
-    keep_path: Option<&str>,
-) -> Result<String, String> {
-    let base = normalize_markdown_file_stem(display_name);
-    let mut candidate = base.clone();
-    let mut index = 2;
-
-    loop {
-        let relative = PathBuf::from(relative_dir)
-            .join(format!("{candidate}.md"))
-            .to_string_lossy()
-            .to_string();
-        let relative = normalize_relative_path_for_storage(&relative);
-
-        if keep_path.is_some_and(|existing| existing == relative) {
-            return Ok(relative);
-        }
-
-        let full = vault
-            .resolve_relative(&PathBuf::from(&relative))
-            .map_err(|err| err.to_string())?;
-        if !full.exists() {
-            return Ok(relative);
-        }
-
-        candidate = format!("{base} {index}");
-        index += 1;
-    }
-}
-
 
 #[cfg(test)]
 fn is_reference_boundary_char(ch: char) -> bool {
@@ -1245,618 +1077,6 @@ fn normalize_input_for_dispatch(input: &str) -> String {
     normalize_command_input(input)
 }
 
-pub(crate) fn normalize_relative_path_for_storage(path: &str) -> String {
-    path.replace('\\', "/")
-}
-
-#[cfg(test)]
-pub(crate) fn path_for_display(path: &str) -> String {
-    if MAIN_SEPARATOR == '\\' {
-        path.replace('/', "\\")
-    } else {
-        path.replace('\\', "/")
-    }
-}
-
-fn stable_id_from_relative(prefix: &str, relative_path: &str) -> String {
-    let suffix: String = relative_path
-        .chars()
-        .map(|ch| {
-            if ch.is_ascii_alphanumeric() {
-                ch.to_ascii_lowercase()
-            } else {
-                '_'
-            }
-        })
-        .collect();
-    format!("{prefix}_{suffix}")
-}
-
-fn file_stem_name(relative_path: &str) -> String {
-    Path::new(relative_path)
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or("Unknown")
-        .to_string()
-}
-
-fn extract_runebound_toml(contents: &str) -> Option<String> {
-    let start = contents.find("```runebound")?;
-    let mut body = &contents[start + "```runebound".len()..];
-    if let Some(rest) = body.strip_prefix("\r\n") {
-        body = rest;
-    } else if let Some(rest) = body.strip_prefix('\n') {
-        body = rest;
-    }
-
-    let end = body.find("\n```").or_else(|| body.find("```"))?;
-    let block = body[..end].trim();
-    if block.is_empty() {
-        None
-    } else {
-        Some(block.to_string())
-    }
-}
-
-fn collect_markdown_files_under(
-    root: &Path,
-    relative_dir: &str,
-) -> Result<Vec<(String, String)>, String> {
-    let base_dir = root.join(relative_dir);
-    if !base_dir.exists() {
-        return Ok(Vec::new());
-    }
-
-    let mut stack = vec![base_dir];
-    let mut files = Vec::new();
-
-    while let Some(current) = stack.pop() {
-        let entries = fs::read_dir(&current)
-            .map_err(|err| format!("failed to read directory {}: {}", current.display(), err))?;
-
-        for entry in entries {
-            let entry = match entry {
-                Ok(entry) => entry,
-                Err(err) => {
-                    eprintln!("startup sync warning: failed to read directory entry: {err}");
-                    continue;
-                }
-            };
-            let path = entry.path();
-            if path.is_dir() {
-                stack.push(path);
-                continue;
-            }
-
-            let is_md = path
-                .extension()
-                .and_then(|ext| ext.to_str())
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("md"));
-            if !is_md {
-                continue;
-            }
-
-            let relative = match path.strip_prefix(root) {
-                Ok(relative) => normalize_relative_path_for_storage(&relative.to_string_lossy()),
-                Err(_) => continue,
-            };
-            match fs::read_to_string(&path) {
-                Ok(contents) => files.push((relative, contents)),
-                Err(err) => {
-                    eprintln!(
-                        "startup sync warning: failed to read markdown file {}: {}",
-                        path.display(),
-                        err
-                    );
-                }
-            }
-        }
-    }
-
-    Ok(files)
-}
-
-fn scan_npc_row_from_markdown(relative_path: &str, contents: &str) -> db::NpcRow {
-    let parsed = extract_runebound_toml(contents).and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
-    let now = now_timestamp();
-    let fallback_name = file_stem_name(relative_path);
-
-    let name = parsed
-        .as_ref()
-        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&fallback_name)
-        .to_string();
-    let slug = parsed
-        .as_ref()
-        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| slugify(&name));
-    let id = parsed
-        .as_ref()
-        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| stable_id_from_relative("npc", relative_path));
-
-    let sex = parsed
-        .as_ref()
-        .and_then(|value| value.get("sex").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .map(str::to_ascii_lowercase)
-        .filter(|value| value == "male" || value == "female")
-        .unwrap_or_else(|| "male".to_string());
-
-    let carrying = parsed
-        .as_ref()
-        .and_then(|value| value.get("carrying").and_then(toml::Value::as_array))
-        .map(|items| {
-            items
-                .iter()
-                .filter_map(toml::Value::as_str)
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-        })
-        .filter(|items| !items.is_empty())
-        .unwrap_or_else(|| vec!["Unknown".to_string()]);
-
-    db::NpcRow {
-        id,
-        slug,
-        name,
-        race: parsed
-            .as_ref()
-            .and_then(|value| value.get("race").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        occupation: parsed
-            .as_ref()
-            .and_then(|value| value.get("occupation").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        sex,
-        age: parsed
-            .as_ref()
-            .and_then(|value| value.get("age").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        height: parsed
-            .as_ref()
-            .and_then(|value| value.get("height").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        weight_lbs: parsed
-            .as_ref()
-            .and_then(|value| value.get("weight_lbs").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        background: parsed
-            .as_ref()
-            .and_then(|value| value.get("background").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        want_need: parsed
-            .as_ref()
-            .and_then(|value| value.get("want_need").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        secret_obstacle: parsed
-            .as_ref()
-            .and_then(|value| value.get("secret_obstacle").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        carrying: serde_json::to_string(&carrying).unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        location: parsed
-            .as_ref()
-            .and_then(|value| value.get("location").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| UNKNOWN_LOCATION.to_string()),
-        vault_path: normalize_relative_path_for_storage(relative_path),
-        created_at: parsed
-            .as_ref()
-            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| now.clone()),
-        updated_at: parsed
-            .as_ref()
-            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .unwrap_or(now),
-    }
-}
-
-fn scan_location_row_from_markdown(relative_path: &str, contents: &str) -> db::LocationRow {
-    let parsed = extract_runebound_toml(contents).and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
-    let now = now_timestamp();
-    let fallback_name = file_stem_name(relative_path);
-
-    let name = parsed
-        .as_ref()
-        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&fallback_name)
-        .to_string();
-    let slug = parsed
-        .as_ref()
-        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| slugify(&name));
-    let id = parsed
-        .as_ref()
-        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| stable_id_from_relative("loc", relative_path));
-
-    let kind_raw = parsed
-        .as_ref()
-        .and_then(|value| {
-            value
-                .get("kind_type")
-                .or_else(|| value.get("kind"))
-                .and_then(toml::Value::as_str)
-        })
-        .unwrap_or("other");
-    let kind_type = normalize_location_kind_type(kind_raw).unwrap_or_else(|_| "other".to_string());
-
-    let mut kind_custom = parsed
-        .as_ref()
-        .and_then(|value| value.get("kind_custom").and_then(toml::Value::as_str))
-        .map(normalize_unknown_text);
-    if kind_type == "other" && kind_custom.is_none() {
-        kind_custom = Some("Unknown".to_string());
-    }
-    if kind_type != "other" {
-        kind_custom = None;
-    }
-
-    let exports = parsed
-        .as_ref()
-        .and_then(|value| value.get("exports"))
-        .and_then(|raw| {
-            if let Some(items) = raw.as_array() {
-                let out: Vec<String> = items
-                    .iter()
-                    .filter_map(toml::Value::as_str)
-                    .map(str::trim)
-                    .filter(|item| !item.is_empty())
-                    .map(ToString::to_string)
-                    .collect();
-                return Some(out);
-            }
-            raw.as_str().map(parse_list_csv)
-        })
-        .unwrap_or_else(|| vec!["Unknown".to_string()]);
-    let exports = normalize_exports(exports);
-
-    db::LocationRow {
-        id,
-        slug,
-        name,
-        vault_path: normalize_relative_path_for_storage(relative_path),
-        kind_type,
-        kind_custom,
-        visual_description: parsed
-            .as_ref()
-            .and_then(|value| value.get("visual_description").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        history_background: parsed
-            .as_ref()
-            .and_then(|value| value.get("history_background").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        exports: serde_json::to_string(&exports).unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        tone: parsed
-            .as_ref()
-            .and_then(|value| value.get("tone").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        authority: parsed
-            .as_ref()
-            .and_then(|value| value.get("authority").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        danger_level: parsed
-            .as_ref()
-            .and_then(|value| value.get("danger_level").and_then(toml::Value::as_str))
-            .map(|value| normalize_location_danger_level(value).unwrap_or_else(|_| "Unknown".to_string()))
-            .unwrap_or_else(|| "Unknown".to_string()),
-        current_tension: parsed
-            .as_ref()
-            .and_then(|value| value.get("current_tension").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        created_at: parsed
-            .as_ref()
-            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| now.clone()),
-        updated_at: parsed
-            .as_ref()
-            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .unwrap_or(now),
-    }
-}
-
-fn scan_faction_row_from_markdown(relative_path: &str, contents: &str) -> db::FactionRow {
-    let parsed = extract_runebound_toml(contents)
-        .and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
-    let now = now_timestamp();
-    let fallback_name = file_stem_name(relative_path);
-
-    let name = parsed
-        .as_ref()
-        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(&fallback_name)
-        .to_string();
-    let slug = parsed
-        .as_ref()
-        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| slugify(&name));
-    let id = parsed
-        .as_ref()
-        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(ToString::to_string)
-        .unwrap_or_else(|| stable_id_from_relative("fac", relative_path));
-
-    let kind_raw = parsed
-        .as_ref()
-        .and_then(|value| {
-            value
-                .get("kind_type")
-                .or_else(|| value.get("kind"))
-                .and_then(toml::Value::as_str)
-        })
-        .unwrap_or("other");
-    let kind_type = normalize_faction_kind_type(kind_raw).unwrap_or_else(|_| "other".to_string());
-
-    let mut kind_custom = parsed
-        .as_ref()
-        .and_then(|value| value.get("kind_custom").and_then(toml::Value::as_str))
-        .map(normalize_unknown_text);
-    if kind_type == "other" && kind_custom.is_none() {
-        kind_custom = Some("Unknown".to_string());
-    }
-    if kind_type != "other" {
-        kind_custom = None;
-    }
-
-    let parse_list_field = |field: &str| {
-        parsed
-            .as_ref()
-            .and_then(|value| value.get(field))
-            .and_then(|raw| {
-                if let Some(items) = raw.as_array() {
-                    let out: Vec<String> = items
-                        .iter()
-                        .filter_map(toml::Value::as_str)
-                        .map(str::trim)
-                        .filter(|item| !item.is_empty())
-                        .map(ToString::to_string)
-                        .collect();
-                    return Some(out);
-                }
-                raw.as_str().map(parse_list_csv)
-            })
-            .unwrap_or_else(|| vec!["Unknown".to_string()])
-    };
-
-    db::FactionRow {
-        id,
-        slug,
-        name,
-        vault_path: normalize_relative_path_for_storage(relative_path),
-        kind_type,
-        kind_custom,
-        public_description: parsed
-            .as_ref()
-            .and_then(|value| value.get("public_description").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        true_agenda: parsed
-            .as_ref()
-            .and_then(|value| value.get("true_agenda").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        methods: parsed
-            .as_ref()
-            .and_then(|value| value.get("methods").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        leadership: parsed
-            .as_ref()
-            .and_then(|value| value.get("leadership").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        headquarters: parsed
-            .as_ref()
-            .and_then(|value| value.get("headquarters").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        sphere_of_influence: parsed
-            .as_ref()
-            .and_then(|value| value.get("sphere_of_influence").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        resources_assets: parsed
-            .as_ref()
-            .and_then(|value| value.get("resources_assets").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        allies: serde_json::to_string(&normalize_unknown_list(parse_list_field("allies")))
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        rivals_enemies: serde_json::to_string(&normalize_unknown_list(parse_list_field("rivals_enemies")))
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        reputation: parsed
-            .as_ref()
-            .and_then(|value| value.get("reputation").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        current_tension: parsed
-            .as_ref()
-            .and_then(|value| value.get("current_tension").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        goals_short_term: serde_json::to_string(&normalize_unknown_list(parse_list_field("goals_short_term")))
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        goals_long_term: serde_json::to_string(&normalize_unknown_list(parse_list_field("goals_long_term")))
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        symbol_description: parsed
-            .as_ref()
-            .and_then(|value| value.get("symbol_description").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        created_at: parsed
-            .as_ref()
-            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .unwrap_or_else(|| now.clone()),
-        updated_at: parsed
-            .as_ref()
-            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
-            .map(str::to_string)
-            .unwrap_or(now),
-    }
-}
-
-async fn sync_database_from_vault(
-    workspace_root: &Path,
-    database: Arc<Database>,
-    npc_repo: Arc<dyn NpcRepository>,
-    location_repo: Arc<dyn LocationRepository>,
-    faction_repo: Arc<dyn FactionRepository>,
-    document_repo: Arc<dyn DocumentRepository>,
-) -> Result<(), String> {
-    let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-    if !loaded.effective.vault.autoscan_on_start {
-        return Ok(());
-    }
-
-    let Some(vault_path) = loaded.effective.vault.path.clone() else {
-        return Ok(());
-    };
-
-    let vault = Vault::new(vault_path);
-    vault.ensure_structure().map_err(|err| err.to_string())?;
-
-    let npc_files = collect_markdown_files_under(vault.root(), "npcs")?;
-    let mut scanned_npc_paths = HashSet::new();
-    for (relative_path, contents) in npc_files {
-        let row = scan_npc_row_from_markdown(&relative_path, &contents);
-        scanned_npc_paths.insert(row.vault_path.clone());
-        npc_repo.upsert(database.as_ref(), &row).await?;
-        document_repo
-            .upsert_index(
-                database.as_ref(),
-                "npc",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
-            )
-            .await?;
-    }
-
-    let existing_npcs = npc_repo.list_all(database.as_ref()).await?;
-    for npc in existing_npcs {
-        if npc.vault_path.starts_with("npcs/") && !scanned_npc_paths.contains(&npc.vault_path) {
-            npc_repo.delete_by_id(database.as_ref(), &npc.id).await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &npc.vault_path)
-                .await?;
-        }
-    }
-
-    let location_files = collect_markdown_files_under(vault.root(), "locations")?;
-    let mut scanned_location_paths = HashSet::new();
-    for (relative_path, contents) in location_files {
-        let row = scan_location_row_from_markdown(&relative_path, &contents);
-        scanned_location_paths.insert(row.vault_path.clone());
-        location_repo.upsert(database.as_ref(), &row).await?;
-        document_repo
-            .upsert_index(
-                database.as_ref(),
-                "location",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
-            )
-            .await?;
-    }
-
-    let existing_locations = location_repo.list_all(database.as_ref()).await?;
-    for location in existing_locations {
-        if location.vault_path.starts_with("locations/")
-            && !scanned_location_paths.contains(&location.vault_path)
-        {
-            location_repo
-                .delete_by_id(database.as_ref(), &location.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &location.vault_path)
-                .await?;
-        }
-    }
-
-    let faction_files = collect_markdown_files_under(vault.root(), "factions")?;
-    let mut scanned_faction_paths = HashSet::new();
-    for (relative_path, contents) in faction_files {
-        let row = scan_faction_row_from_markdown(&relative_path, &contents);
-        scanned_faction_paths.insert(row.vault_path.clone());
-        faction_repo.upsert(database.as_ref(), &row).await?;
-        document_repo
-            .upsert_index(
-                database.as_ref(),
-                "faction",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
-            )
-            .await?;
-    }
-
-    let existing_factions = faction_repo.list_all(database.as_ref()).await?;
-    for faction in existing_factions {
-        if faction.vault_path.starts_with("factions/")
-            && !scanned_faction_paths.contains(&faction.vault_path)
-        {
-            faction_repo
-                .delete_by_id(database.as_ref(), &faction.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &faction.vault_path)
-                .await?;
-        }
-    }
-
-    Ok(())
-}
 
 
 async fn ensure_location_exists(
@@ -2725,9 +1945,8 @@ fn exit_app(app: tauri::AppHandle) {
 mod tests {
     use super::{
         ActiveReferenceQuery, VaultReferenceEntry, build_reference_suggestions_from_entries,
-        extract_active_reference_query, extract_prompt_reference_keys, extract_runebound_toml,
-        normalize_input_for_dispatch, normalize_relative_path_for_storage,
-        npc_travel_location_query, path_for_display, scan_npc_row_from_markdown,
+        extract_active_reference_query, extract_prompt_reference_keys, normalize_input_for_dispatch,
+        npc_travel_location_query,
     };
     use crate::services::ai_generation::LocationSeed;
     use crate::utils::{normalize_location_seed, validate_location_details};
@@ -2745,24 +1964,6 @@ mod tests {
             normalize_input_for_dispatch(input),
             r"set vault C:\Users\andrewk9\Documents\DND"
         );
-    }
-
-    #[test]
-    fn normalizes_storage_paths_to_forward_slashes() {
-        assert_eq!(
-            normalize_relative_path_for_storage(r"npcs\grave cleric.md"),
-            "npcs/grave cleric.md"
-        );
-    }
-
-    #[test]
-    fn displays_paths_with_host_separator() {
-        let displayed = path_for_display("locations/frostholm.md");
-        if std::path::MAIN_SEPARATOR == '\\' {
-            assert_eq!(displayed, r"locations\frostholm.md");
-        } else {
-            assert_eq!(displayed, "locations/frostholm.md");
-        }
     }
 
     #[test]
@@ -2800,22 +2001,6 @@ mod tests {
         };
 
         validate_location_details(&seed).expect("expected Unknown defaults to pass validation");
-    }
-
-    #[test]
-    fn extracts_runebound_toml_block() {
-        let markdown = "# Note\n\n```runebound\ntype = \"npc\"\nname = \"Aelar\"\n```\n";
-        let block = extract_runebound_toml(markdown).expect("expected runebound block");
-        assert!(block.contains("type = \"npc\""));
-        assert!(block.contains("name = \"Aelar\""));
-    }
-
-    #[test]
-    fn indexes_npc_from_filename_without_runebound_block() {
-        let row = scan_npc_row_from_markdown("npcs/Father Elen.md", "# Existing notes");
-        assert_eq!(row.name, "Father Elen");
-        assert_eq!(row.slug, "father-elen");
-        assert_eq!(row.vault_path, "npcs/Father Elen.md");
     }
 
     #[test]
@@ -2946,33 +2131,29 @@ fn main() {
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
 
-    if let Err(err) = tauri::async_runtime::block_on(sync_database_from_vault(
-        &workspace_root,
-        database.clone(),
-        npc_repo.clone(),
-        location_repo.clone(),
-        faction_repo.clone(),
-        document_repo.clone(),
-    )) {
+    let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
+
+    let app_state = AppState {
+        workspace_root,
+        command_service: Mutex::new(command_service),
+        editor_session: Mutex::new(EditorSession::default()),
+        database: database.clone(),
+        vault_repo: vault_repo.clone(),
+        npc_repo: npc_repo.clone(),
+        location_repo: location_repo.clone(),
+        faction_repo: faction_repo.clone(),
+        document_repo: document_repo.clone(),
+        generation_repo: generation_repo.clone(),
+        soft_delete_repo: soft_delete_repo.clone(),
+    };
+
+    let vault_sync_service = VaultSyncService;
+    if let Err(err) = tauri::async_runtime::block_on(vault_sync_service.sync_from_vault(&app_state)) {
         eprintln!("startup vault sync skipped: {err}");
     }
 
-    let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
-
     tauri::Builder::default()
-        .manage(AppState {
-            workspace_root,
-            command_service: Mutex::new(command_service),
-            editor_session: Mutex::new(EditorSession::default()),
-            database: database.clone(),
-            vault_repo: vault_repo.clone(),
-            npc_repo: npc_repo.clone(),
-            location_repo: location_repo.clone(),
-            faction_repo: faction_repo.clone(),
-            document_repo: document_repo.clone(),
-            generation_repo: generation_repo.clone(),
-            soft_delete_repo: soft_delete_repo.clone(),
-        })
+        .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             run_command,
             suggest_command_input,
