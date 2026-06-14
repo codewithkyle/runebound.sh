@@ -496,15 +496,32 @@ export default function App() {
       return;
     }
 
+    const spinnerLabel = commandSpinnerLabel(raw);
+    const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
+    let spinnerFrame = 0;
+    const spinnerTimer = spinnerId
+      ? window.setInterval(() => {
+          spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
+          updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[spinnerFrame]} ${spinnerLabel} ...`);
+        }, 100)
+      : null;
+
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
       const rendered = responseToRenderableModel(response, commandMeta());
       if (response.ok) {
+        if (spinnerId !== null) {
+          updateEntry(spinnerId, "spinner", `OK ${spinnerLabel}`);
+        }
         applyClientEvent(response.client_event);
-        appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
+        const outputDocOverride = outputDocFromClientEvent(response.client_event);
+        appendEntry("output", rendered.text || "(ok)", outputDocOverride ?? rendered.outputDoc);
         pushCommandHistory(raw);
       } else {
+        if (spinnerId !== null) {
+          updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
+        }
         const errorText = response.error || rendered.text || "command failed";
         if (isBootstrapSetupMessage(errorText)) {
           appendEntry("output", errorText, rendered.outputDoc);
@@ -513,8 +530,14 @@ export default function App() {
         }
       }
     } catch (error) {
+      if (spinnerId !== null) {
+        updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
+      }
       appendEntry("error", `invoke error: ${String(error)}`);
     } finally {
+      if (spinnerTimer !== null) {
+        window.clearInterval(spinnerTimer);
+      }
       setRunning(false);
     }
   };
@@ -652,6 +675,34 @@ export default function App() {
     };
     setLocationDraft(draft);
     setEditorMode("location");
+  };
+
+  const outputDocFromClientEvent = (event: CommandClientEvent | null | undefined): OutputDoc | null => {
+    if (!event) {
+      return null;
+    }
+
+    if (event.kind === "load_npc_draft") {
+      const sex = event.sex.toLowerCase() === "female" ? "female" : "male";
+      const draft: NpcDraft = {
+        id: event.id,
+        name: event.name,
+        race: normalizeUnknown(event.race),
+        occupation: normalizeUnknown(event.occupation),
+        sex,
+        age: normalizeUnknown(event.age),
+        height: normalizeUnknown(event.height),
+        weightLbs: normalizeUnknown(event.weight_lbs),
+        background: normalizeUnknown(event.background),
+        wantNeed: normalizeUnknown(event.want_need),
+        secretObstacle: normalizeUnknown(event.secret_obstacle),
+        carrying: normalizeUnknownList(event.carrying),
+        location: normalizeUnknown(event.location)
+      };
+      return npcDraftDoc(draft);
+    }
+
+    return null;
   };
 
   onMount(() => {
@@ -1089,4 +1140,18 @@ function isEditableTarget(target: EventTarget | null): boolean {
 
 function isBootstrapSetupMessage(message: string): boolean {
   return message.toLowerCase().includes("first-time setup required");
+}
+
+function commandSpinnerLabel(raw: string): string | null {
+  const lowered = raw.trim().toLowerCase();
+  if (lowered === "create npc" || lowered.startsWith("create npc ")) {
+    return "generating npc";
+  }
+  if (lowered === "reroll" || lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
+    return "rerolling npc";
+  }
+  if (lowered.startsWith("npc save") || lowered.startsWith("location save") || lowered === "save") {
+    return "saving draft";
+  }
+  return null;
 }
