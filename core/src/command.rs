@@ -1,20 +1,23 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use clap::error::ErrorKind;
 use clap::{Parser, Subcommand};
+use reqwest::StatusCode;
 use serde::Serialize;
 
 use crate::command_manifest::command_manifest;
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
-use crate::config::{load_effective, required_issues, validate_for_runtime};
+use crate::config::{load_effective, required_issues, save_config, validate_for_runtime};
 use crate::db;
 use crate::health::{self, CheckReport};
 use crate::output::{
     InlineNode, OutputBlock, OutputDoc, StatusTone, command_ref, doc, heading, list,
     paragraph_text, paragraph_with_inlines, status, text_node,
 };
-use crate::vault::Vault;
+use crate::session::SessionState;
+use crate::vault::{Vault, is_path_writable};
 
 #[derive(Debug, Parser)]
 #[command(name = "dnd-assistant")]
@@ -47,6 +50,34 @@ pub struct CommandResponse {
     pub exit_code: i32,
     pub segments: Vec<OutputSegment>,
     pub output_doc: Option<OutputDoc>,
+    pub client_event: Option<CommandClientEvent>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum CommandClientEvent {
+    LoadNpcDraft {
+        id: String,
+        name: String,
+        race: String,
+        occupation: String,
+        sex: String,
+        age: String,
+        height: String,
+        weight_lbs: String,
+        background: String,
+        want_need: String,
+        secret_obstacle: String,
+        carrying: Vec<String>,
+        location: String,
+    },
+    LoadLocationDraft {
+        id: String,
+        name: String,
+        slug: String,
+        vault_path: String,
+    },
+    ClearDrafts,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -86,6 +117,57 @@ impl CommandOutput {
 }
 
 pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse {
+    let mut session = SessionState::default();
+    execute_line_with_session(workspace_root, input, &mut session).await
+}
+
+pub async fn execute_line_with_session(
+    workspace_root: &Path,
+    input: &str,
+    session: &mut SessionState,
+) -> CommandResponse {
+    let trimmed = input.trim();
+    if !trimmed.is_empty() {
+        session.push_history(trimmed, 50);
+    }
+
+    let normalized_input = normalize_command_input(input);
+    match try_execute_onboarding(workspace_root, &normalized_input, session).await {
+        Ok(Some(output)) => {
+            let output_text = output.output.clone();
+            return CommandResponse {
+                ok: true,
+                output: output.output,
+                error: None,
+                exit_code: 0,
+                segments: vec![OutputSegment {
+                    kind: OutputSegmentKind::Text,
+                    text: output_text,
+                    command_ref: None,
+                }],
+                output_doc: output.output_doc,
+                client_event: None,
+            };
+        }
+        Ok(None) => {}
+        Err(err) => {
+            let error_text = err.to_string();
+            return CommandResponse {
+                ok: false,
+                output: String::new(),
+                error: Some(error_text.clone()),
+                exit_code: 1,
+                segments: vec![OutputSegment {
+                    kind: OutputSegmentKind::Error,
+                    text: error_text,
+                    command_ref: None,
+                }],
+                output_doc: Some(output_doc_from_error_text(err.to_string())),
+                client_event: None,
+            };
+        }
+    }
+
     match execute_line_result(workspace_root, input).await {
         Ok(output) => {
             let output_text = output.output.clone();
@@ -100,6 +182,7 @@ pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse
                     command_ref: None,
                 }],
                 output_doc: output.output_doc,
+                client_event: None,
             }
         }
         Err(err) => {
@@ -115,9 +198,446 @@ pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse
                     command_ref: None,
                 }],
                 output_doc: Some(output_doc_from_error_text(err.to_string())),
+                client_event: None,
             }
         }
     }
+}
+
+async fn try_execute_onboarding(
+    workspace_root: &Path,
+    input: &str,
+    session: &mut SessionState,
+) -> Result<Option<CommandOutput>> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let tokens = shell_words::split(trimmed).map_err(|e| anyhow!("invalid command input: {e}"))?;
+    if tokens.is_empty() {
+        return Ok(None);
+    }
+
+    let lowered: Vec<String> = tokens
+        .iter()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+
+    if lowered == ["start", "setup"] {
+        let loaded = load_effective(workspace_root)?;
+        session.onboarding.active = true;
+        if session.onboarding.ollama_base_url.trim().is_empty() {
+            session.onboarding.ollama_base_url = loaded.effective.ollama.base_url;
+        }
+
+        if session.onboarding.step == 0 {
+            session.onboarding.step = 1;
+            return Ok(Some(CommandOutput::text(
+                [
+                    "## Step 1: Vault Path",
+                    "runebound.sh needs your Obsidian vault directory so it can read and write your campaign content.",
+                    "Enter your vault directory path and press Enter.",
+                    "Example: /path/to/your/Obsidian/Vault",
+                ]
+                .join("\n"),
+            )));
+        }
+
+        return Ok(Some(CommandOutput::text(
+            "setup already started. use show setup or continue with next step.".to_string(),
+        )));
+    }
+
+    if lowered == ["setup", "help"] {
+        if !session.onboarding.active {
+            let loaded = load_effective(workspace_root)?;
+            session.onboarding.active = true;
+            session.onboarding.step = 0;
+            if session.onboarding.ollama_base_url.trim().is_empty() {
+                session.onboarding.ollama_base_url = loaded.effective.ollama.base_url;
+            }
+        }
+        return Ok(Some(CommandOutput::text(
+            [
+                "## Setup commands",
+                "start setup",
+                "set vault <path>",
+                "set ollama <url>",
+                "test ollama",
+                "set model <name>",
+                "use model <index>",
+                "show setup",
+                "save",
+                "cancel setup",
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if !session.onboarding.active {
+        return Ok(None);
+    }
+
+    if lowered == ["show", "setup"] {
+        return Ok(Some(CommandOutput::text(
+            [
+                "## Current setup",
+                &format!(
+                    "vault: {}",
+                    if session.onboarding.vault_path.trim().is_empty() {
+                        "(not set)"
+                    } else {
+                        session.onboarding.vault_path.as_str()
+                    }
+                ),
+                &format!(
+                    "ollama: {}",
+                    if session.onboarding.ollama_base_url.trim().is_empty() {
+                        "(not set)"
+                    } else {
+                        session.onboarding.ollama_base_url.as_str()
+                    }
+                ),
+                &format!(
+                    "model: {}",
+                    if session.onboarding.selected_model.trim().is_empty() {
+                        "(not set)"
+                    } else {
+                        session.onboarding.selected_model.as_str()
+                    }
+                ),
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if lowered == ["cancel", "setup"] {
+        session.onboarding.active = false;
+        session.onboarding.step = 0;
+        session.onboarding.ollama_models.clear();
+        return Ok(Some(CommandOutput::text(
+            "setup cancelled. run start setup anytime to continue.".to_string(),
+        )));
+    }
+
+    if let Some(path) = extract_trailing_argument(trimmed, "set vault") {
+        let expanded = expand_tilde_path(&path);
+        validate_vault_path_for_onboarding(&expanded)?;
+
+        session.onboarding.vault_path = expanded.display().to_string();
+        if session.onboarding.step < 2 {
+            session.onboarding.step = 2;
+        }
+
+        return Ok(Some(CommandOutput::text(
+            [
+                "## Step 2: Ollama server",
+                &format!("vault set to: {}", session.onboarding.vault_path),
+                "Enter your Ollama URL and press Enter.",
+                "Example: http://127.0.0.1:11434",
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if let Some(url) = extract_trailing_argument(trimmed, "set ollama") {
+        let normalized = normalize_ollama_input(&url);
+        if normalized.is_empty() {
+            bail!("ollama URL cannot be empty");
+        }
+        health::validate_ollama_url(&normalized)?;
+        session.onboarding.ollama_base_url = normalized.clone();
+        if session.onboarding.step < 2 {
+            session.onboarding.step = 2;
+        }
+        return Ok(Some(CommandOutput::text(format!(
+            "ollama URL set to: {normalized}\nrun test ollama to verify connection."
+        ))));
+    }
+
+    if lowered == ["test", "ollama"] {
+        let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
+        health::validate_ollama_url(&normalized)?;
+        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        session.onboarding.ollama_base_url = normalized;
+        session.onboarding.ollama_models = models.clone();
+        if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
+            session.onboarding.selected_model = models[0].clone();
+        }
+        session.onboarding.step = 3;
+
+        let mut lines = vec![
+            "## Step 3: Model".to_string(),
+            detail,
+            "Enter a model name and press Enter.".to_string(),
+            "Or enter a model number from the list below.".to_string(),
+        ];
+        if models.is_empty() {
+            lines.push("(no models returned)".to_string());
+        } else {
+            lines.extend(
+                models
+                    .iter()
+                    .enumerate()
+                    .map(|(index, model)| format!("{}: {}", index + 1, model)),
+            );
+        }
+        return Ok(Some(CommandOutput::text(lines.join("\n"))));
+    }
+
+    if let Some(index_input) = extract_trailing_argument(trimmed, "use model") {
+        let index = index_input
+            .parse::<usize>()
+            .map_err(|_| anyhow!("model index out of range: {index_input}"))?;
+        if index == 0 || index > session.onboarding.ollama_models.len() {
+            bail!("model index out of range: {index_input}");
+        }
+        let selected = session.onboarding.ollama_models[index - 1].clone();
+        session.onboarding.selected_model = selected.clone();
+        if session.onboarding.step < 4 {
+            session.onboarding.step = 4;
+        }
+        return Ok(Some(CommandOutput::text(
+            [
+                &format!("model selected: {selected}"),
+                "## Step 4: Save config",
+                "Type save to finish.",
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if let Some(model_name) = extract_trailing_argument(trimmed, "set model") {
+        if model_name.trim().is_empty() {
+            bail!("model name cannot be empty");
+        }
+        session.onboarding.selected_model = model_name.clone();
+        if session.onboarding.step < 4 {
+            session.onboarding.step = 4;
+        }
+        return Ok(Some(CommandOutput::text(
+            [
+                &format!("model set to: {model_name}"),
+                "## Step 4: Save config",
+                "Type save to finish.",
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if session.onboarding.step == 1 && !trimmed.is_empty() {
+        let expanded = expand_tilde_path(trimmed);
+        validate_vault_path_for_onboarding(&expanded)?;
+        session.onboarding.vault_path = expanded.display().to_string();
+        session.onboarding.step = 2;
+        return Ok(Some(CommandOutput::text(
+            [
+                "## Step 2: Ollama server",
+                &format!("vault set to: {}", session.onboarding.vault_path),
+                "Enter your Ollama URL and press Enter.",
+                "Example: http://127.0.0.1:11434",
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if session.onboarding.step == 2 && !trimmed.is_empty() {
+        let normalized = normalize_ollama_input(trimmed);
+        health::validate_ollama_url(&normalized)?;
+        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+
+        session.onboarding.ollama_base_url = normalized;
+        session.onboarding.ollama_models = models.clone();
+        if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
+            session.onboarding.selected_model = models[0].clone();
+        }
+        session.onboarding.step = 3;
+
+        let mut lines = vec![
+            "## Step 3: Model".to_string(),
+            detail,
+            "Enter a model name and press Enter.".to_string(),
+            "Or enter a model number from the list below.".to_string(),
+        ];
+        if models.is_empty() {
+            lines.push("(no models returned)".to_string());
+        } else {
+            lines.extend(
+                models
+                    .iter()
+                    .enumerate()
+                    .map(|(index, model)| format!("{}: {}", index + 1, model)),
+            );
+        }
+        return Ok(Some(CommandOutput::text(lines.join("\n"))));
+    }
+
+    if session.onboarding.step == 3 && !trimmed.is_empty() {
+        if let Ok(index) = trimmed.parse::<usize>() {
+            if index >= 1 && index <= session.onboarding.ollama_models.len() {
+                session.onboarding.selected_model = session.onboarding.ollama_models[index - 1].clone();
+            } else {
+                bail!("model index out of range: {trimmed}");
+            }
+        } else {
+            session.onboarding.selected_model = trimmed.to_string();
+        }
+        session.onboarding.step = 4;
+        return Ok(Some(CommandOutput::text(
+            [
+                &format!("model set to: {}", session.onboarding.selected_model),
+                "## Step 4: Save config",
+                "Type save to finish.",
+            ]
+            .join("\n"),
+        )));
+    }
+
+    if lowered == ["save"] || lowered == ["save", "setup"] {
+        if session.onboarding.vault_path.trim().is_empty() {
+            bail!("vault path is missing. run set vault <path>.");
+        }
+        if session.onboarding.ollama_base_url.trim().is_empty() {
+            bail!("ollama URL is missing. run set ollama <url>.");
+        }
+        if session.onboarding.selected_model.trim().is_empty() {
+            bail!("model is missing. run set model <name> or use model <index>.");
+        }
+
+        let loaded = load_effective(workspace_root)?;
+        let mut config = loaded.effective;
+        config.vault.path = Some(PathBuf::from(&session.onboarding.vault_path));
+        config.ollama.base_url = session.onboarding.ollama_base_url.clone();
+        config.ollama.model = Some(session.onboarding.selected_model.clone());
+
+        let issues = required_issues(&config);
+        if !issues.is_empty() {
+            bail!("missing required config:\n- {}", issues.join("\n- "));
+        }
+
+        let config_path = save_config(workspace_root, &config)?;
+        let vault_path = config
+            .vault
+            .path
+            .clone()
+            .ok_or_else(|| anyhow!("vault.path is not configured"))?;
+        let vault = Vault::new(vault_path);
+        vault.ensure_structure()?;
+        let db = db::init_database().await?;
+
+        let report = health::run_quick_checks(&config).await;
+        let warnings: Vec<String> = report
+            .items
+            .into_iter()
+            .filter(|item| !item.ok)
+            .map(|item| format!("{}: {}", item.name, item.detail))
+            .collect();
+
+        session.onboarding.active = false;
+        session.onboarding.step = 0;
+        session.onboarding.ollama_models.clear();
+
+        let mut lines = vec![
+            "## Onboarding complete".to_string(),
+            format!("config saved: {}", config_path.display()),
+            format!("vault ready: {}", vault.root().display()),
+            format!("database ready: {}", db.path.display()),
+        ];
+        if !warnings.is_empty() {
+            lines.push("setup warnings:".to_string());
+            lines.extend(warnings.iter().map(|warning| format!("- {warning}")));
+        }
+
+        return Ok(Some(CommandOutput::text(lines.join("\n"))));
+    }
+
+    Ok(Some(CommandOutput::text(
+        "setup mode is active. use setup help to continue guided onboarding.".to_string(),
+    )))
+}
+
+fn extract_trailing_argument(input: &str, prefix: &str) -> Option<String> {
+    let lowered = input.to_ascii_lowercase();
+    let prefix_lower = prefix.to_ascii_lowercase();
+    if !lowered.starts_with(&prefix_lower) {
+        return None;
+    }
+
+    let rest = input[prefix.len()..].trim();
+    if rest.is_empty() {
+        None
+    } else {
+        Some(rest.to_string())
+    }
+}
+
+fn expand_tilde_path(input: &str) -> PathBuf {
+    if input == "~" {
+        if let Some(home) = dirs::home_dir() {
+            return home;
+        }
+    }
+
+    if let Some(rest) = input.strip_prefix("~/") {
+        if let Some(home) = dirs::home_dir() {
+            return home.join(rest);
+        }
+    }
+
+    PathBuf::from(input)
+}
+
+fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
+    if !path.exists() {
+        bail!("vault path does not exist: {}", path.display());
+    }
+    if !path.is_dir() {
+        bail!("vault path is not a directory: {}", path.display());
+    }
+    is_path_writable(path)?;
+    Ok(())
+}
+
+fn normalize_ollama_input(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.contains("://") {
+        return trimmed.to_string();
+    }
+    format!("http://{trimmed}")
+}
+
+async fn probe_ollama_models(base_url: &str, timeout_seconds: u64) -> Result<(String, Vec<String>)> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds))
+        .build()?;
+    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
+    let response = client.get(url).send().await?;
+
+    if response.status() != StatusCode::OK {
+        bail!("ollama responded with {}", response.status());
+    }
+
+    let value: serde_json::Value = response.json().await?;
+    let mut models = Vec::new();
+    if let Some(items) = value.get("models").and_then(|item| item.as_array()) {
+        for item in items {
+            if let Some(name) = item.get("name").and_then(|name| name.as_str()) {
+                models.push(name.to_string());
+            }
+        }
+    }
+
+    let detail = if models.is_empty() {
+        "connected (no models returned)".to_string()
+    } else {
+        format!("connected ({} model(s) found)", models.len())
+    };
+
+    Ok((detail, models))
 }
 
 pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {

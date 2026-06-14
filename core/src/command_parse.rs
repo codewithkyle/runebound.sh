@@ -173,6 +173,11 @@ pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest
             matched_subcommand = Some(subcommand_name);
             ParseStage::Argument
         } else if normalized_tokens.len() == 2 && !ends_with_space {
+            valid = false;
+            diagnostics.push(ParseDiagnostic {
+                code: "unknown_subcommand".to_string(),
+                message: format!("unknown subcommand for {}: {}", root.name, subcommand_name),
+            });
             ParseStage::Subcommand
         } else {
             valid = false;

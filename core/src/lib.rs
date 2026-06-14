@@ -6,4 +6,6 @@ pub mod db;
 pub mod health;
 pub mod npc;
 pub mod output;
+pub mod service;
+pub mod session;
 pub mod vault;
