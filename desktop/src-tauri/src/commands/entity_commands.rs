@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
@@ -6,8 +6,15 @@ use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
 use crate::services::entity_admin::{
     EntityAdminService, EntityDetails, EntityType, SoftDeleteEntityInput,
 };
+use crate::entities::EntityKind;
+use crate::entities::domains::{
+    faction_event_from_draft,
+    item_event_from_draft,
+    location_event_from_draft,
+    npc_event_from_draft,
+};
 use crate::utils::path_for_display;
-use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
+use crate::app_state::{FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
 
 pub async fn handle_load(
     invocation: DesktopHandlerInvocation<'_>,
@@ -112,17 +119,20 @@ pub async fn handle_delete(
 
     let should_clear = {
         let editor = invocation.state.editor_session.lock().await;
-        editor.npc_draft.as_ref().is_some_and(|draft| draft.id == result.id)
-            || editor.location_draft.as_ref().is_some_and(|draft| draft.id == result.id)
-            || editor.faction_draft.as_ref().is_some_and(|draft| draft.id == result.id)
+        editor
+            .get_npc()
+            .is_some_and(|draft| draft.id == result.id)
+            || editor
+                .get_location()
+                .is_some_and(|draft| draft.id == result.id)
+            || editor
+                .get_faction()
+                .is_some_and(|draft| draft.id == result.id)
     };
 
     if should_clear {
         let mut editor = invocation.state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
         return Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))));
     }
 
@@ -165,9 +175,8 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             };
             {
                 let mut editor = state.editor_session.lock().await;
-                editor.mode = EditorMode::Npc;
-                editor.location_draft = None;
-                editor.npc_draft = Some(draft.clone());
+                editor.set_npc(draft.clone());
+                editor.clear_kind(EntityKind::Location);
             }
             (build_entity_card_text(&entity), Some(npc_event_from_draft(&draft)))
         }
@@ -190,9 +199,8 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             };
             {
                 let mut editor = state.editor_session.lock().await;
-                editor.mode = EditorMode::Location;
-                editor.npc_draft = None;
-                editor.location_draft = Some(draft.clone());
+                editor.set_location(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
             }
             (build_entity_card_text(&entity), Some(location_event_from_draft(&draft)))
         }
@@ -222,12 +230,39 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             };
             {
                 let mut editor = state.editor_session.lock().await;
-                editor.mode = EditorMode::Faction;
-                editor.npc_draft = None;
-                editor.location_draft = None;
-                editor.faction_draft = Some(draft.clone());
+                editor.set_faction(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
             }
             (build_entity_card_text(&entity), Some(faction_event_from_draft(&draft)))
+        }
+        EntityType::Item => {
+            let draft = ItemDraftSession {
+                id: entity.id.clone(),
+                seed_prompt: None,
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                vault_path: path_for_display(&entity.vault_path),
+                category: entity.category.clone().unwrap_or_else(|| "other".to_string()),
+                rarity: entity.rarity.clone().unwrap_or_else(|| "unknown".to_string()),
+                attunement: entity.attunement.clone().unwrap_or_else(|| "Unknown".to_string()),
+                materials: entity.materials.clone().unwrap_or_else(|| vec!["Unknown".to_string()]),
+                appearance: entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                abilities: entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string()),
+                drawbacks: entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string()),
+                history: entity.history.clone().unwrap_or_else(|| "Unknown".to_string()),
+                value_gp: entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string()),
+                current_owner: entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string()),
+                location: entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.set_item(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
+                editor.clear_kind(EntityKind::Faction);
+            }
+            (build_entity_card_text(&entity), Some(item_event_from_draft(&draft)))
         }
     }
 }
@@ -290,6 +325,28 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             rows.push(entity_row("symbol", entity.symbol_description.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc { blocks: vec![entity_card("Faction", rows)] }
+        }
+        EntityType::Item => {
+            rows.push(entity_row("category", entity.category.clone().unwrap_or_else(|| "other".to_string())));
+            rows.push(entity_row("rarity", entity.rarity.clone().unwrap_or_else(|| "unknown".to_string())));
+            rows.push(entity_row("attunement", entity.attunement.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row(
+                "materials",
+                entity
+                    .materials
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row("appearance", entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("abilities", entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("drawbacks", entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("history", entity.history.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("value", entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("owner", entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("location", entity.location.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+            OutputDoc { blocks: vec![entity_card("Item", rows)] }
         }
     }
 }
@@ -354,81 +411,31 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
+        EntityType::Item => {
+            let materials = entity
+                .materials
+                .as_ref()
+                .map(|items| items.join(", "))
+                .unwrap_or_else(|| "Unknown".to_string());
+            format!(
+                "## Item\nname: {}\nslug: {}\ncategory: {}\nrarity: {}\nattunement: {}\nmaterials: {}\nappearance: {}\nabilities: {}\ndrawbacks: {}\nhistory: {}\nvalue: {}\nowner: {}\nlocation: {}\npath: {}",
+                entity.name,
+                entity.slug,
+                entity.category.clone().unwrap_or_else(|| "other".to_string()),
+                entity.rarity.clone().unwrap_or_else(|| "unknown".to_string()),
+                entity.attunement.clone().unwrap_or_else(|| "Unknown".to_string()),
+                materials,
+                entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.history.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
+                path_for_display(&entity.vault_path)
+            )
+        }
     }
-}
-
-fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::npc_entity_card;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-
-    let normalized_draft = NpcDraftSession {
-        id: draft.id.clone(),
-        name: draft.name.clone(),
-        race: core_normalize_unknown(&draft.race),
-        occupation: core_normalize_unknown(&draft.occupation),
-        sex: match draft.sex.to_lowercase().as_str() { "male" => "Male".to_string(), "female" => "Female".to_string(), _ => draft.sex.clone() },
-        age: core_normalize_unknown(&draft.age),
-        height: core_normalize_unknown(&draft.height),
-        weight_lbs: core_normalize_unknown(&draft.weight_lbs),
-        background: core_normalize_unknown(&draft.background),
-        want_need: core_normalize_unknown(&draft.want_need),
-        secret_obstacle: core_normalize_unknown(&draft.secret_obstacle),
-        carrying: core_normalize_list(draft.carrying.clone()),
-        location: core_normalize_unknown(&draft.location),
-        seed_prompt: draft.seed_prompt.clone(),
-    };
-    let entity_card_doc = npc_entity_card(&normalized_draft);
-    CommandClientEvent::LoadNpcDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::location_entity_card;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-
-    let normalized_draft = LocationDraftSession {
-        id: draft.id.clone(), name: draft.name.clone(), slug: draft.slug.clone(), vault_path: draft.vault_path.clone(),
-        kind_type: draft.kind_type.clone(), kind_custom: draft.kind_custom.clone(),
-        visual_description: core_normalize_unknown(&draft.visual_description),
-        history_background: core_normalize_unknown(&draft.history_background),
-        exports: core_normalize_list(draft.exports.clone()),
-        tone: core_normalize_unknown(&draft.tone),
-        authority: core_normalize_unknown(&draft.authority),
-        danger_level: core_normalize_unknown(&draft.danger_level),
-        current_tension: core_normalize_unknown(&draft.current_tension),
-        seed_prompt: draft.seed_prompt.clone(),
-    };
-    let entity_card_doc = location_entity_card(&normalized_draft);
-    CommandClientEvent::LoadLocationDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::faction_entity_card;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-
-    let normalized_draft = FactionDraftSession {
-        id: draft.id.clone(), name: draft.name.clone(), slug: draft.slug.clone(), vault_path: draft.vault_path.clone(),
-        kind_type: draft.kind_type.clone(), kind_custom: draft.kind_custom.clone(),
-        public_description: core_normalize_unknown(&draft.public_description),
-        true_agenda: core_normalize_unknown(&draft.true_agenda),
-        methods: core_normalize_unknown(&draft.methods),
-        leadership: core_normalize_unknown(&draft.leadership),
-        headquarters: core_normalize_unknown(&draft.headquarters),
-        sphere_of_influence: core_normalize_unknown(&draft.sphere_of_influence),
-        resources_assets: core_normalize_unknown(&draft.resources_assets),
-        allies: core_normalize_list(draft.allies.clone()),
-        rivals_enemies: core_normalize_list(draft.rivals_enemies.clone()),
-        reputation: core_normalize_unknown(&draft.reputation),
-        current_tension: core_normalize_unknown(&draft.current_tension),
-        goals_short_term: core_normalize_list(draft.goals_short_term.clone()),
-        goals_long_term: core_normalize_list(draft.goals_long_term.clone()),
-        symbol_description: core_normalize_unknown(&draft.symbol_description),
-        seed_prompt: draft.seed_prompt.clone(),
-    };
-    let entity_card_doc = faction_entity_card(&normalized_draft);
-    CommandClientEvent::LoadFactionDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
 }
 
 fn normalize_sex(value: &str) -> Result<String, String> {

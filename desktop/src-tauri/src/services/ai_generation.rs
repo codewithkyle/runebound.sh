@@ -1,12 +1,14 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::utils::{
-    normalize_faction_seed, normalize_location_seed, normalize_sex, normalize_unknown_list,
-    normalize_unknown_text, validate_faction_details, validate_location_details,
+    normalize_faction_seed, normalize_item_category, normalize_item_rarity, normalize_location_seed,
+    normalize_sex, normalize_unknown_list, normalize_unknown_text, validate_faction_details,
+    validate_location_details,
 };
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::vault::Vault;
 use runebound_models::utils::{
-    FACTION_KIND_TYPES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
+    FACTION_KIND_TYPES, ITEM_CATEGORIES, ITEM_RARITIES, LOCATION_DANGER_LEVELS,
+    LOCATION_KIND_TYPES,
 };
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -365,6 +367,144 @@ impl AiGenerationService {
         Err("failed to generate valid structured faction output from ollama".to_string())
     }
 
+    pub async fn generate_item_seed(
+        &self,
+        prompt: Option<String>,
+        workspace_root: &PathBuf,
+        database: &Database,
+        generation_repo: &dyn GenerationRepository,
+    ) -> Result<ItemSeed, String> {
+        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
+        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+        let config = loaded.effective;
+        let model = config
+            .ollama
+            .model
+            .clone()
+            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Generate one magical or legendary item.");
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": [
+                "name",
+                "category",
+                "rarity",
+                "attunement",
+                "materials",
+                "appearance",
+                "abilities",
+                "drawbacks",
+                "history",
+                "value_gp",
+                "current_owner",
+                "location"
+            ],
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "category": { "type": "string", "enum": ITEM_CATEGORIES },
+                "rarity": { "type": "string", "enum": ITEM_RARITIES },
+                "attunement": { "type": "string", "minLength": 1 },
+                "materials": { "type": "array", "minItems": 1, "maxItems": 4, "items": { "type": "string", "minLength": 1 } },
+                "appearance": { "type": "string", "minLength": 1 },
+                "abilities": { "type": "string", "minLength": 1 },
+                "drawbacks": { "type": "string" },
+                "history": { "type": "string", "minLength": 1 },
+                "value_gp": { "type": "string", "minLength": 1 },
+                "current_owner": { "type": "string", "minLength": 1 },
+                "location": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        });
+
+        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+            .build()
+            .map_err(|err| err.to_string())?;
+
+        for attempt in 0..5 {
+            let base_seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_micros() as i64)
+                .unwrap_or(0);
+            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid or repeated. Return only valid JSON."
+            };
+
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed },
+                "messages": [{
+                    "role": "system",
+                    "content": format!(
+                        "You generate concise tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance (1-2 sentences), abilities (1-3 sentences), drawbacks (0-2 sentences, or 'None'), history (1-3 sentences), value text, current owner, and location.{}",
+                        ITEM_CATEGORIES.join(", "),
+                        ITEM_RARITIES.join(", "),
+                        repair_note
+                    )
+                }, { "role": "user", "content": user_prompt }]
+            });
+
+            let response = client
+                .post(&url)
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+            if !response.status().is_success() {
+                return Err(format!("ollama chat failed with status {}", response.status()));
+            }
+
+            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+            let Some(content) = value
+                .get("message")
+                .and_then(|msg| msg.get("content"))
+                .and_then(|content| content.as_str())
+            else {
+                continue;
+            };
+
+            let parsed: Result<ItemSeed, _> = serde_json::from_str(content);
+            let Ok(mut seed) = parsed else { continue };
+
+            seed.name = seed.name.trim().to_string();
+            seed.category = normalize_item_category(&seed.category)?;
+            seed.rarity = normalize_item_rarity(&seed.rarity)?;
+            seed.attunement = normalize_unknown_text(&seed.attunement);
+            seed.materials = normalize_unknown_list(seed.materials);
+            seed.appearance = normalize_unknown_text(&seed.appearance);
+            seed.abilities = normalize_unknown_text(&seed.abilities);
+            seed.drawbacks = normalize_unknown_text(&seed.drawbacks);
+            seed.history = normalize_unknown_text(&seed.history);
+            seed.value_gp = normalize_unknown_text(&seed.value_gp);
+            seed.current_owner = normalize_unknown_text(&seed.current_owner);
+            seed.location = normalize_unknown_text(&seed.location);
+
+            if seed.name.is_empty() {
+                continue;
+            }
+
+            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "item_seed", None, &serialized_seed)
+                .await?;
+
+            return Ok(seed);
+        }
+
+        Err("failed to generate valid structured item output from ollama".to_string())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -415,6 +555,22 @@ pub struct FactionSeed {
     pub goals_short_term: Vec<String>,
     pub goals_long_term: Vec<String>,
     pub symbol_description: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ItemSeed {
+    pub name: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    pub materials: Vec<String>,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value_gp: String,
+    pub current_owner: String,
+    pub location: String,
 }
 
 #[derive(Debug, Clone)]

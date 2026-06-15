@@ -95,6 +95,27 @@ pub const FACTION_KIND_TYPES: [&str; 10] = [
     "other",
 ];
 
+pub const ITEM_CATEGORIES: [&str; 8] = [
+    "weapon",
+    "armor",
+    "consumable",
+    "wondrous",
+    "arcane_focus",
+    "tool",
+    "trinket",
+    "other",
+];
+
+pub const ITEM_RARITIES: [&str; 7] = [
+    "unknown",
+    "common",
+    "uncommon",
+    "rare",
+    "very_rare",
+    "legendary",
+    "artifact",
+];
+
 pub fn now_timestamp() -> String {
     Utc::now().to_rfc3339()
 }
@@ -239,6 +260,30 @@ pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
         Err(format!(
             "kind_type must be one of: {}",
             FACTION_KIND_TYPES.join(", ")
+        ))
+    }
+}
+
+pub fn normalize_item_category(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    if ITEM_CATEGORIES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "category must be one of: {}",
+            ITEM_CATEGORIES.join(", ")
+        ))
+    }
+}
+
+pub fn normalize_item_rarity(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    if ITEM_RARITIES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "rarity must be one of: {}",
+            ITEM_RARITIES.join(", ")
         ))
     }
 }

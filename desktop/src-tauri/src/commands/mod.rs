@@ -1,6 +1,7 @@
 pub mod npc_commands;
 pub mod location_commands;
 pub mod faction_commands;
+pub mod item_commands;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
@@ -64,6 +65,7 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(npc_handler_entry());
     registry.register(location_handler_entry());
     registry.register(faction_handler_entry());
+    registry.register(item_handler_entry());
     registry.register(load_handler_entry());
     registry.register(show_handler_entry());
     registry.register(preview_handler_entry());
@@ -205,6 +207,14 @@ pub fn faction_handler_entry() -> HandlerEntry<DesktopHandler> {
     )
 }
 
+pub fn item_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "item",
+        metadata_for("item"),
+        DesktopHandler::new(|invocation| Box::pin(async move { item_commands::handle_item(invocation).await })),
+    )
+}
+
 pub fn load_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "load",
@@ -276,6 +286,13 @@ fn render_history_output(history: &[String], limit: usize) -> String {
     history[start..].iter().enumerate().map(|(index, value)| format!("{}: {}", start + index + 1, value)).collect::<Vec<_>>().join("\n")
 }
 
-pub use faction_commands::{faction_summary_text, faction_event_from_draft};
-pub use location_commands::{location_summary_text, location_event_from_draft};
-pub use npc_commands::{npc_summary_text, npc_event_from_draft};
+pub use crate::entities::domains::{
+    faction_event_from_draft,
+    faction_summary_text,
+    item_event_from_draft,
+    item_summary_text,
+    location_event_from_draft,
+    location_summary_text,
+    npc_event_from_draft,
+    npc_summary_text,
+};

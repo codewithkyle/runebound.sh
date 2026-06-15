@@ -73,6 +73,28 @@ pub struct FactionDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemDraft {
+    pub id: String,
+    #[serde(default)]
+    pub seed_prompt: Option<String>,
+    pub name: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    #[serde(default)]
+    pub materials: Vec<String>,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value_gp: String,
+    pub current_owner: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcFrontmatter {
     #[serde(rename = "type")]
     pub doc_type: String,
@@ -139,6 +161,28 @@ pub struct FactionFrontmatter {
     pub goals_short_term: Vec<String>,
     pub goals_long_term: Vec<String>,
     pub symbol_description: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ItemFrontmatter {
+    #[serde(rename = "type")]
+    pub doc_type: String,
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    pub materials: Vec<String>,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value_gp: String,
+    pub current_owner: String,
+    pub location: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -297,6 +341,36 @@ pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this faction, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to regenerate it."),
+        ]))
+}
+
+pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
+    let rows = vec![
+        entity_row("Slug:", normalize_unknown_text(&draft.slug)),
+        entity_row("Category:", normalize_unknown_text(&draft.category)),
+        entity_row("Rarity:", normalize_unknown_text(&draft.rarity)),
+        entity_row("Attunement:", normalize_unknown_text(&draft.attunement)),
+        entity_row(
+            "Materials:",
+            normalize_unknown_list(draft.materials.clone()).join(", "),
+        ),
+        entity_row("Appearance:", normalize_unknown_text(&draft.appearance)),
+        entity_row("Abilities:", normalize_unknown_text(&draft.abilities)),
+        entity_row("Drawbacks:", normalize_unknown_text(&draft.drawbacks)),
+        entity_row("History:", normalize_unknown_text(&draft.history)),
+        entity_row("Value:", normalize_unknown_text(&draft.value_gp)),
+        entity_row("Owner:", normalize_unknown_text(&draft.current_owner)),
+        entity_row("Location:", normalize_unknown_text(&draft.location)),
+        entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
+    ];
+    doc()
+        .with_block(entity_card(&draft.name, rows))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this item, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
         ]))

@@ -11,6 +11,7 @@ import type {
   NpcDraft,
   LocationDraft,
   FactionDraft,
+  ItemDraft,
 } from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
@@ -35,7 +36,7 @@ type CommandSpecMeta = {
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "faction" | "reference";
+  helperText?: "command" | "npc" | "location" | "faction" | "item" | "reference";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -84,10 +85,11 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction">("none");
+  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
   const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
+  const [itemDraft, setItemDraft] = createSignal<ItemDraft | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
@@ -471,24 +473,35 @@ export default function App() {
         setNpcDraft(event.draft);
         setLocationDraft(null);
         setFactionDraft(null);
+        setItemDraft(null);
         setEditorMode("npc");
         return;
       case "load_location_draft_with_card":
         setLocationDraft(event.draft);
         setNpcDraft(null);
         setFactionDraft(null);
+        setItemDraft(null);
         setEditorMode("location");
         return;
       case "load_faction_draft_with_card":
         setFactionDraft(event.draft);
         setNpcDraft(null);
         setLocationDraft(null);
+        setItemDraft(null);
         setEditorMode("faction");
+        return;
+      case "load_item_draft_with_card":
+        setItemDraft(event.draft);
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setEditorMode("item");
         return;
       case "clear_drafts":
         setNpcDraft(null);
         setLocationDraft(null);
         setFactionDraft(null);
+        setItemDraft(null);
         setEditorMode("none");
         return;
       case "clear_terminal":
@@ -517,6 +530,7 @@ export default function App() {
       case "load_npc_draft_with_card":
       case "load_location_draft_with_card":
       case "load_faction_draft_with_card":
+      case "load_item_draft_with_card":
         return event.entity_card;
       case "clear_drafts":
       case "clear_terminal":
@@ -943,6 +957,9 @@ function commandSpinnerLabel(raw: string): string | null {
   if (lowered === "create faction" || lowered.startsWith("create faction ")) {
     return "generating faction";
   }
+  if (lowered === "create item" || lowered.startsWith("create item ")) {
+    return "generating item";
+  }
   if (lowered === "reroll" || lowered.startsWith("reroll ")) {
     return "rerolling draft";
   }
@@ -955,7 +972,15 @@ function commandSpinnerLabel(raw: string): string | null {
   if (lowered === "faction reroll" || lowered.startsWith("faction reroll ")) {
     return "rerolling faction";
   }
-  if (lowered.startsWith("npc save") || lowered.startsWith("location save") || lowered === "save") {
+  if (lowered === "item reroll" || lowered.startsWith("item reroll ")) {
+    return "rerolling item";
+  }
+  if (
+    lowered.startsWith("npc save") ||
+    lowered.startsWith("location save") ||
+    lowered.startsWith("item save") ||
+    lowered === "save"
+  ) {
     return "saving draft";
   }
   if (lowered.startsWith("faction save")) {

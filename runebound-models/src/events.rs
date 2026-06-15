@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::drafts::{FactionDraft, LocationDraft, NpcDraft};
+use super::drafts::{FactionDraft, ItemDraft, LocationDraft, NpcDraft};
 use super::output::OutputDoc;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -16,6 +16,10 @@ pub enum CommandClientEvent {
     },
     LoadFactionDraftWithCard {
         draft: FactionDraft,
+        entity_card: OutputDoc,
+    },
+    LoadItemDraftWithCard {
+        draft: ItemDraft,
         entity_card: OutputDoc,
     },
     ClearDrafts,

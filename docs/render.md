@@ -108,6 +108,8 @@ For a new entity type (example: `quest`):
 5. Handle event branch in `desktop/src/App.tsx`
 6. Reuse generic `entity_card` renderer unless a genuinely new block type is required
 
+Existing cards live next to their drafts: `npc_entity_card`, `location_entity_card`, `faction_entity_card`, and `item_entity_card`.
+
 Recommended card composition:
 
 - title = entity name
@@ -164,5 +166,5 @@ Before merging rendering changes:
 
 ---
 
-*Last updated: 2026-06-14*  
+*Last updated: 2026-06-15*  
 *Keep this document aligned with rendering contract changes in the same PR.*

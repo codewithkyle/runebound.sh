@@ -3,9 +3,9 @@ use std::path::PathBuf;
 
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::npc::{
-    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, merge_runebound_block,
-    now_timestamp, render_faction_markdown, render_location_markdown, render_npc_markdown, slugify,
-    unique_slug_for_dir,
+    FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION,
+    merge_runebound_block, now_timestamp, render_faction_markdown, render_item_markdown,
+    render_location_markdown, render_npc_markdown, slugify, unique_slug_for_dir,
 };
 use dnd_core::serialization::{
     carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
@@ -18,9 +18,9 @@ use crate::repositories::db;
 use crate::services::ai_generation::LocationSeed;
 use crate::services::vault_sync::{read_vault_file_if_exists, unique_markdown_path_for_name};
 use crate::utils::{
-    normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_relative_path_for_storage, normalize_sex,
-    normalize_unknown_list, normalize_unknown_text, validate_location_details,
+    normalize_exports, normalize_faction_kind_type, normalize_item_category, normalize_item_rarity,
+    normalize_location_danger_level, normalize_location_kind_type, normalize_relative_path_for_storage,
+    normalize_sex, normalize_unknown_list, normalize_unknown_text, validate_location_details,
 };
 
 pub struct EntityPersistenceService;
@@ -647,6 +647,187 @@ impl EntityPersistenceService {
             updated_at: faction_row.updated_at,
         })
     }
+
+    pub async fn save_item_draft(
+        &self,
+        input: SaveItemDraftInput,
+        state: &AppState,
+    ) -> Result<SaveItemDraftResult, String> {
+        if input.id.trim().is_empty() {
+            return Err("item id cannot be empty".to_string());
+        }
+
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err("item name cannot be empty".to_string());
+        }
+
+        let category = normalize_item_category(&input.category)?;
+        let rarity = normalize_item_rarity(&input.rarity)?;
+        let attunement = normalize_unknown_text(&input.attunement);
+        let materials = normalize_unknown_list(input.materials);
+        let materials_db = faction_list_to_db_text(&materials)?;
+        let appearance = normalize_unknown_text(&input.appearance);
+        let abilities = normalize_unknown_text(&input.abilities);
+        let drawbacks = normalize_unknown_text(&input.drawbacks);
+        let history = normalize_unknown_text(&input.history);
+        let value_gp = normalize_unknown_text(&input.value_gp);
+        let current_owner = normalize_unknown_text(&input.current_owner);
+        let location = normalize_unknown_text(&input.location);
+
+        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+        let vault_path = loaded
+            .effective
+            .vault
+            .path
+            .clone()
+            .ok_or_else(|| "vault.path is not configured".to_string())?;
+        let vault = Vault::new(vault_path);
+        state.vault_repo().ensure_structure(&vault)?;
+
+        let database = state.database();
+        let item_repo = state.item_repo();
+        let document_repo = state.document_repo();
+        let now = now_timestamp();
+        let existing = item_repo
+            .find_by_id(database.as_ref(), input.id.trim())
+            .await?;
+
+        let provided_slug = input.slug.trim();
+        let base_slug = if provided_slug.is_empty() {
+            slugify(name)
+        } else {
+            slugify(provided_slug)
+        };
+
+        let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
+            let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
+            let desired_path = unique_markdown_path_for_name(
+                &vault,
+                "items",
+                name,
+                Some(current_vault_path.as_str()),
+            )?;
+
+            let slug = if current.slug == base_slug {
+                current.slug
+            } else {
+                unique_slug_for_dir(vault.root(), "items", &base_slug)
+            };
+
+            (
+                slug,
+                desired_path.clone(),
+                current.created_at,
+                if desired_path == current_vault_path {
+                    None
+                } else {
+                    Some(current_vault_path)
+                },
+            )
+        } else {
+            (
+                unique_slug_for_dir(vault.root(), "items", &base_slug),
+                unique_markdown_path_for_name(&vault, "items", name, None)?,
+                now.clone(),
+                None,
+            )
+        };
+
+        let frontmatter = ItemFrontmatter {
+            doc_type: "item".to_string(),
+            id: input.id.trim().to_string(),
+            slug: slug.clone(),
+            name: name.to_string(),
+            category: category.clone(),
+            rarity: rarity.clone(),
+            attunement: attunement.clone(),
+            materials: materials.clone(),
+            appearance: appearance.clone(),
+            abilities: abilities.clone(),
+            drawbacks: drawbacks.clone(),
+            history: history.clone(),
+            value_gp: value_gp.clone(),
+            current_owner: current_owner.clone(),
+            location: location.clone(),
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+        };
+
+        let markdown = render_item_markdown(&frontmatter).map_err(|err| err.to_string())?;
+        let existing_markdown = read_vault_file_if_exists(&vault, &relative_path)?;
+        let content = if let Some(current) = existing_markdown {
+            merge_runebound_block(&current, &markdown)
+        } else {
+            markdown
+        };
+        vault
+            .write_relative(&PathBuf::from(&relative_path), &content)
+            .map_err(|err| err.to_string())?;
+
+        let item_row = db::ItemRow {
+            id: input.id.trim().to_string(),
+            slug,
+            name: name.to_string(),
+            vault_path: relative_path.clone(),
+            category,
+            rarity,
+            attunement,
+            materials: materials_db,
+            appearance,
+            abilities,
+            drawbacks,
+            history,
+            value_gp,
+            current_owner,
+            location,
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+        };
+
+        item_repo
+            .upsert(database.as_ref(), &item_row)
+            .await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "item",
+                &item_row.slug,
+                Some(&item_row.name),
+                &item_row.vault_path,
+                &item_row.created_at,
+                &item_row.updated_at,
+            )
+            .await?;
+
+        if let Some(old_path) = previous_path {
+            if old_path != item_row.vault_path {
+                document_repo
+                    .delete_by_vault_path(database.as_ref(), &old_path)
+                    .await?;
+                if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
+                    if old_full_path.exists() {
+                        fs::remove_file(&old_full_path).map_err(|err| {
+                            format!(
+                                "failed to remove old item file {}: {}",
+                                old_full_path.display(),
+                                err
+                            )
+                        })?;
+                    }
+                }
+            }
+        }
+
+        Ok(SaveItemDraftResult {
+            id: item_row.id,
+            slug: item_row.slug,
+            vault_path: item_row.vault_path,
+            created_at: item_row.created_at,
+            updated_at: item_row.updated_at,
+        })
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -727,6 +908,34 @@ pub struct SaveFactionDraftInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SaveFactionDraftResult {
+    pub id: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveItemDraftInput {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    pub materials: Vec<String>,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value_gp: String,
+    pub current_owner: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SaveItemDraftResult {
     pub id: String,
     pub slug: String,
     pub vault_path: String,

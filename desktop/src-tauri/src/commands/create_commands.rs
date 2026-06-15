@@ -1,17 +1,29 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{
-    ok_response, DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
-    location_event_from_draft, location_summary_text, npc_event_from_draft, npc_summary_text,
+    DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
+    item_event_from_draft, item_summary_text, location_event_from_draft, location_summary_text,
+    npc_event_from_draft, npc_summary_text,
 };
+use crate::entities::common::{
+    command_message_response,
+    command_response_with_event,
+    CommandResult,
+};
+use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
+use crate::utils::{
+    normalize_optional_prompt,
+    normalize_sex,
+    normalize_unknown_list,
+    normalize_unknown_text,
+};
 use dnd_core::npc::UNKNOWN_LOCATION;
-use runebound_models::CommandResponse;
 
-use crate::app_state::{FactionDraftSession, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
 
 pub async fn handle_create(
     invocation: DesktopHandlerInvocation<'_>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -20,19 +32,17 @@ pub async fn handle_create(
     let lowered = trimmed.to_ascii_lowercase();
 
     if lowered == "create help" {
-        return Ok(Some(ok_response(
-            [
-                "## Create commands",
-                "create npc",
-                "create npc <prompt text>",
-                "create location",
-                "create location <prompt text>",
-                "create faction",
-                "create faction <prompt text>",
-            ]
-            .join("\n"),
-            None,
-        )));
+        return command_message_response([
+            "## Create commands",
+            "create npc",
+            "create npc <prompt text>",
+            "create location",
+            "create location <prompt text>",
+            "create faction",
+            "create faction <prompt text>",
+            "create item",
+            "create item <prompt text>",
+        ].join("\n"));
     }
 
     if lowered == "create npc" || lowered.starts_with("create npc ") {
@@ -47,16 +57,17 @@ pub async fn handle_create(
         return create_faction(trimmed, invocation.state.clone()).await;
     }
 
-    Ok(Some(ok_response(
-        "unknown create command. use `create help`".to_string(),
-        None,
-    )))
+    if lowered == "create item" || lowered.starts_with("create item ") {
+        return create_item(trimmed, invocation.state.clone()).await;
+    }
+
+    command_message_response("unknown create command. use `create help`")
 }
 
 async fn create_npc(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     let prompt = if trimmed.len() > 10 {
         let value = trimmed[10..].trim();
         if value.is_empty() {
@@ -101,21 +112,17 @@ async fn create_npc(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.location_draft = None;
-        editor.npc_draft = Some(draft.clone());
+        editor.set_npc(draft.clone());
+        editor.clear_kind(EntityKind::Location);
     }
 
-    Ok(Some(ok_response(
-        npc_summary_text(&draft),
-        Some(npc_event_from_draft(&draft)),
-    )))
+    command_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
 }
 
 async fn create_location(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 15 {
@@ -162,21 +169,20 @@ async fn create_location(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Location;
-        editor.npc_draft = None;
-        editor.location_draft = Some(draft.clone());
+        editor.set_location(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
     }
 
-    Ok(Some(ok_response(
+    command_response_with_event(
         location_summary_text(&draft),
-        Some(location_event_from_draft(&draft)),
-    )))
+        location_event_from_draft(&draft),
+    )
 }
 
 async fn create_faction(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 14 {
@@ -230,58 +236,77 @@ async fn create_faction(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Faction;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = Some(draft.clone());
+        editor.set_faction(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
     }
 
-    Ok(Some(ok_response(
+    command_response_with_event(
         faction_summary_text(&draft),
-        Some(faction_event_from_draft(&draft)),
-    )))
+        faction_event_from_draft(&draft),
+    )
 }
 
-fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
-    prompt.map(|p| {
-        let trimmed = p.trim();
-        if trimmed.is_empty() {
-            String::new()
+async fn create_item(
+    trimmed: &str,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult {
+    use dnd_core::npc::slugify;
+
+    let prompt = if trimmed.len() > 11 {
+        let value = trimmed[11..].trim();
+        if value.is_empty() {
+            None
         } else {
-            trimmed.to_string()
+            Some(value.to_string())
         }
-    })
-}
-
-fn normalize_unknown_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        "Unknown".to_string()
     } else {
-        trimmed.to_string()
-    }
-}
+        None
+    };
 
-fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    if cleaned.is_empty() {
-        vec!["Unknown".to_string()]
-    } else {
-        cleaned
-    }
-}
+    let prompt = normalize_optional_prompt(prompt);
 
-fn normalize_sex(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized == "male" || normalized == "female" {
-        Ok(normalized)
-    } else {
-        Err("sex must be one of: male, female".to_string())
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let seed = ai
+        .generate_item_seed(
+            prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+
+    let slug = slugify(&seed.name);
+    let draft = ItemDraftSession {
+        id: make_entity_id("item"),
+        seed_prompt: prompt,
+        name: seed.name,
+        slug,
+        vault_path: String::new(),
+        category: seed.category,
+        rarity: seed.rarity,
+        attunement: seed.attunement,
+        materials: seed.materials,
+        appearance: seed.appearance,
+        abilities: seed.abilities,
+        drawbacks: seed.drawbacks,
+        history: seed.history,
+        value_gp: seed.value_gp,
+        current_owner: seed.current_owner,
+        location: seed.location,
+    };
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_item(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        editor.clear_kind(EntityKind::Faction);
     }
+
+    command_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
 }
 
 fn make_entity_id(prefix: &str) -> String {

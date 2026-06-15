@@ -2,6 +2,7 @@
 
 mod app_state;
 mod commands;
+mod entities;
 mod repositories;
 mod router;
 mod services;
@@ -17,11 +18,12 @@ use dnd_core::db;
 use tokio::sync::Mutex;
 
 use crate::app_state::{AppState, EditorSession};
+use crate::entities::build_default_registry;
 use crate::repositories::{
-    DocumentRepository, FactionRepository, GenerationRepository, LocationRepository, NpcRepository,
-    ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository, ProdLocationRepository,
-    ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository,
-    VaultRepository,
+    DocumentRepository, FactionRepository, GenerationRepository, ItemRepository, LocationRepository,
+    NpcRepository, ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository,
+    ProdItemRepository, ProdLocationRepository, ProdNpcRepository, ProdSoftDeleteRepository,
+    ProdVaultRepository, SoftDeleteRepository, VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
 use crate::services::vault_sync::VaultSyncService;
@@ -101,11 +103,14 @@ fn main() {
     let npc_repo: Arc<dyn NpcRepository> = Arc::new(ProdNpcRepository);
     let location_repo: Arc<dyn LocationRepository> = Arc::new(ProdLocationRepository);
     let faction_repo: Arc<dyn FactionRepository> = Arc::new(ProdFactionRepository);
+    let item_repo: Arc<dyn ItemRepository> = Arc::new(ProdItemRepository);
     let document_repo: Arc<dyn DocumentRepository> = Arc::new(ProdDocumentRepository);
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
 
     let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
+
+    let domains = Arc::new(build_default_registry());
 
     let app_state = AppState {
         workspace_root,
@@ -116,9 +121,11 @@ fn main() {
         npc_repo: npc_repo.clone(),
         location_repo: location_repo.clone(),
         faction_repo: faction_repo.clone(),
+        item_repo: item_repo.clone(),
         document_repo: document_repo.clone(),
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
+        domains,
     };
 
     let vault_sync_service = VaultSyncService;

@@ -59,6 +59,25 @@ export type FactionDraft = {
   symbol_description: string;
 };
 
+export type ItemDraft = {
+  id: string;
+  seed_prompt?: string | null;
+  name: string;
+  slug: string;
+  vault_path: string;
+  category: string;
+  rarity: string;
+  attunement: string;
+  materials: string[];
+  appearance: string;
+  abilities: string;
+  drawbacks: string;
+  history: string;
+  value_gp: string;
+  current_owner: string;
+  location: string;
+};
+
 export type NpcFrontmatter = {
   type: string;
   id: string;
@@ -122,6 +141,26 @@ export type FactionFrontmatter = {
   updated_at: string;
 };
 
+export type ItemFrontmatter = {
+  type: string;
+  id: string;
+  slug: string;
+  name: string;
+  category: string;
+  rarity: string;
+  attunement: string;
+  materials: string[];
+  appearance: string;
+  abilities: string;
+  drawbacks: string;
+  history: string;
+  value_gp: string;
+  current_owner: string;
+  location: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type EntityCardRow = {
   label: string;
   value: string;
@@ -163,6 +202,7 @@ export type CommandClientEvent =
   | { kind: "load_npc_draft_with_card"; draft: NpcDraft; entity_card: OutputDoc }
   | { kind: "load_location_draft_with_card"; draft: LocationDraft; entity_card: OutputDoc }
   | { kind: "load_faction_draft_with_card"; draft: FactionDraft; entity_card: OutputDoc }
+  | { kind: "load_item_draft_with_card"; draft: ItemDraft; entity_card: OutputDoc }
   | { kind: "clear_drafts" }
   | { kind: "clear_terminal"; clear_history: boolean }
   | { kind: "exit_requested" };

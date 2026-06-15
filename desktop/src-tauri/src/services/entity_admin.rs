@@ -196,6 +196,7 @@ impl EntityAdminService {
         let npc_repo = state.npc_repo();
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
+        let item_repo = state.item_repo();
 
         if let Some(npc) = npc_repo
             .find_by_name_or_slug(database.as_ref(), trimmed)
@@ -240,6 +241,16 @@ impl EntityAdminService {
                 goals_short_term: None,
                 goals_long_term: None,
                 symbol_description: None,
+                category: None,
+                rarity: None,
+                attunement: None,
+                materials: None,
+                appearance: None,
+                abilities: None,
+                drawbacks: None,
+                history: None,
+                value_gp: None,
+                current_owner: None,
                 created_at: Some(npc.created_at),
             }));
         }
@@ -287,6 +298,16 @@ impl EntityAdminService {
                 goals_short_term: None,
                 goals_long_term: None,
                 symbol_description: None,
+                category: None,
+                rarity: None,
+                attunement: None,
+                materials: None,
+                appearance: None,
+                abilities: None,
+                drawbacks: None,
+                history: None,
+                value_gp: None,
+                current_owner: None,
                 created_at: Some(location.created_at),
             }));
         }
@@ -334,7 +355,74 @@ impl EntityAdminService {
                 goals_short_term: Some(faction_list_from_db_text(&faction.goals_short_term)),
                 goals_long_term: Some(faction_list_from_db_text(&faction.goals_long_term)),
                 symbol_description: Some(faction.symbol_description),
+                category: None,
+                rarity: None,
+                attunement: None,
+                materials: None,
+                appearance: None,
+                abilities: None,
+                drawbacks: None,
+                history: None,
+                value_gp: None,
+                current_owner: None,
                 created_at: Some(faction.created_at),
+            }));
+        }
+
+        if let Some(item) = item_repo
+            .find_by_name_or_slug(database.as_ref(), trimmed)
+            .await?
+        {
+            return Ok(Some(EntityDetails {
+                id: item.id,
+                entity_type: EntityType::Item,
+                name: item.name,
+                slug: item.slug,
+                race: None,
+                occupation: None,
+                sex: None,
+                age: None,
+                height: None,
+                weight_lbs: None,
+                background: None,
+                want_need: None,
+                secret_obstacle: None,
+                carrying: None,
+                location: Some(item.location.clone()),
+                vault_path: normalize_relative_path_for_storage(&item.vault_path),
+                kind_type: None,
+                kind_custom: None,
+                visual_description: None,
+                history_background: None,
+                exports: None,
+                tone: None,
+                authority: None,
+                danger_level: None,
+                current_tension: None,
+                public_description: None,
+                true_agenda: None,
+                methods: None,
+                leadership: None,
+                headquarters: None,
+                sphere_of_influence: None,
+                resources_assets: None,
+                allies: None,
+                rivals_enemies: None,
+                reputation: None,
+                goals_short_term: None,
+                goals_long_term: None,
+                symbol_description: None,
+                category: Some(item.category),
+                rarity: Some(item.rarity),
+                attunement: Some(item.attunement),
+                materials: Some(faction_list_from_db_text(&item.materials)),
+                appearance: Some(item.appearance),
+                abilities: Some(item.abilities),
+                drawbacks: Some(item.drawbacks),
+                history: Some(item.history),
+                value_gp: Some(item.value_gp),
+                current_owner: Some(item.current_owner),
+                created_at: Some(item.created_at),
             }));
         }
 
@@ -366,6 +454,7 @@ impl EntityAdminService {
         let npc_repo = state.npc_repo();
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
+        let item_repo = state.item_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
         let now = now_timestamp();
@@ -556,7 +645,68 @@ impl EntityAdminService {
             });
         }
 
-        Err(format!("no npc, location, or faction found for: {target}"))
+        if let Some(item) = item_repo
+            .find_by_name_or_slug(database.as_ref(), target)
+            .await?
+        {
+            let normalized_vault_path = normalize_relative_path_for_storage(&item.vault_path);
+            let trash_path = unique_trash_path(&vault, "items", &item.slug, &now)?;
+            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
+
+            item_repo
+                .delete_by_id(database.as_ref(), &item.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &item.vault_path)
+                .await?;
+
+            let payload = ItemDeletePayload {
+                id: item.id.clone(),
+                slug: item.slug.clone(),
+                name: item.name.clone(),
+                vault_path: normalized_vault_path.clone(),
+                category: item.category,
+                rarity: item.rarity,
+                attunement: item.attunement,
+                materials: item.materials,
+                appearance: item.appearance,
+                abilities: item.abilities,
+                drawbacks: item.drawbacks,
+                history: item.history,
+                value_gp: item.value_gp,
+                current_owner: item.current_owner,
+                location: item.location,
+                created_at: item.created_at,
+                updated_at: item.updated_at,
+            };
+
+            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+            let soft_delete_row = db::SoftDeleteRow {
+                id: 0,
+                entity_type: "item".to_string(),
+                entity_id: item.id.clone(),
+                name: item.name.clone(),
+                slug: item.slug.clone(),
+                original_vault_path: normalized_vault_path,
+                trash_vault_path: trash_path.clone(),
+                payload_json,
+                created_at: now.clone(),
+                undone_at: None,
+            };
+            soft_delete_repo
+                .insert(database.as_ref(), &soft_delete_row)
+                .await?;
+
+            return Ok(SoftDeleteEntityResult {
+                entity_type: EntityType::Item,
+                id: item.id,
+                name: item.name,
+                slug: item.slug,
+                trash_vault_path: trash_path,
+            });
+        }
+
+        Err(format!("no npc, location, faction, or item found for: {target}"))
     }
 
     pub async fn undo_last_soft_delete(
@@ -578,6 +728,7 @@ impl EntityAdminService {
         let npc_repo = state.npc_repo();
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
+        let item_repo = state.item_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
@@ -791,6 +942,71 @@ impl EntityAdminService {
             });
         }
 
+        if soft_delete.entity_type == "item" {
+            let payload: ItemDeletePayload =
+                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+            let mut restored_slug = payload.slug.clone();
+            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let preferred_full = vault
+                .resolve_relative(&PathBuf::from(&restored_vault_path))
+                .map_err(|err| err.to_string())?;
+            if preferred_full.exists() {
+                restored_slug = unique_slug_for_dir(vault.root(), "items", &restored_slug);
+                restored_vault_path = unique_markdown_path_for_name(&vault, "items", &payload.name, None)?;
+            }
+
+            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
+
+            let item_row = db::ItemRow {
+                id: payload.id.clone(),
+                slug: restored_slug.clone(),
+                name: payload.name.clone(),
+                vault_path: restored_vault_path.clone(),
+                category: payload.category,
+                rarity: payload.rarity,
+                attunement: payload.attunement,
+                materials: payload.materials,
+                appearance: payload.appearance,
+                abilities: payload.abilities,
+                drawbacks: payload.drawbacks,
+                history: payload.history,
+                value_gp: payload.value_gp,
+                current_owner: payload.current_owner,
+                location: payload.location,
+                created_at: payload.created_at,
+                updated_at: now.clone(),
+            };
+
+            item_repo
+                .upsert(database.as_ref(), &item_row)
+                .await?;
+            document_repo
+                .upsert_index(
+                    database.as_ref(),
+                    "item",
+                    &item_row.slug,
+                    Some(&item_row.name),
+                    &item_row.vault_path,
+                    &item_row.created_at,
+                    &item_row.updated_at,
+                )
+                .await?;
+
+            soft_delete_repo
+                .mark_undone(database.as_ref(), soft_delete.id, &now)
+                .await?;
+
+            return Ok(UndoSoftDeleteResult {
+                entity_type: EntityType::Item,
+                id: payload.id,
+                name: payload.name,
+                slug: restored_slug,
+                vault_path: restored_vault_path,
+            });
+        }
+
         Err(format!(
             "unsupported soft delete entity type: {}",
             soft_delete.entity_type
@@ -841,6 +1057,7 @@ pub enum EntityType {
     Npc,
     Location,
     Faction,
+    Item,
 }
 
 impl EntityType {
@@ -849,6 +1066,7 @@ impl EntityType {
             EntityType::Npc => "npc",
             EntityType::Location => "location",
             EntityType::Faction => "faction",
+            EntityType::Item => "item",
         }
     }
 }
@@ -893,6 +1111,16 @@ pub struct EntityDetails {
     pub goals_short_term: Option<Vec<String>>,
     pub goals_long_term: Option<Vec<String>>,
     pub symbol_description: Option<String>,
+    pub category: Option<String>,
+    pub rarity: Option<String>,
+    pub attunement: Option<String>,
+    pub materials: Option<Vec<String>>,
+    pub appearance: Option<String>,
+    pub abilities: Option<String>,
+    pub drawbacks: Option<String>,
+    pub history: Option<String>,
+    pub value_gp: Option<String>,
+    pub current_owner: Option<String>,
     pub created_at: Option<String>,
 }
 
@@ -958,6 +1186,27 @@ struct FactionDeletePayload {
     goals_short_term: String,
     goals_long_term: String,
     symbol_description: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ItemDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
+    category: String,
+    rarity: String,
+    attunement: String,
+    materials: String,
+    appearance: String,
+    abilities: String,
+    drawbacks: String,
+    history: String,
+    value_gp: String,
+    current_owner: String,
+    location: String,
     created_at: String,
     updated_at: String,
 }
