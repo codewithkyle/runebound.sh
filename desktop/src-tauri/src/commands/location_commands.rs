@@ -3,10 +3,13 @@ use crate::commands::{ok_response, DesktopHandlerInvocation};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
-use crate::utils::{
-    reroll_location_field, LocationRerollContext, RerollLocationFieldInput,
+use crate::services::entity_persistence::{EntityPersistenceService, SaveLocationDraftInput};
+use crate::services::entity_reroll::{
+    EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
-use crate::utils::path_for_display;
+use crate::utils::{
+    normalize_optional_prompt, path_for_display,
+};
 use crate::app_state::LocationDraftSession;
 
 pub async fn handle_location(
@@ -175,8 +178,6 @@ async fn location_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Resul
 }
 
 async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::normalize_optional_prompt;
-
     if trimmed.eq_ignore_ascii_case("location reroll") {
         return Ok(Some(ok_response("usage: location reroll <field> [prompt]".to_string(), None)));
     }
@@ -198,25 +199,33 @@ async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
 
     let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
-    let rerolled = reroll_location_field(
-        RerollLocationFieldInput {
-            field,
-            prompt,
-            location: LocationRerollContext {
-                name: draft.name.clone(),
-                kind_type: draft.kind_type.clone(),
-                kind_custom: draft.kind_custom.clone(),
-                visual_description: draft.visual_description.clone(),
-                history_background: draft.history_background.clone(),
-                exports: draft.exports.clone(),
-                tone: draft.tone.clone(),
-                authority: draft.authority.clone(),
-                danger_level: draft.danger_level.clone(),
-                current_tension: draft.current_tension.clone(),
+    let reroll_service = EntityRerollService;
+    let workspace_root = state.workspace_root.clone();
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let rerolled = reroll_service
+        .reroll_location_field(
+            RerollLocationFieldInput {
+                field,
+                prompt,
+                location: LocationRerollContext {
+                    name: draft.name.clone(),
+                    kind_type: draft.kind_type.clone(),
+                    kind_custom: draft.kind_custom.clone(),
+                    visual_description: draft.visual_description.clone(),
+                    history_background: draft.history_background.clone(),
+                    exports: draft.exports.clone(),
+                    tone: draft.tone.clone(),
+                    authority: draft.authority.clone(),
+                    danger_level: draft.danger_level.clone(),
+                    current_tension: draft.current_tension.clone(),
+                },
             },
-        },
-        state.clone(),
-    ).await?;
+            &workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
 
     match rerolled.field.as_str() {
         "name" => { if let Some(value) = rerolled.value { draft.name = value; } }
@@ -249,14 +258,14 @@ async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
 }
 
 async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::{save_location_draft_impl, SaveLocationDraftInput};
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.location_draft.clone()
     }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
-    let result = save_location_draft_impl(
+    let persistence = EntityPersistenceService;
+    let result = persistence
+        .save_location_draft(
         SaveLocationDraftInput {
             id: draft.id.clone(),
             name: draft.name.clone(),
@@ -272,8 +281,9 @@ async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<Comma
             danger_level: draft.danger_level.clone(),
             current_tension: draft.current_tension.clone(),
         },
-        state.clone(),
-    ).await?;
+            state.inner(),
+        )
+        .await?;
 
     {
         let mut editor = state.editor_session.lock().await;

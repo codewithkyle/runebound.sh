@@ -1,8 +1,12 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::services::entity_admin::{EntityAdminService, EnsureLocationInput};
+use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraftInput};
+use crate::services::entity_reroll::{
+    EntityRerollService, NpcRerollContext, RerollNpcFieldInput,
+};
 use crate::utils::{
-    normalize_sex, parse_carrying_csv, path_for_display, reroll_npc_field, NpcRerollContext,
-    RerollNpcFieldInput,
+    normalize_optional_prompt, normalize_sex, parse_carrying_csv, path_for_display,
 };
 use crate::app_state::NpcDraftSession;
 use dnd_core::command::CommandClientEvent;
@@ -205,12 +209,15 @@ pub async fn npc_travel(
         editor.npc_draft.clone()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
-    use crate::utils::ensure_location_exists;
-    use crate::utils::EnsureLocationInput;
-    let result = ensure_location_exists(
-        EnsureLocationInput { name: location_name.to_string() },
-        state.clone(),
-    ).await?;
+    let admin = EntityAdminService;
+    let result = admin
+        .ensure_location_exists(
+            EnsureLocationInput {
+                name: location_name.to_string(),
+            },
+            state.inner(),
+        )
+        .await?;
     draft.location = if result.name.trim().is_empty() { location_name.to_string() } else { result.name };
 
     {
@@ -224,14 +231,14 @@ pub async fn npc_travel(
 }
 
 pub async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::{save_npc_draft_impl, SaveNpcDraftInput};
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.npc_draft.clone()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
-    let result = save_npc_draft_impl(
+    let persistence = EntityPersistenceService;
+    let result = persistence
+        .save_npc_draft(
         SaveNpcDraftInput {
             id: draft.id.clone(),
             name: draft.name.clone(),
@@ -247,8 +254,9 @@ pub async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<Comman
             carrying: draft.carrying.clone(),
             location: draft.location.clone(),
         },
-        state.clone(),
-    ).await?;
+            state.inner(),
+        )
+        .await?;
 
     {
         let mut editor = state.editor_session.lock().await;
@@ -273,8 +281,6 @@ pub async fn npc_reroll(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
 ) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::normalize_optional_prompt;
-
     if trimmed.eq_ignore_ascii_case("npc reroll") {
         return Ok(Some(ok_response("usage: npc reroll <field> [prompt]".to_string(), None)));
     }
@@ -296,27 +302,35 @@ pub async fn npc_reroll(
 
     let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
-    let rerolled = reroll_npc_field(
-        RerollNpcFieldInput {
-            field,
-            prompt,
-            npc: NpcRerollContext {
-                name: draft.name.clone(),
-                race: draft.race.clone(),
-                occupation: draft.occupation.clone(),
-                sex: draft.sex.clone(),
-                age: draft.age.clone(),
-                height: draft.height.clone(),
-                weight_lbs: draft.weight_lbs.clone(),
-                background: draft.background.clone(),
-                want_need: draft.want_need.clone(),
-                secret_obstacle: draft.secret_obstacle.clone(),
-                carrying: draft.carrying.clone(),
-                location: draft.location.clone(),
+    let reroll_service = EntityRerollService;
+    let workspace_root = state.workspace_root.clone();
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let rerolled = reroll_service
+        .reroll_npc_field(
+            RerollNpcFieldInput {
+                field,
+                prompt,
+                npc: NpcRerollContext {
+                    name: draft.name.clone(),
+                    race: draft.race.clone(),
+                    occupation: draft.occupation.clone(),
+                    sex: draft.sex.clone(),
+                    age: draft.age.clone(),
+                    height: draft.height.clone(),
+                    weight_lbs: draft.weight_lbs.clone(),
+                    background: draft.background.clone(),
+                    want_need: draft.want_need.clone(),
+                    secret_obstacle: draft.secret_obstacle.clone(),
+                    carrying: draft.carrying.clone(),
+                    location: draft.location.clone(),
+                },
             },
-        },
-        state.clone(),
-    ).await?;
+            &workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
 
     match rerolled.field.as_str() {
         "name" => { if let Some(value) = rerolled.value { draft.name = value; } }

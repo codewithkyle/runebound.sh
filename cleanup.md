@@ -342,7 +342,7 @@ These are pure utility functions. Some are duplicated in `utils.rs`.
 
 ---
 
-## Phase 7: Eliminate `utils.rs` Bridge Code
+## Phase 7: Eliminate `utils.rs` Bridge Code *(✅ Completed 2026-06-14)*
 
 ### The Problem
 
@@ -362,28 +362,11 @@ After Phases 1-6, the canonical types should all live in `services/` or `runebou
 
 ### Deliverables
 
-1. **Audit `utils.rs`**
-   - Identify which `From` impls are still needed
-   - If `commands/` and `services/` now use the same type (e.g., `services::ai_generation::NpcRerollContext`), delete the `utils.rs` wrapper type and `From` impl
-   - If `commands/` still imports `utils::NpcRerollContext`, change it to import from `services::ai_generation::NpcRerollContext` directly
-   - Do this for all seed/reroll/save types
-
-2. **Delete unused types from `utils.rs`**
-   - `NpcSeed`, `NpcRerollContext`, `RerollNpcFieldInput`, `RerollNpcFieldResult`, `GenerateNpcSeedInput`, `SaveNpcDraftInput`, `SaveNpcDraftResult`
-   - `LocationSeed`, `LocationRerollContext`, `RerollLocationFieldInput`, `RerollLocationFieldResult`, `SaveLocationDraftInput`, `SaveLocationDraftResult`
-   - `FactionSeed`, `FactionRerollContext`, `RerollFactionFieldInput`, `RerollFactionFieldResult`, `SaveFactionDraftInput`, `SaveFactionDraftResult`
-   - `EnsureLocationInput`, `EnsureLocationResult`
-   - `SoftDeleteEntityInput`, `SoftDeleteEntityResult`, `UndoSoftDeleteResult`
-   - `EntityDetails`, `EntityType` (if already in `commands/entity_commands.rs` or `runebound-models`)
-
-3. **Consolidate remaining helpers**
-   - Keep `normalize_sex`, `normalize_unknown_text`, `normalize_unknown_list`, `parse_carrying_csv`, `normalize_location_kind_type`, `normalize_location_danger_level`, `parse_list_csv`, `normalize_exports`, `normalize_faction_kind_type`, `validate_sentence_range`, `normalize_location_seed`, `validate_location_details`, `normalize_faction_seed`, `validate_faction_details`, `sentence_count`, `word_count`, `normalize_relative_path_for_storage`, `path_for_display`, `canonical_*_reroll_field`, `npc_context_summary`, `location_context_summary`, `faction_context_summary`
-   - These are shared utilities. They stay in `utils.rs`.
-
-4. **Verify**
-   - `cargo check` passes
-   - All `commands/*.rs` compile
-   - All `services/*.rs` compile
+- Added a dedicated `services/entity_admin.rs` module that owns `EnsureLocation*`, `EntityDetails/EntityType`, and the soft-delete/undo logic. All consumers (commands, router, suggestions) now call this service directly.
+- Updated every command module to import the canonical service types (`entity_reroll`, `entity_persistence`, `entity_admin`) instead of the `utils.rs` wrappers.
+- Removed the async forwarding functions and duplicate struct definitions from `utils.rs`; it now contains only shared normalization/path helpers that are reused by services/tests.
+- Deleted the legacy implementations from `main.rs` so it no longer exposes business logic; it simply wires the Tauri commands and startup services.
+- Ran `cargo fmt`, `cargo check` (desktop), and `cargo test -p dnd-core` to verify the refactor.
 
 ### Dependencies
 

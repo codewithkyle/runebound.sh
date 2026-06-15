@@ -6,8 +6,8 @@ use tauri::State;
 use crate::app_state::AppState;
 use crate::commands::{desktop_handler_registry, ok_response, DesktopHandlerInvocation};
 use crate::commands::entity_commands::build_load_response;
+use crate::services::entity_admin::{EntityAdminService, EntityDetails};
 use crate::services::suggestions::starts_with_known_command_root;
-use crate::utils::EntityDetails;
 
 pub(crate) async fn dispatch_desktop_command(
     input: &str,
@@ -41,8 +41,12 @@ pub(crate) async fn dispatch_desktop_command(
 
     let manifest = command_manifest();
     if !starts_with_known_command_root(trimmed, &manifest) {
-        if let Some(entity) = crate::resolve_entity(trimmed.to_string(), state.inner()).await? {
-            let load_entity: EntityDetails = entity.into();
+        let admin = EntityAdminService;
+        if let Some(entity) = admin
+            .resolve_entity(trimmed.to_string(), state.inner())
+            .await?
+        {
+            let load_entity: EntityDetails = entity;
             let (output, event) = build_load_response(load_entity, state).await;
             return Ok(Some(ok_response(output, event)));
         }

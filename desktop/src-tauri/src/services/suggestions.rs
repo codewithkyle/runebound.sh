@@ -9,7 +9,8 @@ use dnd_core::vault::Vault;
 use serde::Serialize;
 
 use crate::app_state::{self, AppState};
-use crate::utils::{normalize_relative_path_for_storage, EntityType};
+use crate::services::entity_admin::EntityType;
+use crate::utils::normalize_relative_path_for_storage;
 
 pub struct SuggestionService;
 

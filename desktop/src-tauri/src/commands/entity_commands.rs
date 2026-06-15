@@ -3,10 +3,10 @@ use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocatio
 use dnd_core::command::CommandClientEvent;
 use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
 
-use crate::utils::{
-    path_for_display, resolve_entity, soft_delete_entity, undo_last_soft_delete,
-    EntityDetails, EntityType, SoftDeleteEntityInput,
+use crate::services::entity_admin::{
+    EntityAdminService, EntityDetails, EntityType, SoftDeleteEntityInput,
 };
+use crate::utils::path_for_display;
 use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
 
 pub async fn handle_load(
@@ -27,7 +27,10 @@ pub async fn handle_load(
         return Ok(Some(ok_response("usage: load <npc-or-location-or-faction-name>".to_string(), None)));
     }
 
-    let entity = resolve_entity(target.to_string(), invocation.state.clone()).await?;
+    let admin = EntityAdminService;
+    let entity = admin
+        .resolve_entity(target.to_string(), invocation.state.inner())
+        .await?;
     let Some(entity) = entity else {
         return Ok(Some(ok_response(format!("no npc, location, or faction found for: {target}"), None)));
     };
@@ -64,7 +67,10 @@ async fn entity_preview_response(
     if target.is_empty() {
         return Ok(Some(ok_response(format!("usage: {} <npc-or-location-or-faction-name>", root), None)));
     }
-    let entity = resolve_entity(target.to_string(), invocation.state.clone()).await?;
+    let admin = EntityAdminService;
+    let entity = admin
+        .resolve_entity(target.to_string(), invocation.state.inner())
+        .await?;
     let Some(entity) = entity else {
         return Ok(Some(ok_response(format!("no npc, location, or faction found for: {target}"), None)));
     };
@@ -90,7 +96,10 @@ pub async fn handle_delete(
         return Ok(Some(ok_response("usage: delete <npc-or-location-or-faction-name>".to_string(), None)));
     }
 
-    let result = soft_delete_entity(SoftDeleteEntityInput { target: target.to_string() }, invocation.state.clone()).await?;
+    let admin = EntityAdminService;
+    let result = admin
+        .soft_delete_entity(SoftDeleteEntityInput { target: target.to_string() }, invocation.state.inner())
+        .await?;
 
     let output = [
         "## Deleted".to_string(),
@@ -123,7 +132,8 @@ pub async fn handle_delete(
 pub async fn handle_undo(
     invocation: DesktopHandlerInvocation<'_>,
 ) -> Result<Option<CommandResponse>, String> {
-    let result = undo_last_soft_delete(invocation.state.clone()).await?;
+    let admin = EntityAdminService;
+    let result = admin.undo_last_soft_delete(invocation.state.inner()).await?;
     let output = [
         "## Undo complete".to_string(),
         format!("type: {}", result.entity_type.as_str()),
