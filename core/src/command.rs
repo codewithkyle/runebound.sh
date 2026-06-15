@@ -14,7 +14,8 @@ use crate::config::{AppConfig, load_effective, required_issues, save_config, val
 use crate::db;
 use crate::health::{self, CheckReport, OllamaHealth};
 use crate::output::{
-    command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status, text_node,
+    code, command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status,
+    text_node,
 };
 use crate::session::{
     OllamaStepState, OnboardingFlow, OnboardingSession, SessionState, VaultStepState,
@@ -117,8 +118,9 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_status(invocation.workspace_root).await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "status"),
+                        command_help_doc(invocation.manifest, Some("status"), None),
                     )),
                     _ => bail!("unknown status command. use `status help`"),
                 }
@@ -142,7 +144,12 @@ fn help_handler_entry() -> HandlerEntry<CoreHandler> {
         "help",
         metadata_for("help"),
         CoreHandler::new(|invocation| {
-            Box::pin(async move { Ok(CommandOutput::text(render_root_help(invocation.manifest))) })
+            Box::pin(async move {
+                Ok(CommandOutput::with_doc(
+                    render_root_help(invocation.manifest),
+                    command_help_doc(invocation.manifest, None, None),
+                ))
+            })
         }),
     )
 }
@@ -155,8 +162,9 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "exit"),
+                        command_help_doc(invocation.manifest, Some("exit"), None),
                     )),
                     _ => bail!("unknown exit command. use `exit help`"),
                 }
@@ -173,8 +181,9 @@ fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_ping(invocation.workspace_root).await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "ping"),
+                        command_help_doc(invocation.manifest, Some("ping"), None),
                     )),
                     _ => bail!("unknown ping command. use `ping help`"),
                 }
@@ -1168,15 +1177,17 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     let lowered = invocation.lowered;
     let manifest = invocation.manifest;
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
-        return Ok(CommandOutput::text(render_command_help(manifest, "config")));
+        return Ok(CommandOutput::with_doc(
+            render_command_help(manifest, "config"),
+            command_help_doc(manifest, Some("config"), None),
+        ));
     }
 
     if lowered.len() == 3 && lowered[2] == "help" {
-        return Ok(CommandOutput::text(render_subcommand_help(
-            manifest,
-            "config",
-            &lowered[1],
-        )));
+        return Ok(CommandOutput::with_doc(
+            render_subcommand_help(manifest, "config", &lowered[1]),
+            command_help_doc(manifest, Some("config"), Some(&lowered[1])),
+        ));
     }
 
     match lowered[1].as_str() {
@@ -1287,6 +1298,106 @@ fn find_manifest_command<'a>(manifest: &'a CommandManifest, root: &str) -> Optio
         .commands
         .iter()
         .find(|command| command.name.eq_ignore_ascii_case(root))
+}
+
+fn examples_block(examples: &[String]) -> OutputBlock {
+    let items: Vec<Vec<InlineNode>> = examples
+        .iter()
+        .map(|example| vec![code(example.clone())])
+        .collect();
+    list(items)
+}
+
+/// Structured, clickable counterpart to the manifest help renderers.
+///
+/// `root = None` renders the command index; `Some(root)` renders one command;
+/// `Some(root) + Some(subcommand)` renders a subcommand. Subcommands render as
+/// `command_ref`s (clicking opens their help) and examples render as code. The
+/// plain-text `render_*_help` functions remain the fallback `output` string.
+fn command_help_doc(
+    manifest: &CommandManifest,
+    root: Option<&str>,
+    subcommand: Option<&str>,
+) -> OutputDoc {
+    let Some(root) = root else {
+        let items: Vec<Vec<InlineNode>> = manifest
+            .commands
+            .iter()
+            .filter(|command| {
+                command.execution == crate::command_manifest::CommandExecution::Core
+            })
+            .map(|command| {
+                vec![
+                    command_ref(command.name.clone(), format!("{} help", command.name)),
+                    text_node(format!(" — {}", command.summary)),
+                ]
+            })
+            .collect();
+        return doc()
+            .with_block(heading(2, "Commands"))
+            .with_block(list(items))
+            .with_block(paragraph_text(
+                "Use `<command> help` or `help <command>` for details.",
+            ));
+    };
+
+    let Some(command) = find_manifest_command(manifest, root) else {
+        return doc().with_block(paragraph_with_inlines(vec![
+            text_node(format!("unknown command: {root}. use ")),
+            command_ref("help", "help"),
+        ]));
+    };
+
+    if let Some(sub_name) = subcommand {
+        let Some(sub) = command
+            .subcommands
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(sub_name))
+        else {
+            return doc().with_block(paragraph_with_inlines(vec![
+                text_node(format!("unknown {root} command. use ")),
+                command_ref(format!("{root} help"), format!("{root} help")),
+            ]));
+        };
+
+        let mut document = doc()
+            .with_block(heading(2, format!("{} {}", command.name, sub.name)))
+            .with_block(paragraph_text(sub.summary.clone()));
+        if !sub.examples.is_empty() {
+            document = document
+                .with_block(heading(3, "Examples"))
+                .with_block(examples_block(&sub.examples));
+        }
+        return document;
+    }
+
+    let mut document = doc()
+        .with_block(heading(2, command.name.clone()))
+        .with_block(paragraph_text(command.summary.clone()));
+    if !command.subcommands.is_empty() {
+        let items: Vec<Vec<InlineNode>> = command
+            .subcommands
+            .iter()
+            .map(|sub| {
+                vec![
+                    command_ref(
+                        format!("{} {}", command.name, sub.name),
+                        format!("{} {} help", command.name, sub.name),
+                    ),
+                    text_node(format!(" — {}", sub.summary)),
+                ]
+            })
+            .collect();
+        document = document
+            .with_block(heading(3, "Subcommands"))
+            .with_block(list(items));
+    }
+    if !command.examples.is_empty() {
+        document = document
+            .with_block(heading(3, "Examples"))
+            .with_block(examples_block(&command.examples));
+    }
+    document
 }
 
 async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {

@@ -4,8 +4,10 @@ use crate::app_state::AppState;
 use crate::commands::DesktopHandlerInvocation;
 use crate::entities::common::{
     command_message_response,
+    command_message_response_with_doc,
     command_no_active_draft,
     command_response_with_event,
+    entity_help_doc,
     entity_reroll_field_help,
     entity_set_field_help,
     parse_reroll_field_and_prompt,
@@ -30,7 +32,9 @@ pub async fn handle_npc(
         if !has_draft {
             return command_no_active_draft(EntityKind::Npc);
         }
-        return command_message_response(domain.help_text());
+        let prose = domain.help_text();
+        let help_doc = entity_help_doc(EntityKind::Npc, &prose);
+        return command_message_response_with_doc(prose, help_doc);
     }
 
     if lowered == "npc show" {
