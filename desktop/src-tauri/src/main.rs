@@ -40,7 +40,7 @@ async fn run_command(
     input: String,
     state: tauri::State<'_, AppState>,
 ) -> Result<CommandResponse, String> {
-    let normalized_input = normalize_input_for_dispatch(&input);
+    let normalized_input = normalize_command_input(&input);
     let parsed = parse_command_input(&normalized_input);
     if !parsed.valid {
         let has_unknown_command = parsed
@@ -80,14 +80,6 @@ async fn run_command(
     Ok(service.execute_line(&normalized_input).await)
 }
 
-fn normalize_input_for_dispatch(input: &str) -> String {
-    normalize_command_input(input)
-}
-
-
-
-
-
 #[tauri::command]
 fn get_command_manifest() -> CommandManifest {
     dnd_core::command_manifest::command_manifest()
@@ -96,27 +88,6 @@ fn get_command_manifest() -> CommandManifest {
 #[tauri::command]
 fn exit_app(app: tauri::AppHandle) {
     app.exit(0);
-}
-
-#[cfg(test)]
-mod tests {
-    use super::normalize_input_for_dispatch;
-
-    #[test]
-    fn dispatch_preserves_windows_backslashes() {
-        let input = r"set vault C:\Users\andrewk9\Documents\DND";
-        assert_eq!(normalize_input_for_dispatch(input), input);
-    }
-
-    #[test]
-    fn dispatch_only_unwraps_markdown_backticks() {
-        let input = "  `set vault C:\\Users\\andrewk9\\Documents\\DND`  ";
-        assert_eq!(
-            normalize_input_for_dispatch(input),
-            r"set vault C:\Users\andrewk9\Documents\DND"
-        );
-    }
-
 }
 
 fn main() {

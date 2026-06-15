@@ -383,7 +383,7 @@ After Phases 1-6, the canonical types should all live in `services/` or `runebou
 
 ---
 
-## Phase 8: Final `main.rs` Cleanup
+## Phase 8: Final `main.rs` Cleanup *(✅ Completed 2026-06-14)*
 
 ### Target State
 
@@ -404,6 +404,8 @@ After Phases 1-6, the canonical types should all live in `services/` or `runebou
 - All normalization helpers (moved to `utils/` or `core`)
 - All reference/vault helpers (moved to `services/vault_sync.rs` or `utils/`)
 
+Result: `main.rs` is down to **139 lines**, containing only module declarations, imports, the four Tauri command wrappers, and `main()`.
+
 ### Deliverables
 
 1. **Audit `main.rs` for remaining dead code**
@@ -412,23 +414,23 @@ After Phases 1-6, the canonical types should all live in `services/` or `runebou
    - Delete anything not used by the Tauri command wrappers or `main()`
 
 2. **Verify `run_command`**
-   - Should be ~40 lines:
-     ```rust
-     #[tauri::command]
-     async fn run_command(input: String, state: State<'_, AppState>) -> Result<CommandResponse, String> {
-         let normalized = normalize_input_for_dispatch(&input);
-         let parsed = parse_command_input(&normalized);
-         if !parsed.valid && !has_unknown_command(&parsed) {
-             return Err(parsed.diagnostics.first().map(|d| d.message.clone()).unwrap_or_else(|| "invalid command".to_string()));
-         }
-         if let Some(response) = router::dispatch_desktop_command(&normalized, &parsed.normalized_tokens, state.clone()).await? {
-             push_history(&state, &normalized, &response).await;
-             return Ok(response);
-         }
-         let mut service = state.command_service.lock().await;
-         Ok(service.execute_line(&normalized).await)
-     }
-     ```
+    - Should be ~40 lines:
+      ```rust
+      #[tauri::command]
+      async fn run_command(input: String, state: State<'_, AppState>) -> Result<CommandResponse, String> {
+          let normalized = normalize_command_input(&input);
+          let parsed = parse_command_input(&normalized);
+          if !parsed.valid && !has_unknown_command(&parsed) {
+              return Err(parsed.diagnostics.first().map(|d| d.message.clone()).unwrap_or_else(|| "invalid command".to_string()));
+          }
+          if let Some(response) = router::dispatch_desktop_command(&normalized, &parsed.normalized_tokens, state.clone()).await? {
+              push_history(&state, &normalized, &response).await;
+              return Ok(response);
+          }
+          let mut service = state.command_service.lock().await;
+          Ok(service.execute_line(&normalized).await)
+      }
+      ```
 
 3. **Verify `suggest_command_input`**
    - Should be ~10 lines delegating to `services::suggestions`
@@ -501,7 +503,7 @@ An agent should implement **one phase at a time**, in order, and verify at each 
 
 | File | Current Lines | Target Lines | Notes |
 |---|---|---|---|
-| `main.rs` | 5,575 | <500 | All business logic moved out |
+| `main.rs` | 139 | <500 | All business logic moved out; now pure Tauri wiring |
 | `utils.rs` | 1,134 | <300 | Bridge types removed, only helpers remain |
 | `services/ai_generation.rs` | 806 | ~1,000 | Add `reroll_*_field` methods |
 
