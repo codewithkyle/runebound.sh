@@ -1,3 +1,7 @@
+pub mod calendar_commands;
+pub mod date_commands;
+pub mod time_delta_commands;
+pub mod moon_commands;
 pub mod npc_commands;
 pub mod location_commands;
 pub mod faction_commands;
@@ -49,6 +53,7 @@ pub struct DesktopHandlerInvocation<'a> {
     pub tokens: &'a [String],
     pub lowered: &'a [String],
     pub state: State<'a, AppState>,
+    pub app_handle: tauri::AppHandle,
 }
 
 pub fn desktop_handler_registry() -> &'static HandlerRegistry<DesktopHandler> {
@@ -74,6 +79,11 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(save_handler_entry());
     registry.register(reroll_handler_entry());
     registry.register(cancel_handler_entry());
+    registry.register(calendar_handler_entry());
+    registry.register(date_handler_entry());
+    registry.register(time_delta_add_handler_entry());
+    registry.register(time_delta_subtract_handler_entry());
+    registry.register(moon_handler_entry());
     registry
 }
 
@@ -276,6 +286,46 @@ pub fn cancel_handler_entry() -> HandlerEntry<DesktopHandler> {
         "cancel",
         metadata_for("cancel"),
         DesktopHandler::new(|invocation| Box::pin(async move { system_commands::handle_cancel(invocation).await })),
+    )
+}
+
+pub fn calendar_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "calendar",
+        metadata_for("calendar"),
+        DesktopHandler::new(|invocation| Box::pin(async move { calendar_commands::handle_calendar(invocation).await })),
+    )
+}
+
+pub fn date_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "date",
+        metadata_for("date"),
+        DesktopHandler::new(|invocation| Box::pin(async move { date_commands::handle_date(invocation).await })),
+    )
+}
+
+pub fn time_delta_add_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "+",
+        metadata_for("+"),
+        DesktopHandler::new(|invocation| Box::pin(async move { time_delta_commands::handle_time_delta(invocation).await })),
+    )
+}
+
+pub fn time_delta_subtract_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "-",
+        metadata_for("-"),
+        DesktopHandler::new(|invocation| Box::pin(async move { time_delta_commands::handle_time_delta(invocation).await })),
+    )
+}
+
+pub fn moon_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "moon",
+        metadata_for("moon"),
+        DesktopHandler::new(|invocation| Box::pin(async move { moon_commands::handle_moon(invocation).await })),
     )
 }
 

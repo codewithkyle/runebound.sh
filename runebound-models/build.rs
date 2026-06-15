@@ -211,7 +211,9 @@ fn generate_typescript() -> String {
     );
     out.push_str("  | { kind: \"load_location_draft_with_card\"; draft: LocationDraft; entity_card: OutputDoc }\n");
     out.push_str("  | { kind: \"load_faction_draft_with_card\"; draft: FactionDraft; entity_card: OutputDoc }\n");
-    out.push_str("  | { kind: \"load_item_draft_with_card\"; draft: ItemDraft; entity_card: OutputDoc }\n");
+    out.push_str(
+        "  | { kind: \"load_item_draft_with_card\"; draft: ItemDraft; entity_card: OutputDoc }\n",
+    );
     out.push_str("  | { kind: \"clear_drafts\" }\n");
     out.push_str("  | { kind: \"clear_terminal\"; clear_history: boolean }\n");
     out.push_str("  | { kind: \"exit_requested\" };\n\n");

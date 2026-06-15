@@ -86,6 +86,42 @@ fn normalize_help_tokens(tokens: &[String]) -> Vec<String> {
     tokens.to_vec()
 }
 
+fn expand_inline_delta_root_tokens(tokens: Vec<String>) -> Vec<String> {
+    if tokens.is_empty() {
+        return tokens;
+    }
+
+    let first = &tokens[0];
+    if let Some((sign, remainder)) = split_inline_delta_token(first) {
+        let mut rewritten = Vec::with_capacity(tokens.len() + 1);
+        rewritten.push(sign);
+        rewritten.push(remainder);
+        rewritten.extend(tokens.into_iter().skip(1));
+        rewritten
+    } else {
+        tokens
+    }
+}
+
+fn split_inline_delta_token(token: &str) -> Option<(String, String)> {
+    if token.len() < 2 {
+        return None;
+    }
+
+    let mut chars = token.chars();
+    let first = chars.next()?;
+    if first != '+' && first != '-' {
+        return None;
+    }
+
+    let remainder: String = chars.collect();
+    if remainder.is_empty() {
+        return None;
+    }
+
+    Some((first.to_string(), remainder))
+}
+
 pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest) -> ParseResult {
     let normalized_input = normalize_command_input(input);
     let sanitized_input = sanitize_inline_apostrophes(&normalized_input);
@@ -117,6 +153,8 @@ pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest
             };
         }
     };
+
+    let raw_tokens = expand_inline_delta_root_tokens(raw_tokens);
 
     let normalized_tokens = normalize_alias_tokens(&raw_tokens, manifest);
     let canonical_input = normalized_tokens.join(" ");
@@ -368,6 +406,20 @@ mod tests {
     #[test]
     fn does_not_unwrap_malformed_nested_backticks() {
         assert_eq!(normalize_command_input("``help``"), "``help``");
+    }
+
+    #[test]
+    fn splits_inline_positive_delta_root_token() {
+        let parsed = parse_command_input("+1d");
+        assert_eq!(parsed.normalized_tokens, vec!["+", "1d"]);
+        assert!(parsed.valid);
+    }
+
+    #[test]
+    fn splits_inline_negative_delta_root_token() {
+        let parsed = parse_command_input("-15m");
+        assert_eq!(parsed.normalized_tokens, vec!["-", "15m"]);
+        assert!(parsed.valid);
     }
 
     #[test]
