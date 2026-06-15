@@ -29,7 +29,7 @@ pub async fn handle_date(
     )))
 }
 
-async fn date_show(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
+async fn date_show(_invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let stored = match calendar::load_calendar() {
         Ok(Some(c)) => c,
         Ok(None) => {

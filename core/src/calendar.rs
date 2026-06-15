@@ -467,6 +467,7 @@ fn days_before_month(definition: &CalendarDefinition, month_index: usize) -> u32
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[allow(dead_code)]
 struct DonjonCalendarJson {
     year_len: u32,
     #[serde(default)]
