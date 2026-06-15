@@ -61,11 +61,14 @@ pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
             write_attr_line(&mut out, "Kind (custom)", custom);
         }
     }
-    write_attr_line(&mut out, "Headquarters", &frontmatter.headquarters);
-    write_attr_line(&mut out, "Sphere", &frontmatter.sphere_of_influence);
-    write_attr_line(&mut out, "Reputation", &frontmatter.reputation);
     writeln!(&mut out).ok();
-
+    write_section(&mut out, "Headquarters", &frontmatter.headquarters);
+    write_section(
+        &mut out,
+        "Sphere of Influence",
+        &frontmatter.sphere_of_influence,
+    );
+    write_section(&mut out, "Reputation", &frontmatter.reputation);
     write_section(&mut out, "Public Description", &frontmatter.public_description);
     write_section(&mut out, "True Agenda", &frontmatter.true_agenda);
     write_section(&mut out, "Methods", &frontmatter.methods);
