@@ -96,9 +96,6 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Op
     };
 
     let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
-    if let Some(ref prompt) = merged_prompt {
-        eprintln!("[reroll] npc merged prompt: {}", prompt);
-    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
@@ -144,9 +141,6 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_promp
     };
 
     let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
-    if let Some(ref prompt) = merged_prompt {
-        eprintln!("[reroll] location merged prompt: {}", prompt);
-    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
@@ -192,9 +186,6 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt
     };
 
     let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
-    if let Some(ref prompt) = merged_prompt {
-        eprintln!("[reroll] faction merged prompt: {}", prompt);
-    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
@@ -250,9 +241,6 @@ async fn reroll_current_item(state: tauri::State<'_, AppState>, reroll_prompt: O
     };
 
     let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
-    if let Some(ref prompt) = merged_prompt {
-        eprintln!("[reroll] item merged prompt: {}", prompt);
-    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
