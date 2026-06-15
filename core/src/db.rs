@@ -273,10 +273,7 @@ pub async fn find_faction_by_name_or_slug(
     row.map(row_to_faction).transpose()
 }
 
-pub async fn find_item_by_name_or_slug(
-    pool: &SqlitePool,
-    input: &str,
-) -> Result<Option<ItemRow>> {
+pub async fn find_item_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<ItemRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
         "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location, created_at, updated_at

@@ -550,7 +550,8 @@ pub fn command_manifest() -> CommandManifest {
                         examples: vec![
                             "item set category weapon".to_string(),
                             "item set rarity legendary".to_string(),
-                            "item set abilities Channels stormlight into blinding arcs.".to_string(),
+                            "item set abilities Channels stormlight into blinding arcs."
+                                .to_string(),
                             "item set materials stormglass, quicksilver filigree".to_string(),
                         ],
                     },
@@ -708,7 +709,8 @@ pub fn command_manifest() -> CommandManifest {
                 subcommands: vec![
                     SubcommandSpec {
                         name: "import".to_string(),
-                        summary: "Import calendar from JSON file exported by donjon.bin.sh".to_string(),
+                        summary: "Import calendar from JSON file exported by donjon.bin.sh"
+                            .to_string(),
                         options: Vec::new(),
                         examples: vec![
                             "calendar import".to_string(),
@@ -758,6 +760,28 @@ pub fn command_manifest() -> CommandManifest {
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("date help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
+                name: "+".to_string(),
+                summary: "Advance the calendar forward by a time delta".to_string(),
+                examples: vec!["+15m".to_string(), "+2h".to_string(), "+1d".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
+                name: "-".to_string(),
+                summary: "Rewind the calendar backward by a time delta".to_string(),
+                examples: vec!["-10m".to_string(), "-3d".to_string(), "-1w".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
                 execution: CommandExecution::Desktop,
                 show_in_autocomplete: true,
             },

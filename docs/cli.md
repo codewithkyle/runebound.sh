@@ -246,7 +246,45 @@ The weekday is computed from the calendar's `first_day` offset and `week_len`.
 
 ---
 
-## 11. Related Docs
+## 11. Relative Time Commands
+
+Standalone `+` and `-` commands adjust the current calendar forward or backward.
+
+### Usage
+
+```
++<amount><unit>
+-<amount><unit>
+```
+
+Where `<unit>` is one of:
+
+- `m` — minutes
+- `h` — hours
+- `d` — days
+- `w` — weeks (uses the calendar's `week_len`)
+- `y` — years (uses the calendar's `year_len`)
+
+### Examples
+
+```
++30m
++5h
+-2d
+-1w
+```
+
+### Rules
+
+- Requires an imported calendar (`calendar import`).
+- Amount must be a positive integer (e.g., `+5h`).
+- Only one delta token is accepted per command.
+- Subtractions clamp at the campaign start (year 0, first month/day).
+- Each command persists immediately and echoes the updated formatted date.
+
+---
+
+## 12. Related Docs
 
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts

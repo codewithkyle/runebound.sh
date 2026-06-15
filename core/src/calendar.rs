@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 
 use crate::config::config_paths;
@@ -49,7 +49,9 @@ impl CalendarDefinition {
             }
         }
 
-        let total_month_days: u32 = self.months.iter()
+        let total_month_days: u32 = self
+            .months
+            .iter()
             .map(|m| self.month_len.get(m).copied().unwrap_or(0))
             .sum();
 
@@ -74,7 +76,11 @@ impl CalendarDefinition {
         }
 
         if self.first_day >= self.week_len {
-            bail!("first_day ({}) must be less than week_len ({})", self.first_day, self.week_len);
+            bail!(
+                "first_day ({}) must be less than week_len ({})",
+                self.first_day,
+                self.week_len
+            );
         }
 
         Ok(())
@@ -110,7 +116,12 @@ impl StoredCalendar {
         }
 
         let month_name = &self.definition.months[self.state.month_index];
-        let month_len = self.definition.month_len.get(month_name).copied().unwrap_or(0);
+        let month_len = self
+            .definition
+            .month_len
+            .get(month_name)
+            .copied()
+            .unwrap_or(0);
         if self.state.day == 0 || self.state.day > month_len {
             bail!(
                 "day ({}) must be between 1 and {} for month '{}'",
@@ -212,6 +223,247 @@ impl CalendarState {
         self.minute = minute;
         Ok(())
     }
+
+    fn total_minutes(&self, definition: &CalendarDefinition) -> i64 {
+        let year_minutes = i64::from(self.year) * i64::from(definition.year_len) * MINUTES_PER_DAY;
+        let month_days = days_before_month(definition, self.month_index) as i64;
+        let day_offset = i64::from(self.day.saturating_sub(1));
+        let day_minutes = (month_days + day_offset) * MINUTES_PER_DAY;
+        let hour_minutes = i64::from(self.hour_24) * MINUTES_PER_HOUR;
+        let minute_component = i64::from(self.minute);
+        year_minutes + day_minutes + hour_minutes + minute_component
+    }
+
+    fn update_from_total_minutes(
+        &mut self,
+        definition: &CalendarDefinition,
+        total_minutes: i64,
+    ) -> Result<()> {
+        let clamped = total_minutes.max(0);
+        let total_days = clamped / MINUTES_PER_DAY;
+        let minute_of_day = clamped % MINUTES_PER_DAY;
+
+        let year_len = i64::from(definition.year_len);
+        let year = total_days / year_len;
+        if year > i64::from(i32::MAX) {
+            bail!("calendar year exceeds supported range");
+        }
+
+        let mut day_of_year = (total_days % year_len) as u32;
+        let mut month_index = 0usize;
+        let mut day_in_month = 1u32;
+        for (idx, name) in definition.months.iter().enumerate() {
+            let month_len = definition.month_len.get(name).copied().unwrap_or(0);
+            if month_len == 0 {
+                bail!("month '{}' has invalid length 0", name);
+            }
+            if day_of_year < month_len {
+                month_index = idx;
+                day_in_month = day_of_year + 1;
+                break;
+            }
+            day_of_year -= month_len;
+        }
+
+        self.year = year as i32;
+        self.month_index = month_index;
+        self.day = day_in_month;
+        self.hour_24 = (minute_of_day / MINUTES_PER_HOUR) as u8;
+        self.minute = (minute_of_day % MINUTES_PER_HOUR) as u8;
+        Ok(())
+    }
+}
+
+const MINUTES_PER_HOUR: i64 = 60;
+const HOURS_PER_DAY: i64 = 24;
+const MINUTES_PER_DAY: i64 = MINUTES_PER_HOUR * HOURS_PER_DAY;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CalendarDeltaUnit {
+    Minutes,
+    Hours,
+    Days,
+    Weeks,
+    Years,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CalendarDelta {
+    sign: i8,
+    magnitude: u32,
+    unit: CalendarDeltaUnit,
+}
+
+impl CalendarDelta {
+    pub fn from_str(input: &str) -> Result<Self> {
+        if input.is_empty() {
+            bail!("delta cannot be empty");
+        }
+        let mut chars = input.chars();
+        let sign_char = chars
+            .next()
+            .ok_or_else(|| anyhow!("delta cannot be empty"))?;
+        let remainder: String = chars.collect();
+        Self::from_parts(sign_char, remainder.as_str())
+    }
+
+    pub fn from_parts(sign_char: char, payload: &str) -> Result<Self> {
+        if payload.is_empty() {
+            bail!("delta is missing an amount and unit");
+        }
+
+        let sign = match sign_char {
+            '+' => 1,
+            '-' => -1,
+            _ => bail!("delta must start with '+' or '-'"),
+        };
+
+        let (amount_str, unit_char) = split_amount_and_unit(payload)?;
+        let magnitude: u32 = amount_str
+            .parse()
+            .map_err(|_| anyhow!("'{}' is not a valid positive integer", amount_str))?;
+        if magnitude == 0 {
+            bail!("delta amount must be greater than 0");
+        }
+
+        let unit = CalendarDeltaUnit::try_from(unit_char)?;
+
+        Ok(Self {
+            sign,
+            magnitude,
+            unit,
+        })
+    }
+
+    pub fn is_positive(&self) -> bool {
+        self.sign >= 0
+    }
+
+    pub fn magnitude(&self) -> u32 {
+        self.magnitude
+    }
+
+    pub fn unit(&self) -> CalendarDeltaUnit {
+        self.unit
+    }
+
+    pub fn unit_label(&self, amount: u32) -> &'static str {
+        match self.unit {
+            CalendarDeltaUnit::Minutes => {
+                if amount == 1 {
+                    "minute"
+                } else {
+                    "minutes"
+                }
+            }
+            CalendarDeltaUnit::Hours => {
+                if amount == 1 {
+                    "hour"
+                } else {
+                    "hours"
+                }
+            }
+            CalendarDeltaUnit::Days => {
+                if amount == 1 {
+                    "day"
+                } else {
+                    "days"
+                }
+            }
+            CalendarDeltaUnit::Weeks => {
+                if amount == 1 {
+                    "week"
+                } else {
+                    "weeks"
+                }
+            }
+            CalendarDeltaUnit::Years => {
+                if amount == 1 {
+                    "year"
+                } else {
+                    "years"
+                }
+            }
+        }
+    }
+
+    fn minutes(&self, definition: &CalendarDefinition) -> Result<i64> {
+        let magnitude = i64::from(self.magnitude);
+        let base_minutes = match self.unit {
+            CalendarDeltaUnit::Minutes => magnitude,
+            CalendarDeltaUnit::Hours => checked_mul_i64(magnitude, MINUTES_PER_HOUR)?,
+            CalendarDeltaUnit::Days => checked_mul_i64(magnitude, MINUTES_PER_DAY)?,
+            CalendarDeltaUnit::Weeks => {
+                let days = checked_mul_i64(magnitude, i64::from(definition.week_len))?;
+                checked_mul_i64(days, MINUTES_PER_DAY)?
+            }
+            CalendarDeltaUnit::Years => {
+                let days = checked_mul_i64(magnitude, i64::from(definition.year_len))?;
+                checked_mul_i64(days, MINUTES_PER_DAY)?
+            }
+        };
+
+        Ok(if self.sign >= 0 {
+            base_minutes
+        } else {
+            -base_minutes
+        })
+    }
+}
+
+impl TryFrom<char> for CalendarDeltaUnit {
+    type Error = anyhow::Error;
+
+    fn try_from(value: char) -> Result<Self> {
+        match value.to_ascii_lowercase() {
+            'm' => Ok(CalendarDeltaUnit::Minutes),
+            'h' => Ok(CalendarDeltaUnit::Hours),
+            'd' => Ok(CalendarDeltaUnit::Days),
+            'w' => Ok(CalendarDeltaUnit::Weeks),
+            'y' => Ok(CalendarDeltaUnit::Years),
+            _ => bail!("unsupported delta unit '{}'. use m, h, d, w, or y", value),
+        }
+    }
+}
+
+pub fn apply_calendar_delta(
+    state: &mut CalendarState,
+    definition: &CalendarDefinition,
+    delta: CalendarDelta,
+) -> Result<()> {
+    let current = state.total_minutes(definition);
+    let delta_minutes = delta.minutes(definition)?;
+    let updated = current
+        .checked_add(delta_minutes)
+        .ok_or_else(|| anyhow!("calendar adjustment is too large"))?;
+    state.update_from_total_minutes(definition, updated.max(0))
+}
+
+fn split_amount_and_unit(payload: &str) -> Result<(&str, char)> {
+    let mut chars = payload.chars();
+    let unit_char = chars
+        .next_back()
+        .ok_or_else(|| anyhow!("delta is missing a unit"))?;
+    let amount_len = payload.len() - unit_char.len_utf8();
+    if amount_len == 0 {
+        bail!("delta is missing an amount");
+    }
+    let amount = &payload[..amount_len];
+    Ok((amount, unit_char))
+}
+
+fn checked_mul_i64(left: i64, right: i64) -> Result<i64> {
+    left.checked_mul(right)
+        .ok_or_else(|| anyhow!("calendar adjustment is too large"))
+}
+
+fn days_before_month(definition: &CalendarDefinition, month_index: usize) -> u32 {
+    definition
+        .months
+        .iter()
+        .take(month_index)
+        .map(|name| definition.month_len.get(name).copied().unwrap_or(0))
+        .sum()
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -238,15 +490,21 @@ struct DonjonCalendarJson {
 }
 
 pub fn import_donjon_json(json_content: &str) -> Result<StoredCalendar> {
-    let donjon: DonjonCalendarJson = serde_json::from_str(json_content)
-        .context("failed to parse donjon calendar JSON")?;
+    let donjon: DonjonCalendarJson =
+        serde_json::from_str(json_content).context("failed to parse donjon calendar JSON")?;
 
     let mut notes = donjon.notes;
     if !donjon.lunar_cyc.is_empty() {
-        notes.insert("lunar_cyc".to_string(), serde_json::to_value(&donjon.lunar_cyc)?);
+        notes.insert(
+            "lunar_cyc".to_string(),
+            serde_json::to_value(&donjon.lunar_cyc)?,
+        );
     }
     if !donjon.lunar_shf.is_empty() {
-        notes.insert("lunar_shf".to_string(), serde_json::to_value(&donjon.lunar_shf)?);
+        notes.insert(
+            "lunar_shf".to_string(),
+            serde_json::to_value(&donjon.lunar_shf)?,
+        );
     }
 
     let definition = CalendarDefinition {
@@ -260,7 +518,9 @@ pub fn import_donjon_json(json_content: &str) -> Result<StoredCalendar> {
         first_day: donjon.first_day,
     };
 
-    definition.validate().context("calendar validation failed")?;
+    definition
+        .validate()
+        .context("calendar validation failed")?;
 
     let state = CalendarState::default();
 
@@ -276,8 +536,12 @@ pub fn load_calendar() -> Result<Option<StoredCalendar>> {
     let content = std::fs::read_to_string(&paths.calendar)
         .with_context(|| format!("failed to read calendar file {}", paths.calendar.display()))?;
 
-    let calendar: StoredCalendar = toml::from_str(&content)
-        .with_context(|| format!("failed to parse calendar TOML from {}", paths.calendar.display()))?;
+    let calendar: StoredCalendar = toml::from_str(&content).with_context(|| {
+        format!(
+            "failed to parse calendar TOML from {}",
+            paths.calendar.display()
+        )
+    })?;
 
     calendar.validate().context("loaded calendar is invalid")?;
 
@@ -285,7 +549,9 @@ pub fn load_calendar() -> Result<Option<StoredCalendar>> {
 }
 
 pub fn save_calendar(calendar: &StoredCalendar) -> Result<PathBuf> {
-    calendar.validate().context("cannot save invalid calendar")?;
+    calendar
+        .validate()
+        .context("cannot save invalid calendar")?;
 
     let paths = config_paths(Path::new(""))?;
 
@@ -294,8 +560,8 @@ pub fn save_calendar(calendar: &StoredCalendar) -> Result<PathBuf> {
             .with_context(|| format!("failed to create calendar directory {}", parent.display()))?;
     }
 
-    let content = toml::to_string_pretty(calendar)
-        .context("failed to serialize calendar to TOML")?;
+    let content =
+        toml::to_string_pretty(calendar).context("failed to serialize calendar to TOML")?;
 
     std::fs::write(&paths.calendar, content)
         .with_context(|| format!("failed to write calendar file {}", paths.calendar.display()))?;
@@ -366,12 +632,7 @@ pub fn format_date(calendar: &StoredCalendar) -> String {
 
     format!(
         "{} of {} {}:{} {} ({})",
-        day_with_suffix,
-        month_name,
-        hour_12,
-        minute_str,
-        am_pm,
-        weekday
+        day_with_suffix, month_name, hour_12, minute_str, am_pm, weekday
     )
 }
 
@@ -414,13 +675,7 @@ pub fn format_date_conversational(calendar: &StoredCalendar) -> String {
 
     format!(
         "It is the {} of {} in the year {} at {}:{} {} ({})",
-        day_with_suffix,
-        month_name,
-        calendar.state.year,
-        hour_12,
-        minute_str,
-        am_pm,
-        weekday
+        day_with_suffix, month_name, calendar.state.year, hour_12, minute_str, am_pm, weekday
     )
 }
 
@@ -503,8 +758,16 @@ mod tests {
         let result = import_donjon_json(json);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let error_string = err.chain().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
-        assert!(error_string.contains("does not match year_len"), "error chain: {}", error_string);
+        let error_string = err
+            .chain()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_string.contains("does not match year_len"),
+            "error chain: {}",
+            error_string
+        );
     }
 
     #[test]
@@ -525,9 +788,17 @@ mod tests {
         let result = import_donjon_json(json);
         assert!(result.is_err());
         let err = result.unwrap_err();
-        let error_string = err.chain().map(|e| e.to_string()).collect::<Vec<_>>().join("; ");
-        assert!(error_string.contains("invalid length 0") || error_string.contains("does not match year_len"),
-            "error chain: {}", error_string);
+        let error_string = err
+            .chain()
+            .map(|e| e.to_string())
+            .collect::<Vec<_>>()
+            .join("; ");
+        assert!(
+            error_string.contains("invalid length 0")
+                || error_string.contains("does not match year_len"),
+            "error chain: {}",
+            error_string
+        );
     }
 
     #[test]
@@ -773,5 +1044,104 @@ mod tests {
 
         let result = state.set_day(51, &calendar.definition);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn calendar_delta_parses_units() {
+        let delta = CalendarDelta::from_parts('+', "12h").expect("delta should parse");
+        assert!(delta.is_positive());
+        assert_eq!(delta.magnitude(), 12);
+        assert_eq!(delta.unit(), CalendarDeltaUnit::Hours);
+
+        let negative = CalendarDelta::from_parts('-', "3d").expect("delta should parse");
+        assert!(!negative.is_positive());
+        assert_eq!(negative.unit(), CalendarDeltaUnit::Days);
+    }
+
+    #[test]
+    fn apply_calendar_delta_adds_hours() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let mut calendar = import_donjon_json(json).expect("import should succeed");
+        calendar.state.hour_24 = 10;
+        calendar.state.minute = 45;
+
+        let delta = CalendarDelta::from_parts('+', "3h").expect("delta should parse");
+        apply_calendar_delta(&mut calendar.state, &calendar.definition, delta)
+            .expect("delta should apply");
+
+        assert_eq!(calendar.state.hour_24, 13);
+        assert_eq!(calendar.state.minute, 45);
+    }
+
+    #[test]
+    fn apply_calendar_delta_rolls_over_month() {
+        let json = r#"{
+            "year_len": 100,
+            "n_months": 2,
+            "months": ["First", "Second"],
+            "month_len": {"First": 50, "Second": 50},
+            "week_len": 5,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let mut calendar = import_donjon_json(json).expect("import should succeed");
+        calendar.state.month_index = 0;
+        calendar.state.day = 50;
+        calendar.state.hour_24 = 23;
+        calendar.state.minute = 0;
+
+        let delta = CalendarDelta::from_parts('+', "2d").expect("delta should parse");
+        apply_calendar_delta(&mut calendar.state, &calendar.definition, delta)
+            .expect("delta should apply");
+
+        assert_eq!(calendar.state.month_index, 1);
+        assert_eq!(calendar.state.day, 2);
+        assert_eq!(calendar.state.hour_24, 23);
+    }
+
+    #[test]
+    fn apply_calendar_delta_clamps_negative_values() {
+        let json = r#"{
+            "year_len": 60,
+            "n_months": 2,
+            "months": ["First", "Second"],
+            "month_len": {"First": 30, "Second": 30},
+            "week_len": 6,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5", "D6"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let mut calendar = import_donjon_json(json).expect("import should succeed");
+        calendar.state.year = 5;
+        calendar.state.month_index = 1;
+        calendar.state.day = 10;
+        calendar.state.hour_24 = 12;
+        calendar.state.minute = 30;
+
+        let delta = CalendarDelta::from_parts('-', "400d").expect("delta should parse");
+        apply_calendar_delta(&mut calendar.state, &calendar.definition, delta)
+            .expect("delta should apply");
+
+        assert_eq!(calendar.state.year, 0);
+        assert_eq!(calendar.state.month_index, 0);
+        assert_eq!(calendar.state.day, 1);
+        assert_eq!(calendar.state.hour_24, 0);
+        assert_eq!(calendar.state.minute, 0);
     }
 }

@@ -1,5 +1,6 @@
 pub mod calendar_commands;
 pub mod date_commands;
+pub mod time_delta_commands;
 pub mod npc_commands;
 pub mod location_commands;
 pub mod faction_commands;
@@ -79,6 +80,8 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(cancel_handler_entry());
     registry.register(calendar_handler_entry());
     registry.register(date_handler_entry());
+    registry.register(time_delta_add_handler_entry());
+    registry.register(time_delta_subtract_handler_entry());
     registry
 }
 
@@ -297,6 +300,22 @@ pub fn date_handler_entry() -> HandlerEntry<DesktopHandler> {
         "date",
         metadata_for("date"),
         DesktopHandler::new(|invocation| Box::pin(async move { date_commands::handle_date(invocation).await })),
+    )
+}
+
+pub fn time_delta_add_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "+",
+        metadata_for("+"),
+        DesktopHandler::new(|invocation| Box::pin(async move { time_delta_commands::handle_time_delta(invocation).await })),
+    )
+}
+
+pub fn time_delta_subtract_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "-",
+        metadata_for("-"),
+        DesktopHandler::new(|invocation| Box::pin(async move { time_delta_commands::handle_time_delta(invocation).await })),
     )
 }
 

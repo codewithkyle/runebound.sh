@@ -61,7 +61,7 @@
 ## Phase 3 — Time Commands
 
 ### Goals
-- Support relative time adjustments (minutes, hours, days, weeks, years) with `+/-` syntax, including rollover across months/years.
+- Support relative time adjustments (minutes, hours, days, weeks, years) with standalone `+/-` commands (e.g., `+5h`, `-2d`), including rollover across months/years.
 - Persist changes immediately and echo the updated formatted date after each adjustment.
 
 ### Workstream
@@ -69,7 +69,7 @@
    - Implement `CalendarDelta::from_str("+3d")` supporting units `m`, `h`, `d`, `w`, `y`, optional `+/-`, multi-digit magnitudes, and case-insensitive units.
    - Expose `apply_delta(&mut CalendarState, &CalendarDefinition, CalendarDelta)` that uses minute-level arithmetic, converts weeks via `week_len`, years via cumulative month lengths, and handles underflow (no negative years; clamp at year 0, day 1 if subtraction overshoots).
 2. **Handler Additions:**
-   - Extend `date_commands.rs` so `date +5h`, `date -2d`, `date +1w`, `date +1y`, `date +30m` call the delta helper.
+   - Add standalone handlers in `time_delta_commands.rs` so commands like `+5h`, `-2d`, `+1w`, `+1y`, `+30m` call the delta helper.
    - Reject mixed/multi-token expressions per CLI simplicity (one delta per invocation). Provide explicit usage errors for invalid tokens.
    - Always print the new formatted date plus a short delta summary (e.g., “Added 5 hours → 14th of Emberwane 3:30 PM”).
 3. **Time-of-Day Formatting:**
