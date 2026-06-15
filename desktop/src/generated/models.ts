@@ -83,6 +83,7 @@ export type NpcFrontmatter = {
   id: string;
   slug: string;
   name: string;
+  vault_path: string;
   race: string;
   occupation: string;
   sex: string;
@@ -103,6 +104,7 @@ export type LocationFrontmatter = {
   id: string;
   slug: string;
   name: string;
+  vault_path: string;
   kind_type: string;
   kind_custom?: string | null;
   visual_description: string;
@@ -121,6 +123,7 @@ export type FactionFrontmatter = {
   id: string;
   slug: string;
   name: string;
+  vault_path: string;
   kind_type: string;
   kind_custom?: string | null;
   public_description: string;
@@ -146,6 +149,7 @@ export type ItemFrontmatter = {
   id: string;
   slug: string;
   name: string;
+  vault_path: string;
   category: string;
   rarity: string;
   attunement: string;

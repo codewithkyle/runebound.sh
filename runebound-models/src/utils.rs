@@ -147,11 +147,22 @@ pub fn slugify(value: &str) -> String {
 }
 
 pub fn unique_slug_for_dir(root: &Path, relative_dir: &str, base_slug: &str) -> String {
+    unique_slug_for_dir_with_ext(root, relative_dir, base_slug, "md")
+}
+
+pub fn unique_slug_for_dir_with_ext(
+    root: &Path,
+    relative_dir: &str,
+    base_slug: &str,
+    extension: &str,
+) -> String {
     let mut candidate = base_slug.to_string();
     let mut idx = 2;
 
     loop {
-        let path = root.join(relative_dir).join(format!("{candidate}.md"));
+        let path = root
+            .join(relative_dir)
+            .join(format!("{candidate}.{extension}"));
         if !path.exists() {
             return candidate;
         }
@@ -171,7 +182,9 @@ pub fn normalize_markdown_file_stem(value: &str) -> String {
         }
 
         let invalid = matches!(ch, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|');
-        if invalid || ch.is_whitespace() {
+        let treated_as_space =
+            invalid || ch.is_whitespace() || matches!(ch, '-' | '_' | '\u{2013}' | '\u{2014}');
+        if treated_as_space {
             if !out.is_empty() && !last_was_space {
                 out.push(' ');
                 last_was_space = true;
@@ -185,10 +198,58 @@ pub fn normalize_markdown_file_stem(value: &str) -> String {
 
     let trimmed = out.trim().trim_matches('.').trim();
     if trimmed.is_empty() {
-        "Untitled".to_string()
+        return "Untitled".to_string();
+    }
+
+    if should_title_case(trimmed) {
+        trimmed
+            .split_whitespace()
+            .map(title_case_word)
+            .collect::<Vec<_>>()
+            .join(" ")
     } else {
         trimmed.to_string()
     }
+}
+
+fn should_title_case(value: &str) -> bool {
+    let mut has_alpha = false;
+    let mut has_lower = false;
+    let mut has_upper = false;
+
+    for ch in value.chars() {
+        if !ch.is_alphabetic() {
+            continue;
+        }
+        has_alpha = true;
+        if ch.is_lowercase() {
+            has_lower = true;
+        } else if ch.is_uppercase() {
+            has_upper = true;
+        }
+    }
+
+    has_alpha && (!has_lower || !has_upper)
+}
+
+fn title_case_word(word: &str) -> String {
+    let mut result = String::with_capacity(word.len());
+    let mut first_alpha_found = false;
+
+    for ch in word.chars() {
+        if ch.is_alphabetic() {
+            if !first_alpha_found {
+                result.push(ch.to_ascii_uppercase());
+                first_alpha_found = true;
+            } else {
+                result.push(ch.to_ascii_lowercase());
+            }
+        } else {
+            result.push(ch);
+        }
+    }
+
+    result
 }
 
 pub fn normalize_unknown_text(value: &str) -> String {
@@ -334,6 +395,18 @@ mod tests {
         assert_eq!(
             normalize_markdown_file_stem("Drizzt/Do'Urden: Ranger?"),
             "Drizzt Do'Urden Ranger"
+        );
+    }
+
+    #[test]
+    fn normalize_markdown_file_stem_title_cases_kebab_and_snake_inputs() {
+        assert_eq!(
+            normalize_markdown_file_stem("lady-aria-of-neverwinter"),
+            "Lady Aria Of Neverwinter"
+        );
+        assert_eq!(
+            normalize_markdown_file_stem("__ashen_guard__"),
+            "Ashen Guard"
         );
     }
 

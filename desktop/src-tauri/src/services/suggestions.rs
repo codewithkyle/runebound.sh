@@ -122,6 +122,9 @@ impl SuggestionService {
         let is_delete_context = lowered == "delete" || lowered.starts_with("delete ");
         let is_show_context = lowered == "show" || lowered.starts_with("show ");
         let is_preview_context = lowered == "preview" || lowered.starts_with("preview ");
+        let is_publish_help = lowered.starts_with("publish help");
+        let is_publish_context = !is_publish_help
+            && (lowered == "publish" || lowered.starts_with("publish "));
         let search_query = if is_load_context {
             trimmed[4..].trim()
         } else if is_delete_context {
@@ -130,6 +133,8 @@ impl SuggestionService {
             trimmed[4..].trim()
         } else if is_preview_context {
             trimmed[7..].trim()
+        } else if is_publish_context {
+            trimmed["publish".len()..].trim()
         } else {
             trimmed
         };
@@ -139,6 +144,7 @@ impl SuggestionService {
                 || is_delete_context
                 || is_show_context
                 || is_preview_context
+                || is_publish_context
                 || !starts_with_known_command_root(trimmed, &manifest))
         {
             let entity_results = search_entities(state, search_query.to_string(), Some(6)).await?;
@@ -150,6 +156,8 @@ impl SuggestionService {
                 Some("show")
             } else if is_preview_context {
                 Some("preview")
+            } else if is_publish_context {
+                Some("publish")
             } else {
                 None
             };

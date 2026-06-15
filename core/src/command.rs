@@ -569,15 +569,16 @@ async fn try_execute_onboarding(
         if session.onboarding.ollama_base_url.trim().is_empty() {
             bail!("ollama URL is missing. run set ollama <url>.");
         }
-        if session.onboarding.selected_model.trim().is_empty() {
-            bail!("model is missing. run set model <name> or use model <index>.");
-        }
+
+        let missing_model = session.onboarding.selected_model.trim().is_empty();
 
         let loaded = load_effective(workspace_root)?;
         let mut config = loaded.effective;
         config.vault.path = Some(PathBuf::from(&session.onboarding.vault_path));
         config.ollama.base_url = session.onboarding.ollama_base_url.clone();
-        config.ollama.model = Some(session.onboarding.selected_model.clone());
+        if !missing_model {
+            config.ollama.model = Some(session.onboarding.selected_model.clone());
+        }
 
         let issues = required_issues(&config);
         if !issues.is_empty() {
@@ -612,6 +613,9 @@ async fn try_execute_onboarding(
             format!("vault ready: {}", vault.root().display()),
             format!("database ready: {}", db.path.display()),
         ];
+        if missing_model {
+            lines.push("ollama model not set; run `start setup` later to choose a model if you plan to use AI generation.".to_string());
+        }
         if !warnings.is_empty() {
             lines.push("setup warnings:".to_string());
             lines.extend(warnings.iter().map(|warning| format!("- {warning}")));

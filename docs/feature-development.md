@@ -12,6 +12,7 @@
 - `repositories/mod.rs` handles database and vault boundaries
 - `runebound-models` defines shared Rust and TS contracts
 - `desktop/src/App.tsx` integrates frontend events and rendering
+- Canonical entity data is stored as TOML under `~/.config/runebound.sh/entities/<kind>/<slug>.toml`; Obsidian files are generated via `publish`
 
 If your change crosses backend/frontend boundaries, model it in `runebound-models` first.
 
@@ -72,7 +73,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 3. Add persistence workflow in `desktop/src-tauri/src/services/entity_persistence.rs`
 4. Add reroll + AI-generation helpers in `desktop/src-tauri/src/services/entity_reroll.rs` (and `services/ai_generation.rs` if seed prompts change)
 5. Add admin resolution/load/delete/undo support in `desktop/src-tauri/src/services/entity_admin.rs`
-6. Add vault-sync scanning/import behavior in `desktop/src-tauri/src/services/vault_sync.rs`
+6. Wire the canonical `EntityStore` sync in `desktop/src-tauri/src/services/vault_sync.rs` so DB + search indexes mirror the TOML records (no Markdown parsing)
 
 ### Commands and editor state
 

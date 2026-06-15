@@ -59,6 +59,16 @@ async fn run_command(
         }
     }
 
+    let onboarding_active = {
+        let service = state.command_service.lock().await;
+        service.session().onboarding.active
+    };
+
+    if onboarding_active {
+        let mut service = state.command_service.lock().await;
+        return Ok(service.execute_line(&normalized_input).await);
+    }
+
     if let Some(response) =
         router::dispatch_desktop_command(&normalized_input, &parsed.normalized_tokens, state.clone(), app_handle.clone())
             .await?

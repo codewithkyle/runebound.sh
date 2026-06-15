@@ -1,5 +1,5 @@
 use dnd_core::calendar::{self, moon_phase_info, MoonPhaseKind, StoredCalendar};
-use runebound_models::{doc, entity_card, entity_row, heading};
+use runebound_models::{doc, entity_card, entity_row};
 
 use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
 
@@ -22,7 +22,7 @@ pub async fn handle_moon(
         )));
     }
 
-    let mut stored = match load_calendar_state()? {
+    let stored = match load_calendar_state()? {
         Some(calendar) => calendar,
         None => {
             return Ok(Some(ok_response(

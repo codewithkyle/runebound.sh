@@ -9,6 +9,7 @@ pub mod item_commands;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
+pub mod publish_commands;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -84,6 +85,7 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(time_delta_add_handler_entry());
     registry.register(time_delta_subtract_handler_entry());
     registry.register(moon_handler_entry());
+    registry.register(publish_handler_entry());
     registry
 }
 
@@ -222,6 +224,14 @@ pub fn item_handler_entry() -> HandlerEntry<DesktopHandler> {
         "item",
         metadata_for("item"),
         DesktopHandler::new(|invocation| Box::pin(async move { item_commands::handle_item(invocation).await })),
+    )
+}
+
+pub fn publish_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "publish",
+        metadata_for("publish"),
+        DesktopHandler::new(|invocation| Box::pin(async move { publish_commands::handle_publish(invocation).await })),
     )
 }
 

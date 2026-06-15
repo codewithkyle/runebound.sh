@@ -797,6 +797,20 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "publish".to_string(),
+                summary: "Render an entity's markdown into the Obsidian vault".to_string(),
+                examples: vec![
+                    "publish Lirael".to_string(),
+                    "publish obsidian-gate".to_string(),
+                ],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: Some("publish help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "exit".to_string(),
                 summary: "Exit the application".to_string(),
                 examples: vec!["exit".to_string()],
@@ -815,8 +829,8 @@ pub fn command_manifest() -> CommandManifest {
                 summary: "history clear alias".to_string(),
             },
             CommandAlias {
-                from: vec!["start".to_string(), "setup".to_string()],
-                to: vec!["setup".to_string(), "start".to_string()],
+                from: vec!["setup".to_string(), "start".to_string()],
+                to: vec!["start".to_string(), "setup".to_string()],
                 summary: "setup start alias".to_string(),
             },
             CommandAlias {

@@ -309,7 +309,32 @@ moon
 
 ---
 
-## 13. Related Docs
+## 13. Publish Command
+
+Generate a reader-friendly markdown file for any saved entity and write it to the configured Obsidian vault.
+
+### Usage
+
+```
+publish
+publish <name-or-slug>
+publish help
+```
+
+### Behavior
+
+- If you have an active draft loaded in the editor, `publish` with no arguments targets that draft.
+- Pulls the canonical TOML record from `~/.config/runebound.sh/entities/...`.
+- Renders entity data into a structured markdown layout (metadata table, sections, bullet lists).
+- Writes to the entity's `vault_path` (e.g., `npcs/Lirael Drake.md`).
+- If the file already exists you must confirm the overwrite; declining leaves the file untouched.
+- Publishing is one-way—manual edits inside Obsidian are not synced back. Re-run `publish` after making changes via commands.
+- Startup sync mirrors the canonical TOML store into the SQLite database; Obsidian files are treated purely as render targets.
+- When run with an active draft (no arguments), `publish` automatically saves the draft first so you never need to run `npc save`/`location save` separately.
+
+---
+
+## 14. Related Docs
 
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts
