@@ -792,7 +792,9 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                show_in_autocomplete: true,
+                // Hidden from prefix-based autocomplete: users type a delta (e.g. `+15m`),
+                // never `+` as a standalone prefix, so it would never surface usefully.
+                show_in_autocomplete: false,
             },
             CommandSpec {
                 name: "-".to_string(),
@@ -803,7 +805,9 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                show_in_autocomplete: true,
+                // Hidden from prefix-based autocomplete: users type a delta (e.g. `-3d`),
+                // never `-` as a standalone prefix, so it would never surface usefully.
+                show_in_autocomplete: false,
             },
             CommandSpec {
                 name: "moon".to_string(),
@@ -823,7 +827,12 @@ pub fn command_manifest() -> CommandManifest {
                     "publish Lirael".to_string(),
                     "publish obsidian-gate".to_string(),
                 ],
-                subcommands: Vec::new(),
+                subcommands: vec![SubcommandSpec {
+                    name: "help".to_string(),
+                    summary: "Show publish command help".to_string(),
+                    options: Vec::new(),
+                    examples: vec!["publish help".to_string()],
+                }],
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: Some("publish help".to_string()),
@@ -879,45 +888,6 @@ pub fn command_manifest() -> CommandManifest {
                 from: vec!["setup".to_string(), "start".to_string()],
                 to: vec!["start".to_string(), "setup".to_string()],
                 summary: "setup start alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["show".to_string(), "setup".to_string()],
-                to: vec!["setup".to_string(), "show".to_string()],
-                summary: "setup show alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["cancel".to_string(), "setup".to_string()],
-                to: vec!["setup".to_string(), "cancel".to_string()],
-                summary: "setup cancel alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["set".to_string(), "vault".to_string()],
-                to: vec!["setup".to_string(), "set".to_string(), "vault".to_string()],
-                summary: "setup set vault alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["set".to_string(), "ollama".to_string()],
-                to: vec!["setup".to_string(), "set".to_string(), "ollama".to_string()],
-                summary: "setup set ollama alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["test".to_string(), "ollama".to_string()],
-                to: vec![
-                    "setup".to_string(),
-                    "test".to_string(),
-                    "ollama".to_string(),
-                ],
-                summary: "setup test ollama alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["use".to_string(), "model".to_string()],
-                to: vec!["setup".to_string(), "use".to_string(), "model".to_string()],
-                summary: "setup use model alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["set".to_string(), "model".to_string()],
-                to: vec!["setup".to_string(), "set".to_string(), "model".to_string()],
-                summary: "setup set model alias".to_string(),
             },
         ],
     }
