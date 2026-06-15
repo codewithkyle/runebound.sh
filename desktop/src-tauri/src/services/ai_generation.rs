@@ -1,20 +1,16 @@
 use crate::repositories::{Database, GenerationRepository};
+use crate::utils::{
+    normalize_faction_seed, normalize_location_seed, normalize_sex, normalize_unknown_list,
+    normalize_unknown_text, validate_faction_details, validate_location_details,
+};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::vault::Vault;
+use runebound_models::utils::{
+    FACTION_KIND_TYPES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
-
-const LOCATION_KIND_TYPES: [&str; 10] = [
-    "hamlet", "town", "city", "dungeon", "hideout", "ruin", "guildhall", "landmark", "wilderness", "other",
-];
-
-const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
-
-const FACTION_KIND_TYPES: [&str; 10] = [
-    "guild", "cult", "military_order", "noble_house", "criminal_syndicate", "mercantile_league",
-    "religious_order", "arcane_circle", "revolutionary_cell", "other",
-];
 
 pub struct AiGenerationService;
 
@@ -434,126 +430,6 @@ pub struct PromptReferenceContext {
     pub system_context: String,
 }
 
-fn normalize_sex(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized == "male" || normalized == "female" { Ok(normalized) } else { Err("sex must be one of: male, female".to_string()) }
-}
-
-fn normalize_unknown_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() { "Unknown".to_string() } else { trimmed.to_string() }
-}
-
-fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values.into_iter().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).collect();
-    if cleaned.is_empty() { vec!["Unknown".to_string()] } else { cleaned }
-}
-
-fn normalize_location_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if LOCATION_KIND_TYPES.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("kind_type must be one of: {}", LOCATION_KIND_TYPES.join(", "))) }
-}
-
-fn normalize_location_danger_level(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    let normalized = if trimmed.eq_ignore_ascii_case("unknown") { "Unknown".to_string() } else { trimmed.to_ascii_lowercase() };
-    if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("danger_level must be one of: {}", LOCATION_DANGER_LEVELS.join(", "))) }
-}
-
-fn normalize_exports(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values.into_iter().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).collect();
-    if cleaned.is_empty() { vec!["Unknown".to_string()] } else { cleaned }
-}
-
-fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    if FACTION_KIND_TYPES.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("kind_type must be one of: {}", FACTION_KIND_TYPES.join(", "))) }
-}
-
-fn sentence_count(value: &str) -> usize {
-    value.split_terminator(['.', '!', '?']).filter(|part| !part.trim().is_empty()).count()
-}
-
-fn word_count(value: &str) -> usize {
-    value.split_whitespace().count()
-}
-
-fn validate_sentence_range(value: &str, min: usize, max: usize, field: &str) -> Result<(), String> {
-    let count = sentence_count(value);
-    if count < min || count > max { return Err(format!("{field} must be {min}-{max} sentences; got {count}")); }
-    Ok(())
-}
-
-fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, String> {
-    seed.name = seed.name.trim().to_string();
-    seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
-    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
-    if seed.kind_type == "other" {
-        if seed.kind_custom.as_ref().is_none_or(|value| value.trim().is_empty()) { return Err("kind_custom is required when kind_type is other".to_string()); }
-    } else {
-        seed.kind_custom = None;
-    }
-    seed.visual_description = normalize_unknown_text(&seed.visual_description);
-    seed.history_background = normalize_unknown_text(&seed.history_background);
-    seed.exports = normalize_exports(seed.exports);
-    seed.tone = normalize_unknown_text(&seed.tone);
-    seed.authority = normalize_unknown_text(&seed.authority);
-    seed.danger_level = normalize_location_danger_level(&seed.danger_level)?;
-    seed.current_tension = normalize_unknown_text(&seed.current_tension);
-    Ok(seed)
-}
-
-fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
-    if seed.name.trim().is_empty() { return Err("location name cannot be empty".to_string()); }
-    if seed.visual_description != "Unknown" { validate_sentence_range(&seed.visual_description, 1, 3, "visual_description")?; }
-    if seed.history_background != "Unknown" { validate_sentence_range(&seed.history_background, 2, 5, "history_background")?; }
-    if seed.current_tension != "Unknown" { validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?; }
-    if seed.exports.is_empty() || seed.exports.len() > 3 { return Err("exports must have 1-3 items".to_string()); }
-    if !(seed.exports.len() == 1 && seed.exports[0] == "Unknown") {
-        let empty_item = seed.exports.iter().any(|item| item.trim().is_empty());
-        if empty_item { return Err("exports cannot contain empty items".to_string()); }
-    }
-    if seed.tone != "Unknown" {
-        let tone_words = word_count(&seed.tone);
-        if !(2..=5).contains(&tone_words) { return Err(format!("tone must be 2-5 words; got {tone_words}")); }
-    }
-    Ok(())
-}
-
-fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, String> {
-    seed.name = seed.name.trim().to_string();
-    seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
-    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
-    if seed.kind_type == "other" {
-        if seed.kind_custom.as_ref().is_none_or(|value| value.trim().is_empty()) { return Err("kind_custom is required when kind_type is other".to_string()); }
-    } else {
-        seed.kind_custom = None;
-    }
-    seed.public_description = normalize_unknown_text(&seed.public_description);
-    seed.true_agenda = normalize_unknown_text(&seed.true_agenda);
-    seed.methods = normalize_unknown_text(&seed.methods);
-    seed.leadership = normalize_unknown_text(&seed.leadership);
-    seed.headquarters = normalize_unknown_text(&seed.headquarters);
-    seed.sphere_of_influence = normalize_unknown_text(&seed.sphere_of_influence);
-    seed.resources_assets = normalize_unknown_text(&seed.resources_assets);
-    seed.allies = normalize_unknown_list(seed.allies);
-    seed.rivals_enemies = normalize_unknown_list(seed.rivals_enemies);
-    seed.reputation = normalize_unknown_text(&seed.reputation);
-    seed.current_tension = normalize_unknown_text(&seed.current_tension);
-    seed.goals_short_term = normalize_unknown_list(seed.goals_short_term);
-    seed.goals_long_term = normalize_unknown_list(seed.goals_long_term);
-    seed.symbol_description = normalize_unknown_text(&seed.symbol_description);
-    Ok(seed)
-}
-
-fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
-    if seed.name.trim().is_empty() { return Err("faction name cannot be empty".to_string()); }
-    if seed.public_description != "Unknown" { validate_sentence_range(&seed.public_description, 1, 3, "public_description")?; }
-    if seed.true_agenda != "Unknown" { validate_sentence_range(&seed.true_agenda, 1, 3, "true_agenda")?; }
-    if seed.current_tension != "Unknown" { validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?; }
-    if seed.symbol_description != "Unknown" { validate_sentence_range(&seed.symbol_description, 1, 1, "symbol_description")?; }
-    Ok(())
-}
 
 pub(crate) fn parse_recent_npc_seeds(payloads: Vec<String>) -> Vec<NpcSeed> {
     payloads.into_iter().filter_map(|payload| serde_json::from_str::<NpcSeed>(&payload).ok()).collect()

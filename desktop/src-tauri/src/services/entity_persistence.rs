@@ -7,6 +7,9 @@ use dnd_core::npc::{
     now_timestamp, render_faction_markdown, render_location_markdown, render_npc_markdown, slugify,
     unique_slug_for_dir,
 };
+use dnd_core::serialization::{
+    carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
+};
 use dnd_core::vault::Vault;
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +18,9 @@ use crate::repositories::db;
 use crate::services::ai_generation::LocationSeed;
 use crate::services::vault_sync::{read_vault_file_if_exists, unique_markdown_path_for_name};
 use crate::utils::{
-    carrying_to_db_text, exports_to_db_text, faction_list_to_db_text, normalize_exports,
-    normalize_faction_kind_type, normalize_location_danger_level, normalize_location_kind_type,
-    normalize_relative_path_for_storage, normalize_sex, normalize_unknown_list,
-    normalize_unknown_text, validate_location_details,
+    normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
+    normalize_location_kind_type, normalize_relative_path_for_storage, normalize_sex,
+    normalize_unknown_list, normalize_unknown_text, validate_location_details,
 };
 
 pub struct EntityPersistenceService;

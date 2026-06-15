@@ -297,7 +297,7 @@ These functions:
 
 ---
 
-## Phase 6: Move Normalization Helpers into `utils/` or `core`
+## Phase 6: Move Normalization Helpers into `utils/` or `core` *(✅ Completed 2026-06-14)*
 
 ### What's in `main.rs`
 
@@ -327,32 +327,10 @@ These are pure utility functions. Some are duplicated in `utils.rs`.
 
 ### Deliverables
 
-1. **Move to `utils.rs`** (if used by `commands/`)
-   - `normalize_sex` — already in `utils.rs`
-   - `normalize_unknown_text` — already in `utils.rs`
-   - `normalize_unknown_list` — already in `utils.rs`
-   - `parse_carrying_csv` — already in `utils.rs`
-   - `normalize_location_kind_type` — already in `utils.rs`
-   - `normalize_location_danger_level` — already in `utils.rs`
-   - `parse_list_csv` — already in `utils.rs`
-   - `normalize_exports` — already in `utils.rs`
-   - `normalize_faction_kind_type` — already in `utils.rs`
-   - `validate_sentence_range` — already in `utils.rs`
-   - `normalize_location_seed` — already in `utils.rs`
-   - `validate_location_details` — already in `utils.rs`
-   - `normalize_faction_seed` — already in `utils.rs`
-   - `validate_faction_details` — already in `utils.rs`
-   - `sentence_count` — already in `utils.rs`
-   - `word_count` — already in `utils.rs`
-
-   **Action:** Verify that `utils.rs` has the canonical versions and delete the duplicates from `main.rs`. Update any remaining callers in `main.rs` to import from `utils`.
-
-2. **Move to `core` (if domain-level)**
-   - `carrying_to_db_text` / `carrying_from_db_text` — these are serialization helpers. Move to `core/src/npc.rs` or `core/src/db.rs` if used by `core`.
-   - `faction_list_to_db_text` / `faction_list_from_db_text` — same.
-
-3. **Remove from `main.rs`**
-   - Delete all the moved functions
+- All normalization helpers (`normalize_*`, `sentence_count`, `validate_*`) now live in `utils.rs` and are reused by services/tests; the duplicate implementations in `main.rs` and `services/ai_generation.rs` have been deleted.
+- Canonical DB serialization helpers (`carrying_*`, `exports_*`, `faction_list_*`) moved into `core/src/serialization.rs` and are imported where needed (`services/entity_persistence.rs`, `main.rs`).
+- `services/ai_generation.rs` imports the shared helpers instead of redefining them, shrinking `main.rs` by another ~70 lines.
+- Normalization tests relocated from `main.rs` into `utils.rs`, and new serialization unit tests were added under `dnd-core`.
 
 ### Dependencies
 

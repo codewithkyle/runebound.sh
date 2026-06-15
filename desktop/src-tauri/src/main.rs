@@ -15,6 +15,9 @@ use dnd_core::command_manifest::CommandManifest;
 use dnd_core::command_parse::{normalize_command_input, parse_command_input};
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::db;
+use dnd_core::serialization::{
+    carrying_from_db_text, exports_from_db_text, faction_list_from_db_text,
+};
 use dnd_core::npc::{
     LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, render_location_markdown,
     slugify, unique_slug_for_dir,
@@ -36,9 +39,7 @@ use crate::services::vault_sync::{
 };
 use crate::utils::{
     EntityDetails, EntityType, EnsureLocationInput, EnsureLocationResult, SoftDeleteEntityInput,
-    SoftDeleteEntityResult, UndoSoftDeleteResult, carrying_from_db_text, exports_from_db_text,
-    faction_list_from_db_text,
-    normalize_relative_path_for_storage,
+    SoftDeleteEntityResult, UndoSoftDeleteResult, normalize_relative_path_for_storage,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -945,8 +946,6 @@ fn exit_app(app: tauri::AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::normalize_input_for_dispatch;
-    use crate::services::ai_generation::LocationSeed;
-    use crate::utils::{normalize_location_seed, validate_location_details};
 
     #[test]
     fn dispatch_preserves_windows_backslashes() {
@@ -961,43 +960,6 @@ mod tests {
             normalize_input_for_dispatch(input),
             r"set vault C:\Users\andrewk9\Documents\DND"
         );
-    }
-
-    #[test]
-    fn location_seed_requires_custom_kind_for_other() {
-        let seed = LocationSeed {
-            name: "Gloomreach".to_string(),
-            kind_type: "other".to_string(),
-            kind_custom: None,
-            visual_description: "Moss-slick walls drip in torchlight.".to_string(),
-            history_background: "Built by exiles. Later seized by smugglers.".to_string(),
-            exports: vec!["amber resin".to_string()],
-            tone: "wet tense".to_string(),
-            authority: "Smuggler council".to_string(),
-            danger_level: "risky".to_string(),
-            current_tension: "A rival gang stalks the tunnels.".to_string(),
-        };
-
-        let err = normalize_location_seed(seed).expect_err("expected missing kind_custom error");
-        assert!(err.contains("kind_custom"));
-    }
-
-    #[test]
-    fn location_seed_validation_accepts_unknown_backcompat_values() {
-        let seed = LocationSeed {
-            name: "Unknown Hold".to_string(),
-            kind_type: "other".to_string(),
-            kind_custom: Some("Unknown".to_string()),
-            visual_description: "Unknown".to_string(),
-            history_background: "Unknown".to_string(),
-            exports: vec!["Unknown".to_string()],
-            tone: "Unknown".to_string(),
-            authority: "Unknown".to_string(),
-            danger_level: "Unknown".to_string(),
-            current_tension: "Unknown".to_string(),
-        };
-
-        validate_location_details(&seed).expect("expected Unknown defaults to pass validation");
     }
 
 }
