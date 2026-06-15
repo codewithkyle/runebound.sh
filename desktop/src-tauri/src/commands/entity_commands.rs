@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
@@ -6,6 +6,7 @@ use runebound_models::{CommandResponse, OutputDoc, entity_card, entity_row};
 use crate::services::entity_admin::{
     EntityAdminService, EntityDetails, EntityType, SoftDeleteEntityInput,
 };
+use crate::entities::EntityKind;
 use crate::utils::path_for_display;
 use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
 
@@ -112,17 +113,20 @@ pub async fn handle_delete(
 
     let should_clear = {
         let editor = invocation.state.editor_session.lock().await;
-        editor.npc_draft.as_ref().is_some_and(|draft| draft.id == result.id)
-            || editor.location_draft.as_ref().is_some_and(|draft| draft.id == result.id)
-            || editor.faction_draft.as_ref().is_some_and(|draft| draft.id == result.id)
+        editor
+            .get_npc()
+            .is_some_and(|draft| draft.id == result.id)
+            || editor
+                .get_location()
+                .is_some_and(|draft| draft.id == result.id)
+            || editor
+                .get_faction()
+                .is_some_and(|draft| draft.id == result.id)
     };
 
     if should_clear {
         let mut editor = invocation.state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
         return Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))));
     }
 
@@ -165,9 +169,8 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             };
             {
                 let mut editor = state.editor_session.lock().await;
-                editor.mode = EditorMode::Npc;
-                editor.location_draft = None;
-                editor.npc_draft = Some(draft.clone());
+                editor.set_npc(draft.clone());
+                editor.clear_kind(EntityKind::Location);
             }
             (build_entity_card_text(&entity), Some(npc_event_from_draft(&draft)))
         }
@@ -190,9 +193,8 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             };
             {
                 let mut editor = state.editor_session.lock().await;
-                editor.mode = EditorMode::Location;
-                editor.npc_draft = None;
-                editor.location_draft = Some(draft.clone());
+                editor.set_location(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
             }
             (build_entity_card_text(&entity), Some(location_event_from_draft(&draft)))
         }
@@ -222,10 +224,9 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             };
             {
                 let mut editor = state.editor_session.lock().await;
-                editor.mode = EditorMode::Faction;
-                editor.npc_draft = None;
-                editor.location_draft = None;
-                editor.faction_draft = Some(draft.clone());
+                editor.set_faction(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
             }
             (build_entity_card_text(&entity), Some(faction_event_from_draft(&draft)))
         }

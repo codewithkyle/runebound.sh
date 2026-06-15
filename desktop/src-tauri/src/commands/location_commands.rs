@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::entities::{
     canonical_field_name,
@@ -27,7 +27,7 @@ pub async fn handle_location(
     if lowered == "location help" {
         let has_draft = {
             let editor = invocation.state.editor_session.lock().await;
-            editor.location_draft.is_some()
+            editor.get_location().is_some()
         };
         if !has_draft {
             return Ok(Some(ok_response(
@@ -54,7 +54,7 @@ pub async fn handle_location(
     if lowered == "location show" {
         let draft = {
             let editor = invocation.state.editor_session.lock().await;
-            editor.location_draft.clone()
+            editor.get_location().cloned()
         };
         let Some(draft) = draft else {
             return Ok(Some(ok_response(
@@ -68,18 +68,7 @@ pub async fn handle_location(
     if lowered == "location cancel" {
         let had_draft = {
             let mut editor = invocation.state.editor_session.lock().await;
-            let had = editor.location_draft.is_some();
-            if had {
-                editor.location_draft = None;
-                editor.mode = if editor.npc_draft.is_some() {
-                    EditorMode::Npc
-                } else if editor.faction_draft.is_some() {
-                    EditorMode::Faction
-                } else {
-                    EditorMode::None
-                };
-            }
-            had
+            editor.take_location().is_some()
         };
         if !had_draft {
             return Ok(Some(ok_response("no active location draft. run create location or load <name>.".to_string(), None)));
@@ -112,20 +101,22 @@ async fn location_rename(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
         return Ok(Some(ok_response("location name cannot be empty.".to_string(), None)));
     }
 
-    let mut draft = {
-        let editor = state.editor_session.lock().await;
-        editor.location_draft.clone()
-    }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
-    draft.name = name.to_string();
-
-    {
+    let updated = {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Location;
-        editor.location_draft = Some(draft.clone());
-        editor.npc_draft = None;
-    }
+        let draft = editor
+            .get_location_mut()
+            .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+        draft.name = name.to_string();
+        let snapshot = draft.clone();
+        editor.activate(EntityKind::Location);
+        editor.clear_kind(EntityKind::Npc);
+        snapshot
+    };
 
-    Ok(Some(ok_response(location_summary_text(&draft), Some(location_event_from_draft(&draft)))))
+    Ok(Some(ok_response(
+        location_summary_text(&updated),
+        Some(location_event_from_draft(&updated)),
+    )))
 }
 
 async fn location_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -138,11 +129,6 @@ async fn location_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Resul
         return Ok(Some(ok_response("location set value cannot be empty.".to_string(), None)));
     }
 
-    let mut draft = {
-        let editor = state.editor_session.lock().await;
-        editor.location_draft.clone()
-    }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
-
     let Some(canonical) =
         canonical_field_name(EntityKind::Location, field, FieldAccess::Set)
     else {
@@ -153,40 +139,56 @@ async fn location_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Resul
         )));
     };
 
-    match canonical {
-        "name" => draft.name = value.to_string(),
-        "kind_type" => {
-            draft.kind_type = normalize_location_kind_type(value)?;
-            if draft.kind_type == "other" && draft.kind_custom.is_none() {
-                draft.kind_custom = Some("Unknown".to_string());
-            }
-        }
-        "kind_custom" => draft.kind_custom = Some(value.to_string()),
-        "visual_description" => draft.visual_description = value.to_string(),
-        "history_background" => draft.history_background = value.to_string(),
-        "exports" => draft.exports = normalize_exports(parse_list_csv(value)),
-        "tone" => draft.tone = value.to_string(),
-        "authority" => draft.authority = value.to_string(),
-        "danger_level" => draft.danger_level = normalize_location_danger_level(value)?,
-        "current_tension" => draft.current_tension = value.to_string(),
-        _ => {}
-    }
-
-    if draft.kind_type == "other" && draft.kind_custom.as_ref().is_none_or(|item| item.trim().is_empty()) {
-        return Ok(Some(ok_response("kind_custom is required when kind is other. use location set kind_custom <value>.".to_string(), None)));
-    }
-    if draft.kind_type != "other" {
-        draft.kind_custom = None;
-    }
-
-    {
+    let updated = {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Location;
-        editor.location_draft = Some(draft.clone());
-        editor.npc_draft = None;
-    }
+        let draft = editor
+            .get_location_mut()
+            .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
-    Ok(Some(ok_response(location_summary_text(&draft), Some(location_event_from_draft(&draft)))))
+        match canonical {
+            "name" => draft.name = value.to_string(),
+            "kind_type" => {
+                draft.kind_type = normalize_location_kind_type(value)?;
+                if draft.kind_type == "other" && draft.kind_custom.is_none() {
+                    draft.kind_custom = Some("Unknown".to_string());
+                }
+            }
+            "kind_custom" => draft.kind_custom = Some(value.to_string()),
+            "visual_description" => draft.visual_description = value.to_string(),
+            "history_background" => draft.history_background = value.to_string(),
+            "exports" => draft.exports = normalize_exports(parse_list_csv(value)),
+            "tone" => draft.tone = value.to_string(),
+            "authority" => draft.authority = value.to_string(),
+            "danger_level" => draft.danger_level = normalize_location_danger_level(value)?,
+            "current_tension" => draft.current_tension = value.to_string(),
+            _ => {}
+        }
+
+        if draft.kind_type == "other"
+            && draft
+                .kind_custom
+                .as_ref()
+                .is_none_or(|item| item.trim().is_empty())
+        {
+            return Ok(Some(ok_response(
+                "kind_custom is required when kind is other. use location set kind_custom <value>.".to_string(),
+                None,
+            )));
+        }
+        if draft.kind_type != "other" {
+            draft.kind_custom = None;
+        }
+
+        let snapshot = draft.clone();
+        editor.activate(EntityKind::Location);
+        editor.clear_kind(EntityKind::Npc);
+        snapshot
+    };
+
+    Ok(Some(ok_response(
+        location_summary_text(&updated),
+        Some(location_event_from_draft(&updated)),
+    )))
 }
 
 async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -206,7 +208,9 @@ async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
 
     let mut draft = {
         let editor = state.editor_session.lock().await;
-        editor.location_draft.clone()
+        editor
+            .get_location()
+            .cloned()
     }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
     let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
@@ -261,9 +265,8 @@ async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Location;
-        editor.location_draft = Some(draft.clone());
-        editor.npc_draft = None;
+        editor.set_location(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
     }
 
     Ok(Some(ok_response(location_summary_text(&draft), Some(location_event_from_draft(&draft)))))
@@ -272,7 +275,9 @@ async fn location_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Re
 async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.location_draft.clone()
+        editor
+            .get_location()
+            .cloned()
     }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
     let persistence = EntityPersistenceService;
@@ -299,10 +304,7 @@ async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<Comma
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
     }
 
     let output = [

@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::entities::{
     canonical_field_name,
@@ -27,7 +27,7 @@ pub async fn handle_npc(
     if lowered == "npc help" {
         let has_draft = {
             let editor = invocation.state.editor_session.lock().await;
-            editor.npc_draft.is_some()
+            editor.get_npc().is_some()
         };
         if !has_draft {
             return Ok(Some(ok_response(
@@ -55,7 +55,7 @@ pub async fn handle_npc(
     if lowered == "npc show" {
         let draft = {
             let editor = invocation.state.editor_session.lock().await;
-            editor.npc_draft.clone()
+            editor.get_npc().cloned()
         };
         let Some(draft) = draft else {
             return Ok(Some(ok_response(
@@ -72,18 +72,7 @@ pub async fn handle_npc(
     if lowered == "npc cancel" {
         let had_draft = {
             let mut editor = invocation.state.editor_session.lock().await;
-            let had = editor.npc_draft.is_some();
-            if had {
-                editor.npc_draft = None;
-                editor.mode = if editor.location_draft.is_some() {
-                    EditorMode::Location
-                } else if editor.faction_draft.is_some() {
-                    EditorMode::Faction
-                } else {
-                    EditorMode::None
-                };
-            }
-            had
+            editor.take_npc().is_some()
         };
         if !had_draft {
             return Ok(Some(ok_response(
@@ -131,18 +120,21 @@ pub async fn npc_rename(
     if name.is_empty() {
         return Ok(Some(ok_response("npc name cannot be empty.".to_string(), None)));
     }
-    let mut draft = {
-        let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
-    }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
-    draft.name = name.to_string();
-    {
+    let updated = {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.npc_draft = Some(draft.clone());
-        editor.location_draft = None;
-    }
-    Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))
+        let draft = editor
+            .get_npc_mut()
+            .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
+        draft.name = name.to_string();
+        let snapshot = draft.clone();
+        editor.activate(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        snapshot
+    };
+    Ok(Some(ok_response(
+        npc_summary_text(&updated),
+        Some(npc_event_from_draft(&updated)),
+    )))
 }
 
 pub async fn npc_set(
@@ -158,14 +150,7 @@ pub async fn npc_set(
         return Ok(Some(ok_response("npc set value cannot be empty.".to_string(), None)));
     }
 
-    let mut draft = {
-        let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
-    }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
-
-    let Some(canonical) =
-        canonical_field_name(EntityKind::Npc, field, FieldAccess::Set)
-    else {
+    let Some(canonical) = canonical_field_name(EntityKind::Npc, field, FieldAccess::Set) else {
         let valid_fields = format_valid_field_list(EntityKind::Npc, FieldAccess::Set);
         return Ok(Some(ok_response(
             format!("unknown npc field: {}. valid fields: {}", field, valid_fields),
@@ -173,29 +158,37 @@ pub async fn npc_set(
         )));
     };
 
-    match canonical {
-        "name" => draft.name = value.to_string(),
-        "race" => draft.race = value.to_string(),
-        "occupation" => draft.occupation = value.to_string(),
-        "sex" => draft.sex = normalize_sex(value)?,
-        "age" => draft.age = value.to_string(),
-        "height" => draft.height = value.to_string(),
-        "weight_lbs" => draft.weight_lbs = value.to_string(),
-        "background" => draft.background = value.to_string(),
-        "want_need" => draft.want_need = value.to_string(),
-        "secret_obstacle" => draft.secret_obstacle = value.to_string(),
-        "carrying" => draft.carrying = parse_carrying_csv(value),
-        _ => {}
-    }
-
-    {
+    let updated = {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.npc_draft = Some(draft.clone());
-        editor.location_draft = None;
-    }
+        let draft = editor
+            .get_npc_mut()
+            .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
-    Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))
+        match canonical {
+            "name" => draft.name = value.to_string(),
+            "race" => draft.race = value.to_string(),
+            "occupation" => draft.occupation = value.to_string(),
+            "sex" => draft.sex = normalize_sex(value)?,
+            "age" => draft.age = value.to_string(),
+            "height" => draft.height = value.to_string(),
+            "weight_lbs" => draft.weight_lbs = value.to_string(),
+            "background" => draft.background = value.to_string(),
+            "want_need" => draft.want_need = value.to_string(),
+            "secret_obstacle" => draft.secret_obstacle = value.to_string(),
+            "carrying" => draft.carrying = parse_carrying_csv(value),
+            _ => {}
+        }
+
+        let snapshot = draft.clone();
+        editor.activate(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        snapshot
+    };
+
+    Ok(Some(ok_response(
+        npc_summary_text(&updated),
+        Some(npc_event_from_draft(&updated)),
+    )))
 }
 
 pub async fn npc_travel(
@@ -212,7 +205,9 @@ pub async fn npc_travel(
 
     let mut draft = {
         let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
+        editor
+            .get_npc()
+            .cloned()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
     let admin = EntityAdminService;
@@ -228,9 +223,8 @@ pub async fn npc_travel(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.npc_draft = Some(draft.clone());
-        editor.location_draft = None;
+        editor.set_npc(draft.clone());
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))
@@ -239,7 +233,9 @@ pub async fn npc_travel(
 pub async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
+        editor
+            .get_npc()
+            .cloned()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
     let persistence = EntityPersistenceService;
@@ -266,10 +262,7 @@ pub async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<Comman
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
     }
 
     let output = [
@@ -303,7 +296,9 @@ pub async fn npc_reroll(
 
     let mut draft = {
         let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
+        editor
+            .get_npc()
+            .cloned()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
     let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
@@ -355,9 +350,8 @@ pub async fn npc_reroll(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.npc_draft = Some(draft.clone());
-        editor.location_draft = None;
+        editor.set_npc(draft.clone());
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))

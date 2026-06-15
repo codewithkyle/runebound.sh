@@ -1,7 +1,8 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{
     faction_event_from_draft, faction_summary_text, ok_response, DesktopHandlerInvocation,
 };
+use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
 use crate::services::entity_persistence::{
     EntityPersistenceService, SaveFactionDraftInput, SaveFactionDraftResult,
@@ -13,82 +14,70 @@ use runebound_models::CommandResponse;
 
 
 pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
-    let mode = {
+    let active_kind = {
         let editor = invocation.state.editor_session.lock().await;
-        editor.mode
+        editor.active_kind()
     };
 
-    match mode {
-        EditorMode::Npc => npc_save(invocation.state.clone()).await,
-        EditorMode::Location => location_save(invocation.state.clone()).await,
-        EditorMode::Faction => faction_save(invocation.state.clone()).await,
-        EditorMode::None => Ok(Some(ok_response("no active draft to save.".to_string(), None))),
+    match active_kind {
+        Some(EntityKind::Npc) => npc_save(invocation.state.clone()).await,
+        Some(EntityKind::Location) => location_save(invocation.state.clone()).await,
+        Some(EntityKind::Faction) => faction_save(invocation.state.clone()).await,
+        None => Ok(Some(ok_response("no active draft to save.".to_string(), None))),
     }
 }
 
 pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
-    let mode = {
+    let active_kind = {
         let editor = invocation.state.editor_session.lock().await;
-        editor.mode
+        editor.active_kind()
     };
 
-    match mode {
-        EditorMode::Npc => reroll_current_npc(invocation.state.clone()).await,
-        EditorMode::Location => reroll_current_location(invocation.state.clone()).await,
-        EditorMode::Faction => reroll_current_faction(invocation.state.clone()).await,
-        EditorMode::None => Ok(Some(ok_response("no active draft to reroll.".to_string(), None))),
+    match active_kind {
+        Some(EntityKind::Npc) => reroll_current_npc(invocation.state.clone()).await,
+        Some(EntityKind::Location) => reroll_current_location(invocation.state.clone()).await,
+        Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone()).await,
+        None => Ok(Some(ok_response("no active draft to reroll.".to_string(), None))),
     }
 }
 
 pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
     let mut editor = invocation.state.editor_session.lock().await;
-    let response = match editor.mode {
-        EditorMode::Npc => {
-            if editor.npc_draft.is_none() {
+    let response = match editor.active_kind() {
+        Some(EntityKind::Npc) => {
+            if editor.get_npc().is_none() {
                 ok_response("no active npc draft.".to_string(), None)
             } else {
-                editor.npc_draft = None;
-                editor.mode = if editor.location_draft.is_some() {
-                    EditorMode::Location
-                } else if editor.faction_draft.is_some() {
-                    EditorMode::Faction
-                } else {
-                    EditorMode::None
-                };
-                ok_response("npc draft discarded.".to_string(), Some(CommandClientEvent::ClearDrafts))
+                editor.take_npc();
+                ok_response(
+                    "npc draft discarded.".to_string(),
+                    Some(CommandClientEvent::ClearDrafts),
+                )
             }
         }
-        EditorMode::Location => {
-            if editor.location_draft.is_none() {
+        Some(EntityKind::Location) => {
+            if editor.get_location().is_none() {
                 ok_response("no active location draft.".to_string(), None)
             } else {
-                editor.location_draft = None;
-                editor.mode = if editor.npc_draft.is_some() {
-                    EditorMode::Npc
-                } else if editor.faction_draft.is_some() {
-                    EditorMode::Faction
-                } else {
-                    EditorMode::None
-                };
-                ok_response("location draft discarded.".to_string(), Some(CommandClientEvent::ClearDrafts))
+                editor.take_location();
+                ok_response(
+                    "location draft discarded.".to_string(),
+                    Some(CommandClientEvent::ClearDrafts),
+                )
             }
         }
-        EditorMode::Faction => {
-            if editor.faction_draft.is_none() {
+        Some(EntityKind::Faction) => {
+            if editor.get_faction().is_none() {
                 ok_response("no active faction draft.".to_string(), None)
             } else {
-                editor.faction_draft = None;
-                editor.mode = if editor.npc_draft.is_some() {
-                    EditorMode::Npc
-                } else if editor.location_draft.is_some() {
-                    EditorMode::Location
-                } else {
-                    EditorMode::None
-                };
-                ok_response("faction draft discarded.".to_string(), Some(CommandClientEvent::ClearDrafts))
+                editor.take_faction();
+                ok_response(
+                    "faction draft discarded.".to_string(),
+                    Some(CommandClientEvent::ClearDrafts),
+                )
             }
         }
-        EditorMode::None => ok_response("no active draft to cancel.".to_string(), None),
+        None => ok_response("no active draft to cancel.".to_string(), None),
     };
     Ok(Some(response))
 }
@@ -98,7 +87,7 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
 
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
+        editor.get_npc().cloned()
     };
     let Some(mut draft) = draft else {
         return Ok(Some(ok_response("no active npc draft.".to_string(), None)));
@@ -129,9 +118,8 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.location_draft = None;
-        editor.npc_draft = Some(draft.clone());
+        editor.set_npc(draft.clone());
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))
@@ -142,7 +130,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
 
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.location_draft.clone()
+        editor.get_location().cloned()
     };
     let Some(mut draft) = draft else {
         return Ok(Some(ok_response("no active location draft.".to_string(), None)));
@@ -172,9 +160,8 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Location;
-        editor.npc_draft = None;
-        editor.location_draft = Some(draft.clone());
+        editor.set_location(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
     }
 
     Ok(Some(ok_response(location_summary_text(&draft), Some(location_event_from_draft(&draft)))))
@@ -183,7 +170,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
 async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.faction_draft.clone()
+        editor.get_faction().cloned()
     };
     let Some(mut draft) = draft else {
         return Ok(Some(ok_response("no active faction draft.".to_string(), None)));
@@ -220,10 +207,9 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Faction;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = Some(draft.clone());
+        editor.set_faction(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(faction_summary_text(&draft), Some(faction_event_from_draft(&draft)))))
@@ -232,7 +218,7 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
 async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.npc_draft.clone()
+        editor.get_npc().cloned()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
     let result = save_npc_draft(
@@ -256,10 +242,7 @@ async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandRes
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
     }
 
     let output = [
@@ -276,7 +259,7 @@ async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandRes
 async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.location_draft.clone()
+        editor.get_location().cloned()
     }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
     let result = save_location_draft(
@@ -300,10 +283,7 @@ async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<Comma
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
     }
 
     let output = [
@@ -320,7 +300,7 @@ async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<Comma
 async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.faction_draft.clone()
+        editor.get_faction().cloned()
     }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
     let result = save_faction_draft(
@@ -351,10 +331,7 @@ async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<Comman
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
     }
 
     let output = [

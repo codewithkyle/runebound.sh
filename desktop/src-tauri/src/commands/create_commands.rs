@@ -1,8 +1,9 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{
     ok_response, DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
     location_event_from_draft, location_summary_text, npc_event_from_draft, npc_summary_text,
 };
+use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
 use dnd_core::npc::UNKNOWN_LOCATION;
 use runebound_models::CommandResponse;
@@ -101,9 +102,8 @@ async fn create_npc(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Npc;
-        editor.location_draft = None;
-        editor.npc_draft = Some(draft.clone());
+        editor.set_npc(draft.clone());
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(
@@ -162,9 +162,8 @@ async fn create_location(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Location;
-        editor.npc_draft = None;
-        editor.location_draft = Some(draft.clone());
+        editor.set_location(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
     }
 
     Ok(Some(ok_response(
@@ -230,10 +229,9 @@ async fn create_faction(
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Faction;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = Some(draft.clone());
+        editor.set_faction(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(

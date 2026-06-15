@@ -1,4 +1,4 @@
-use crate::app_state::{AppState, EditorMode};
+use crate::app_state::AppState;
 use crate::commands::{ok_response, DesktopHandlerInvocation};
 use crate::entities::{
     canonical_field_name,
@@ -27,7 +27,7 @@ pub async fn handle_faction(
     if lowered == "faction help" {
         let has_draft = {
             let editor = invocation.state.editor_session.lock().await;
-            editor.faction_draft.is_some()
+            editor.get_faction().is_some()
         };
         if !has_draft {
             return Ok(Some(ok_response("no active faction draft. run create faction or load <name>.".to_string(), None)));
@@ -51,7 +51,7 @@ pub async fn handle_faction(
     if lowered == "faction show" {
         let draft = {
             let editor = invocation.state.editor_session.lock().await;
-            editor.faction_draft.clone()
+            editor.get_faction().cloned()
         };
         let Some(draft) = draft else {
             return Ok(Some(ok_response("no active faction draft. run create faction or load <name>.".to_string(), None)));
@@ -62,18 +62,7 @@ pub async fn handle_faction(
     if lowered == "faction cancel" {
         let had_draft = {
             let mut editor = invocation.state.editor_session.lock().await;
-            let had = editor.faction_draft.is_some();
-            if had {
-                editor.faction_draft = None;
-                editor.mode = if editor.npc_draft.is_some() {
-                    EditorMode::Npc
-                } else if editor.location_draft.is_some() {
-                    EditorMode::Location
-                } else {
-                    EditorMode::None
-                };
-            }
-            had
+            editor.take_faction().is_some()
         };
         if !had_draft {
             return Ok(Some(ok_response("no active faction draft. run create faction or load <name>.".to_string(), None)));
@@ -106,21 +95,23 @@ async fn faction_rename(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
         return Ok(Some(ok_response("faction name cannot be empty.".to_string(), None)));
     }
 
-    let mut draft = {
-        let editor = state.editor_session.lock().await;
-        editor.faction_draft.clone()
-    }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
-    draft.name = name.to_string();
-
-    {
+    let updated = {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Faction;
-        editor.faction_draft = Some(draft.clone());
-        editor.npc_draft = None;
-        editor.location_draft = None;
-    }
+        let draft = editor
+            .get_faction_mut()
+            .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+        draft.name = name.to_string();
+        let snapshot = draft.clone();
+        editor.activate(EntityKind::Faction);
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        snapshot
+    };
 
-    Ok(Some(ok_response(faction_summary_text(&draft), Some(faction_event_from_draft(&draft)))))
+    Ok(Some(ok_response(
+        faction_summary_text(&updated),
+        Some(faction_event_from_draft(&updated)),
+    )))
 }
 
 async fn faction_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -133,11 +124,6 @@ async fn faction_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Result
         return Ok(Some(ok_response("faction set value cannot be empty.".to_string(), None)));
     }
 
-    let mut draft = {
-        let editor = state.editor_session.lock().await;
-        editor.faction_draft.clone()
-    }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
-
     let canonical = canonical_field_name(EntityKind::Faction, field, FieldAccess::Set)
         .ok_or_else(|| {
             let valid_fields = format_valid_field_list(EntityKind::Faction, FieldAccess::Set);
@@ -146,48 +132,63 @@ async fn faction_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Result
                 field, valid_fields
             )
         })?;
-    match canonical {
-        "name" => draft.name = value.to_string(),
-        "kind_type" => {
-            draft.kind_type = normalize_faction_kind_type(value)?;
-            if draft.kind_type == "other" && draft.kind_custom.is_none() {
-                draft.kind_custom = Some("Unknown".to_string());
-            }
-        }
-        "kind_custom" => draft.kind_custom = Some(value.to_string()),
-        "public_description" => draft.public_description = value.to_string(),
-        "true_agenda" => draft.true_agenda = value.to_string(),
-        "methods" => draft.methods = value.to_string(),
-        "leadership" => draft.leadership = value.to_string(),
-        "headquarters" => draft.headquarters = value.to_string(),
-        "sphere_of_influence" => draft.sphere_of_influence = value.to_string(),
-        "resources_assets" => draft.resources_assets = value.to_string(),
-        "allies" => draft.allies = normalize_unknown_list(parse_list_csv(value)),
-        "rivals_enemies" => draft.rivals_enemies = normalize_unknown_list(parse_list_csv(value)),
-        "reputation" => draft.reputation = value.to_string(),
-        "current_tension" => draft.current_tension = value.to_string(),
-        "goals_short_term" => draft.goals_short_term = normalize_unknown_list(parse_list_csv(value)),
-        "goals_long_term" => draft.goals_long_term = normalize_unknown_list(parse_list_csv(value)),
-        "symbol_description" => draft.symbol_description = value.to_string(),
-        _ => {}
-    }
-
-    if draft.kind_type == "other" && draft.kind_custom.as_ref().is_none_or(|item| item.trim().is_empty()) {
-        return Ok(Some(ok_response("kind_custom is required when kind is other. use faction set kind_custom <value>.".to_string(), None)));
-    }
-    if draft.kind_type != "other" {
-        draft.kind_custom = None;
-    }
-
-    {
+    let updated = {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Faction;
-        editor.faction_draft = Some(draft.clone());
-        editor.npc_draft = None;
-        editor.location_draft = None;
-    }
+        let draft = editor
+            .get_faction_mut()
+            .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+        match canonical {
+            "name" => draft.name = value.to_string(),
+            "kind_type" => {
+                draft.kind_type = normalize_faction_kind_type(value)?;
+                if draft.kind_type == "other" && draft.kind_custom.is_none() {
+                    draft.kind_custom = Some("Unknown".to_string());
+                }
+            }
+            "kind_custom" => draft.kind_custom = Some(value.to_string()),
+            "public_description" => draft.public_description = value.to_string(),
+            "true_agenda" => draft.true_agenda = value.to_string(),
+            "methods" => draft.methods = value.to_string(),
+            "leadership" => draft.leadership = value.to_string(),
+            "headquarters" => draft.headquarters = value.to_string(),
+            "sphere_of_influence" => draft.sphere_of_influence = value.to_string(),
+            "resources_assets" => draft.resources_assets = value.to_string(),
+            "allies" => draft.allies = normalize_unknown_list(parse_list_csv(value)),
+            "rivals_enemies" => draft.rivals_enemies = normalize_unknown_list(parse_list_csv(value)),
+            "reputation" => draft.reputation = value.to_string(),
+            "current_tension" => draft.current_tension = value.to_string(),
+            "goals_short_term" => draft.goals_short_term = normalize_unknown_list(parse_list_csv(value)),
+            "goals_long_term" => draft.goals_long_term = normalize_unknown_list(parse_list_csv(value)),
+            "symbol_description" => draft.symbol_description = value.to_string(),
+            _ => {}
+        }
 
-    Ok(Some(ok_response(faction_summary_text(&draft), Some(faction_event_from_draft(&draft)))))
+        if draft.kind_type == "other"
+            && draft
+                .kind_custom
+                .as_ref()
+                .is_none_or(|item| item.trim().is_empty())
+        {
+            return Ok(Some(ok_response(
+                "kind_custom is required when kind is other. use faction set kind_custom <value>.".to_string(),
+                None,
+            )));
+        }
+        if draft.kind_type != "other" {
+            draft.kind_custom = None;
+        }
+
+        let snapshot = draft.clone();
+        editor.activate(EntityKind::Faction);
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        snapshot
+    };
+
+    Ok(Some(ok_response(
+        faction_summary_text(&updated),
+        Some(faction_event_from_draft(&updated)),
+    )))
 }
 
 async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -207,7 +208,9 @@ async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
 
     let mut draft = {
         let editor = state.editor_session.lock().await;
-        editor.faction_draft.clone()
+        editor
+            .get_faction()
+            .cloned()
     }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
     let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
@@ -276,10 +279,9 @@ async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::Faction;
-        editor.faction_draft = Some(draft.clone());
-        editor.npc_draft = None;
-        editor.location_draft = None;
+        editor.set_faction(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
     }
 
     Ok(Some(ok_response(faction_summary_text(&draft), Some(faction_event_from_draft(&draft)))))
@@ -288,7 +290,9 @@ async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
 async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
-        editor.faction_draft.clone()
+        editor
+            .get_faction()
+            .cloned()
     }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
     let persistence = EntityPersistenceService;
@@ -322,10 +326,7 @@ async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<Comman
 
     {
         let mut editor = state.editor_session.lock().await;
-        editor.mode = EditorMode::None;
-        editor.npc_draft = None;
-        editor.location_draft = None;
-        editor.faction_draft = None;
+        editor.clear_all();
     }
 
     let output = [

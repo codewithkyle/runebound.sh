@@ -8,7 +8,7 @@ use dnd_core::config::load_effective;
 use dnd_core::vault::Vault;
 use serde::Serialize;
 
-use crate::app_state::{self, AppState};
+use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
 use crate::services::entity_admin::EntityType;
 use crate::utils::normalize_relative_path_for_storage;
@@ -55,16 +55,19 @@ impl SuggestionService {
         let parsed = command_parse::parse_command_input(&input);
         let mut suggestions = build_command_suggestions(&manifest, &parsed, &input);
 
-        let mode = {
+        let active_kind = {
             let editor = state.editor_session.lock().await;
-            editor.mode
+            editor.active_kind()
         };
+        let is_npc = matches!(active_kind, Some(EntityKind::Npc));
+        let is_location = matches!(active_kind, Some(EntityKind::Location));
+        let is_faction = matches!(active_kind, Some(EntityKind::Faction));
 
         suggestions.retain(|suggestion| {
             let completion = suggestion.completion.trim().to_ascii_lowercase();
             let label = suggestion.label.trim().to_ascii_lowercase();
 
-            if mode != app_state::EditorMode::Npc {
+            if !is_npc {
                 if completion == "npc"
                     || completion.starts_with("npc ")
                     || label == "npc"
@@ -72,15 +75,15 @@ impl SuggestionService {
                 {
                     return false;
                 }
-                if mode != app_state::EditorMode::Location
-                    && mode != app_state::EditorMode::Faction
+                if !is_location
+                    && !is_faction
                     && (completion == "reroll" || label == "reroll")
                 {
                     return false;
                 }
             }
 
-            if mode != app_state::EditorMode::Location
+            if !is_location
                 && (completion == "location"
                     || completion.starts_with("location ")
                     || label == "location"
@@ -89,7 +92,7 @@ impl SuggestionService {
                 return false;
             }
 
-            if mode != app_state::EditorMode::Faction
+            if !is_faction
                 && (completion == "faction"
                     || completion.starts_with("faction ")
                     || label == "faction"
@@ -98,7 +101,7 @@ impl SuggestionService {
                 return false;
             }
 
-            if mode == app_state::EditorMode::None && (completion == "cancel" || label == "cancel") {
+            if active_kind.is_none() && (completion == "cancel" || label == "cancel") {
                 return false;
             }
 
@@ -160,7 +163,7 @@ impl SuggestionService {
             }
         }
 
-        if mode == app_state::EditorMode::Npc {
+        if is_npc {
             if let Some(location_query) = npc_travel_location_query(trimmed) {
                 let location_names = search_location_names(state, location_query, Some(8)).await?;
                 for location_name in location_names {
