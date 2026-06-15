@@ -571,7 +571,7 @@ fn build_date_argument_suggestions(
     let has_target_token = typed_after_set >= 1;
     let is_known_target = target_token_lower
         .as_deref()
-        .is_some_and(|value| matches!(value, "year" | "month" | "day"));
+        .is_some_and(|value| matches!(value, "year" | "month" | "day" | "time"));
     let selecting_component = !has_target_token || !is_known_target || (typed_after_set == 1 && !ends_with_space);
 
     if selecting_component {
@@ -615,7 +615,7 @@ fn build_date_argument_suggestions(
         return None;
     }
 
-    if target_name == "year" || target_name == "day" {
+    if target_name == "year" || target_name == "day" || target_name == "time" {
         return Some(Vec::new());
     }
 
@@ -650,7 +650,7 @@ fn strip_last_token_segment(value: &str) -> String {
 }
 
 fn build_date_component_suggestions(base: &str, prefix: &str) -> Vec<CommandSuggestion> {
-    const COMPONENTS: [&str; 3] = ["year", "month", "day"];
+    const COMPONENTS: [&str; 4] = ["year", "month", "day", "time"];
     COMPONENTS
         .iter()
         .filter(|component| component.starts_with(prefix))

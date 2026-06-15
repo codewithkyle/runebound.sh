@@ -49,6 +49,7 @@
    - `date set year <number>`: parse `i32`, guard against negatives, update state, persist, emit formatted date string and `output_doc` showing weekday + ordinal.
    - `date set month <name>`: case-insensitive match against definition; reject unknown names with list of valid entries.
    - `date set day <number>`: ensure `1..=month_length` after applying month change.
+   - `date set time <HH:MM> [AM|PM]`: parse 12-hour inputs with optional suffix, default suffix to AM when omitted, accept 24-hour tokens (e.g., `13:30`) and convert to stored 24-hour representation before formatting output.
    - Centralize formatting in `dnd_core::calendar::format_date(&StoredCalendar)` returning `14th of Emberwane 10:30 AM (Moonday)` to keep CLI doc-compliant.
 3. **Services/Utilities:**
    - Provide `CalendarState::set_year/month/day` helpers that return `Result<()>` so handler stays orchestration-only (`docs/architecture.md`).

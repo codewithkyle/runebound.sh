@@ -220,6 +220,7 @@ date
 date set year <number>
 date set month <month-name>
 date set day <number>
+date set time <HH:MM> [AM|PM]
 ```
 
 ### Examples
@@ -229,6 +230,9 @@ date
 date set year 5
 date set month Emberwane
 date set day 14
+date set time 12:15 PM
+date set 1:00
+date set 13:30
 ```
 
 ### Requirements
@@ -237,6 +241,7 @@ date set day 14
 - Year must be ≥ 0
 - Month name is case-insensitive; must match an existing month
 - Day must be within the valid range for the selected month
+- Time defaults to AM when no suffix is provided; 24-hour inputs (e.g., `13:30`) are also supported and converted for display
 
 ### Output Format
 

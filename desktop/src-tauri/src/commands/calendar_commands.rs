@@ -180,8 +180,7 @@ fn build_calendar_import_doc(calendar: &StoredCalendar) -> OutputDoc {
     )));
 
     doc()
-        .with_block(heading(2, "Calendar Imported"))
-        .with_block(entity_card("Calendar Definition", rows))
+        .with_block(entity_card("Calendar Imported", rows))
         .with_block(heading(3, "Active State Reset"))
         .with_block(paragraph_text("The calendar state has been reset to year 0, first month, day 1, midnight."))
 }
