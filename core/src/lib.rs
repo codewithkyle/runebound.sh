@@ -1,3 +1,4 @@
+pub mod calendar;
 pub mod command;
 pub mod command_manifest;
 pub mod command_parse;

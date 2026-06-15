@@ -1,3 +1,4 @@
+pub mod calendar_commands;
 pub mod npc_commands;
 pub mod location_commands;
 pub mod faction_commands;
@@ -74,6 +75,7 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(save_handler_entry());
     registry.register(reroll_handler_entry());
     registry.register(cancel_handler_entry());
+    registry.register(calendar_handler_entry());
     registry
 }
 
@@ -276,6 +278,14 @@ pub fn cancel_handler_entry() -> HandlerEntry<DesktopHandler> {
         "cancel",
         metadata_for("cancel"),
         DesktopHandler::new(|invocation| Box::pin(async move { system_commands::handle_cancel(invocation).await })),
+    )
+}
+
+pub fn calendar_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "calendar",
+        metadata_for("calendar"),
+        DesktopHandler::new(|invocation| Box::pin(async move { calendar_commands::handle_calendar(invocation).await })),
     )
 }
 

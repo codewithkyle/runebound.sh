@@ -10,7 +10,7 @@
 - Structured output (`output_doc`) is preferred; plain text (`output`) is compatibility fallback.
 - Commands are split by execution target:
   - Core: `status`, `config`, `help`, `exit`, `setup`
-  - Desktop: `create`, `npc`, `location`, `faction`, `item`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `clear`, `history`
+  - Desktop: `calendar`, `create`, `npc`, `location`, `faction`, `item`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `clear`, `history`
 - Router remains dispatch-only (`desktop/src-tauri/src/router.rs`).
 
 ---
@@ -166,7 +166,50 @@ Before merging any CLI or command behavior change:
 
 ---
 
-## 9. Related Docs
+## 9. Calendar Import
+
+The `calendar` command imports fantasy calendars from JSON exports produced by [donjon.bin.sh/fantasy/calendar/](https://donjon.bin.sh/fantasy/calendar/).
+
+### Usage
+
+```
+calendar import <path>
+calendar import path/to/calendar.json
+```
+
+### JSON Expectations
+
+The importer expects donjon.bin.sh JSON format with the following fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `year_len` | integer | Total days in a year |
+| `months` | array of strings | Month names |
+| `month_len` | object | Mapping of month name to day count |
+| `week_len` | integer | Days in a week |
+| `weekdays` | array of strings | Weekday names |
+| `moons` | array of strings | Moon names |
+| `lunar_cyc` | object | Moon cycle lengths (stored in notes) |
+| `lunar_shf` | object | Moon shift values (stored in notes) |
+| `first_day` | integer | First day of year (weekday index) |
+
+### Storage Location
+
+Imported calendars are normalized to TOML and stored at:
+
+```
+~/.config/runebound.sh/calendar.toml
+```
+
+### Overwrite Semantics
+
+- Importing a calendar **always replaces** any previously stored calendar.
+- The active calendar state is **reset to year 0, first month, day 1, midnight (00:00)** after import.
+- Unsupported JSON fields are stashed in a `notes` map for forward compatibility.
+
+---
+
+## 10. Related Docs
 
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts

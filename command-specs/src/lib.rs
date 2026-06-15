@@ -699,6 +699,36 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "calendar".to_string(),
+                summary: "Import and manage fantasy calendar".to_string(),
+                examples: vec![
+                    "calendar import".to_string(),
+                    "calendar import path/to/calendar.json".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "import".to_string(),
+                        summary: "Import calendar from JSON file exported by donjon.bin.sh".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "calendar import".to_string(),
+                            "calendar import path/to/calendar.json".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show calendar command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["calendar help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("calendar help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "exit".to_string(),
                 summary: "Exit the application".to_string(),
                 examples: vec!["exit".to_string()],
