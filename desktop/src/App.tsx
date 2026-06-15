@@ -462,6 +462,10 @@ export default function App() {
         return;
       }
 
+      // Details of failed tasks to surface after the view is cleared. The `llm`
+      // task is excluded because the MOTD already reports its status.
+      const failureNotices: string[] = [];
+
       for (const task of plan.tasks) {
         const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${task.label} ...`);
         let spinnerFrame = 0;
@@ -477,18 +481,28 @@ export default function App() {
           ]);
           window.clearInterval(spinnerTimer);
           updateEntry(spinnerId, "spinner", `${result.ok ? "OK" : "FAILED"} ${task.label}`);
+          if (!result.ok && task.id !== "llm" && result.detail) {
+            failureNotices.push(result.detail);
+          }
         } catch (error) {
           window.clearInterval(spinnerTimer);
           updateEntry(spinnerId, "spinner", `FAILED ${task.label}`);
+          if (task.id !== "llm") {
+            failureNotices.push(String(error));
+          }
         }
       }
 
-      // Clear the boot spinners and show the welcome banner + accurate status.
+      // Clear the boot spinners and show the welcome banner + accurate status,
+      // then re-surface any failures that the MOTD doesn't already cover.
       setEntries([]);
       appendEntry("banner", BANNER_TEXT);
       const motd = await invoke<CommandResponse>("boot_motd");
       const rendered = responseToRenderableModel(motd, commandMeta());
       appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
+      for (const notice of failureNotices) {
+        appendEntry("error", notice);
+      }
     } catch (error) {
       appendEntry("error", `boot failed: ${String(error)}`);
     } finally {

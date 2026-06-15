@@ -46,6 +46,10 @@ fn boot_task_infos() -> Vec<BootTaskInfo> {
             label: "cleaning up owlbear droppings".to_string(),
         },
         BootTaskInfo {
+            id: "calendar".to_string(),
+            label: "consulting the astrolabe".to_string(),
+        },
+        BootTaskInfo {
             id: "llm".to_string(),
             label: "warming up the sending stones".to_string(),
         },
@@ -81,6 +85,23 @@ pub async fn run_boot_task(
                 tone: "success".to_string(),
                 detail: "vault and database are tidy".to_string(),
             })
+        }
+        "calendar" => {
+            // Validate the calendar up front so a corrupt/invalid calendar.toml
+            // surfaces at boot rather than on the first date/moon command.
+            // A missing calendar is fine (returns Ok(None)).
+            match dnd_core::calendar::load_calendar() {
+                Ok(_) => Ok(BootTaskResult {
+                    ok: true,
+                    tone: "success".to_string(),
+                    detail: "calendar looks good".to_string(),
+                }),
+                Err(err) => Ok(BootTaskResult {
+                    ok: false,
+                    tone: "warning".to_string(),
+                    detail: format!("Calendar problem: {err:#}"),
+                }),
+            }
         }
         "llm" => {
             let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
