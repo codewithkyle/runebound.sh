@@ -1,17 +1,18 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::utils::{
     normalize_faction_seed, normalize_item_category, normalize_item_rarity, normalize_location_seed,
-    normalize_sex, normalize_unknown_list, normalize_unknown_text, validate_faction_details,
-    validate_location_details,
+    normalize_relative_path_for_storage, normalize_sex, normalize_unknown_list,
+    normalize_unknown_text, validate_faction_details, validate_location_details,
 };
 use dnd_core::config::{load_effective, validate_for_runtime};
+use dnd_core::entity_store::EntityStore;
 use dnd_core::vault::Vault;
 use runebound_models::utils::{
     FACTION_KIND_TYPES, ITEM_CATEGORIES, ITEM_RARITIES, LOCATION_DANGER_LEVELS,
     LOCATION_KIND_TYPES,
 };
-use std::collections::HashSet;
-use std::path::PathBuf;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 pub struct AiGenerationService;
@@ -36,7 +37,12 @@ impl AiGenerationService {
             let vault = Vault::new(vault_path);
             if vault.ensure_root_exists().is_ok() {
                 match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault),
+                    Ok(entries) => build_prompt_reference_context(
+                        user_prompt,
+                        &entries,
+                        &vault,
+                        workspace_root,
+                    ),
                     Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
                 }
             } else {
@@ -264,7 +270,12 @@ impl AiGenerationService {
             let vault = Vault::new(vault_path);
             if vault.ensure_root_exists().is_ok() {
                 match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault),
+                    Ok(entries) => build_prompt_reference_context(
+                        user_prompt,
+                        &entries,
+                        &vault,
+                        workspace_root,
+                    ),
                     Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
                 }
             } else {
@@ -670,7 +681,6 @@ fn markdown_reference_key(relative_path: &str) -> Option<String> {
 }
 
 fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry>, String> {
-    use std::collections::HashMap;
     use std::fs;
     vault.ensure_root_exists().map_err(|err| err.to_string())?;
     let mut entries: HashMap<String, VaultReferenceEntry> = HashMap::new();
@@ -740,7 +750,12 @@ fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) 
     unique
 }
 
-fn build_prompt_reference_context(prompt: &str, entries: &[VaultReferenceEntry], vault: &Vault) -> PromptReferenceContext {
+fn build_prompt_reference_context(
+    prompt: &str,
+    entries: &[VaultReferenceEntry],
+    vault: &Vault,
+    workspace_root: &Path,
+) -> PromptReferenceContext {
     const MAX_REFERENCE_DOCS: usize = 5;
     const MAX_METADATA_CHARS_PER_DOC: usize = 1800;
 
@@ -750,16 +765,73 @@ fn build_prompt_reference_context(prompt: &str, entries: &[VaultReferenceEntry],
     let path_by_key: std::collections::HashMap<String, String> = entries.iter().filter_map(|entry| entry.markdown_path.as_ref().map(|path| (entry.key.to_lowercase(), path.clone()))).collect();
     let mut blocks = Vec::new();
 
+    let canonical_metadata = match EntityStore::new(workspace_root) {
+        Ok(store) => canonical_metadata_map(&store),
+        Err(err) => {
+            eprintln!("reference context warning: failed to load canonical entities: {err}");
+            HashMap::new()
+        }
+    };
+
     for key in keys.into_iter().take(MAX_REFERENCE_DOCS) {
         let Some(path) = path_by_key.get(&key.to_lowercase()) else { continue };
-        let contents = match vault.read_relative(std::path::Path::new(path)) { Ok(value) => value, Err(err) => { eprintln!("reference context warning: failed reading {}: {}", path, err); continue; } };
-        let Some(payload) = reference_payload_from_markdown(&contents) else { continue };
+        let normalized_path = normalize_relative_path_for_storage(path);
+        let payload = if let Some(canonical) = canonical_metadata.get(&normalized_path) {
+            canonical.clone()
+        } else {
+            let contents = match vault.read_relative(Path::new(path)) { Ok(value) => value, Err(err) => { eprintln!("reference context warning: failed reading {}: {}", path, err); continue; } };
+            match reference_payload_from_markdown(&contents) { Some(value) => value, None => continue }
+        };
         let metadata = if payload.len() > MAX_METADATA_CHARS_PER_DOC { format!("{}...", &payload[..MAX_METADATA_CHARS_PER_DOC]) } else { payload };
         blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
     }
 
     if blocks.is_empty() { return PromptReferenceContext::default(); }
     PromptReferenceContext { system_context: format!("Referenced vault metadata (treat as authoritative setting context):\n\n{}", blocks.join("\n\n")) }
+}
+
+fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
+    let mut map = HashMap::new();
+
+    if let Ok(npcs) = store.list_npcs() {
+        for npc in npcs {
+            if let Ok(serialized) = toml::to_string_pretty(&npc) {
+                map.insert(normalize_relative_path_for_storage(&npc.vault_path), serialized);
+            }
+        }
+    }
+
+    if let Ok(locations) = store.list_locations() {
+        for location in locations {
+            if let Ok(serialized) = toml::to_string_pretty(&location) {
+                map.insert(
+                    normalize_relative_path_for_storage(&location.vault_path),
+                    serialized,
+                );
+            }
+        }
+    }
+
+    if let Ok(factions) = store.list_factions() {
+        for faction in factions {
+            if let Ok(serialized) = toml::to_string_pretty(&faction) {
+                map.insert(
+                    normalize_relative_path_for_storage(&faction.vault_path),
+                    serialized,
+                );
+            }
+        }
+    }
+
+    if let Ok(items) = store.list_items() {
+        for item in items {
+            if let Ok(serialized) = toml::to_string_pretty(&item) {
+                map.insert(normalize_relative_path_for_storage(&item.vault_path), serialized);
+            }
+        }
+    }
+
+    map
 }
 
 fn extract_runebound_toml(contents: &str) -> Option<String> {

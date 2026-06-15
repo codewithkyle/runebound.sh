@@ -38,6 +38,7 @@ Replace the embedded `runebound` blocks in Obsidian markdown files with a canoni
 5. **Code Cleanup**
    - Remove/disable legacy paths that parse runebound blocks from Obsidian files (vault sync, imports) since structured data now lives in config TOML.
    - Ensure any references to `runebound` blocks either point to the canonical files or are deprecated.
+   - Vault sync must read from the canonical `EntityStore` TOML files exclusively; manual vault edits are never imported.
 
 6. **Testing**
    - Unit tests for renderer output (snapshot or string assertions) per entity type.

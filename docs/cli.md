@@ -329,6 +329,7 @@ publish help
 - Writes to the entity's `vault_path` (e.g., `npcs/lirael.md`).
 - If the file already exists you must confirm the overwrite; declining leaves the file untouched.
 - Publishing is one-way—manual edits inside Obsidian are not synced back. Re-run `publish` after making changes via commands.
+- Startup sync mirrors the canonical TOML store into the SQLite database; Obsidian files are treated purely as render targets.
 
 ---
 

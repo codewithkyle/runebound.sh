@@ -73,7 +73,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 3. Add persistence workflow in `desktop/src-tauri/src/services/entity_persistence.rs`
 4. Add reroll + AI-generation helpers in `desktop/src-tauri/src/services/entity_reroll.rs` (and `services/ai_generation.rs` if seed prompts change)
 5. Add admin resolution/load/delete/undo support in `desktop/src-tauri/src/services/entity_admin.rs`
-6. Add vault-sync scanning/import behavior in `desktop/src-tauri/src/services/vault_sync.rs`
+6. Wire the canonical `EntityStore` sync in `desktop/src-tauri/src/services/vault_sync.rs` so DB + search indexes mirror the TOML records (no Markdown parsing)
 
 ### Commands and editor state
 

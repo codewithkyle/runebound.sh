@@ -4,12 +4,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
 use crate::repositories::db;
+use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{move_vault_file, unique_markdown_path_for_name, unique_trash_path};
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::npc::{
-    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, render_location_markdown,
-    slugify, unique_slug_for_dir,
+    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
+    unique_slug_for_dir,
 };
 use dnd_core::serialization::{
     carrying_from_db_text, exports_from_db_text, faction_list_from_db_text,
@@ -102,8 +103,7 @@ impl EntityAdminService {
                 current_tension: "Unknown".to_string(),
                 created_at: created_at.clone(),
                 updated_at: now.clone(),
-            })
-            .map_err(|err| err.to_string())?;
+            });
             vault
                 .write_relative(&PathBuf::from(&relative_path), &content)
                 .map_err(|err| err.to_string())?;
