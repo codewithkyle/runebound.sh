@@ -327,6 +327,28 @@ fn build_command_suggestions(
     input: &str,
 ) -> Vec<CommandSuggestion> {
     if matches!(parsed.completion.stage, ParseStage::Root) {
+        if let Some(root_name) = parsed.completion.root.as_deref() {
+            if let Some(command) = find_command(manifest, root_name) {
+                if command.requires_subcommand
+                    && parsed
+                        .completion
+                        .current_token
+                        .eq_ignore_ascii_case(root_name)
+                {
+                    let mut hydrated_input = input.to_string();
+                    if !hydrated_input.ends_with(' ') {
+                        hydrated_input.push(' ');
+                    }
+                    return build_subcommand_suggestions(
+                        manifest,
+                        parsed.completion.root.as_deref(),
+                        &hydrated_input,
+                        "",
+                    );
+                }
+            }
+        }
+
         return build_root_suggestions(manifest, &parsed.completion.current_token);
     }
 
@@ -416,6 +438,12 @@ fn build_argument_suggestions(
                 completion: "npc travel to ".to_string(),
                 helper_text: Some(SuggestionHelperText::Command),
             }];
+        }
+    }
+
+    if command.name == "date" {
+        if let Some(suggestions) = build_date_argument_suggestions(subcommand_name, parsed, input) {
+            return suggestions;
         }
     }
 
@@ -519,6 +547,119 @@ fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
         "item" => Some(EntityKind::Item),
         _ => None,
     }
+}
+
+fn build_date_argument_suggestions(
+    subcommand: Option<&str>,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    let subcommand = subcommand?;
+
+    if subcommand != "set" {
+        return None;
+    }
+
+    let normalized = &parsed.normalized_tokens;
+    if normalized.len() < 2 {
+        return None;
+    }
+
+    let typed_after_set = normalized.len().saturating_sub(2);
+    let ends_with_space = parsed.completion.ends_with_space;
+    let target_token_lower = normalized.get(2).map(|token| token.to_ascii_lowercase());
+    let has_target_token = typed_after_set >= 1;
+    let is_known_target = target_token_lower
+        .as_deref()
+        .is_some_and(|value| matches!(value, "year" | "month" | "day"));
+    let selecting_component = !has_target_token || !is_known_target || (typed_after_set == 1 && !ends_with_space);
+
+    if selecting_component {
+        let base = base_for_date_component_selection(input, typed_after_set);
+        let prefix = if has_target_token {
+            target_token_lower.clone().unwrap_or_default()
+        } else {
+            String::new()
+        };
+        let suggestions = build_date_component_suggestions(&base, &prefix);
+        return Some(suggestions);
+    }
+
+    let target_name = target_token_lower.expect("expected target token");
+    let mut base = replace_current_token(input, &parsed.completion.current_token);
+    if !base.ends_with(' ') {
+        base.push(' ');
+    }
+    let value_prefix = if ends_with_space {
+        String::new()
+    } else {
+        parsed.completion.current_token.to_ascii_lowercase()
+    };
+
+    if target_name == "month" {
+        if let Ok(Some(calendar)) = dnd_core::calendar::load_calendar() {
+            return Some(
+                calendar
+                    .definition
+                    .months
+                    .iter()
+                    .filter(|month| month.to_ascii_lowercase().starts_with(&value_prefix))
+                    .map(|month| CommandSuggestion {
+                        label: month.clone(),
+                        completion: format!("{}{} ", base, month),
+                        helper_text: Some(SuggestionHelperText::Command),
+                    })
+                    .collect(),
+            );
+        }
+        return None;
+    }
+
+    if target_name == "year" || target_name == "day" {
+        return Some(Vec::new());
+    }
+
+    None
+}
+
+fn base_for_date_component_selection(input: &str, tokens_to_remove: usize) -> String {
+    if tokens_to_remove == 0 {
+        let mut base = input.to_string();
+        if !base.ends_with(' ') {
+            base.push(' ');
+        }
+        return base;
+    }
+
+    let mut trimmed = input.trim_end().to_string();
+    for _ in 0..tokens_to_remove {
+        trimmed = strip_last_token_segment(&trimmed);
+    }
+    if !trimmed.ends_with(' ') {
+        trimmed.push(' ');
+    }
+    trimmed
+}
+
+fn strip_last_token_segment(value: &str) -> String {
+    let trimmed = value.trim_end();
+    match trimmed.rfind(char::is_whitespace) {
+        Some(index) => trimmed[..index + 1].to_string(),
+        None => String::new(),
+    }
+}
+
+fn build_date_component_suggestions(base: &str, prefix: &str) -> Vec<CommandSuggestion> {
+    const COMPONENTS: [&str; 3] = ["year", "month", "day"];
+    COMPONENTS
+        .iter()
+        .filter(|component| component.starts_with(prefix))
+        .map(|component| CommandSuggestion {
+            label: format!("date set {}", component),
+            completion: format!("{}{} ", base, component),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
 }
 
 fn find_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {
@@ -891,6 +1032,57 @@ mod tests {
         let parsed = command_parse::parse_command_input("npc");
         let suggestions = build_command_suggestions(&manifest, &parsed, "npc");
         assert!(!suggestions.is_empty());
+    }
+
+    #[test]
+    fn date_command_suggests_set_without_trailing_space() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("date");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "date");
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "date set "),
+            "missing date set suggestion"
+        );
+    }
+
+    #[test]
+    fn date_set_suggests_components_without_trailing_space() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("date set");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "date set");
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "date set year "),
+            "missing component suggestion"
+        );
+    }
+
+    #[test]
+    fn date_set_component_prefix_filters_results() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("date set y");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "date set y");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].completion, "date set year ");
+    }
+
+    #[test]
+    fn date_set_year_does_not_suggest_numeric_values() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("date set year ");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "date set year ");
+        assert!(suggestions.is_empty(), "expected no year value suggestions");
+    }
+
+    #[test]
+    fn date_set_day_does_not_suggest_numeric_values() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("date set day 12");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "date set day 12");
+        assert!(suggestions.is_empty(), "expected no day value suggestions");
     }
 
     #[test]
