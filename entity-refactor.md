@@ -266,19 +266,30 @@ Acceptance:
 
 ### Phase 5: Pilot New Entity (Proof)
 
-Deliverables:
+**Pilot target:** `item` (simpler surface than quests; great proving ground).
 
-1. Implement one pilot entity (`quest` recommended)
-2. Use only new extension pathways:
-   - schema
-   - domain impl
-   - registration
-   - persistence/generation hooks
-3. Record files touched and compare to legacy path
+Deliverables (must all be completed):
+
+1. **Shared contracts**
+   - Add `EntityKind::Item`, `ITEM_FIELDS`, and `ITEM_SCHEMA` so schema helpers, suggestions, and validation recognize the new entity.
+   - Extend `runebound-models` with `ItemDraft`, `ItemFrontmatter`, `item_entity_card`, and `CommandClientEvent::LoadItemDraftWithCard`; regenerate `desktop/src/generated/models.ts`.
+2. **Data + persistence**
+   - Introduce an `items` table (SQLite migration + `ItemRow` helpers in `core::db`), repositories, and document-index support.
+   - Implement `save_item_draft` (including markdown rendering) plus vault sync + soft delete plumbing for items.
+3. **Domains + services**
+   - Create `entities/domains/item_domain.rs`, register it, and ensure `AppState::EditorSession` manages item drafts.
+   - Add item AI generation + reroll support (new seed struct, normalization helpers, `EntityRerollService::reroll_item_field`).
+4. **CLI integration**
+   - Add `commands/item_commands.rs` (help/show/rename/set/reroll/save/cancel), wire it into the router, and update `command-specs` metadata.
+   - Extend `create` command with `create item [prompt]` and ensure `system` commands (save/reroll) handle active item drafts.
+5. **Frontend + UX**
+   - Handle `LoadItemDraftWithCard` in the desktop app (state + renderer) and confirm entity cards render correctly.
+   - Update docs (`docs/feature-development.md`, etc.) with the new item workflow and summarize files touched vs. legacy approach.
 
 Acceptance:
 
-- Pilot entity added with low invasive change count
+- Items behave like existing entities end-to-end: create/show/set/reroll/save/cancel/load/delete/undo all work, cards render, persistence + vault sync round-trip.
+- New entity onboarding required only additive touches (registry, schema, services, command spec) with no large branches in existing modules.
 
 ---
 
