@@ -68,21 +68,19 @@ impl SuggestionService {
             let completion = suggestion.completion.trim().to_ascii_lowercase();
             let label = suggestion.label.trim().to_ascii_lowercase();
 
-            if !is_npc {
-                if completion == "npc"
-                    || completion.starts_with("npc ")
-                    || label == "npc"
-                    || label.starts_with("npc ")
-                {
-                    return false;
-                }
-                if !is_location
-                    && !is_faction
-                    && (completion == "reroll" || label == "reroll")
-                {
-                    return false;
-                }
+        if !is_npc {
+            if completion == "npc"
+                || completion.starts_with("npc ")
+                || label == "npc"
+                || label.starts_with("npc ")
+            {
+                return false;
             }
+        }
+
+        if active_kind.is_none() && (completion == "reroll" || label == "reroll") {
+            return false;
+        }
 
             if !is_location
                 && (completion == "location"
@@ -518,6 +516,7 @@ fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
         "npc" => Some(EntityKind::Npc),
         "location" => Some(EntityKind::Location),
         "faction" => Some(EntityKind::Faction),
+        "item" => Some(EntityKind::Item),
         _ => None,
     }
 }
@@ -748,10 +747,13 @@ fn can_start_reference_at(input: &str, at_index: usize) -> bool {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_reference_suggestions_from_entries, extract_active_reference_query,
-        extract_prompt_reference_keys, load_vault_reference_entries, npc_travel_location_query,
-        ActiveReferenceQuery, CommandSuggestion, SuggestionHelperText, VaultReferenceEntry,
+        build_command_suggestions, build_entity_field_argument_suggestions,
+        build_reference_suggestions_from_entries, entity_kind_for_root, extract_active_reference_query,
+        extract_prompt_reference_keys, find_command, npc_travel_location_query, ActiveReferenceQuery,
+        VaultReferenceEntry,
     };
+    use crate::entities::EntityKind;
+    use dnd_core::{command_manifest, command_parse};
 
     #[test]
     fn extracts_active_reference_query_from_tail() {
@@ -897,6 +899,55 @@ mod tests {
         let parsed = command_parse::parse_command_input("unknown");
         let suggestions = build_command_suggestions(&manifest, &parsed, "unknown");
         assert!(suggestions.is_empty());
+    }
+
+    #[test]
+    fn entity_kind_for_item_root_maps_to_item_kind() {
+        assert_eq!(entity_kind_for_root("item"), Some(EntityKind::Item));
+    }
+
+    #[test]
+    fn item_set_field_suggestions_include_rarity() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "item").expect("missing item command");
+        let parsed = command_parse::parse_command_input("item set r");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::Item,
+            command,
+            Some("set"),
+            &parsed,
+            "item set r",
+        )
+        .expect("expected suggestions");
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "item set rarity "),
+            "missing rarity suggestion"
+        );
+    }
+
+    #[test]
+    fn item_reroll_field_suggestions_include_materials() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "item").expect("missing item command");
+        let parsed = command_parse::parse_command_input("item reroll m");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::Item,
+            command,
+            Some("reroll"),
+            &parsed,
+            "item reroll m",
+        )
+        .expect("expected suggestions");
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "item reroll materials "),
+            "missing materials suggestion"
+        );
     }
 }
 
