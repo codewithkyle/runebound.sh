@@ -7,6 +7,11 @@ use crate::services::entity_admin::{
     EntityAdminService, EntityDetails, EntityType, SoftDeleteEntityInput,
 };
 use crate::entities::EntityKind;
+use crate::entities::domains::{
+    faction_event_from_draft,
+    location_event_from_draft,
+    npc_event_from_draft,
+};
 use crate::utils::path_for_display;
 use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
 
@@ -356,80 +361,6 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
             )
         }
     }
-}
-
-fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::npc_entity_card;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-
-    let normalized_draft = NpcDraftSession {
-        id: draft.id.clone(),
-        name: draft.name.clone(),
-        race: core_normalize_unknown(&draft.race),
-        occupation: core_normalize_unknown(&draft.occupation),
-        sex: match draft.sex.to_lowercase().as_str() { "male" => "Male".to_string(), "female" => "Female".to_string(), _ => draft.sex.clone() },
-        age: core_normalize_unknown(&draft.age),
-        height: core_normalize_unknown(&draft.height),
-        weight_lbs: core_normalize_unknown(&draft.weight_lbs),
-        background: core_normalize_unknown(&draft.background),
-        want_need: core_normalize_unknown(&draft.want_need),
-        secret_obstacle: core_normalize_unknown(&draft.secret_obstacle),
-        carrying: core_normalize_list(draft.carrying.clone()),
-        location: core_normalize_unknown(&draft.location),
-        seed_prompt: draft.seed_prompt.clone(),
-    };
-    let entity_card_doc = npc_entity_card(&normalized_draft);
-    CommandClientEvent::LoadNpcDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::location_entity_card;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-
-    let normalized_draft = LocationDraftSession {
-        id: draft.id.clone(), name: draft.name.clone(), slug: draft.slug.clone(), vault_path: draft.vault_path.clone(),
-        kind_type: draft.kind_type.clone(), kind_custom: draft.kind_custom.clone(),
-        visual_description: core_normalize_unknown(&draft.visual_description),
-        history_background: core_normalize_unknown(&draft.history_background),
-        exports: core_normalize_list(draft.exports.clone()),
-        tone: core_normalize_unknown(&draft.tone),
-        authority: core_normalize_unknown(&draft.authority),
-        danger_level: core_normalize_unknown(&draft.danger_level),
-        current_tension: core_normalize_unknown(&draft.current_tension),
-        seed_prompt: draft.seed_prompt.clone(),
-    };
-    let entity_card_doc = location_entity_card(&normalized_draft);
-    CommandClientEvent::LoadLocationDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::faction_entity_card;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-
-    let normalized_draft = FactionDraftSession {
-        id: draft.id.clone(), name: draft.name.clone(), slug: draft.slug.clone(), vault_path: draft.vault_path.clone(),
-        kind_type: draft.kind_type.clone(), kind_custom: draft.kind_custom.clone(),
-        public_description: core_normalize_unknown(&draft.public_description),
-        true_agenda: core_normalize_unknown(&draft.true_agenda),
-        methods: core_normalize_unknown(&draft.methods),
-        leadership: core_normalize_unknown(&draft.leadership),
-        headquarters: core_normalize_unknown(&draft.headquarters),
-        sphere_of_influence: core_normalize_unknown(&draft.sphere_of_influence),
-        resources_assets: core_normalize_unknown(&draft.resources_assets),
-        allies: core_normalize_list(draft.allies.clone()),
-        rivals_enemies: core_normalize_list(draft.rivals_enemies.clone()),
-        reputation: core_normalize_unknown(&draft.reputation),
-        current_tension: core_normalize_unknown(&draft.current_tension),
-        goals_short_term: core_normalize_list(draft.goals_short_term.clone()),
-        goals_long_term: core_normalize_list(draft.goals_long_term.clone()),
-        symbol_description: core_normalize_unknown(&draft.symbol_description),
-        seed_prompt: draft.seed_prompt.clone(),
-    };
-    let entity_card_doc = faction_entity_card(&normalized_draft);
-    CommandClientEvent::LoadFactionDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
 }
 
 fn normalize_sex(value: &str) -> Result<String, String> {

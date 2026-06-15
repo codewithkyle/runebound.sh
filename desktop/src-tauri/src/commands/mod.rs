@@ -276,6 +276,11 @@ fn render_history_output(history: &[String], limit: usize) -> String {
     history[start..].iter().enumerate().map(|(index, value)| format!("{}: {}", start + index + 1, value)).collect::<Vec<_>>().join("\n")
 }
 
-pub use faction_commands::{faction_summary_text, faction_event_from_draft};
-pub use location_commands::{location_summary_text, location_event_from_draft};
-pub use npc_commands::{npc_summary_text, npc_event_from_draft};
+pub use crate::entities::domains::{
+    faction_event_from_draft,
+    faction_summary_text,
+    location_event_from_draft,
+    location_summary_text,
+    npc_event_from_draft,
+    npc_summary_text,
+};

@@ -1,11 +1,14 @@
+pub mod domain;
+pub mod domains;
 pub mod kind;
+pub mod registry;
 pub mod schema;
 
 pub use kind::EntityKind;
 pub use schema::{
-    canonical_field_name,
-    format_valid_field_list,
     rerollable_fields,
     settable_fields,
-    FieldAccess,
 };
+
+pub use domain::EntityDomain;
+pub use registry::{build_default_registry, EntityDomainRegistry};

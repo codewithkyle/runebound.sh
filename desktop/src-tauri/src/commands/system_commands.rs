@@ -4,12 +4,6 @@ use crate::commands::{
 };
 use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
-use crate::services::entity_persistence::{
-    EntityPersistenceService, SaveFactionDraftInput, SaveFactionDraftResult,
-    SaveLocationDraftInput, SaveLocationDraftResult, SaveNpcDraftInput, SaveNpcDraftResult,
-};
-use crate::utils::path_for_display;
-use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
 
@@ -20,9 +14,14 @@ pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Opt
     };
 
     match active_kind {
-        Some(EntityKind::Npc) => npc_save(invocation.state.clone()).await,
-        Some(EntityKind::Location) => location_save(invocation.state.clone()).await,
-        Some(EntityKind::Faction) => faction_save(invocation.state.clone()).await,
+        Some(kind) => {
+            let domain = invocation
+                .state
+                .domains()
+                .domain(kind)
+                .expect("domain not registered");
+            domain.save(invocation.state.inner()).await
+        }
         None => Ok(Some(ok_response("no active draft to save.".to_string(), None))),
     }
 }
@@ -42,44 +41,25 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
 }
 
 pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
-    let mut editor = invocation.state.editor_session.lock().await;
-    let response = match editor.active_kind() {
-        Some(EntityKind::Npc) => {
-            if editor.get_npc().is_none() {
-                ok_response("no active npc draft.".to_string(), None)
-            } else {
-                editor.take_npc();
-                ok_response(
-                    "npc draft discarded.".to_string(),
-                    Some(CommandClientEvent::ClearDrafts),
-                )
-            }
-        }
-        Some(EntityKind::Location) => {
-            if editor.get_location().is_none() {
-                ok_response("no active location draft.".to_string(), None)
-            } else {
-                editor.take_location();
-                ok_response(
-                    "location draft discarded.".to_string(),
-                    Some(CommandClientEvent::ClearDrafts),
-                )
-            }
-        }
-        Some(EntityKind::Faction) => {
-            if editor.get_faction().is_none() {
-                ok_response("no active faction draft.".to_string(), None)
-            } else {
-                editor.take_faction();
-                ok_response(
-                    "faction draft discarded.".to_string(),
-                    Some(CommandClientEvent::ClearDrafts),
-                )
-            }
-        }
-        None => ok_response("no active draft to cancel.".to_string(), None),
+    let active_kind = {
+        let editor = invocation.state.editor_session.lock().await;
+        editor.active_kind()
     };
-    Ok(Some(response))
+
+    match active_kind {
+        Some(kind) => {
+            let domain = invocation
+                .state
+                .domains()
+                .domain(kind)
+                .expect("domain not registered");
+            domain.cancel(invocation.state.inner()).await
+        }
+        None => Ok(Some(ok_response(
+            "no active draft to cancel.".to_string(),
+            None,
+        ))),
+    }
 }
 
 async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -215,136 +195,6 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
     Ok(Some(ok_response(faction_summary_text(&draft), Some(faction_event_from_draft(&draft)))))
 }
 
-async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    let draft = {
-        let editor = state.editor_session.lock().await;
-        editor.get_npc().cloned()
-    }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
-
-    let result = save_npc_draft(
-        SaveNpcDraftInput {
-            id: draft.id.clone(),
-            name: draft.name.clone(),
-            race: draft.race.clone(),
-            occupation: draft.occupation.clone(),
-            sex: draft.sex.clone(),
-            age: draft.age.clone(),
-            height: draft.height.clone(),
-            weight_lbs: draft.weight_lbs.clone(),
-            background: draft.background.clone(),
-            want_need: draft.want_need.clone(),
-            secret_obstacle: draft.secret_obstacle.clone(),
-            carrying: draft.carrying.clone(),
-            location: draft.location.clone(),
-        },
-        state.clone(),
-    ).await?;
-
-    {
-        let mut editor = state.editor_session.lock().await;
-        editor.clear_all();
-    }
-
-    let output = [
-        "## NPC saved".to_string(),
-        format!("id: {}", result.id),
-        format!("slug: {}", result.slug),
-        format!("vault: {}", path_for_display(&result.vault_path)),
-        format!("updated: {}", result.updated_at),
-    ].join("\n");
-
-    Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))))
-}
-
-async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    let draft = {
-        let editor = state.editor_session.lock().await;
-        editor.get_location().cloned()
-    }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
-
-    let result = save_location_draft(
-        SaveLocationDraftInput {
-            id: draft.id.clone(),
-            name: draft.name.clone(),
-            slug: draft.slug.clone(),
-            vault_path: draft.vault_path.clone(),
-            kind_type: draft.kind_type.clone(),
-            kind_custom: draft.kind_custom.clone(),
-            visual_description: draft.visual_description.clone(),
-            history_background: draft.history_background.clone(),
-            exports: draft.exports.clone(),
-            tone: draft.tone.clone(),
-            authority: draft.authority.clone(),
-            danger_level: draft.danger_level.clone(),
-            current_tension: draft.current_tension.clone(),
-        },
-        state.clone(),
-    ).await?;
-
-    {
-        let mut editor = state.editor_session.lock().await;
-        editor.clear_all();
-    }
-
-    let output = [
-        "## Location saved".to_string(),
-        format!("id: {}", result.id),
-        format!("slug: {}", result.slug),
-        format!("vault: {}", path_for_display(&result.vault_path)),
-        format!("updated: {}", result.updated_at),
-    ].join("\n");
-
-    Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))))
-}
-
-async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    let draft = {
-        let editor = state.editor_session.lock().await;
-        editor.get_faction().cloned()
-    }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
-
-    let result = save_faction_draft(
-        SaveFactionDraftInput {
-            id: draft.id.clone(),
-            slug: draft.slug.clone(),
-            name: draft.name.clone(),
-            vault_path: draft.vault_path.clone(),
-            kind_type: draft.kind_type.clone(),
-            kind_custom: draft.kind_custom.clone(),
-            public_description: draft.public_description.clone(),
-            true_agenda: draft.true_agenda.clone(),
-            methods: draft.methods.clone(),
-            leadership: draft.leadership.clone(),
-            headquarters: draft.headquarters.clone(),
-            sphere_of_influence: draft.sphere_of_influence.clone(),
-            resources_assets: draft.resources_assets.clone(),
-            allies: draft.allies.clone(),
-            rivals_enemies: draft.rivals_enemies.clone(),
-            reputation: draft.reputation.clone(),
-            current_tension: draft.current_tension.clone(),
-            goals_short_term: draft.goals_short_term.clone(),
-            goals_long_term: draft.goals_long_term.clone(),
-            symbol_description: draft.symbol_description.clone(),
-        },
-        state.clone(),
-    ).await?;
-
-    {
-        let mut editor = state.editor_session.lock().await;
-        editor.clear_all();
-    }
-
-    let output = [
-        "## Faction saved".to_string(),
-        format!("id: {}", result.id),
-        format!("slug: {}", result.slug),
-        format!("vault: {}", path_for_display(&result.vault_path)),
-        format!("updated: {}", result.updated_at),
-    ].join("\n");
-
-    Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))))
-}
-
 pub fn normalize_unknown_text(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() { "Unknown".to_string() } else { trimmed.to_string() }
@@ -358,28 +208,4 @@ pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
 pub fn normalize_sex(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase();
     if normalized == "male" || normalized == "female" { Ok(normalized) } else { Err("sex must be one of: male, female".to_string()) }
-}
-
-async fn save_npc_draft(
-    input: SaveNpcDraftInput,
-    state: tauri::State<'_, AppState>,
-) -> Result<SaveNpcDraftResult, String> {
-    let service = EntityPersistenceService;
-    service.save_npc_draft(input, state.inner()).await
-}
-
-async fn save_location_draft(
-    input: SaveLocationDraftInput,
-    state: tauri::State<'_, AppState>,
-) -> Result<SaveLocationDraftResult, String> {
-    let service = EntityPersistenceService;
-    service.save_location_draft(input, state.inner()).await
-}
-
-async fn save_faction_draft(
-    input: SaveFactionDraftInput,
-    state: tauri::State<'_, AppState>,
-) -> Result<SaveFactionDraftResult, String> {
-    let service = EntityPersistenceService;
-    service.save_faction_draft(input, state.inner()).await
 }

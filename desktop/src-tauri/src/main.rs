@@ -18,6 +18,7 @@ use dnd_core::db;
 use tokio::sync::Mutex;
 
 use crate::app_state::{AppState, EditorSession};
+use crate::entities::build_default_registry;
 use crate::repositories::{
     DocumentRepository, FactionRepository, GenerationRepository, LocationRepository, NpcRepository,
     ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository, ProdLocationRepository,
@@ -108,6 +109,8 @@ fn main() {
 
     let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
 
+    let domains = Arc::new(build_default_registry());
+
     let app_state = AppState {
         workspace_root,
         command_service: Mutex::new(command_service),
@@ -120,6 +123,7 @@ fn main() {
         document_repo: document_repo.clone(),
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
+        domains,
     };
 
     let vault_sync_service = VaultSyncService;

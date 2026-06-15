@@ -6,7 +6,7 @@ use tokio::sync::Mutex;
 
 use runebound_models::{FactionDraft, LocationDraft, NpcDraft};
 
-use crate::entities::EntityKind;
+use crate::entities::{EntityDomainRegistry, EntityKind};
 use crate::repositories::{
     Database, DocumentRepository, FactionRepository, GenerationRepository, LocationRepository,
     NpcRepository, SoftDeleteRepository, VaultRepository,
@@ -234,6 +234,7 @@ pub(crate) struct AppState {
     pub(crate) document_repo: Arc<dyn DocumentRepository>,
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
+    pub(crate) domains: Arc<EntityDomainRegistry>,
 }
 
 impl AppState {
@@ -267,5 +268,9 @@ impl AppState {
 
     pub(crate) fn soft_delete_repo(&self) -> Arc<dyn SoftDeleteRepository> {
         self.soft_delete_repo.clone()
+    }
+
+    pub(crate) fn domains(&self) -> Arc<EntityDomainRegistry> {
+        self.domains.clone()
     }
 }
