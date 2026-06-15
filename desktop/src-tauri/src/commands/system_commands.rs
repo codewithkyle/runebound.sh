@@ -6,10 +6,11 @@ use crate::entities::common::{
     command_message_response,
     entity_message_response,
     entity_response_with_event,
+    merge_seed_and_reroll_prompt,
 };
 use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
-use crate::utils::{normalize_sex, normalize_unknown_list, normalize_unknown_text};
+use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text};
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
 
@@ -39,11 +40,27 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         editor.active_kind()
     };
 
+    let reroll_prompt = if invocation.lowered.len() > 1 {
+        let raw_after_reroll = invocation.raw_input.trim_start_matches(|c: char| c.is_whitespace());
+        if let Some(stripped) = raw_after_reroll.strip_prefix("reroll") {
+            let after_reroll = stripped.trim_start_matches(|c: char| c.is_whitespace());
+            if !after_reroll.is_empty() {
+                normalize_optional_prompt(Some(after_reroll.to_string()))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
     match active_kind {
-        Some(EntityKind::Npc) => reroll_current_npc(invocation.state.clone()).await,
-        Some(EntityKind::Location) => reroll_current_location(invocation.state.clone()).await,
-        Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone()).await,
-        Some(EntityKind::Item) => reroll_current_item(invocation.state.clone()).await,
+        Some(EntityKind::Npc) => reroll_current_npc(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Location) => reroll_current_location(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Item) => reroll_current_item(invocation.state.clone(), reroll_prompt).await,
         None => command_message_response("no active draft to reroll."),
     }
 }
@@ -67,7 +84,7 @@ pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<O
     }
 }
 
-async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{npc_summary_text, npc_event_from_draft};
 
     let draft = {
@@ -78,12 +95,16 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
         return entity_message_response("no active npc draft.");
     };
 
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    if let Some(ref prompt) = merged_prompt {
+        eprintln!("[reroll] npc merged prompt: {}", prompt);
+    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let seed = ai
         .generate_npc_seed(
-            draft.seed_prompt.clone(),
+            merged_prompt,
             &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),
@@ -111,7 +132,7 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
     entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
 }
 
-async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{location_summary_text, location_event_from_draft};
 
     let draft = {
@@ -122,12 +143,16 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
         return entity_message_response("no active location draft.");
     };
 
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    if let Some(ref prompt) = merged_prompt {
+        eprintln!("[reroll] location merged prompt: {}", prompt);
+    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let seed = ai
         .generate_location_seed(
-            draft.seed_prompt.clone(),
+            merged_prompt,
             &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),
@@ -157,7 +182,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
     )
 }
 
-async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.get_faction().cloned()
@@ -166,12 +191,16 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
         return entity_message_response("no active faction draft.");
     };
 
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    if let Some(ref prompt) = merged_prompt {
+        eprintln!("[reroll] faction merged prompt: {}", prompt);
+    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let seed = ai
         .generate_faction_seed(
-            draft.seed_prompt.clone(),
+            merged_prompt,
             &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),
@@ -209,7 +238,7 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
     )
 }
 
-async fn reroll_current_item(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_item(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{item_event_from_draft, item_summary_text};
 
     let draft = {
@@ -220,12 +249,16 @@ async fn reroll_current_item(state: tauri::State<'_, AppState>) -> Result<Option
         return entity_message_response("no active item draft.");
     };
 
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    if let Some(ref prompt) = merged_prompt {
+        eprintln!("[reroll] item merged prompt: {}", prompt);
+    }
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let seed = ai
         .generate_item_seed(
-            draft.seed_prompt.clone(),
+            merged_prompt,
             &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),

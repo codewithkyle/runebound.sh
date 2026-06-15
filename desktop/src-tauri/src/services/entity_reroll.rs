@@ -1148,16 +1148,95 @@ fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {
 fn item_context_summary(context: &ItemRerollContext) -> String {
     format!(
         "name={}, category={}, rarity={}, attunement={}, materials={}, appearance={}, abilities={}, drawbacks={}, history={}, value={}, location={}",
-        context.name,
-        context.category,
-        context.rarity,
-        context.attunement,
-        context.materials.join(", "),
-        context.appearance,
-        context.abilities,
-        context.drawbacks,
-        context.history,
-        context.value,
-        context.location
+        context.name, context.category, context.rarity, context.attunement, context.materials.join(", "), context.appearance, context.abilities, context.drawbacks, context.history, context.value, context.location
     )
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollNpcSeedInput {
+    pub prompt: Option<String>,
+    pub npc: NpcRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollNpcSeedResult {
+    pub name: String,
+    pub race: String,
+    pub occupation: String,
+    pub sex: String,
+    pub age: String,
+    pub height: String,
+    pub weight_lbs: String,
+    pub background: String,
+    pub want_need: String,
+    pub secret_obstacle: String,
+    pub carrying: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollLocationSeedInput {
+    pub prompt: Option<String>,
+    pub location: LocationRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollLocationSeedResult {
+    pub name: String,
+    pub kind_type: String,
+    pub kind_custom: Option<String>,
+    pub visual_description: String,
+    pub history_background: String,
+    pub exports: Vec<String>,
+    pub tone: String,
+    pub authority: String,
+    pub danger_level: String,
+    pub current_tension: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollFactionSeedInput {
+    pub prompt: Option<String>,
+    pub faction: FactionRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollFactionSeedResult {
+    pub name: String,
+    pub kind_type: String,
+    pub kind_custom: Option<String>,
+    pub public_description: String,
+    pub true_agenda: String,
+    pub methods: String,
+    pub leadership: String,
+    pub headquarters: String,
+    pub sphere_of_influence: String,
+    pub resources_assets: String,
+    pub allies: Vec<String>,
+    pub rivals_enemies: Vec<String>,
+    pub reputation: String,
+    pub current_tension: String,
+    pub goals_short_term: Vec<String>,
+    pub goals_long_term: Vec<String>,
+    pub symbol_description: String,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollItemSeedInput {
+    pub prompt: Option<String>,
+    pub item: ItemRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollItemSeedResult {
+    pub name: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    pub materials: Vec<String>,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value: String,
+    pub location: String,
 }
