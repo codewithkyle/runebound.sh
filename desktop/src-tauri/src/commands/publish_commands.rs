@@ -6,8 +6,10 @@ use dnd_core::entity_store::EntityStore;
 use dnd_core::vault::Vault;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
+use crate::app_state::AppState;
 use crate::commands::{ok_response, DesktopHandlerInvocation};
-use crate::services::entity_admin::{EntityAdminService, EntityType};
+use crate::entities::EntityKind;
+use crate::services::entity_admin::{EntityAdminService, EntityDetails, EntityType};
 use crate::services::publish::{
     render_faction_markdown, render_item_markdown, render_location_markdown, render_npc_markdown,
 };
@@ -25,61 +27,75 @@ pub async fn handle_publish(
         return publish_help();
     }
 
-    if !lowered.starts_with("publish ") {
+    if !lowered.starts_with("publish") {
         return Ok(Some(ok_response(
-            "usage: publish <entity name or slug>".to_string(),
-            None,
-        )));
-    }
-
-    let target = trimmed["publish".len()..].trim();
-    if target.is_empty() {
-        return Ok(Some(ok_response(
-            "usage: publish <entity name or slug>".to_string(),
+            "usage: publish [entity name or slug]".to_string(),
             None,
         )));
     }
 
     let state = invocation.state.inner();
-    let admin = EntityAdminService;
-    let Some(details) = admin
-        .resolve_entity(target.to_string(), state)
-        .await?
-    else {
-        return Ok(Some(ok_response(
-            format!("no npc, location, faction, or item found for '{target}'"),
-            None,
-        )));
+    let args = if trimmed.len() > "publish".len() {
+        trimmed["publish".len()..].trim()
+    } else {
+        ""
+    };
+
+    let target = if args.is_empty() {
+        match active_draft_target(state).await? {
+            Some(target) => target,
+            None => {
+                return Ok(Some(ok_response(
+                    "No active draft to publish. Provide a name (e.g., `publish Lirael`) or load an entity first.".to_string(),
+                    None,
+                )))
+            }
+        }
+    } else if lowered == "publish help" {
+        // Already handled above, but keep guard for safety.
+        return publish_help();
+    } else {
+        let admin = EntityAdminService;
+        let Some(details) = admin
+            .resolve_entity(args.to_string(), state)
+            .await?
+        else {
+            return Ok(Some(ok_response(
+                format!("no npc, location, faction, or item found for '{args}'"),
+                None,
+            )));
+        };
+        PublishTargetInfo::from_details(details)
     };
 
     let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
-    let (markdown, vault_path) = match details.entity_type {
+    let (markdown, vault_path) = match target.entity_type {
         EntityType::Npc => {
             let frontmatter = store
-                .load_npc(&details.slug)
+                .load_npc(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| format!("canonical record for '{}' is missing", details.slug))?;
+                .ok_or_else(|| missing_canonical_message(&target))?;
             (render_npc_markdown(&frontmatter), frontmatter.vault_path)
         }
         EntityType::Location => {
             let frontmatter = store
-                .load_location(&details.slug)
+                .load_location(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| format!("canonical record for '{}' is missing", details.slug))?;
+                .ok_or_else(|| missing_canonical_message(&target))?;
             (render_location_markdown(&frontmatter), frontmatter.vault_path)
         }
         EntityType::Faction => {
             let frontmatter = store
-                .load_faction(&details.slug)
+                .load_faction(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| format!("canonical record for '{}' is missing", details.slug))?;
+                .ok_or_else(|| missing_canonical_message(&target))?;
             (render_faction_markdown(&frontmatter), frontmatter.vault_path)
         }
         EntityType::Item => {
             let frontmatter = store
-                .load_item(&details.slug)
+                .load_item(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| format!("canonical record for '{}' is missing", details.slug))?;
+                .ok_or_else(|| missing_canonical_message(&target))?;
             (render_item_markdown(&frontmatter), frontmatter.vault_path)
         }
     };
@@ -131,12 +147,78 @@ pub async fn handle_publish(
         .map_err(|err| format!("failed to write {}: {err}", full_path.display()))?;
 
     Ok(Some(ok_response(
-        format!("Published {} to {}", details.name, relative.display()),
+        format!("Published {} to {}", target.name, relative.display()),
         None,
     )))
 }
 
 fn publish_help() -> CommandResult {
-    let text = "Publish an entity's canonical record to your Obsidian vault.\n\nUsage:\n  publish <name or slug>\n\nPublishing overwrites the target markdown file. If it already exists you will be asked to confirm before it is replaced.";
+    let text = "Publish an entity's canonical record to your Obsidian vault.\n\nUsage:\n  publish\n  publish <name or slug>\n\nIf you omit a name while editing an entity, the active draft is published. Publishing overwrites the target markdown file. If it already exists you will be asked to confirm before it is replaced.";
     Ok(Some(ok_response(text.to_string(), None)))
+}
+
+struct PublishTargetInfo {
+    entity_type: EntityType,
+    slug: String,
+    name: String,
+}
+
+impl PublishTargetInfo {
+    fn from_details(details: EntityDetails) -> Self {
+        Self {
+            entity_type: details.entity_type,
+            slug: details.slug,
+            name: details.name,
+        }
+    }
+}
+
+async fn active_draft_target(state: &AppState) -> Result<Option<PublishTargetInfo>, String> {
+    let editor = state.editor_session.lock().await;
+    let kind = match editor.active_kind() {
+        Some(kind) => kind,
+        None => return Ok(None),
+    };
+
+    let info = match kind {
+        EntityKind::Npc => editor.get_npc().map(|draft| PublishTargetInfo {
+            entity_type: EntityType::Npc,
+            slug: draft.slug.clone(),
+            name: draft.name.clone(),
+        }),
+        EntityKind::Location => editor.get_location().map(|draft| PublishTargetInfo {
+            entity_type: EntityType::Location,
+            slug: draft.slug.clone(),
+            name: draft.name.clone(),
+        }),
+        EntityKind::Faction => editor.get_faction().map(|draft| PublishTargetInfo {
+            entity_type: EntityType::Faction,
+            slug: draft.slug.clone(),
+            name: draft.name.clone(),
+        }),
+        EntityKind::Item => editor.get_item().map(|draft| PublishTargetInfo {
+            entity_type: EntityType::Item,
+            slug: draft.slug.clone(),
+            name: draft.name.clone(),
+        }),
+    };
+
+    Ok(info)
+}
+
+fn missing_canonical_message(target: &PublishTargetInfo) -> String {
+    format!(
+        "{} has not been saved yet. Run `{} save` before publishing.",
+        target.name,
+        command_root_for(&target.entity_type)
+    )
+}
+
+fn command_root_for(entity_type: &EntityType) -> &'static str {
+    match entity_type {
+        EntityType::Npc => "npc",
+        EntityType::Location => "location",
+        EntityType::Faction => "faction",
+        EntityType::Item => "item",
+    }
 }
