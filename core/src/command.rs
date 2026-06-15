@@ -2,13 +2,11 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use command_handler::{
     CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry,
 };
-use reqwest::StatusCode;
 
 use crate::command_manifest::{CommandManifest, CommandSpec, command_manifest};
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
@@ -383,7 +381,7 @@ async fn try_execute_onboarding(
         let normalized = normalize_ollama_input(&base_url);
         health::validate_ollama_url(&normalized)?;
         // Probe the configured server for its model list (shows the spinner).
-        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
 
         session.onboarding.active = true;
         session.onboarding.flow = OnboardingFlow::Model;
@@ -529,7 +527,7 @@ async fn try_execute_onboarding(
     if lowered == ["test", "ollama"] {
         let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
         health::validate_ollama_url(&normalized)?;
-        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
         session.onboarding.ollama_base_url = normalized;
         session.onboarding.ollama_models = models.clone();
         if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
@@ -637,7 +635,7 @@ async fn try_execute_onboarding(
             "2" | "continue" => {
                 let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
                 health::validate_ollama_url(&normalized)?;
-                let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+                let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
                 session.onboarding.ollama_base_url = normalized;
                 session.onboarding.ollama_models = models.clone();
                 if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
@@ -664,7 +662,7 @@ async fn try_execute_onboarding(
     if session.onboarding.ollama_substate == OllamaStepState::AwaitingUrl && !trimmed.is_empty() {
         let normalized = normalize_ollama_input(trimmed);
         health::validate_ollama_url(&normalized)?;
-        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
 
         session.onboarding.ollama_base_url = normalized;
         session.onboarding.ollama_models = models.clone();
@@ -1021,37 +1019,26 @@ fn normalize_ollama_input(value: &str) -> String {
     format!("http://{trimmed}")
 }
 
+/// Probe an Ollama server during setup and summarize the model list for display.
+///
+/// Delegates the `/api/tags` request to the shared [`health::probe_ollama`] and
+/// surfaces failures as errors so the setup spinner flips to an error state.
 async fn probe_ollama_models(
     base_url: &str,
     timeout_seconds: u64,
 ) -> Result<(String, Vec<String>)> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
-        .build()?;
-    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
-    let response = client.get(url).send().await?;
-
-    if response.status() != StatusCode::OK {
-        bail!("ollama responded with {}", response.status());
+    let probe = health::probe_ollama(base_url, timeout_seconds).await;
+    if let Some(error) = probe.error {
+        bail!("{error}");
     }
 
-    let value: serde_json::Value = response.json().await?;
-    let mut models = Vec::new();
-    if let Some(items) = value.get("models").and_then(|item| item.as_array()) {
-        for item in items {
-            if let Some(name) = item.get("name").and_then(|name| name.as_str()) {
-                models.push(name.to_string());
-            }
-        }
-    }
-
-    let detail = if models.is_empty() {
+    let detail = if probe.models.is_empty() {
         "connected (no models returned)".to_string()
     } else {
-        format!("connected ({} model(s) found)", models.len())
+        format!("connected ({} model(s) found)", probe.models.len())
     };
 
-    Ok((detail, models))
+    Ok((detail, probe.models))
 }
 
 pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {
@@ -1331,6 +1318,12 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
 
 /// Short timeout for boot/status probes so a dead server doesn't stall startup.
 pub const OLLAMA_BOOT_TIMEOUT_SECONDS: u64 = 5;
+
+/// Timeout for interactive setup probes. Longer than the boot budget (the user is
+/// actively waiting and may point at a remote server) but still bounded so a dead
+/// server can't hang setup. Distinct from `ollama.timeout_seconds`, which is the
+/// LLM generation budget and far too long for a connectivity check.
+const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
 
 /// Probe the configured Ollama server to confirm the LLM is running.
 ///
