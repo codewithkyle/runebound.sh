@@ -17,6 +17,7 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveLocation
 use crate::services::entity_reroll::{EntityRerollService, LocationRerollContext, RerollLocationFieldInput};
 use crate::utils::path_for_display;
 use dnd_core::command::CommandClientEvent;
+use dnd_core::npc::slugify;
 
 pub struct LocationDomain;
 
@@ -77,6 +78,7 @@ impl EntityDomain for LocationDomain {
                 .get_location_mut()
                 .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
             draft.name = name.to_string();
+            draft.slug = slugify(name);
             let snapshot = draft.clone();
             editor.activate(EntityKind::Location);
             editor.clear_kind(EntityKind::Npc);
@@ -110,7 +112,10 @@ impl EntityDomain for LocationDomain {
                 .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
             match canonical {
-                "name" => draft.name = trimmed_value.to_string(),
+                "name" => {
+                    draft.name = trimmed_value.to_string();
+                    draft.slug = slugify(trimmed_value);
+                }
                 "kind_type" => {
                     draft.kind_type = normalize_location_kind_type(trimmed_value)?;
                     if draft.kind_type == "other" && draft.kind_custom.is_none() {
@@ -206,6 +211,7 @@ impl EntityDomain for LocationDomain {
         match rerolled.field.as_str() {
             "name" => {
                 if let Some(value) = rerolled.value {
+                    draft.slug = slugify(&value);
                     draft.name = value;
                 }
             }

@@ -5,6 +5,7 @@ export type NpcDraft = {
   id: string;
   seed_prompt?: string | null;
   name: string;
+  slug: string;
   race: string;
   occupation: string;
   sex: string;

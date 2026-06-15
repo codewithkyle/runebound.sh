@@ -22,6 +22,7 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveItemDraf
 use crate::services::entity_reroll::{EntityRerollService, ItemRerollContext, RerollItemFieldInput};
 use crate::utils::{normalize_item_category, normalize_item_rarity, path_for_display};
 use dnd_core::command::CommandClientEvent;
+use dnd_core::npc::slugify;
 
 pub struct ItemDomain;
 
@@ -80,6 +81,7 @@ impl EntityDomain for ItemDomain {
                 .get_item_mut()
                 .ok_or_else(|| no_active_draft_message(EntityKind::Item))?;
             draft.name = name.to_string();
+            draft.slug = slugify(name);
             let snapshot = draft.clone();
             editor.activate(EntityKind::Item);
             snapshot
@@ -109,7 +111,10 @@ impl EntityDomain for ItemDomain {
                 .ok_or_else(|| no_active_draft_message(EntityKind::Item))?;
 
             match canonical {
-                "name" => draft.name = trimmed_value.to_string(),
+                "name" => {
+                    draft.name = trimmed_value.to_string();
+                    draft.slug = slugify(trimmed_value);
+                }
                 "category" => draft.category = normalize_item_category(trimmed_value)?,
                 "rarity" => draft.rarity = normalize_item_rarity(trimmed_value)?,
                 "attunement" => draft.attunement = normalize_unknown_text(trimmed_value),
@@ -179,6 +184,7 @@ impl EntityDomain for ItemDomain {
         match rerolled.field.as_str() {
             "name" => {
                 if let Some(value) = rerolled.value {
+                    draft.slug = slugify(&value);
                     draft.name = value;
                 }
             }

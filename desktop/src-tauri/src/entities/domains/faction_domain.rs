@@ -17,6 +17,7 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveFactionD
 use crate::services::entity_reroll::{EntityRerollService, FactionRerollContext, RerollFactionFieldInput};
 use crate::utils::{normalize_optional_prompt, path_for_display};
 use dnd_core::command::CommandClientEvent;
+use dnd_core::npc::slugify;
 
 pub struct FactionDomain;
 
@@ -77,6 +78,7 @@ impl EntityDomain for FactionDomain {
                 .get_faction_mut()
                 .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
             draft.name = name.to_string();
+            draft.slug = slugify(name);
             let snapshot = draft.clone();
             editor.activate(EntityKind::Faction);
             editor.clear_kind(EntityKind::Npc);
@@ -112,7 +114,10 @@ impl EntityDomain for FactionDomain {
                 .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
             match canonical {
-                "name" => draft.name = trimmed_value.to_string(),
+                "name" => {
+                    draft.name = trimmed_value.to_string();
+                    draft.slug = slugify(trimmed_value);
+                }
                 "kind_type" => {
                     draft.kind_type = normalize_faction_kind_type(trimmed_value)?;
                     if draft.kind_type == "other" && draft.kind_custom.is_none() {
@@ -229,6 +234,7 @@ impl EntityDomain for FactionDomain {
         match rerolled.field.as_str() {
             "name" => {
                 if let Some(value) = rerolled.value {
+                    draft.slug = slugify(&value);
                     draft.name = value;
                 }
             }

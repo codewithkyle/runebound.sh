@@ -10,6 +10,7 @@ use crate::entities::common::{
 use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
 use crate::utils::{normalize_sex, normalize_unknown_list, normalize_unknown_text};
+use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
 
 
@@ -88,6 +89,7 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
             generation_repo.as_ref(),
         )
         .await?;
+    draft.slug = slugify(&seed.name.trim());
     draft.name = seed.name.trim().to_string();
     draft.race = seed.race.trim().to_string();
     draft.occupation = normalize_unknown_text(&seed.occupation);
@@ -131,6 +133,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
             generation_repo.as_ref(),
         )
         .await?;
+    draft.slug = slugify(&seed.name);
     draft.name = seed.name;
     draft.kind_type = seed.kind_type;
     draft.kind_custom = seed.kind_custom;
@@ -174,6 +177,7 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
             generation_repo.as_ref(),
         )
         .await?;
+    draft.slug = slugify(&seed.name);
     draft.name = seed.name;
     draft.kind_type = seed.kind_type;
     draft.kind_custom = seed.kind_custom;
@@ -227,6 +231,7 @@ async fn reroll_current_item(state: tauri::State<'_, AppState>) -> Result<Option
             generation_repo.as_ref(),
         )
         .await?;
+    draft.slug = slugify(&seed.name);
     draft.name = seed.name;
     draft.category = seed.category;
     draft.rarity = seed.rarity;

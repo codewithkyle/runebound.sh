@@ -6,6 +6,8 @@ pub struct NpcDraft {
     #[serde(default)]
     pub seed_prompt: Option<String>,
     pub name: String,
+    #[serde(default)]
+    pub slug: String,
     pub race: String,
     pub occupation: String,
     pub sex: String,
@@ -213,6 +215,7 @@ fn location_kind_display(kind_type: &str, kind_custom: &Option<String>) -> Strin
 
 pub fn npc_entity_card(draft: &NpcDraft) -> OutputDoc {
     let rows = vec![
+        entity_row("Slug:", normalize_unknown_text(&draft.slug)),
         entity_row("Race:", normalize_unknown_text(&draft.race)),
         entity_row("Occupation:", normalize_unknown_text(&draft.occupation)),
         entity_row("Gender:", title_case_sex(&draft.sex)),

@@ -161,6 +161,7 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
                 id: entity.id.clone(),
                 seed_prompt: None,
                 name: entity.name.clone(),
+                slug: entity.slug.clone(),
                 race: entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
                 occupation: entity.occupation.clone().unwrap_or_else(|| "Unknown".to_string()),
                 sex: normalize_sex(&entity.sex.clone().unwrap_or_else(|| "male".to_string())).unwrap_or_else(|_| "male".to_string()),

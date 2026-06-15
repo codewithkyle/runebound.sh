@@ -16,6 +16,7 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraft
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
 use crate::utils::{normalize_sex, parse_carrying_csv, path_for_display};
 use dnd_core::command::CommandClientEvent;
+use dnd_core::npc::slugify;
 
 pub struct NpcDomain;
 
@@ -75,6 +76,7 @@ impl EntityDomain for NpcDomain {
                 .get_npc_mut()
                 .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
             draft.name = name.to_string();
+            draft.slug = slugify(name);
             let snapshot = draft.clone();
             editor.activate(EntityKind::Npc);
             editor.clear_kind(EntityKind::Location);
@@ -105,7 +107,10 @@ impl EntityDomain for NpcDomain {
                 .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
             match canonical {
-                "name" => draft.name = trimmed_value.to_string(),
+                "name" => {
+                    draft.name = trimmed_value.to_string();
+                    draft.slug = slugify(trimmed_value);
+                }
                 "race" => draft.race = trimmed_value.to_string(),
                 "occupation" => draft.occupation = trimmed_value.to_string(),
                 "sex" => draft.sex = normalize_sex(trimmed_value)?,
@@ -180,6 +185,7 @@ impl EntityDomain for NpcDomain {
         match rerolled.field.as_str() {
             "name" => {
                 if let Some(value) = rerolled.value {
+                    draft.slug = slugify(&value);
                     draft.name = value;
                 }
             }
@@ -258,6 +264,7 @@ impl EntityDomain for NpcDomain {
             .save_npc_draft(
                 SaveNpcDraftInput {
                     id: draft.id.clone(),
+                    slug: draft.slug.clone(),
                     name: draft.name.clone(),
                     race: draft.race.clone(),
                     occupation: draft.occupation.clone(),
@@ -308,8 +315,9 @@ impl EntityDomain for NpcDomain {
 
 pub fn npc_summary_text(draft: &NpcDraftSession) -> String {
     format!(
-        "## NPC Draft\nname: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}",
+        "## NPC Draft\nname: {}\nslug: {}\nrace: {}\noccupation: {}\nsex: {}\nage: {}\nheight: {}\nweight: {}\nbackground: {}\nwant: {}\nsecret: {}\ncarrying: {}\nlocation: {}",
         draft.name,
+        draft.slug,
         draft.race,
         draft.occupation,
         draft.sex,
@@ -330,6 +338,7 @@ pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
     let normalized_draft = NpcDraftSession {
         id: draft.id.clone(),
         name: draft.name.clone(),
+        slug: draft.slug.clone(),
         race: normalize_unknown_text(&draft.race),
         occupation: normalize_unknown_text(&draft.occupation),
         sex: match draft.sex.to_lowercase().as_str() {

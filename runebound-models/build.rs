@@ -13,6 +13,7 @@ fn generate_typescript() -> String {
     out.push_str("  id: string;\n");
     out.push_str("  seed_prompt?: string | null;\n");
     out.push_str("  name: string;\n");
+    out.push_str("  slug: string;\n");
     out.push_str("  race: string;\n");
     out.push_str("  occupation: string;\n");
     out.push_str("  sex: string;\n");

@@ -516,20 +516,16 @@ impl EntityPersistenceService {
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
 
-        let provided_slug = input.slug.trim();
-        let base_slug = if provided_slug.is_empty() {
-            slugify(&input.name)
-        } else {
-            slugify(provided_slug)
-        };
+        // Always regenerate slug from the current name
+        let desired_base_slug = slugify(&input.name);
         let slug = if let Some(row) = existing.as_ref() {
-            if row.slug != base_slug {
-                base_slug
-            } else {
+            if row.slug == desired_base_slug {
                 row.slug.clone()
+            } else {
+                unique_slug_for_dir(vault.root(), "factions", &desired_base_slug)
             }
         } else {
-            unique_slug_for_dir(vault.root(), "factions", &base_slug)
+            unique_slug_for_dir(vault.root(), "factions", &desired_base_slug)
         };
 
         let desired_path = unique_markdown_path_for_name(
@@ -693,12 +689,8 @@ impl EntityPersistenceService {
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
 
-        let provided_slug = input.slug.trim();
-        let base_slug = if provided_slug.is_empty() {
-            slugify(name)
-        } else {
-            slugify(provided_slug)
-        };
+        // Always regenerate slug from the current name
+        let desired_base_slug = slugify(name);
 
         let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
             let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
@@ -709,10 +701,10 @@ impl EntityPersistenceService {
                 Some(current_vault_path.as_str()),
             )?;
 
-            let slug = if current.slug == base_slug {
+            let slug = if current.slug == desired_base_slug {
                 current.slug
             } else {
-                unique_slug_for_dir(vault.root(), "items", &base_slug)
+                unique_slug_for_dir(vault.root(), "items", &desired_base_slug)
             };
 
             (
@@ -727,7 +719,7 @@ impl EntityPersistenceService {
             )
         } else {
             (
-                unique_slug_for_dir(vault.root(), "items", &base_slug),
+                unique_slug_for_dir(vault.root(), "items", &desired_base_slug),
                 unique_markdown_path_for_name(&vault, "items", name, None)?,
                 now.clone(),
                 None,
@@ -830,6 +822,7 @@ impl EntityPersistenceService {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveNpcDraftInput {
     pub id: String,
+    pub slug: String,
     pub name: String,
     pub race: String,
     pub occupation: String,
