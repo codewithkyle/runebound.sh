@@ -105,6 +105,7 @@ fn generate_typescript() -> String {
     out.push_str("  location: string;\n");
     out.push_str("  created_at: string;\n");
     out.push_str("  updated_at: string;\n");
+    out.push_str("  published_at?: string | null;\n");
     out.push_str("};\n\n");
 
     out.push_str("export type LocationFrontmatter = {\n");
@@ -124,6 +125,7 @@ fn generate_typescript() -> String {
     out.push_str("  current_tension: string;\n");
     out.push_str("  created_at: string;\n");
     out.push_str("  updated_at: string;\n");
+    out.push_str("  published_at?: string | null;\n");
     out.push_str("};\n\n");
 
     out.push_str("export type FactionFrontmatter = {\n");
@@ -150,6 +152,7 @@ fn generate_typescript() -> String {
     out.push_str("  symbol_description: string;\n");
     out.push_str("  created_at: string;\n");
     out.push_str("  updated_at: string;\n");
+    out.push_str("  published_at?: string | null;\n");
     out.push_str("};\n\n");
 
     out.push_str("export type ItemFrontmatter = {\n");
@@ -170,6 +173,7 @@ fn generate_typescript() -> String {
     out.push_str("  location: string;\n");
     out.push_str("  created_at: string;\n");
     out.push_str("  updated_at: string;\n");
+    out.push_str("  published_at?: string | null;\n");
     out.push_str("};\n\n");
 
     out.push_str("export type EntityCardRow = {\n");

@@ -97,6 +97,7 @@ export type NpcFrontmatter = {
   location: string;
   created_at: string;
   updated_at: string;
+  published_at?: string | null;
 };
 
 export type LocationFrontmatter = {
@@ -116,6 +117,7 @@ export type LocationFrontmatter = {
   current_tension: string;
   created_at: string;
   updated_at: string;
+  published_at?: string | null;
 };
 
 export type FactionFrontmatter = {
@@ -142,6 +144,7 @@ export type FactionFrontmatter = {
   symbol_description: string;
   created_at: string;
   updated_at: string;
+  published_at?: string | null;
 };
 
 export type ItemFrontmatter = {
@@ -162,6 +165,7 @@ export type ItemFrontmatter = {
   location: string;
   created_at: string;
   updated_at: string;
+  published_at?: string | null;
 };
 
 export type EntityCardRow = {

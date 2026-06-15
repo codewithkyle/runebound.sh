@@ -531,6 +531,7 @@ pub trait SoftDeleteRepository: Send + Sync {
     async fn insert(&self, database: &Database, row: &db::SoftDeleteRow) -> Result<(), String>;
     async fn latest_pending(&self, database: &Database) -> Result<Option<db::SoftDeleteRow>, String>;
     async fn mark_undone(&self, database: &Database, id: i64, timestamp: &str) -> Result<(), String>;
+    async fn finalize_pending_publishes(&self, database: &Database, timestamp: &str) -> Result<(), String>;
 }
 
 pub struct ProdSoftDeleteRepository;
@@ -553,6 +554,13 @@ impl SoftDeleteRepository for ProdSoftDeleteRepository {
     async fn mark_undone(&self, database: &Database, id: i64, timestamp: &str) -> Result<(), String> {
         core_db::mark_soft_delete_undone(&database.pool, id, timestamp)
             .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn finalize_pending_publishes(&self, database: &Database, timestamp: &str) -> Result<(), String> {
+        core_db::finalize_pending_publishes(&database.pool, timestamp)
+            .await
+            .map(|_| ())
             .map_err(|e| e.to_string())
     }
 }

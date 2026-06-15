@@ -55,6 +55,7 @@
 - `ollama.base_url`
 - `ollama.model`
 - `ollama.timeout_seconds`
+- `ollama.num_ctx`
 - `ui.confirm_soft_delete`
 - `ui.show_inline_help`
 
@@ -70,6 +71,9 @@
 - `ollama.model`:
   - Warn if not currently available in Ollama.
   - Keep as non-fatal to allow offline setup.
+- `ollama.num_ctx`:
+  - Context window (tokens) sent to Ollama; defaults to 8192.
+  - Must be at least 512. Raise it if you reference many/large documents and have the VRAM; lower it on constrained hardware.
 
 ## Suggested TOML Schema
 
@@ -84,6 +88,7 @@ autoscan_on_start = true
 base_url = "http://127.0.0.1:11434"
 model = "llama3.1:8b"
 timeout_seconds = 120
+num_ctx = 8192
 
 [ui]
 confirm_soft_delete = true

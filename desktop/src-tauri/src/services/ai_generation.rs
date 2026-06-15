@@ -1,8 +1,9 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::utils::{
-    normalize_faction_seed, normalize_item_category, normalize_item_rarity, normalize_location_seed,
-    normalize_relative_path_for_storage, normalize_sex, normalize_unknown_list,
-    normalize_unknown_text, validate_faction_details, validate_location_details,
+    estimate_tokens, normalize_faction_seed, normalize_item_category, normalize_item_rarity,
+    normalize_location_seed, normalize_relative_path_for_storage, normalize_sex,
+    normalize_unknown_list, normalize_unknown_text, validate_faction_details,
+    validate_location_details,
 };
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::entity_store::EntityStore;
@@ -15,6 +16,33 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+/// Tokens reserved within the context window for the model's own output, so the
+/// capacity warning fires before the prompt crowds out room to respond.
+const OUTPUT_RESERVE_TOKENS: usize = 512;
+/// Flat allowance for each generator's fixed system instructions / schema framing.
+const SYSTEM_BOILERPLATE_TOKENS: usize = 160;
+
+/// A generated seed plus an optional non-blocking notice (e.g. the assembled
+/// prompt is near the configured context window and output may drift).
+#[derive(Debug, Clone)]
+pub struct SeedGeneration<T> {
+    pub seed: T,
+    pub notice: Option<String>,
+}
+
+/// Returns a user-facing warning when the estimated prompt is close enough to the
+/// configured `num_ctx` that there is little room left for the response.
+fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
+    let budget = (num_ctx as usize).saturating_sub(OUTPUT_RESERVE_TOKENS);
+    if estimated_tokens > budget {
+        Some(format!(
+            "⚠️ This prompt is ~{estimated_tokens} tokens, near your model's configured context window (ollama.num_ctx = {num_ctx}). Large referenced documents may cause the model to lose detail or drift. Consider referencing fewer or smaller documents, or raising ollama.num_ctx in your config."
+        ))
+    } else {
+        None
+    }
+}
+
 pub struct AiGenerationService;
 
 impl AiGenerationService {
@@ -24,7 +52,7 @@ impl AiGenerationService {
         workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
-    ) -> Result<NpcSeed, String> {
+    ) -> Result<SeedGeneration<NpcSeed>, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -60,6 +88,13 @@ impl AiGenerationService {
         let recent_context = describe_recent_npc_seeds(&recent_seeds);
         let recent_occupation_anchors = recent_occupation_anchor_set(&recent_seeds);
         let recent_occupation_context = describe_recent_npc_occupation_anchors(&recent_seeds);
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&reference_context.system_context)
+            + estimate_tokens(&recent_context)
+            + estimate_tokens(&recent_occupation_context)
+            + estimate_tokens(user_prompt);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
 
         let schema = serde_json::json!({
             "type": "object",
@@ -98,7 +133,7 @@ impl AiGenerationService {
                 "model": model,
                 "stream": false,
                 "format": schema,
-                "options": { "temperature": 1.1, "top_p": 0.92, "repeat_penalty": 1.15, "seed": run_seed },
+                "options": { "temperature": 1.1, "top_p": 0.92, "repeat_penalty": 1.15, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
                 "messages": [{
                     "role": "system",
                     "content": format!(
@@ -146,7 +181,7 @@ impl AiGenerationService {
                 .insert(database, "npc_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(seed);
+            return Ok(SeedGeneration { seed, notice: notice.clone() });
         }
 
         Err("failed to generate valid structured NPC output from ollama".to_string())
@@ -158,7 +193,7 @@ impl AiGenerationService {
         workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
-    ) -> Result<LocationSeed, String> {
+    ) -> Result<SeedGeneration<LocationSeed>, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -167,12 +202,37 @@ impl AiGenerationService {
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
+        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
+            let vault = Vault::new(vault_path);
+            if vault.ensure_root_exists().is_ok() {
+                match load_vault_reference_entries(&vault) {
+                    Ok(entries) => build_prompt_reference_context(
+                        user_prompt,
+                        &entries,
+                        &vault,
+                        workspace_root,
+                    ),
+                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
+                }
+            } else {
+                PromptReferenceContext::default()
+            }
+        } else {
+            PromptReferenceContext::default()
+        };
+
         let recent_payloads = generation_repo
             .recent_prompts(database, "location_seed", 20)
             .await?;
         let recent_seeds = parse_recent_location_seeds(recent_payloads);
         let recent_names = recent_location_name_set(&recent_seeds);
         let recent_context = describe_recent_location_seeds(&recent_seeds);
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&reference_context.system_context)
+            + estimate_tokens(&recent_context)
+            + estimate_tokens(user_prompt);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
 
         let schema = serde_json::json!({
             "type": "object",
@@ -209,12 +269,13 @@ impl AiGenerationService {
                 "model": model,
                 "stream": false,
                 "format": schema,
-                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.14, "seed": run_seed },
+                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.14, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise, usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. visual_description must be 1-3 sentences. history_background must be 2-5 sentences. exports must have 1-3 short items. tone must be 2-5 words. current_tension must be 1-2 sentences. If kind_type is not other, kind_custom must be null. Avoid these recent seeds: {}.{}",
-                        recent_context, repair_note
+                        "You generate concise, usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. visual_description must be 1-3 sentences. history_background must be 2-5 sentences. exports must have 1-3 short items. tone must be 2-5 words. current_tension must be 1-2 sentences. If kind_type is not other, kind_custom must be null. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {}.{}{}",
+                        recent_context, repair_note,
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
                     )
                 }, { "role": "user", "content": user_prompt }]
             });
@@ -245,7 +306,7 @@ impl AiGenerationService {
                 .insert(database, "location_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(seed);
+            return Ok(SeedGeneration { seed, notice: notice.clone() });
         }
 
         Err("failed to generate valid structured location output from ollama".to_string())
@@ -257,7 +318,7 @@ impl AiGenerationService {
         workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
-    ) -> Result<FactionSeed, String> {
+    ) -> Result<SeedGeneration<FactionSeed>, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -291,6 +352,12 @@ impl AiGenerationService {
         let recent_seeds = parse_recent_faction_seeds(recent_payloads);
         let recent_names = recent_faction_name_set(&recent_seeds);
         let recent_context = describe_recent_faction_seeds(&recent_seeds);
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&reference_context.system_context)
+            + estimate_tokens(&recent_context)
+            + estimate_tokens(user_prompt);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
         let enforce_unique_name = reference_context.system_context.is_empty();
 
         let schema = serde_json::json!({
@@ -335,7 +402,7 @@ impl AiGenerationService {
                 "model": model,
                 "stream": false,
                 "format": schema,
-                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.12, "seed": run_seed },
+                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
                 "messages": [{
                     "role": "system",
                     "content": format!(
@@ -372,7 +439,7 @@ impl AiGenerationService {
                 .insert(database, "faction_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(seed);
+            return Ok(SeedGeneration { seed, notice: notice.clone() });
         }
 
         Err("failed to generate valid structured faction output from ollama".to_string())
@@ -384,7 +451,7 @@ impl AiGenerationService {
         workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
-    ) -> Result<ItemSeed, String> {
+    ) -> Result<SeedGeneration<ItemSeed>, String> {
         let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let config = loaded.effective;
@@ -399,6 +466,30 @@ impl AiGenerationService {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one magical or legendary item.");
+
+        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
+            let vault = Vault::new(vault_path);
+            if vault.ensure_root_exists().is_ok() {
+                match load_vault_reference_entries(&vault) {
+                    Ok(entries) => build_prompt_reference_context(
+                        user_prompt,
+                        &entries,
+                        &vault,
+                        workspace_root,
+                    ),
+                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
+                }
+            } else {
+                PromptReferenceContext::default()
+            }
+        } else {
+            PromptReferenceContext::default()
+        };
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&reference_context.system_context)
+            + estimate_tokens(user_prompt);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
 
         let schema = serde_json::json!({
             "type": "object",
@@ -453,14 +544,15 @@ impl AiGenerationService {
                 "model": model,
                 "stream": false,
                 "format": schema,
-                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed },
+                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance (1-2 sentences), abilities (1-3 sentences), drawbacks (0-2 sentences, or 'None'), history (1-3 sentences), value in format like '1000gp' or '250sp' or '50cp', and location.{}",
+                        "You generate concise tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance (1-2 sentences), abilities (1-3 sentences), drawbacks (0-2 sentences, or 'None'), history (1-3 sentences), value in format like '1000gp' or '250sp' or '50cp', and location. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any person, place, or organization instead of inventing new ones.{}{}",
                         ITEM_CATEGORIES.join(", "),
                         ITEM_RARITIES.join(", "),
-                        repair_note
+                        repair_note,
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
                     )
                 }, { "role": "user", "content": user_prompt }]
             });
@@ -508,7 +600,7 @@ impl AiGenerationService {
                 .insert(database, "item_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(seed);
+            return Ok(SeedGeneration { seed, notice: notice.clone() });
         }
 
         Err("failed to generate valid structured item output from ollama".to_string())
@@ -756,9 +848,6 @@ fn build_prompt_reference_context(
     vault: &Vault,
     workspace_root: &Path,
 ) -> PromptReferenceContext {
-    const MAX_REFERENCE_DOCS: usize = 5;
-    const MAX_METADATA_CHARS_PER_DOC: usize = 1800;
-
     let keys = extract_prompt_reference_keys(prompt, entries);
     if keys.is_empty() { return PromptReferenceContext::default(); }
 
@@ -773,16 +862,15 @@ fn build_prompt_reference_context(
         }
     };
 
-    for key in keys.into_iter().take(MAX_REFERENCE_DOCS) {
+    for key in keys.into_iter() {
         let Some(path) = path_by_key.get(&key.to_lowercase()) else { continue };
         let normalized_path = normalize_relative_path_for_storage(path);
-        let payload = if let Some(canonical) = canonical_metadata.get(&normalized_path) {
+        let metadata = if let Some(canonical) = canonical_metadata.get(&normalized_path) {
             canonical.clone()
         } else {
             let contents = match vault.read_relative(Path::new(path)) { Ok(value) => value, Err(err) => { eprintln!("reference context warning: failed reading {}: {}", path, err); continue; } };
             match reference_payload_from_markdown(&contents) { Some(value) => value, None => continue }
         };
-        let metadata = if payload.len() > MAX_METADATA_CHARS_PER_DOC { format!("{}...", &payload[..MAX_METADATA_CHARS_PER_DOC]) } else { payload };
         blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
     }
 
@@ -853,7 +941,23 @@ fn reference_payload_from_markdown(contents: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown, NpcSeed};
+    use super::{capacity_notice, describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown, NpcSeed, OUTPUT_RESERVE_TOKENS};
+
+    #[test]
+    fn capacity_notice_none_when_comfortably_under_budget() {
+        assert!(capacity_notice(100, 8192).is_none());
+    }
+
+    #[test]
+    fn capacity_notice_fires_when_prompt_crowds_output_reserve() {
+        // Exactly at the budget edge: estimate == num_ctx - reserve -> no notice.
+        let num_ctx: u32 = 4096;
+        let budget = num_ctx as usize - OUTPUT_RESERVE_TOKENS;
+        assert!(capacity_notice(budget, num_ctx).is_none());
+        // One token over the budget -> notice.
+        let notice = capacity_notice(budget + 1, num_ctx).expect("notice expected");
+        assert!(notice.contains("num_ctx"));
+    }
 
     #[test]
     fn occupation_anchor_ignores_descriptive_fillers() {

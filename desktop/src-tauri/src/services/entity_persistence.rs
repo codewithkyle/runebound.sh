@@ -110,6 +110,15 @@ impl EntityPersistenceService {
             .await?
         };
 
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_npc(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
         let frontmatter = NpcFrontmatter {
             doc_type: "npc".to_string(),
             id: input.id.trim().to_string(),
@@ -129,6 +138,7 @@ impl EntityPersistenceService {
             location: location.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
+            published_at,
         };
 
         store
@@ -291,6 +301,15 @@ impl EntityPersistenceService {
             .await?
         };
 
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_location(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
         let frontmatter = LocationFrontmatter {
             doc_type: "location".to_string(),
             id: input.id.trim().to_string(),
@@ -308,6 +327,7 @@ impl EntityPersistenceService {
             current_tension: current_tension.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
+            published_at,
         };
 
         store
@@ -461,6 +481,15 @@ impl EntityPersistenceService {
             .await?
         };
 
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_faction(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
         let frontmatter = FactionFrontmatter {
             doc_type: "faction".to_string(),
             id: input.id.trim().to_string(),
@@ -485,6 +514,7 @@ impl EntityPersistenceService {
             symbol_description: symbol_description.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
+            published_at,
         };
 
         store
@@ -657,6 +687,15 @@ impl EntityPersistenceService {
             .await?
         };
 
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_item(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
         let frontmatter = ItemFrontmatter {
             doc_type: "item".to_string(),
             id: input.id.trim().to_string(),
@@ -675,6 +714,7 @@ impl EntityPersistenceService {
             location: location.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
+            published_at,
         };
 
         store

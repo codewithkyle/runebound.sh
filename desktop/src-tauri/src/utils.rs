@@ -56,6 +56,21 @@ pub fn word_count(value: &str) -> usize {
     value.split_whitespace().count()
 }
 
+/// Rough token estimate for local-model context budgeting (~4 chars per token
+/// for English; ceil-divided so it errs slightly high rather than low).
+pub fn estimate_tokens(value: &str) -> usize {
+    value.chars().count().div_ceil(4)
+}
+
+/// Prepend an optional non-blocking notice (e.g. a context-capacity warning) to a
+/// response body, separated by a blank line. Returns `body` unchanged when `None`.
+pub fn prepend_notice(notice: Option<String>, body: String) -> String {
+    match notice {
+        Some(notice) => format!("{notice}\n\n{body}"),
+        None => body,
+    }
+}
+
 pub fn validate_sentence_range(value: &str, min: usize, max: usize, field: &str) -> Result<(), String> {
     let count = sentence_count(value);
     if count < min || count > max {
@@ -164,10 +179,28 @@ pub fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        normalize_faction_seed, normalize_location_seed, normalize_relative_path_for_storage,
-        path_for_display, validate_faction_details, validate_location_details,
+        estimate_tokens, normalize_faction_seed, normalize_location_seed,
+        normalize_relative_path_for_storage, path_for_display, prepend_notice,
+        validate_faction_details, validate_location_details,
     };
     use crate::services::ai_generation::{FactionSeed, LocationSeed};
+
+    #[test]
+    fn estimate_tokens_is_roughly_chars_over_four() {
+        assert_eq!(estimate_tokens(""), 0);
+        // 8 chars -> 2 tokens; ceil division rounds partials up.
+        assert_eq!(estimate_tokens("abcdefgh"), 2);
+        assert_eq!(estimate_tokens("abcde"), 2);
+    }
+
+    #[test]
+    fn prepend_notice_adds_blank_line_when_present() {
+        assert_eq!(prepend_notice(None, "body".to_string()), "body");
+        assert_eq!(
+            prepend_notice(Some("warn".to_string()), "body".to_string()),
+            "warn\n\nbody"
+        );
+    }
 
     #[test]
     fn normalizes_storage_paths_to_forward_slashes() {

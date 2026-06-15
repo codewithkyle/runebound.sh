@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use dnd_core::config::load_effective;
 use dnd_core::entity_store::EntityStore;
-use dnd_core::npc::{FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem};
+use dnd_core::npc::{FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
 use dnd_core::serialization::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 use dnd_core::vault::Vault;
 
@@ -38,6 +38,13 @@ impl VaultSyncService {
         let item_repo = state.item_repo();
         let document_repo = state.document_repo();
 
+        // Any publish that survived to a restart is permanent: finalize its pending
+        // undo record so a reaped entity can no longer be brought back via `undo`.
+        state
+            .soft_delete_repo()
+            .finalize_pending_publishes(database.as_ref(), &now_timestamp())
+            .await?;
+
         sync_npcs(&store, database.as_ref(), npc_repo.as_ref(), document_repo.as_ref()).await?;
         sync_locations(&store, database.as_ref(), location_repo.as_ref(), document_repo.as_ref()).await?;
         sync_factions(&store, database.as_ref(), faction_repo.as_ref(), document_repo.as_ref()).await?;
@@ -59,6 +66,15 @@ async fn sync_npcs(
     let mut synced_ids = HashSet::new();
 
     for frontmatter in frontmatters {
+        // Published entities are reaped: their record lives in Obsidian now, so drop
+        // the DB row, document index, and the backing TOML.
+        if frontmatter.published_at.is_some() {
+            npc_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_npc(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
+        }
+
         let row = npc_row_from_frontmatter(&frontmatter)?;
         synced_ids.insert(row.id.clone());
         npc_repo.upsert(database, &row).await?;
@@ -100,6 +116,13 @@ async fn sync_locations(
     let mut synced_ids = HashSet::new();
 
     for frontmatter in frontmatters {
+        if frontmatter.published_at.is_some() {
+            location_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_location(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
+        }
+
         let row = location_row_from_frontmatter(&frontmatter)?;
         synced_ids.insert(row.id.clone());
         location_repo.upsert(database, &row).await?;
@@ -141,6 +164,13 @@ async fn sync_factions(
     let mut synced_ids = HashSet::new();
 
     for frontmatter in frontmatters {
+        if frontmatter.published_at.is_some() {
+            faction_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_faction(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
+        }
+
         let row = faction_row_from_frontmatter(&frontmatter)?;
         synced_ids.insert(row.id.clone());
         faction_repo.upsert(database, &row).await?;
@@ -182,6 +212,13 @@ async fn sync_items(
     let mut synced_ids = HashSet::new();
 
     for frontmatter in frontmatters {
+        if frontmatter.published_at.is_some() {
+            item_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_item(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
+        }
+
         let row = item_row_from_frontmatter(&frontmatter)?;
         synced_ids.insert(row.id.clone());
         item_repo.upsert(database, &row).await?;
@@ -211,7 +248,7 @@ async fn sync_items(
     Ok(())
 }
 
-fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {
+pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {
     Ok(db::NpcRow {
         id: frontmatter.id.clone(),
         slug: frontmatter.slug.clone(),
@@ -234,7 +271,7 @@ fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, 
     })
 }
 
-fn location_row_from_frontmatter(
+pub(crate) fn location_row_from_frontmatter(
     frontmatter: &LocationFrontmatter,
 ) -> Result<db::LocationRow, String> {
     Ok(db::LocationRow {
@@ -256,7 +293,7 @@ fn location_row_from_frontmatter(
     })
 }
 
-fn faction_row_from_frontmatter(
+pub(crate) fn faction_row_from_frontmatter(
     frontmatter: &FactionFrontmatter,
 ) -> Result<db::FactionRow, String> {
     Ok(db::FactionRow {
@@ -288,7 +325,7 @@ fn faction_row_from_frontmatter(
     })
 }
 
-fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result<db::ItemRow, String> {
+pub(crate) fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result<db::ItemRow, String> {
     Ok(db::ItemRow {
         id: frontmatter.id.clone(),
         slug: frontmatter.slug.clone(),
@@ -425,6 +462,7 @@ mod tests {
             location: "Silversong".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T12:00:00Z".to_string(),
+            published_at: None,
         };
 
         let row = npc_row_from_frontmatter(&frontmatter).expect("row");
@@ -452,6 +490,7 @@ mod tests {
             current_tension: "None".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T12:00:00Z".to_string(),
+            published_at: None,
         };
 
         let row = location_row_from_frontmatter(&frontmatter).expect("row");

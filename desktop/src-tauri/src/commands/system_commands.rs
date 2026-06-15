@@ -9,8 +9,8 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt,
 };
 use crate::entities::EntityKind;
-use crate::services::ai_generation::AiGenerationService;
-use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text};
+use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
+use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text, prepend_notice};
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
 
@@ -99,7 +99,7 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Op
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_npc_seed(
             merged_prompt,
             &state.workspace_root,
@@ -126,7 +126,10 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Op
         editor.clear_kind(EntityKind::Location);
     }
 
-    entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
+    entity_response_with_event(
+        prepend_notice(notice, npc_summary_text(&draft)),
+        npc_event_from_draft(&draft),
+    )
 }
 
 async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
@@ -144,7 +147,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_promp
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_location_seed(
             merged_prompt,
             &state.workspace_root,
@@ -171,7 +174,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_promp
     }
 
     entity_response_with_event(
-        location_summary_text(&draft),
+        prepend_notice(notice, location_summary_text(&draft)),
         location_event_from_draft(&draft),
     )
 }
@@ -189,7 +192,7 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_faction_seed(
             merged_prompt,
             &state.workspace_root,
@@ -224,7 +227,7 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt
     }
 
     entity_response_with_event(
-        faction_summary_text(&draft),
+        prepend_notice(notice, faction_summary_text(&draft)),
         faction_event_from_draft(&draft),
     )
 }
@@ -244,7 +247,7 @@ async fn reroll_current_item(state: tauri::State<'_, AppState>, reroll_prompt: O
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_item_seed(
             merged_prompt,
             &state.workspace_root,
@@ -270,5 +273,8 @@ async fn reroll_current_item(state: tauri::State<'_, AppState>, reroll_prompt: O
         editor.set_item(draft.clone());
     }
 
-    entity_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
+    entity_response_with_event(
+        prepend_notice(notice, item_summary_text(&draft)),
+        item_event_from_draft(&draft),
+    )
 }

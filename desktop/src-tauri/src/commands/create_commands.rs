@@ -10,12 +10,13 @@ use crate::entities::common::{
     CommandResult,
 };
 use crate::entities::EntityKind;
-use crate::services::ai_generation::AiGenerationService;
+use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{
     normalize_optional_prompt,
     normalize_sex,
     normalize_unknown_list,
     normalize_unknown_text,
+    prepend_notice,
 };
 use dnd_core::npc::UNKNOWN_LOCATION;
 
@@ -86,7 +87,7 @@ async fn create_npc(
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_npc_seed(
             prompt.clone(),
             &state.workspace_root,
@@ -119,7 +120,10 @@ async fn create_npc(
         editor.clear_kind(EntityKind::Location);
     }
 
-    command_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
+    command_response_with_event(
+        prepend_notice(notice, npc_summary_text(&draft)),
+        npc_event_from_draft(&draft),
+    )
 }
 
 async fn create_location(
@@ -144,7 +148,7 @@ async fn create_location(
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_location_seed(
             prompt.clone(),
             &state.workspace_root,
@@ -177,7 +181,7 @@ async fn create_location(
     }
 
     command_response_with_event(
-        location_summary_text(&draft),
+        prepend_notice(notice, location_summary_text(&draft)),
         location_event_from_draft(&draft),
     )
 }
@@ -204,7 +208,7 @@ async fn create_faction(
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_faction_seed(
             prompt.clone(),
             &state.workspace_root,
@@ -245,7 +249,7 @@ async fn create_faction(
     }
 
     command_response_with_event(
-        faction_summary_text(&draft),
+        prepend_notice(notice, faction_summary_text(&draft)),
         faction_event_from_draft(&draft),
     )
 }
@@ -272,7 +276,7 @@ async fn create_item(
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let seed = ai
+    let SeedGeneration { seed, notice } = ai
         .generate_item_seed(
             prompt.clone(),
             &state.workspace_root,
@@ -308,7 +312,10 @@ async fn create_item(
         editor.clear_kind(EntityKind::Faction);
     }
 
-    command_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
+    command_response_with_event(
+        prepend_notice(notice, item_summary_text(&draft)),
+        item_event_from_draft(&draft),
+    )
 }
 
 fn make_entity_id(prefix: &str) -> String {
