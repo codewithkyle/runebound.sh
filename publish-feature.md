@@ -14,11 +14,12 @@ Replace the embedded `runebound` blocks in Obsidian markdown files with a canoni
 2. **Publish Command**
    - Add `publish <name>` command (desktop) that resolves the entity by name/slug via existing lookup/suggestions. Users should not have to specify entity type.
    - Flow:
-     1. Load entity data from TOML.
-     2. Render a human-readable markdown layout tailored to the entity type.
-     3. Determine target vault path (e.g., `npcs/<slug>.md`, configurable via stored metadata or convention).
-     4. If the file already exists, prompt `Overwrite <path>? [y/N]`. Default to “No” unless the user confirms.
-     5. On confirmation (or if file absent), write the rendered markdown, overwriting existing content. Publishing is one-way: no attempt to preserve prior user edits.
+      1. Load entity data from TOML.
+      2. Render a human-readable markdown layout tailored to the entity type.
+      3. Determine target vault path (e.g., `npcs/<slug>.md`, configurable via stored metadata or convention).
+      4. If the file already exists, prompt `Overwrite <path>? [y/N]`. Default to “No” unless the user confirms.
+      5. On confirmation (or if file absent), write the rendered markdown, overwriting existing content. Publishing is one-way: no attempt to preserve prior user edits.
+      6. If an entity draft is active (user is editing), `publish` saves that draft automatically before rendering so there’s no separate `save` step.
    - Future flags (not required now): `--force` to skip prompts, `publish all` batch mode.
 
 3. **Markdown Renderers**

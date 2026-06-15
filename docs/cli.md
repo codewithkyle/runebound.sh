@@ -330,6 +330,7 @@ publish help
 - If the file already exists you must confirm the overwrite; declining leaves the file untouched.
 - Publishing is one-way—manual edits inside Obsidian are not synced back. Re-run `publish` after making changes via commands.
 - Startup sync mirrors the canonical TOML store into the SQLite database; Obsidian files are treated purely as render targets.
+- When run with an active draft (no arguments), `publish` automatically saves the draft first so you never need to run `npc save`/`location save` separately.
 
 ---
 
