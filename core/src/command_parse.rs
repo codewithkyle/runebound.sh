@@ -410,6 +410,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_setup_model_command() {
+        let parsed = parse_command_input("setup model");
+        assert!(
+            parsed.valid,
+            "expected setup model to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["setup", "model"]);
+    }
+
+    #[test]
+    fn parses_model_command() {
+        let parsed = parse_command_input("model");
+        assert!(
+            parsed.valid,
+            "expected model to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["model"]);
+    }
+
+    #[test]
     fn normalizes_markdown_wrapped_help_command() {
         assert_eq!(normalize_command_input("`help`"), "help");
         let parsed = parse_command_input("`help`");

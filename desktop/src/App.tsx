@@ -79,6 +79,9 @@ export default function App() {
   ]);
   const [command, setCommand] = createSignal("");
   const [running, setRunning] = createSignal(false);
+  // Tracks which Ollama setup prompt is currently shown so we can show a
+  // "testing connection" spinner when the next input triggers a server probe.
+  const [ollamaPrompt, setOllamaPrompt] = createSignal<"menu" | "url" | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
   const [commandHistory, setCommandHistory] = createSignal<string[]>([]);
@@ -346,7 +349,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw);
+    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -364,6 +367,10 @@ export default function App() {
         if (spinnerId !== null) {
           updateEntry(spinnerId, "spinner", `OK ${spinnerLabel}`);
         }
+        // Track the Ollama prompt context so the next probe-triggering input
+        // shows the connection-test spinner. Only update on success; on error we
+        // keep the prior context so a retry still shows the spinner.
+        setOllamaPrompt(detectOllamaPrompt(rendered.text));
         applyClientEvent(response.client_event);
         const outputDocOverride = outputDocFromClientEvent(response.client_event);
         const suppressOutput =
@@ -946,8 +953,36 @@ function isBootstrapSetupMessage(message: string): boolean {
   return message.toLowerCase().includes("first-time setup required");
 }
 
-function commandSpinnerLabel(raw: string): string | null {
+const OLLAMA_TEST_LABEL = "testing ollama connection";
+
+// Infer which Ollama setup prompt the backend just rendered so a follow-up
+// input that probes the server can show the connection-test spinner.
+function detectOllamaPrompt(text: string): "menu" | "url" | null {
+  if (text.includes("## Step 2: Ollama server") && text.includes("1: Configure a new server")) {
+    return "menu";
+  }
+  if (text.includes("Enter your Ollama URL")) {
+    return "url";
+  }
+  return null;
+}
+
+function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): string | null {
   const lowered = raw.trim().toLowerCase();
+  // Commands that always probe the Ollama server.
+  if (lowered === "test ollama") {
+    return OLLAMA_TEST_LABEL;
+  }
+  if (lowered === "model" || lowered === "setup model") {
+    return OLLAMA_TEST_LABEL;
+  }
+  // In-flow probes: typing a URL, or continuing with the current server.
+  if (ollamaPrompt === "url" && lowered.length > 0) {
+    return OLLAMA_TEST_LABEL;
+  }
+  if (ollamaPrompt === "menu" && (lowered === "2" || lowered === "continue")) {
+    return OLLAMA_TEST_LABEL;
+  }
   if (lowered === "create npc" || lowered.startsWith("create npc ")) {
     return "generating npc";
   }

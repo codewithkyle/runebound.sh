@@ -355,6 +355,38 @@ async fn try_execute_onboarding(
         return Ok(Some(enter_ollama_menu(&mut session.onboarding, None)));
     }
 
+    if lowered == ["model"] || lowered == ["setup", "model"] {
+        let loaded = load_effective(workspace_root)?;
+        let base_url = loaded.effective.ollama.base_url.clone();
+        if base_url.trim().is_empty() {
+            bail!("no Ollama server is configured. run setup llm first.");
+        }
+        let normalized = normalize_ollama_input(&base_url);
+        health::validate_ollama_url(&normalized)?;
+        // Probe the configured server for its model list (shows the spinner).
+        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+
+        session.onboarding.active = true;
+        session.onboarding.flow = OnboardingFlow::Model;
+        session.onboarding.vault_substate = VaultStepState::Inactive;
+        session.onboarding.ollama_substate = OllamaStepState::Inactive;
+        session.onboarding.ollama_base_url = normalized;
+        session.onboarding.ollama_models = models.clone();
+        if let Some(model) = &loaded.effective.ollama.model {
+            session.onboarding.selected_model = model.clone();
+        } else if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
+            session.onboarding.selected_model = models[0].clone();
+        }
+        session.onboarding.step = 3;
+
+        return Ok(Some(CommandOutput::text(model_step_text(
+            &detail,
+            &models,
+            OnboardingFlow::Model,
+            &session.onboarding.selected_model,
+        ))));
+    }
+
     if lowered == ["setup", "help"] {
         if !session.onboarding.active {
             let loaded = load_effective(workspace_root)?;
@@ -370,6 +402,7 @@ async fn try_execute_onboarding(
                 "start setup",
                 "setup vault",
                 "setup llm",
+                "setup model",
                 "set vault <path>",
                 "set ollama <url>",
                 "test ollama",
@@ -428,16 +461,19 @@ async fn try_execute_onboarding(
         )));
     }
 
-    // `continue` at the model step (LLM flow) keeps the current model and saves.
-    // The Ollama-server step's `continue` is handled by the menu block below.
+    // `continue` at the model step (LLM/model flows) keeps the current model and
+    // saves. The Ollama-server step's `continue` is handled by the menu block below.
     if lowered == ["continue"]
-        && session.onboarding.flow == OnboardingFlow::Llm
         && session.onboarding.step == 3
+        && matches!(
+            session.onboarding.flow,
+            OnboardingFlow::Llm | OnboardingFlow::Model
+        )
     {
         if session.onboarding.selected_model.trim().is_empty() {
             bail!("no model is selected. choose a model first.");
         }
-        return Ok(Some(save_llm_section(workspace_root, session).await?));
+        return Ok(Some(save_model_step(workspace_root, session).await?));
     }
 
     if let Some(path) = extract_trailing_argument(trimmed, "set vault") {
@@ -500,8 +536,8 @@ async fn try_execute_onboarding(
         }
         let selected = session.onboarding.ollama_models[index - 1].clone();
         session.onboarding.selected_model = selected.clone();
-        if session.onboarding.flow == OnboardingFlow::Llm {
-            return Ok(Some(save_llm_section(workspace_root, session).await?));
+        if session.onboarding.flow != OnboardingFlow::Full {
+            return Ok(Some(save_model_step(workspace_root, session).await?));
         }
         if session.onboarding.step < 4 {
             session.onboarding.step = 4;
@@ -514,8 +550,8 @@ async fn try_execute_onboarding(
             bail!("model name cannot be empty");
         }
         session.onboarding.selected_model = model_name.clone();
-        if session.onboarding.flow == OnboardingFlow::Llm {
-            return Ok(Some(save_llm_section(workspace_root, session).await?));
+        if session.onboarding.flow != OnboardingFlow::Full {
+            return Ok(Some(save_model_step(workspace_root, session).await?));
         }
         if session.onboarding.step < 4 {
             session.onboarding.step = 4;
@@ -638,8 +674,8 @@ async fn try_execute_onboarding(
         } else {
             session.onboarding.selected_model = trimmed.to_string();
         }
-        if session.onboarding.flow == OnboardingFlow::Llm {
-            return Ok(Some(save_llm_section(workspace_root, session).await?));
+        if session.onboarding.flow != OnboardingFlow::Full {
+            return Ok(Some(save_model_step(workspace_root, session).await?));
         }
         session.onboarding.step = 4;
         return Ok(Some(CommandOutput::text(save_prompt_text(
@@ -779,7 +815,9 @@ fn model_step_text(detail: &str, models: &[String], flow: OnboardingFlow, curren
         "Enter a model name and press Enter.".to_string(),
         "Or enter a model number from the list below.".to_string(),
     ];
-    if flow == OnboardingFlow::Llm && !current_model.trim().is_empty() {
+    if matches!(flow, OnboardingFlow::Llm | OnboardingFlow::Model)
+        && !current_model.trim().is_empty()
+    {
         lines.push(format!("Or type continue to keep {current_model}."));
     }
     if models.is_empty() {
@@ -869,6 +907,46 @@ async fn save_llm_section(
     reset_onboarding(&mut session.onboarding);
 
     Ok(CommandOutput::text(lines.join("\n")))
+}
+
+/// Persist the chosen model at the end of the model step, picking the right
+/// scope for the active flow.
+async fn save_model_step(
+    workspace_root: &Path,
+    session: &mut SessionState,
+) -> Result<CommandOutput> {
+    match session.onboarding.flow {
+        OnboardingFlow::Model => save_model_section(workspace_root, session).await,
+        _ => save_llm_section(workspace_root, session).await,
+    }
+}
+
+/// Save only the selected Ollama model, leaving the server URL untouched.
+async fn save_model_section(
+    workspace_root: &Path,
+    session: &mut SessionState,
+) -> Result<CommandOutput> {
+    if session.onboarding.selected_model.trim().is_empty() {
+        bail!("no model is selected. choose a model first.");
+    }
+
+    let loaded = load_effective(workspace_root)?;
+    let mut config = loaded.effective;
+    config.ollama.model = Some(session.onboarding.selected_model.clone());
+
+    let config_path = save_config(workspace_root, &config)?;
+    let model = session.onboarding.selected_model.clone();
+
+    reset_onboarding(&mut session.onboarding);
+
+    Ok(CommandOutput::text(
+        [
+            "## Model updated".to_string(),
+            format!("config saved: {}", config_path.display()),
+            format!("model: {model}"),
+        ]
+        .join("\n"),
+    ))
 }
 
 fn extract_trailing_argument(input: &str, prefix: &str) -> Option<String> {

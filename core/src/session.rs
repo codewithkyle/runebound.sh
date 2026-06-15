@@ -11,6 +11,8 @@ pub enum OnboardingFlow {
     Vault,
     /// `setup llm` — ollama url + model only; saves that section and exits.
     Llm,
+    /// `setup model` / `model` — pick a model on the existing server; saves and exits.
+    Model,
 }
 
 /// Sub-state of the vault step, used to disambiguate menu input from a typed path.
