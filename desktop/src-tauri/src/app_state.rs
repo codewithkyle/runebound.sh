@@ -283,6 +283,9 @@ pub(crate) struct AppState {
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
     pub(crate) domains: Arc<EntityDomainRegistry>,
+    /// Cached result of the boot LLM health probe, reused to render the MOTD
+    /// without re-probing the Ollama server.
+    pub(crate) boot_ollama_health: Mutex<Option<dnd_core::health::OllamaHealth>>,
 }
 
 impl AppState {

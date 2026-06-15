@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app_state;
+mod boot;
 mod commands;
 mod entities;
 mod repositories;
@@ -29,7 +30,6 @@ use crate::repositories::{
     ProdVaultRepository, SoftDeleteRepository, VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
-use crate::services::vault_sync::VaultSyncService;
 
 #[tauri::command]
 async fn suggest_command_input(
@@ -160,12 +160,11 @@ fn main() {
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
         domains,
+        boot_ollama_health: Mutex::new(None),
     };
 
-    let vault_sync_service = VaultSyncService;
-    if let Err(err) = tauri::async_runtime::block_on(vault_sync_service.sync_from_vault(&app_state)) {
-        eprintln!("startup vault sync skipped: {err}");
-    }
+    // Startup cleanup (vault sync / soft-delete reaping) now runs as the
+    // `cleanup` boot task so the user sees a spinner for it.
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -174,7 +173,10 @@ fn main() {
             run_command,
             suggest_command_input,
             get_command_manifest,
-            exit_app
+            exit_app,
+            boot::boot_plan,
+            boot::run_boot_task,
+            boot::boot_motd
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

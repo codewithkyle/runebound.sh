@@ -3,11 +3,123 @@ use std::time::Duration;
 
 use anyhow::{Result, anyhow};
 use reqwest::StatusCode;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::config::{AppConfig, required_issues};
 use crate::db;
 use crate::vault::{Vault, is_path_writable};
+
+/// Live state of the configured Ollama server, used by the boot flow and status.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OllamaHealth {
+    /// The server answered `/api/tags` successfully.
+    pub reachable: bool,
+    /// The model configured in the app is present in the server's model list.
+    pub model_available: bool,
+    /// Human-readable summary suitable for a status/spinner line.
+    pub detail: String,
+}
+
+/// Probe the configured Ollama server and verify the configured model exists.
+///
+/// Uses a short timeout so a dead server does not stall the boot sequence.
+pub async fn check_ollama_health(config: &AppConfig, timeout_seconds: u64) -> OllamaHealth {
+    let base = config.ollama.base_url.trim();
+    if base.is_empty() {
+        return OllamaHealth {
+            reachable: false,
+            model_available: false,
+            detail: "no Ollama server is configured".to_string(),
+        };
+    }
+    if validate_ollama_url(base).is_err() {
+        return OllamaHealth {
+            reachable: false,
+            model_available: false,
+            detail: format!("invalid Ollama URL: {base}"),
+        };
+    }
+
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return OllamaHealth {
+                reachable: false,
+                model_available: false,
+                detail: format!("failed to create HTTP client: {err}"),
+            };
+        }
+    };
+
+    let url = format!("{}/api/tags", base.trim_end_matches('/'));
+    let response = match client.get(url).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            return OllamaHealth {
+                reachable: false,
+                model_available: false,
+                detail: format!("could not reach the Ollama server at {base}"),
+            };
+        }
+    };
+
+    if response.status() != StatusCode::OK {
+        return OllamaHealth {
+            reachable: false,
+            model_available: false,
+            detail: format!("the Ollama server returned {}", response.status()),
+        };
+    }
+
+    let models = match response.json::<serde_json::Value>().await {
+        Ok(value) => value
+            .get("models")
+            .and_then(|models| models.as_array())
+            .map(|models| {
+                models
+                    .iter()
+                    .filter_map(|model| {
+                        model.get("name").and_then(|name| name.as_str()).map(String::from)
+                    })
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default(),
+        Err(_) => {
+            return OllamaHealth {
+                reachable: true,
+                model_available: false,
+                detail: "the Ollama server response could not be read".to_string(),
+            };
+        }
+    };
+
+    match config.ollama.model.as_deref() {
+        Some(model) if !model.trim().is_empty() => {
+            if models.iter().any(|candidate| candidate == model) {
+                OllamaHealth {
+                    reachable: true,
+                    model_available: true,
+                    detail: format!("model {model} is available"),
+                }
+            } else {
+                OllamaHealth {
+                    reachable: true,
+                    model_available: false,
+                    detail: format!("the configured model {model} is no longer available"),
+                }
+            }
+        }
+        _ => OllamaHealth {
+            reachable: true,
+            model_available: false,
+            detail: "no model is configured".to_string(),
+        },
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct CheckItem {

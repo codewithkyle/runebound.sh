@@ -14,7 +14,7 @@ use crate::command_manifest::{CommandManifest, CommandSpec, command_manifest};
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
 use crate::config::{AppConfig, load_effective, required_issues, save_config, validate_for_runtime};
 use crate::db;
-use crate::health::{self, CheckReport};
+use crate::health::{self, CheckReport, OllamaHealth};
 use crate::output::{
     command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status, text_node,
 };
@@ -1300,36 +1300,63 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
     let db = db::init_database().await?;
     db::health_check(&db.pool).await?;
 
-    let model = config
-        .ollama
-        .model
-        .clone()
-        .unwrap_or_else(|| "(not set)".to_string());
+    let health = health::check_ollama_health(&config, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
+
+    Ok(render_motd(
+        &vault.root().display().to_string(),
+        &config.ollama.base_url,
+        config.ollama.model.as_deref(),
+        &health,
+    ))
+}
+
+/// Short timeout for boot/status probes so a dead server doesn't stall startup.
+pub const OLLAMA_BOOT_TIMEOUT_SECONDS: u64 = 5;
+
+/// Render the welcome/MOTD system-status output with an accurate connection line.
+///
+/// The status line is only the green "ready to work" message when the server is
+/// reachable and the configured model is present; otherwise it is a warning that
+/// names the reason (the app still opens for non-AI work).
+pub fn render_motd(
+    vault_root: &str,
+    endpoint: &str,
+    model: Option<&str>,
+    health: &OllamaHealth,
+) -> CommandOutput {
+    let model_str = model
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or("(not set)");
+
+    let (tone, status_line) = if health.reachable && health.model_available {
+        (
+            StatusTone::Success,
+            "runebound.sh is connected and ready to work.".to_string(),
+        )
+    } else {
+        (
+            StatusTone::Warning,
+            format!(
+                "runebound.sh is running, but AI generation is unavailable: {}.",
+                health.detail
+            ),
+        )
+    };
 
     let text = format!(
-        "## System Status\nrunebound.sh is connected and ready to work.\n\nvault: {}\nollama endpoint: {}\nollama model: {}\ndatabase: {}",
-        vault.root().display(),
-        config.ollama.base_url,
-        model,
-        db.path.display()
+        "## System Status\n{status_line}\n\nvault: {vault_root}\nollama endpoint: {endpoint}\nollama model: {model_str}"
     );
     let output_doc = doc()
         .with_block(heading(2, "System Status"))
-        .with_block(status(
-            StatusTone::Success,
-            "runebound.sh is connected and ready to work.",
-        ))
+        .with_block(status(tone, status_line))
         .with_block(list(vec![
-            vec![text_node(format!("vault: {}", vault.root().display()))],
-            vec![text_node(format!(
-                "ollama endpoint: {}",
-                config.ollama.base_url
-            ))],
-            vec![text_node(format!("ollama model: {model}"))],
-            vec![text_node(format!("database: {}", db.path.display()))],
+            vec![text_node(format!("vault: {vault_root}"))],
+            vec![text_node(format!("ollama endpoint: {endpoint}"))],
+            vec![text_node(format!("ollama model: {model_str}"))],
         ]));
 
-    Ok(CommandOutput::with_doc(text, output_doc))
+    CommandOutput::with_doc(text, output_doc)
 }
 
 fn format_report(title: &str, report: &CheckReport) -> String {
@@ -1412,6 +1439,15 @@ mod tests {
     };
     use crate::session::{OllamaStepState, OnboardingFlow, SessionState, VaultStepState};
 
+    // A unique, writable directory per test. The shared temp dir cannot be used
+    // because `is_path_writable` writes a fixed-name probe file, which races
+    // across parallel tests.
+    fn unique_temp_vault(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("runebound-test-{name}"));
+        std::fs::create_dir_all(&dir).expect("create temp vault dir");
+        dir
+    }
+
     #[tokio::test]
     async fn rejects_help_flags_in_favor_of_phrase_help() {
         let result = execute_line_result(Path::new("."), "config --help").await;
@@ -1473,10 +1509,10 @@ mod tests {
 
     #[tokio::test]
     async fn full_flow_typed_path_advances_to_ollama() {
-        // Uses the temp dir as a stand-in vault: it exists, is a directory, and
-        // is writable. The Full flow does not save at the vault step, so no
+        // Uses a unique temp dir as a stand-in vault: it exists, is a directory,
+        // and is writable. The Full flow does not save at the vault step, so no
         // config is written.
-        let tmp = std::env::temp_dir();
+        let tmp = unique_temp_vault("full-flow-advances");
         let mut session = SessionState::default();
         execute_line_with_session(Path::new("."), "start setup", &mut session).await;
         execute_line_with_session(Path::new("."), "2", &mut session).await;
@@ -1495,7 +1531,7 @@ mod tests {
 
     #[tokio::test]
     async fn ollama_menu_configure_new_awaits_url() {
-        let tmp = std::env::temp_dir();
+        let tmp = unique_temp_vault("ollama-menu-awaits-url");
         let mut session = SessionState::default();
         execute_line_with_session(Path::new("."), "start setup", &mut session).await;
         execute_line_with_session(Path::new("."), "2", &mut session).await;

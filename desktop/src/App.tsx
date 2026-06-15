@@ -41,6 +41,29 @@ type SuggestionViewItem = {
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
 
+// Minimum time a boot spinner stays on screen, even if its task finishes
+// instantly, so the boot sequence reads as deliberate rather than flickering.
+const BOOT_SPINNER_MIN_MS = 300;
+
+const BANNER_TEXT =
+  "\n" +
+  "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
+  "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
+  "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝\n\n" +
+  "\n" +
+  "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders.\n" +
+  "\n" +
+  "Type help to see available commands.\n";
+
+const bannerResolver = (candidate: string): string | null =>
+  candidate.trim().toLowerCase() === "help" ? "help" : null;
+
+type BootTaskInfo = { id: string; label: string };
+type BootPlan = { needs_setup: boolean; tasks: BootTaskInfo[] };
+type BootTaskResult = { ok: boolean; tone: string; detail: string };
+
+const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
+
 const HISTORY_STORAGE_KEY = "dnd-assistant.command-history";
 const MAX_COMMAND_HISTORY = 50;
 
@@ -49,32 +72,8 @@ export default function App() {
     {
       id: 1,
       kind: "banner",
-      text:
-        "\n" +
-        "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
-        "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
-        "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝\n\n" +
-        "\n" +
-        "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders.\n" +
-        "\n" +
-        "Type help to see available commands.\n",
-      outputDoc: parseOutputEntry(
-        "banner",
-        "\n" +
-          "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
-          "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
-          "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝\n\n" +
-          "\n" +
-          "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders.\n" +
-          "\n" +
-          "Type help to see available commands.\n",
-        (candidate) => {
-          if (candidate.trim().toLowerCase() === "help") {
-            return "help";
-          }
-          return null;
-        }
-      )
+      text: BANNER_TEXT,
+      outputDoc: parseOutputEntry("banner", BANNER_TEXT, bannerResolver)
     }
   ]);
   const [command, setCommand] = createSignal("");
@@ -442,29 +441,56 @@ export default function App() {
     inputRef?.focus();
   };
 
-  const runStartupStatusCheck = async () => {
+  // Boot sequence: run each registered boot task in order, showing a spinner
+  // that grows the list, then clear the view and render the welcome/MOTD with
+  // accurate connection info. Falls back to the first-time setup message when
+  // the app is not configured yet.
+  const runBootSequence = async () => {
     if (running()) {
       return;
     }
 
     setRunning(true);
     try {
-      const response = await invoke<CommandResponse>("run_command", { input: "status" });
-      const rendered = responseToRenderableModel(response, commandMeta());
-      if (response.ok) {
-        applyClientEvent(response.client_event);
-        appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
+      const plan = await invoke<BootPlan>("boot_plan");
+
+      if (plan.needs_setup) {
+        const response = await invoke<CommandResponse>("run_command", { input: "status" });
+        const rendered = responseToRenderableModel(response, commandMeta());
+        const text = response.error || rendered.text || "first-time setup required";
+        appendEntry("output", text, rendered.outputDoc);
         return;
       }
 
-      const errorText = response.error || rendered.text || "command failed";
-      if (isBootstrapSetupMessage(errorText)) {
-        appendEntry("output", errorText, rendered.outputDoc);
-      } else {
-        appendEntry("error", errorText);
+      for (const task of plan.tasks) {
+        const spinnerId = appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${task.label} ...`);
+        let spinnerFrame = 0;
+        const spinnerTimer = window.setInterval(() => {
+          spinnerFrame = (spinnerFrame + 1) % SPINNER_FRAMES.length;
+          updateEntry(spinnerId, "spinner", `${SPINNER_FRAMES[spinnerFrame]} ${task.label} ...`);
+        }, 100);
+
+        try {
+          const [result] = await Promise.all([
+            invoke<BootTaskResult>("run_boot_task", { id: task.id }),
+            delay(BOOT_SPINNER_MIN_MS)
+          ]);
+          window.clearInterval(spinnerTimer);
+          updateEntry(spinnerId, "spinner", `${result.ok ? "OK" : "FAILED"} ${task.label}`);
+        } catch (error) {
+          window.clearInterval(spinnerTimer);
+          updateEntry(spinnerId, "spinner", `FAILED ${task.label}`);
+        }
       }
+
+      // Clear the boot spinners and show the welcome banner + accurate status.
+      setEntries([]);
+      appendEntry("banner", BANNER_TEXT);
+      const motd = await invoke<CommandResponse>("boot_motd");
+      const rendered = responseToRenderableModel(motd, commandMeta());
+      appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
     } catch (error) {
-      appendEntry("error", `startup check failed: ${String(error)}`);
+      appendEntry("error", `boot failed: ${String(error)}`);
     } finally {
       setRunning(false);
     }
@@ -579,7 +605,7 @@ export default function App() {
     inputRef?.focus();
     resizeCommandInput();
     updateScrollbarCompensation();
-    void runStartupStatusCheck();
+    void runBootSequence();
 
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
