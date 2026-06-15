@@ -1,5 +1,6 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
+    build_reference_context,
     describe_recent_npc_occupation_anchors,
     occupation_anchor,
     parse_recent_npc_seeds,
@@ -19,8 +20,28 @@ use crate::utils::{
     normalize_unknown_list,
     normalize_unknown_text,
 };
+use dnd_core::config::AppConfig;
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+/// Resolve any `@references` in a custom reroll prompt into an authoritative
+/// setting-context block appended to the system message. Returns an empty string
+/// when the prompt is blank or references nothing, so a plain reroll is unchanged.
+fn resolve_reference_suffix(
+    config: &AppConfig,
+    extra_prompt: &str,
+    workspace_root: &Path,
+) -> String {
+    if extra_prompt.is_empty() {
+        return String::new();
+    }
+    let context = build_reference_context(config, extra_prompt, workspace_root);
+    if context.system_context.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", context.system_context)
+    }
+}
 
 pub struct EntityRerollService;
 
@@ -43,6 +64,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = npc_context_summary(&input.npc);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let (recent_occupation_anchors, recent_occupation_context) = if field == "occupation" {
             let recent_payloads = generation_repo
                 .recent_prompts(database, "npc_seed", 20)
@@ -125,12 +147,13 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
                             if field == "occupation" {
                                 " For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one."
                             } else {
                                 ""
-                            }
+                            },
+                            reference_suffix
                         )
                     },
                     {
@@ -245,6 +268,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = location_context_summary(&input.location);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise, fitting fantasy location name.",
             "kind_type" => "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other.",
@@ -302,7 +326,10 @@ impl EntityRerollService {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                        "content": format!(
+                            "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                            reference_suffix
+                        )
                     },
                     {
                         "role": "user",
@@ -410,6 +437,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = faction_context_summary(&input.faction);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise fantasy faction name.",
             "kind_type" => "Generate one kind_type enum value from: guild, cult, military_order, noble_house, criminal_syndicate, mercantile_league, religious_order, arcane_circle, revolutionary_cell, other.",
@@ -481,7 +509,10 @@ impl EntityRerollService {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                        "content": format!(
+                            "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                            reference_suffix
+                        )
                     },
                     {
                         "role": "user",
@@ -600,6 +631,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = item_context_summary(&input.item);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise, evocative item name.",
             "category" => "Generate one category from: weapon, armor, consumable, wondrous, arcane_focus, tool, trinket, other.",
@@ -658,7 +690,10 @@ impl EntityRerollService {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You update one RPG item field. Return only valid JSON matching the schema."
+                        "content": format!(
+                            "You update one RPG item field. Return only valid JSON matching the schema.{}",
+                            reference_suffix
+                        )
                     },
                     {
                         "role": "user",

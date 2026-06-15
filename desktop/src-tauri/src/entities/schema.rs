@@ -594,7 +594,7 @@ pub fn format_field_help(kind: EntityKind, access: FieldAccess) -> String {
             "## {root} set\nUpdate a field on the active {root} draft.\nUsage: {root} set <field> <value>"
         ),
         FieldAccess::Reroll => format!(
-            "## {root} reroll\nRegenerate a field on the active {root} draft with the LLM.\nUsage: {root} reroll <field> [prompt]"
+            "## {root} reroll\nRegenerate a field on the active {root} draft with the LLM.\nUsage: {root} reroll <field> [prompt]\nThe optional prompt may include @references to vault documents."
         ),
     };
 

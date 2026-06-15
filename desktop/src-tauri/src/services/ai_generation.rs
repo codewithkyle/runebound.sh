@@ -49,8 +49,10 @@ fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
 }
 
 /// Assemble the `@reference` prompt context from the configured vault, tolerating a
-/// missing or unreadable vault by returning empty context.
-fn build_reference_context(
+/// missing or unreadable vault by returning empty context. Shared by seed
+/// generation and field reroll so a custom prompt's `@references` resolve the same
+/// way in both flows.
+pub(crate) fn build_reference_context(
     config: &AppConfig,
     user_prompt: &str,
     workspace_root: &Path,
