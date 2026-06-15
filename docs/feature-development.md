@@ -67,6 +67,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 1. Add draft model and card builder in `runebound-models/src/drafts.rs`
 2. Extend app state/editor mode in `desktop/src-tauri/src/app_state.rs`
 3. Add create/edit command module under `desktop/src-tauri/src/commands/`
+   (mirror the existing `item_commands.rs` wiring when adding new entities)
 4. Register handler in `desktop/src-tauri/src/commands/mod.rs`
 5. Extend shared entity actions (`load/show/preview/delete/undo`) in `desktop/src-tauri/src/commands/entity_commands.rs`
 
@@ -168,4 +169,4 @@ Then manually test the affected command flows in desktop UI:
 
 ---
 
-*Last updated: 2026-06-14*
+*Last updated: 2026-06-15*

@@ -62,6 +62,7 @@ impl SuggestionService {
         let is_npc = matches!(active_kind, Some(EntityKind::Npc));
         let is_location = matches!(active_kind, Some(EntityKind::Location));
         let is_faction = matches!(active_kind, Some(EntityKind::Faction));
+        let is_item = matches!(active_kind, Some(EntityKind::Item));
 
         suggestions.retain(|suggestion| {
             let completion = suggestion.completion.trim().to_ascii_lowercase();
@@ -97,6 +98,15 @@ impl SuggestionService {
                     || completion.starts_with("faction ")
                     || label == "faction"
                     || label.starts_with("faction "))
+            {
+                return false;
+            }
+
+            if !is_item
+                && (completion == "item"
+                    || completion.starts_with("item ")
+                    || label == "item"
+                    || label.starts_with("item "))
             {
                 return false;
             }
@@ -158,6 +168,7 @@ impl SuggestionService {
                         EntityType::Npc => SuggestionHelperText::Npc,
                         EntityType::Location => SuggestionHelperText::Location,
                         EntityType::Faction => SuggestionHelperText::Faction,
+                        EntityType::Item => SuggestionHelperText::Item,
                     }),
                 });
             }
@@ -194,12 +205,12 @@ pub struct CommandSuggestion {
 }
 
 #[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "snake_case")]
 pub enum SuggestionHelperText {
     Command,
     Npc,
     Location,
     Faction,
+    Item,
     Reference,
 }
 
@@ -240,6 +251,7 @@ async fn search_entities(
     let npc_repo = state.npc_repo();
     let location_repo = state.location_repo();
     let faction_repo = state.faction_repo();
+    let item_repo = state.item_repo();
 
     let npcs = npc_repo
         .search_by_name(database.as_ref(), trimmed, limit)
@@ -248,6 +260,9 @@ async fn search_entities(
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
     let factions = faction_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
+    let items = item_repo
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
 
@@ -267,6 +282,11 @@ async fn search_entities(
             entity_type: EntityType::Faction,
             name: faction.name,
             slug: faction.slug,
+        }))
+        .chain(items.into_iter().map(|item| EntitySuggestion {
+            entity_type: EntityType::Item,
+            name: item.name,
+            slug: item.slug,
         }))
         .collect();
 

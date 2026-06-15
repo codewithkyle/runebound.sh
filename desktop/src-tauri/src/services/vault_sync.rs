@@ -7,11 +7,13 @@ use dnd_core::npc::{UNKNOWN_LOCATION, normalize_markdown_file_stem, now_timestam
 use dnd_core::vault::Vault;
 
 use crate::app_state::AppState;
-use crate::repositories::{db, DocumentRepository, FactionRepository, LocationRepository, NpcRepository};
+use crate::repositories::{
+    db, DocumentRepository, FactionRepository, ItemRepository, LocationRepository, NpcRepository,
+};
 use crate::utils::{
-    normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_relative_path_for_storage, normalize_unknown_list,
-    normalize_unknown_text, parse_list_csv,
+    normalize_exports, normalize_faction_kind_type, normalize_item_category, normalize_item_rarity,
+    normalize_location_danger_level, normalize_location_kind_type, normalize_relative_path_for_storage,
+    normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 
 pub struct VaultSyncService;
@@ -34,11 +36,13 @@ impl VaultSyncService {
         let npc_repo = state.npc_repo();
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
+        let item_repo = state.item_repo();
         let document_repo = state.document_repo();
 
         sync_npcs(&vault, database.as_ref(), npc_repo.as_ref(), document_repo.as_ref()).await?;
         sync_locations(&vault, database.as_ref(), location_repo.as_ref(), document_repo.as_ref()).await?;
         sync_factions(&vault, database.as_ref(), faction_repo.as_ref(), document_repo.as_ref()).await?;
+        sync_items(&vault, database.as_ref(), item_repo.as_ref(), document_repo.as_ref()).await?;
 
         Ok(())
     }
@@ -152,6 +156,45 @@ async fn sync_factions(
     for row in existing {
         if row.vault_path.starts_with("factions/") && !scanned_paths.contains(&row.vault_path) {
             faction_repo.delete_by_id(database, &row.id).await?;
+            document_repo
+                .delete_by_vault_path(database, &row.vault_path)
+                .await?;
+        }
+    }
+
+    Ok(())
+}
+
+async fn sync_items(
+    vault: &Vault,
+    database: &db::Database,
+    item_repo: &dyn ItemRepository,
+    document_repo: &dyn DocumentRepository,
+) -> Result<(), String> {
+    let item_files = collect_markdown_files_under(vault.root(), "items")?;
+    let mut scanned_paths = HashSet::new();
+
+    for (relative_path, contents) in item_files {
+        let row = scan_item_row_from_markdown(&relative_path, &contents);
+        scanned_paths.insert(row.vault_path.clone());
+        item_repo.upsert(database, &row).await?;
+        document_repo
+            .upsert_index(
+                database,
+                "item",
+                &row.slug,
+                Some(&row.name),
+                &row.vault_path,
+                &row.created_at,
+                &row.updated_at,
+            )
+            .await?;
+    }
+
+    let existing = item_repo.list_all(database).await?;
+    for row in existing {
+        if row.vault_path.starts_with("items/") && !scanned_paths.contains(&row.vault_path) {
+            item_repo.delete_by_id(database, &row.id).await?;
             document_repo
                 .delete_by_vault_path(database, &row.vault_path)
                 .await?;
@@ -588,6 +631,130 @@ fn scan_faction_row_from_markdown(relative_path: &str, contents: &str) -> db::Fa
         symbol_description: parsed
             .as_ref()
             .and_then(|value| value.get("symbol_description").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        created_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("created_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or_else(|| now.clone()),
+        updated_at: parsed
+            .as_ref()
+            .and_then(|value| value.get("updated_at").and_then(toml::Value::as_str))
+            .map(str::to_string)
+            .unwrap_or(now),
+    }
+}
+
+fn scan_item_row_from_markdown(relative_path: &str, contents: &str) -> db::ItemRow {
+    let parsed = extract_runebound_toml(contents)
+        .and_then(|toml_text| toml::from_str::<toml::Value>(&toml_text).ok());
+    let now = now_timestamp();
+    let fallback_name = file_stem_name(relative_path);
+
+    let name = parsed
+        .as_ref()
+        .and_then(|value| value.get("name").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(&fallback_name)
+        .to_string();
+    let slug = parsed
+        .as_ref()
+        .and_then(|value| value.get("slug").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| slugify(&name));
+    let id = parsed
+        .as_ref()
+        .and_then(|value| value.get("id").and_then(toml::Value::as_str))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .unwrap_or_else(|| stable_id_from_relative("item", relative_path));
+
+    let category_raw = parsed
+        .as_ref()
+        .and_then(|value| value.get("category").and_then(toml::Value::as_str))
+        .unwrap_or("other");
+    let category = normalize_item_category(category_raw).unwrap_or_else(|_| "other".to_string());
+
+    let rarity_raw = parsed
+        .as_ref()
+        .and_then(|value| value.get("rarity").and_then(toml::Value::as_str))
+        .unwrap_or("unknown");
+    let rarity = normalize_item_rarity(rarity_raw).unwrap_or_else(|_| "unknown".to_string());
+
+    let parse_list = |field: &str| -> Vec<String> {
+        parsed
+            .as_ref()
+            .and_then(|value| value.get(field))
+            .and_then(|raw| {
+                if let Some(items) = raw.as_array() {
+                    let out: Vec<String> = items
+                        .iter()
+                        .filter_map(toml::Value::as_str)
+                        .map(str::trim)
+                        .filter(|item| !item.is_empty())
+                        .map(ToString::to_string)
+                        .collect();
+                    return Some(out);
+                }
+                raw.as_str().map(parse_list_csv)
+            })
+            .unwrap_or_else(|| vec!["Unknown".to_string()])
+    };
+
+    let materials = normalize_unknown_list(parse_list("materials"));
+    let materials_db = serde_json::to_string(&materials).unwrap_or_else(|_| "[\"Unknown\"]".to_string());
+
+    db::ItemRow {
+        id,
+        slug,
+        name,
+        vault_path: normalize_relative_path_for_storage(relative_path),
+        category,
+        rarity,
+        attunement: parsed
+            .as_ref()
+            .and_then(|value| value.get("attunement").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        materials: materials_db,
+        appearance: parsed
+            .as_ref()
+            .and_then(|value| value.get("appearance").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        abilities: parsed
+            .as_ref()
+            .and_then(|value| value.get("abilities").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        drawbacks: parsed
+            .as_ref()
+            .and_then(|value| value.get("drawbacks").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        history: parsed
+            .as_ref()
+            .and_then(|value| value.get("history").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        value_gp: parsed
+            .as_ref()
+            .and_then(|value| value.get("value_gp").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        current_owner: parsed
+            .as_ref()
+            .and_then(|value| value.get("current_owner").and_then(toml::Value::as_str))
+            .map(normalize_unknown_text)
+            .unwrap_or_else(|| "Unknown".to_string()),
+        location: parsed
+            .as_ref()
+            .and_then(|value| value.get("location").and_then(toml::Value::as_str))
             .map(normalize_unknown_text)
             .unwrap_or_else(|| "Unknown".to_string()),
         created_at: parsed

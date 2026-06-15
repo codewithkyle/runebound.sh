@@ -4,23 +4,25 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use runebound_models::{FactionDraft, LocationDraft, NpcDraft};
+use runebound_models::{FactionDraft, ItemDraft, LocationDraft, NpcDraft};
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
 use crate::repositories::{
-    Database, DocumentRepository, FactionRepository, GenerationRepository, LocationRepository,
-    NpcRepository, SoftDeleteRepository, VaultRepository,
+    Database, DocumentRepository, FactionRepository, GenerationRepository, ItemRepository,
+    LocationRepository, NpcRepository, SoftDeleteRepository, VaultRepository,
 };
 
 pub type NpcDraftSession = NpcDraft;
 pub type LocationDraftSession = LocationDraft;
 pub type FactionDraftSession = FactionDraft;
+pub type ItemDraftSession = ItemDraft;
 
 #[derive(Debug, Clone)]
 pub(crate) enum DraftEnvelope {
     Npc(NpcDraftSession),
     Location(LocationDraftSession),
     Faction(FactionDraftSession),
+    Item(ItemDraftSession),
 }
 
 impl DraftEnvelope {
@@ -29,6 +31,7 @@ impl DraftEnvelope {
             DraftEnvelope::Npc(_) => EntityKind::Npc,
             DraftEnvelope::Location(_) => EntityKind::Location,
             DraftEnvelope::Faction(_) => EntityKind::Faction,
+            DraftEnvelope::Item(_) => EntityKind::Item,
         }
     }
 
@@ -79,6 +82,22 @@ impl DraftEnvelope {
             None
         }
     }
+
+    pub(crate) fn as_item(&self) -> Option<&ItemDraftSession> {
+        if let DraftEnvelope::Item(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn as_item_mut(&mut self) -> Option<&mut ItemDraftSession> {
+        if let DraftEnvelope::Item(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 impl From<NpcDraftSession> for DraftEnvelope {
@@ -96,6 +115,12 @@ impl From<LocationDraftSession> for DraftEnvelope {
 impl From<FactionDraftSession> for DraftEnvelope {
     fn from(draft: FactionDraftSession) -> Self {
         DraftEnvelope::Faction(draft)
+    }
+}
+
+impl From<ItemDraftSession> for DraftEnvelope {
+    fn from(draft: ItemDraftSession) -> Self {
+        DraftEnvelope::Item(draft)
     }
 }
 
@@ -208,11 +233,33 @@ impl EditorSession {
             })
     }
 
+    pub(crate) fn get_item(&self) -> Option<&ItemDraftSession> {
+        self.draft(EntityKind::Item).and_then(DraftEnvelope::as_item)
+    }
+
+    pub(crate) fn get_item_mut(&mut self) -> Option<&mut ItemDraftSession> {
+        self.draft_mut(EntityKind::Item)
+            .and_then(DraftEnvelope::as_item_mut)
+    }
+
+    pub(crate) fn set_item(&mut self, draft: ItemDraftSession) {
+        self.set_active_draft(DraftEnvelope::Item(draft));
+    }
+
+    pub(crate) fn take_item(&mut self) -> Option<ItemDraftSession> {
+        self.clear_kind(EntityKind::Item)
+            .and_then(|envelope| match envelope {
+                DraftEnvelope::Item(draft) => Some(draft),
+                _ => None,
+            })
+    }
+
     fn next_active_after(&self, cleared: EntityKind) -> Option<EntityKind> {
         let search_order: &[EntityKind] = match cleared {
-            EntityKind::Npc => &[EntityKind::Location, EntityKind::Faction],
-            EntityKind::Location => &[EntityKind::Npc, EntityKind::Faction],
-            EntityKind::Faction => &[EntityKind::Npc, EntityKind::Location],
+            EntityKind::Npc => &[EntityKind::Location, EntityKind::Faction, EntityKind::Item],
+            EntityKind::Location => &[EntityKind::Npc, EntityKind::Faction, EntityKind::Item],
+            EntityKind::Faction => &[EntityKind::Npc, EntityKind::Location, EntityKind::Item],
+            EntityKind::Item => &[EntityKind::Npc, EntityKind::Location, EntityKind::Faction],
         };
 
         search_order
@@ -231,6 +278,7 @@ pub(crate) struct AppState {
     pub(crate) npc_repo: Arc<dyn NpcRepository>,
     pub(crate) location_repo: Arc<dyn LocationRepository>,
     pub(crate) faction_repo: Arc<dyn FactionRepository>,
+    pub(crate) item_repo: Arc<dyn ItemRepository>,
     pub(crate) document_repo: Arc<dyn DocumentRepository>,
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
@@ -256,6 +304,10 @@ impl AppState {
 
     pub(crate) fn faction_repo(&self) -> Arc<dyn FactionRepository> {
         self.faction_repo.clone()
+    }
+
+    pub(crate) fn item_repo(&self) -> Arc<dyn ItemRepository> {
+        self.item_repo.clone()
     }
 
     pub(crate) fn document_repo(&self) -> Arc<dyn DocumentRepository> {

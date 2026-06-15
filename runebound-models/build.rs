@@ -67,6 +67,25 @@ fn generate_typescript() -> String {
     out.push_str("  symbol_description: string;\n");
     out.push_str("};\n\n");
 
+    out.push_str("export type ItemDraft = {\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  seed_prompt?: string | null;\n");
+    out.push_str("  name: string;\n");
+    out.push_str("  slug: string;\n");
+    out.push_str("  vault_path: string;\n");
+    out.push_str("  category: string;\n");
+    out.push_str("  rarity: string;\n");
+    out.push_str("  attunement: string;\n");
+    out.push_str("  materials: string[];\n");
+    out.push_str("  appearance: string;\n");
+    out.push_str("  abilities: string;\n");
+    out.push_str("  drawbacks: string;\n");
+    out.push_str("  history: string;\n");
+    out.push_str("  value_gp: string;\n");
+    out.push_str("  current_owner: string;\n");
+    out.push_str("  location: string;\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type NpcFrontmatter = {\n");
     out.push_str("  type: string;\n");
     out.push_str("  id: string;\n");
@@ -130,6 +149,26 @@ fn generate_typescript() -> String {
     out.push_str("  updated_at: string;\n");
     out.push_str("};\n\n");
 
+    out.push_str("export type ItemFrontmatter = {\n");
+    out.push_str("  type: string;\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  slug: string;\n");
+    out.push_str("  name: string;\n");
+    out.push_str("  category: string;\n");
+    out.push_str("  rarity: string;\n");
+    out.push_str("  attunement: string;\n");
+    out.push_str("  materials: string[];\n");
+    out.push_str("  appearance: string;\n");
+    out.push_str("  abilities: string;\n");
+    out.push_str("  drawbacks: string;\n");
+    out.push_str("  history: string;\n");
+    out.push_str("  value_gp: string;\n");
+    out.push_str("  current_owner: string;\n");
+    out.push_str("  location: string;\n");
+    out.push_str("  created_at: string;\n");
+    out.push_str("  updated_at: string;\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type EntityCardRow = {\n");
     out.push_str("  label: string;\n");
     out.push_str("  value: string;\n");
@@ -173,6 +212,7 @@ fn generate_typescript() -> String {
     );
     out.push_str("  | { kind: \"load_location_draft_with_card\"; draft: LocationDraft; entity_card: OutputDoc }\n");
     out.push_str("  | { kind: \"load_faction_draft_with_card\"; draft: FactionDraft; entity_card: OutputDoc }\n");
+    out.push_str("  | { kind: \"load_item_draft_with_card\"; draft: ItemDraft; entity_card: OutputDoc }\n");
     out.push_str("  | { kind: \"clear_drafts\" }\n");
     out.push_str("  | { kind: \"clear_terminal\"; clear_history: boolean }\n");
     out.push_str("  | { kind: \"exit_requested\" };\n\n");

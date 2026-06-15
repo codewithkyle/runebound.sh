@@ -59,6 +59,27 @@ pub struct FactionRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct ItemRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    pub materials: String,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value_gp: String,
+    pub current_owner: String,
+    pub location: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct NpcRow {
     pub id: String,
     pub slug: String,
@@ -159,6 +180,28 @@ pub async fn search_factions_by_name(
     rows.into_iter().map(row_to_faction).collect()
 }
 
+pub async fn search_items_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<ItemRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value_gp, current_owner, location, created_at, updated_at
+         FROM items
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search items by name")?;
+
+    rows.into_iter().map(row_to_item).collect()
+}
+
 pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
@@ -231,6 +274,27 @@ pub async fn find_faction_by_name_or_slug(
     row.map(row_to_faction).transpose()
 }
 
+pub async fn find_item_by_name_or_slug(
+    pool: &SqlitePool,
+    input: &str,
+) -> Result<Option<ItemRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value_gp, current_owner, location, created_at, updated_at
+         FROM items
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find item by name or slug")?;
+
+    row.map(row_to_item).transpose()
+}
+
 pub async fn list_locations(pool: &SqlitePool) -> Result<Vec<LocationRow>> {
     let rows = sqlx::query(
         "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
@@ -253,6 +317,18 @@ pub async fn list_factions(pool: &SqlitePool) -> Result<Vec<FactionRow>> {
     .context("failed to list factions")?;
 
     rows.into_iter().map(row_to_faction).collect()
+}
+
+pub async fn list_items(pool: &SqlitePool) -> Result<Vec<ItemRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value_gp, current_owner, location, created_at, updated_at
+         FROM items",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list items")?;
+
+    rows.into_iter().map(row_to_item).collect()
 }
 
 pub async fn init_database() -> Result<Database> {
@@ -355,6 +431,18 @@ pub async fn find_faction_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Fa
     .context("failed to query faction by id")?;
 
     row.map(row_to_faction).transpose()
+}
+
+pub async fn find_item_by_id(pool: &SqlitePool, id: &str) -> Result<Option<ItemRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value_gp, current_owner, location, created_at, updated_at FROM items WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query item by id")?;
+
+    row.map(row_to_item).transpose()
 }
 
 pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Result<()> {
@@ -510,6 +598,51 @@ pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
     Ok(())
 }
 
+pub async fn upsert_item(pool: &SqlitePool, item: &ItemRow) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO items (id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value_gp, current_owner, location, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
+         ON CONFLICT(id) DO UPDATE SET
+            slug = excluded.slug,
+            name = excluded.name,
+            vault_path = excluded.vault_path,
+            category = excluded.category,
+            rarity = excluded.rarity,
+            attunement = excluded.attunement,
+            materials = excluded.materials,
+            appearance = excluded.appearance,
+            abilities = excluded.abilities,
+            drawbacks = excluded.drawbacks,
+            history = excluded.history,
+            value_gp = excluded.value_gp,
+            current_owner = excluded.current_owner,
+            location = excluded.location,
+            updated_at = excluded.updated_at",
+    )
+    .bind(&item.id)
+    .bind(&item.slug)
+    .bind(&item.name)
+    .bind(&item.vault_path)
+    .bind(&item.category)
+    .bind(&item.rarity)
+    .bind(&item.attunement)
+    .bind(&item.materials)
+    .bind(&item.appearance)
+    .bind(&item.abilities)
+    .bind(&item.drawbacks)
+    .bind(&item.history)
+    .bind(&item.value_gp)
+    .bind(&item.current_owner)
+    .bind(&item.location)
+    .bind(&item.created_at)
+    .bind(&item.updated_at)
+    .execute(pool)
+    .await
+    .context("failed to upsert item")?;
+
+    Ok(())
+}
+
 pub async fn upsert_document_index(
     pool: &SqlitePool,
     doc_type: &str,
@@ -568,6 +701,16 @@ pub async fn delete_faction_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
         .execute(pool)
         .await
         .context("failed to delete faction row")?;
+
+    Ok(())
+}
+
+pub async fn delete_item_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM items WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete item row")?;
 
     Ok(())
 }
@@ -825,6 +968,56 @@ fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
         updated_at: row
             .try_get("updated_at")
             .context("npcs.updated_at missing")?,
+    })
+}
+
+fn row_to_item(row: sqlx::sqlite::SqliteRow) -> Result<ItemRow> {
+    Ok(ItemRow {
+        id: row.try_get("id").context("items.id missing")?,
+        slug: row.try_get("slug").context("items.slug missing")?,
+        name: row.try_get("name").context("items.name missing")?,
+        vault_path: row
+            .try_get("vault_path")
+            .context("items.vault_path missing")?,
+        category: row
+            .try_get("category")
+            .unwrap_or_else(|_| "other".to_string()),
+        rarity: row
+            .try_get("rarity")
+            .unwrap_or_else(|_| "unknown".to_string()),
+        attunement: row
+            .try_get("attunement")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        materials: row
+            .try_get("materials")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        appearance: row
+            .try_get("appearance")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        abilities: row
+            .try_get("abilities")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        drawbacks: row
+            .try_get("drawbacks")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        history: row
+            .try_get("history")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        value_gp: row
+            .try_get("value_gp")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        current_owner: row
+            .try_get("current_owner")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        location: row
+            .try_get("location")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        created_at: row
+            .try_get("created_at")
+            .context("items.created_at missing")?,
+        updated_at: row
+            .try_get("updated_at")
+            .context("items.updated_at missing")?,
     })
 }
 

@@ -10,7 +10,7 @@
 - Structured output (`output_doc`) is preferred; plain text (`output`) is compatibility fallback.
 - Commands are split by execution target:
   - Core: `status`, `config`, `help`, `exit`, `setup`
-  - Desktop: `create`, `npc`, `location`, `faction`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `clear`, `history`
+  - Desktop: `create`, `npc`, `location`, `faction`, `item`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `clear`, `history`
 - Router remains dispatch-only (`desktop/src-tauri/src/router.rs`).
 
 ---
@@ -79,7 +79,7 @@ Key behavior:
 
 Current editor modes:
 
-- `None`, `Npc`, `Location`, `Faction`
+- `None`, `Npc`, `Location`, `Faction`, `Item`
 
 When adding an entity mode, update `EditorMode`, command handlers, and suggestion filters together.
 
@@ -163,5 +163,5 @@ Before merging any CLI or command behavior change:
 
 ---
 
-*Last updated: 2026-06-14*  
+*Last updated: 2026-06-15*  
 *Update this doc whenever command UX contracts or command flow rules change.*

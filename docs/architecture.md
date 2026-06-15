@@ -20,7 +20,7 @@ The project is a Rust workspace with a Tauri desktop frontend. Responsibilities 
 | `core` (`dnd_core`) | Config, database, vault, command parsing, core command execution | `db`, `vault`, `command`, `command_manifest`, `command_parse` |
 | `command-handler` | Generic dispatch primitives | `CommandHandler`, `HandlerEntry`, `HandlerRegistry`, `HandlerMetadata` |
 | `command-specs` | Command manifest source of truth | `command_manifest()`, `CommandManifest`, `CommandSpec`, `handler_metadata_for()` |
-| `runebound-models` | Shared models + TS generation | `NpcDraft`, `LocationDraft`, `FactionDraft`, `OutputDoc`, `events` |
+| `runebound-models` | Shared models + TS generation | `NpcDraft`, `LocationDraft`, `FactionDraft`, `ItemDraft`, `OutputDoc`, `events` |
 | `desktop/src-tauri` | Desktop command backend | `commands/`, `services/`, `repositories/`, `router.rs`, `main.rs` |
 
 ---
@@ -73,10 +73,11 @@ desktop/src-tauri/src/
 |- app_state.rs            # AppState, EditorSession, EditorMode
 |- commands/
 |  |- mod.rs               # registry construction + shared response helpers
-|  |- create_commands.rs   # create npc|location|faction
+|  |- create_commands.rs   # create npc|location|faction|item
 |  |- npc_commands.rs      # npc show|rename|set|travel|reroll|save|cancel
 |  |- location_commands.rs # location show|rename|set|reroll|save|cancel
 |  |- faction_commands.rs  # faction show|rename|set|reroll|save|cancel
+|  |- item_commands.rs     # item show|rename|set|reroll|save|cancel
 |  |- entity_commands.rs   # load|show|preview|delete|undo
 |  `- system_commands.rs   # mode-aware save|reroll|cancel
 |- repositories/
@@ -242,5 +243,5 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-*Last updated: 2026-06-14*  
+*Last updated: 2026-06-15*  
 *If this document drifts from the codebase, update it in the same PR as the architecture change.*

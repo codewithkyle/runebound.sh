@@ -360,6 +360,105 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
     },
 ];
 
+const ITEM_FIELDS: [EntityFieldSpec; 12] = [
+    EntityFieldSpec {
+        canonical: "name",
+        display_name: "name",
+        aliases: &["name"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "category",
+        display_name: "category",
+        aliases: &["category", "type"],
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "rarity",
+        display_name: "rarity",
+        aliases: &["rarity"],
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "attunement",
+        display_name: "attunement",
+        aliases: &["attune", "attunement"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "materials",
+        display_name: "materials",
+        aliases: &["materials"],
+        value_kind: ValueKind::List,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "appearance",
+        display_name: "appearance",
+        aliases: &["appearance"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "abilities",
+        display_name: "abilities",
+        aliases: &["abilities", "ability"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "drawbacks",
+        display_name: "drawbacks",
+        aliases: &["drawback", "drawbacks"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "history",
+        display_name: "history",
+        aliases: &["history"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "value_gp",
+        display_name: "value",
+        aliases: &["value", "value_gp"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "current_owner",
+        display_name: "owner",
+        aliases: &["owner", "current_owner"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "location",
+        display_name: "location",
+        aliases: &["location"],
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+];
+
 pub static NPC_SCHEMA: EntitySchema = EntitySchema {
     kind: EntityKind::Npc,
     fields: &NPC_FIELDS,
@@ -375,11 +474,17 @@ pub static FACTION_SCHEMA: EntitySchema = EntitySchema {
     fields: &FACTION_FIELDS,
 };
 
+pub static ITEM_SCHEMA: EntitySchema = EntitySchema {
+    kind: EntityKind::Item,
+    fields: &ITEM_FIELDS,
+};
+
 pub fn schema_for_kind(kind: EntityKind) -> &'static EntitySchema {
     match kind {
         EntityKind::Npc => &NPC_SCHEMA,
         EntityKind::Location => &LOCATION_SCHEMA,
         EntityKind::Faction => &FACTION_SCHEMA,
+        EntityKind::Item => &ITEM_SCHEMA,
     }
 }
 

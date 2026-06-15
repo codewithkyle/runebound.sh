@@ -4,7 +4,7 @@ use dnd_core::vault::Vault;
 use std::path::PathBuf;
 
 pub mod db {
-    pub use dnd_core::db::{Database, FactionRow, LocationRow, NpcRow, SoftDeleteRow};
+    pub use dnd_core::db::{Database, FactionRow, ItemRow, LocationRow, NpcRow, SoftDeleteRow};
 }
 
 pub use db::Database;
@@ -335,6 +335,83 @@ impl FactionRepository for ProdFactionRepository {
 
     async fn list_all(&self, database: &Database) -> Result<Vec<db::FactionRow>, String> {
         core_db::list_factions(&database.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[async_trait]
+pub trait ItemRepository: Send + Sync {
+    async fn find_by_name_or_slug(
+        &self,
+        database: &Database,
+        name_or_slug: &str,
+    ) -> Result<Option<db::ItemRow>, String>;
+    async fn find_by_id(
+        &self,
+        database: &Database,
+        id: &str,
+    ) -> Result<Option<db::ItemRow>, String>;
+    async fn upsert(&self, database: &Database, row: &db::ItemRow) -> Result<(), String>;
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::ItemRow>, String>;
+    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::ItemRow>, String>;
+}
+
+pub struct ProdItemRepository;
+
+#[async_trait]
+impl ItemRepository for ProdItemRepository {
+    async fn find_by_name_or_slug(
+        &self,
+        database: &Database,
+        name_or_slug: &str,
+    ) -> Result<Option<db::ItemRow>, String> {
+        core_db::find_item_by_name_or_slug(&database.pool, name_or_slug)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn find_by_id(
+        &self,
+        database: &Database,
+        id: &str,
+    ) -> Result<Option<db::ItemRow>, String> {
+        core_db::find_item_by_id(&database.pool, id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn upsert(&self, database: &Database, row: &db::ItemRow) -> Result<(), String> {
+        core_db::upsert_item(&database.pool, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::ItemRow>, String> {
+        core_db::search_items_by_name(&database.pool, query, limit)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
+        core_db::delete_item_by_id(&database.pool, id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::ItemRow>, String> {
+        core_db::list_items(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }

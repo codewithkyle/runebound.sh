@@ -1,7 +1,8 @@
 use crate::app_state::AppState;
 use crate::commands::{
     DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
-    location_event_from_draft, location_summary_text, npc_event_from_draft, npc_summary_text,
+    item_event_from_draft, item_summary_text, location_event_from_draft, location_summary_text,
+    npc_event_from_draft, npc_summary_text,
 };
 use crate::entities::common::{
     command_message_response,
@@ -18,7 +19,7 @@ use crate::utils::{
 };
 use dnd_core::npc::UNKNOWN_LOCATION;
 
-use crate::app_state::{FactionDraftSession, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
 
 pub async fn handle_create(
     invocation: DesktopHandlerInvocation<'_>,
@@ -39,6 +40,8 @@ pub async fn handle_create(
             "create location <prompt text>",
             "create faction",
             "create faction <prompt text>",
+            "create item",
+            "create item <prompt text>",
         ].join("\n"));
     }
 
@@ -52,6 +55,10 @@ pub async fn handle_create(
 
     if lowered == "create faction" || lowered.starts_with("create faction ") {
         return create_faction(trimmed, invocation.state.clone()).await;
+    }
+
+    if lowered == "create item" || lowered.starts_with("create item ") {
+        return create_item(trimmed, invocation.state.clone()).await;
     }
 
     command_message_response("unknown create command. use `create help`")
@@ -238,6 +245,68 @@ async fn create_faction(
         faction_summary_text(&draft),
         faction_event_from_draft(&draft),
     )
+}
+
+async fn create_item(
+    trimmed: &str,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult {
+    use dnd_core::npc::slugify;
+
+    let prompt = if trimmed.len() > 11 {
+        let value = trimmed[11..].trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    } else {
+        None
+    };
+
+    let prompt = normalize_optional_prompt(prompt);
+
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let seed = ai
+        .generate_item_seed(
+            prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+
+    let slug = slugify(&seed.name);
+    let draft = ItemDraftSession {
+        id: make_entity_id("item"),
+        seed_prompt: prompt,
+        name: seed.name,
+        slug,
+        vault_path: String::new(),
+        category: seed.category,
+        rarity: seed.rarity,
+        attunement: seed.attunement,
+        materials: seed.materials,
+        appearance: seed.appearance,
+        abilities: seed.abilities,
+        drawbacks: seed.drawbacks,
+        history: seed.history,
+        value_gp: seed.value_gp,
+        current_owner: seed.current_owner,
+        location: seed.location,
+    };
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_item(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        editor.clear_kind(EntityKind::Faction);
+    }
+
+    command_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
 }
 
 fn make_entity_id(prefix: &str) -> String {

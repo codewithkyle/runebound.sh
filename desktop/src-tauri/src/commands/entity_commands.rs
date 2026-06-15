@@ -9,11 +9,12 @@ use crate::services::entity_admin::{
 use crate::entities::EntityKind;
 use crate::entities::domains::{
     faction_event_from_draft,
+    item_event_from_draft,
     location_event_from_draft,
     npc_event_from_draft,
 };
 use crate::utils::path_for_display;
-use crate::app_state::{NpcDraftSession, LocationDraftSession, FactionDraftSession};
+use crate::app_state::{FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
 
 pub async fn handle_load(
     invocation: DesktopHandlerInvocation<'_>,
@@ -235,6 +236,34 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             }
             (build_entity_card_text(&entity), Some(faction_event_from_draft(&draft)))
         }
+        EntityType::Item => {
+            let draft = ItemDraftSession {
+                id: entity.id.clone(),
+                seed_prompt: None,
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                vault_path: path_for_display(&entity.vault_path),
+                category: entity.category.clone().unwrap_or_else(|| "other".to_string()),
+                rarity: entity.rarity.clone().unwrap_or_else(|| "unknown".to_string()),
+                attunement: entity.attunement.clone().unwrap_or_else(|| "Unknown".to_string()),
+                materials: entity.materials.clone().unwrap_or_else(|| vec!["Unknown".to_string()]),
+                appearance: entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                abilities: entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string()),
+                drawbacks: entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string()),
+                history: entity.history.clone().unwrap_or_else(|| "Unknown".to_string()),
+                value_gp: entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string()),
+                current_owner: entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string()),
+                location: entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.set_item(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
+                editor.clear_kind(EntityKind::Faction);
+            }
+            (build_entity_card_text(&entity), Some(item_event_from_draft(&draft)))
+        }
     }
 }
 
@@ -297,6 +326,28 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc { blocks: vec![entity_card("Faction", rows)] }
         }
+        EntityType::Item => {
+            rows.push(entity_row("category", entity.category.clone().unwrap_or_else(|| "other".to_string())));
+            rows.push(entity_row("rarity", entity.rarity.clone().unwrap_or_else(|| "unknown".to_string())));
+            rows.push(entity_row("attunement", entity.attunement.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row(
+                "materials",
+                entity
+                    .materials
+                    .clone()
+                    .unwrap_or_else(|| vec!["Unknown".to_string()])
+                    .join(", "),
+            ));
+            rows.push(entity_row("appearance", entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("abilities", entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("drawbacks", entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("history", entity.history.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("value", entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("owner", entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("location", entity.location.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+            OutputDoc { blocks: vec![entity_card("Item", rows)] }
+        }
     }
 }
 
@@ -357,6 +408,30 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 entity.goals_short_term.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
                 entity.goals_long_term.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
                 entity.symbol_description.clone().unwrap_or_else(|| "Unknown".to_string()),
+                path_for_display(&entity.vault_path)
+            )
+        }
+        EntityType::Item => {
+            let materials = entity
+                .materials
+                .as_ref()
+                .map(|items| items.join(", "))
+                .unwrap_or_else(|| "Unknown".to_string());
+            format!(
+                "## Item\nname: {}\nslug: {}\ncategory: {}\nrarity: {}\nattunement: {}\nmaterials: {}\nappearance: {}\nabilities: {}\ndrawbacks: {}\nhistory: {}\nvalue: {}\nowner: {}\nlocation: {}\npath: {}",
+                entity.name,
+                entity.slug,
+                entity.category.clone().unwrap_or_else(|| "other".to_string()),
+                entity.rarity.clone().unwrap_or_else(|| "unknown".to_string()),
+                entity.attunement.clone().unwrap_or_else(|| "Unknown".to_string()),
+                materials,
+                entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.history.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
                 path_for_display(&entity.vault_path)
             )
         }

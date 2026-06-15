@@ -42,6 +42,7 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         Some(EntityKind::Npc) => reroll_current_npc(invocation.state.clone()).await,
         Some(EntityKind::Location) => reroll_current_location(invocation.state.clone()).await,
         Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone()).await,
+        Some(EntityKind::Item) => reroll_current_item(invocation.state.clone()).await,
         None => command_message_response("no active draft to reroll."),
     }
 }
@@ -202,4 +203,47 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
         faction_summary_text(&draft),
         faction_event_from_draft(&draft),
     )
+}
+
+async fn reroll_current_item(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
+    use crate::commands::{item_event_from_draft, item_summary_text};
+
+    let draft = {
+        let editor = state.editor_session.lock().await;
+        editor.get_item().cloned()
+    };
+    let Some(mut draft) = draft else {
+        return entity_message_response("no active item draft.");
+    };
+
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let seed = ai
+        .generate_item_seed(
+            draft.seed_prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+    draft.name = seed.name;
+    draft.category = seed.category;
+    draft.rarity = seed.rarity;
+    draft.attunement = seed.attunement;
+    draft.materials = seed.materials;
+    draft.appearance = seed.appearance;
+    draft.abilities = seed.abilities;
+    draft.drawbacks = seed.drawbacks;
+    draft.history = seed.history;
+    draft.value_gp = seed.value_gp;
+    draft.current_owner = seed.current_owner;
+    draft.location = seed.location;
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_item(draft.clone());
+    }
+
+    entity_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
 }

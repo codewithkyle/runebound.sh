@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use super::domain::EntityDomain;
-use super::domains::{FactionDomain, LocationDomain, NpcDomain};
+use super::domains::{FactionDomain, ItemDomain, LocationDomain, NpcDomain};
 use super::kind::EntityKind;
 
 pub struct EntityDomainRegistry {
@@ -37,5 +37,6 @@ pub fn build_default_registry() -> EntityDomainRegistry {
     registry.register(Arc::new(NpcDomain::new()));
     registry.register(Arc::new(LocationDomain::new()));
     registry.register(Arc::new(FactionDomain::new()));
+    registry.register(Arc::new(ItemDomain::new()));
     registry
 }

@@ -1,7 +1,7 @@
 pub use runebound_models::{
-    FactionFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id,
-    normalize_markdown_file_stem, normalize_unknown_list, normalize_unknown_text, now_timestamp,
-    slugify, unique_slug_for_dir,
+    FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION,
+    make_entity_id, normalize_markdown_file_stem, normalize_unknown_list, normalize_unknown_text,
+    now_timestamp, slugify, unique_slug_for_dir,
 };
 
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> Result<String, toml::ser::Error> {
@@ -155,6 +155,56 @@ pub fn render_faction_markdown(
         goals_short_term: &frontmatter.goals_short_term,
         goals_long_term: &frontmatter.goals_long_term,
         symbol_description: &frontmatter.symbol_description,
+        created_at: &frontmatter.created_at,
+        updated_at: &frontmatter.updated_at,
+    };
+
+    let mut out = String::new();
+    out.push_str("```runebound\n");
+    out.push_str(&toml::to_string_pretty(&fm)?);
+    out.push_str("```\n");
+    Ok(out)
+}
+
+pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> Result<String, toml::ser::Error> {
+    #[derive(serde::Serialize)]
+    struct Frontmatter<'a> {
+        #[serde(rename = "type")]
+        doc_type: &'a str,
+        id: &'a str,
+        slug: &'a str,
+        name: &'a str,
+        category: &'a str,
+        rarity: &'a str,
+        attunement: &'a str,
+        materials: &'a [String],
+        appearance: &'a str,
+        abilities: &'a str,
+        drawbacks: &'a str,
+        history: &'a str,
+        value_gp: &'a str,
+        current_owner: &'a str,
+        location: &'a str,
+        created_at: &'a str,
+        updated_at: &'a str,
+    }
+
+    let fm = Frontmatter {
+        doc_type: &frontmatter.doc_type,
+        id: &frontmatter.id,
+        slug: &frontmatter.slug,
+        name: &frontmatter.name,
+        category: &frontmatter.category,
+        rarity: &frontmatter.rarity,
+        attunement: &frontmatter.attunement,
+        materials: &frontmatter.materials,
+        appearance: &frontmatter.appearance,
+        abilities: &frontmatter.abilities,
+        drawbacks: &frontmatter.drawbacks,
+        history: &frontmatter.history,
+        value_gp: &frontmatter.value_gp,
+        current_owner: &frontmatter.current_owner,
+        location: &frontmatter.location,
         created_at: &frontmatter.created_at,
         updated_at: &frontmatter.updated_at,
     };

@@ -8,6 +8,8 @@ use crate::services::ai_generation::{
 use crate::utils::{
     normalize_exports,
     normalize_faction_kind_type,
+    normalize_item_category,
+    normalize_item_rarity,
     normalize_location_danger_level,
     normalize_location_kind_type,
     normalize_sex,
@@ -668,6 +670,196 @@ impl EntityRerollService {
 
         Err(format!("failed to reroll faction field: {}", field))
     }
+
+    pub async fn reroll_item_field(
+        &self,
+        input: RerollItemFieldInput,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<RerollItemFieldResult, String> {
+        let field = canonical_item_reroll_field(&input.field)?;
+        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
+        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
+        let config = loaded.effective;
+        let model = config
+            .ollama
+            .model
+            .clone()
+            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+
+        let extra_prompt = input
+            .prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+
+        let context_summary = item_context_summary(&input.item);
+        let field_instructions = match field {
+            "name" => "Generate a concise, evocative item name.",
+            "category" => "Generate one category from: weapon, armor, consumable, wondrous, arcane_focus, tool, trinket, other.",
+            "rarity" => "Generate rarity as one of: unknown, common, uncommon, rare, very_rare, legendary, artifact.",
+            "attunement" => "Describe attunement requirements in a short phrase (or 'None').",
+            "materials" => "List 1-4 notable materials as concise strings.",
+            "appearance" => "Describe appearance in 1-2 sentences.",
+            "abilities" => "Describe abilities/powers in 1-3 sentences.",
+            "drawbacks" => "Describe drawbacks/costs in up to 2 sentences (or 'None').",
+            "history" => "Describe history/origin in 1-3 sentences.",
+            "value_gp" => "Provide estimated value text such as '250 gp' or 'Priceless'.",
+            "current_owner" => "Provide current owner name or 'Unknown'.",
+            "location" => "Provide current location or hiding place.",
+            _ => "Generate a concise field value.",
+        };
+
+        let schema = if field == "materials" {
+            serde_json::json!({
+                "type": "object",
+                "required": ["materials"],
+                "properties": {
+                    "materials": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 4,
+                        "items": { "type": "string", "minLength": 1 }
+                    }
+                },
+                "additionalProperties": false
+            })
+        } else {
+            serde_json::json!({
+                "type": "object",
+                "required": ["value"],
+                "properties": {
+                    "value": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            })
+        };
+
+        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
+            .build()
+            .map_err(|err| err.to_string())?;
+
+        for attempt in 0..4 {
+            let base_seed = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_micros() as i64)
+                .unwrap_or(0);
+            let run_seed = (base_seed + i64::from(attempt)) as i32;
+
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": {
+                    "temperature": 1.02,
+                    "top_p": 0.92,
+                    "repeat_penalty": 1.1,
+                    "seed": run_seed
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": "You update one RPG item field. Return only valid JSON matching the schema."
+                    },
+                    {
+                        "role": "user",
+                        "content": format!(
+                            "Item context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
+                            context_summary,
+                            field,
+                            field_instructions,
+                            if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                        )
+                    }
+                ]
+            });
+
+            let response = client
+                .post(&url)
+                .json(&payload)
+                .send()
+                .await
+                .map_err(|err| err.to_string())?;
+            if !response.status().is_success() {
+                return Err(format!("ollama chat failed with status {}", response.status()));
+            }
+
+            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+            let Some(content) = value
+                .get("message")
+                .and_then(|msg| msg.get("content"))
+                .and_then(|content| content.as_str())
+            else {
+                continue;
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(content) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            if field == "materials" {
+                let Some(items) = parsed.get("materials").and_then(|item| item.as_array()) else {
+                    continue;
+                };
+                let next = normalize_unknown_list(
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                        .collect(),
+                );
+                if attempt < 3 && next == input.item.materials {
+                    continue;
+                }
+                return Ok(RerollItemFieldResult {
+                    field: field.to_string(),
+                    value: None,
+                    materials: Some(next),
+                });
+            }
+
+            let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
+                continue;
+            };
+            let normalized = match field {
+                "category" => normalize_item_category(raw_value)?,
+                "rarity" => normalize_item_rarity(raw_value)?,
+                _ => normalize_unknown_text(raw_value),
+            };
+
+            if attempt < 3 {
+                let matches_current = match field {
+                    "name" => normalized.eq_ignore_ascii_case(input.item.name.trim()),
+                    "category" => normalized == input.item.category,
+                    "rarity" => normalized == input.item.rarity,
+                    "attunement" => normalized.eq_ignore_ascii_case(input.item.attunement.trim()),
+                    "appearance" => normalized.eq_ignore_ascii_case(input.item.appearance.trim()),
+                    "abilities" => normalized.eq_ignore_ascii_case(input.item.abilities.trim()),
+                    "drawbacks" => normalized.eq_ignore_ascii_case(input.item.drawbacks.trim()),
+                    "history" => normalized.eq_ignore_ascii_case(input.item.history.trim()),
+                    "value_gp" => normalized.eq_ignore_ascii_case(input.item.value_gp.trim()),
+                    "current_owner" => normalized.eq_ignore_ascii_case(input.item.current_owner.trim()),
+                    "location" => normalized.eq_ignore_ascii_case(input.item.location.trim()),
+                    _ => false,
+                };
+                if matches_current {
+                    continue;
+                }
+            }
+
+            return Ok(RerollItemFieldResult {
+                field: field.to_string(),
+                value: Some(normalized),
+                materials: None,
+            });
+        }
+
+        Err(format!("failed to reroll item field: {}", field))
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -761,6 +953,36 @@ pub struct RerollFactionFieldResult {
     pub field: String,
     pub value: Option<String>,
     pub list_value: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollItemFieldInput {
+    pub field: String,
+    pub prompt: Option<String>,
+    pub item: ItemRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct ItemRerollContext {
+    pub name: String,
+    pub category: String,
+    pub rarity: String,
+    pub attunement: String,
+    pub materials: Vec<String>,
+    pub appearance: String,
+    pub abilities: String,
+    pub drawbacks: String,
+    pub history: String,
+    pub value_gp: String,
+    pub current_owner: String,
+    pub location: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollItemFieldResult {
+    pub field: String,
+    pub value: Option<String>,
+    pub materials: Option<Vec<String>>,
 }
 
 fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
@@ -899,5 +1121,48 @@ fn faction_context_summary(context: &FactionRerollContext) -> String {
         context.goals_short_term.join(", "),
         context.goals_long_term.join(", "),
         context.symbol_description,
+    )
+}
+
+fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let field = match normalized.as_str() {
+        "name" => "name",
+        "category" => "category",
+        "rarity" => "rarity",
+        "attunement" | "attune" => "attunement",
+        "materials" => "materials",
+        "appearance" => "appearance",
+        "abilities" | "ability" => "abilities",
+        "drawbacks" | "drawback" => "drawbacks",
+        "history" => "history",
+        "value" | "value_gp" => "value_gp",
+        "owner" | "current_owner" => "current_owner",
+        "location" => "location",
+        _ => {
+            return Err(format!(
+                "unknown item reroll field: {}. valid fields: name, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, owner, location",
+                raw
+            ))
+        }
+    };
+    Ok(field)
+}
+
+fn item_context_summary(context: &ItemRerollContext) -> String {
+    format!(
+        "name={}, category={}, rarity={}, attunement={}, materials={}, appearance={}, abilities={}, drawbacks={}, history={}, value={}, current_owner={}, location={}",
+        context.name,
+        context.category,
+        context.rarity,
+        context.attunement,
+        context.materials.join(", "),
+        context.appearance,
+        context.abilities,
+        context.drawbacks,
+        context.history,
+        context.value_gp,
+        context.current_owner,
+        context.location
     )
 }
