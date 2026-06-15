@@ -19,7 +19,7 @@ use crate::utils::normalize_relative_path_for_storage;
 use crate::services::publish::{
     render_faction_markdown, render_item_markdown, render_location_markdown, render_npc_markdown,
 };
-use runebound_models::CommandResponse;
+use runebound_models::{CommandClientEvent, CommandResponse};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
@@ -223,9 +223,50 @@ pub async fn handle_publish(
         }
     }
 
+    // Publishing is a one-way street: retire the entity from the app (it now lives
+    // in Obsidian). Soft-delete makes it vanish from typeaheads/edit/preview while
+    // `undo` can still bring it back until the next startup reap.
+    let admin = EntityAdminService;
+    admin
+        .soft_delete_for_publish(state, target.entity_type, &target.slug)
+        .await?;
+
+    // Close the editor flow for the published entity. The no-arg path already
+    // cleared via `auto_save_active_draft`; this covers `publish <name>`.
+    let mut closed_editor = args.is_empty();
+    if !args.is_empty() {
+        let mut editor = state.editor_session.lock().await;
+        let open = match target.entity_type {
+            EntityType::Npc => editor.get_npc().is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Location => editor.get_location().is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Faction => editor.get_faction().is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Item => editor.get_item().is_some_and(|draft| draft.slug == target.slug),
+        };
+        if open {
+            let kind = match target.entity_type {
+                EntityType::Npc => EntityKind::Npc,
+                EntityType::Location => EntityKind::Location,
+                EntityType::Faction => EntityKind::Faction,
+                EntityType::Item => EntityKind::Item,
+            };
+            editor.clear_kind(kind);
+            closed_editor = true;
+        }
+    }
+
+    let event = if closed_editor {
+        Some(CommandClientEvent::ClearDrafts)
+    } else {
+        None
+    };
+
     Ok(Some(ok_response(
-        format!("Published {} to {}", target.name, relative.display()),
-        None,
+        format!(
+            "Published {} to {}. It has been retired from the app — Obsidian is now its home. Run `undo` to bring it back.",
+            target.name,
+            relative.display()
+        ),
+        event,
     )))
 }
 

@@ -38,53 +38,24 @@ impl VaultSyncService {
         let item_repo = state.item_repo();
         let document_repo = state.document_repo();
 
-        sync_npcs(&store, &vault, database.as_ref(), npc_repo.as_ref(), document_repo.as_ref()).await?;
-        sync_locations(&store, &vault, database.as_ref(), location_repo.as_ref(), document_repo.as_ref()).await?;
-        sync_factions(&store, &vault, database.as_ref(), faction_repo.as_ref(), document_repo.as_ref()).await?;
-        sync_items(&store, &vault, database.as_ref(), item_repo.as_ref(), document_repo.as_ref()).await?;
+        // Any publish that survived to a restart is permanent: finalize its pending
+        // undo record so a reaped entity can no longer be brought back via `undo`.
+        state
+            .soft_delete_repo()
+            .finalize_pending_publishes(database.as_ref(), &now_timestamp())
+            .await?;
+
+        sync_npcs(&store, database.as_ref(), npc_repo.as_ref(), document_repo.as_ref()).await?;
+        sync_locations(&store, database.as_ref(), location_repo.as_ref(), document_repo.as_ref()).await?;
+        sync_factions(&store, database.as_ref(), faction_repo.as_ref(), document_repo.as_ref()).await?;
+        sync_items(&store, database.as_ref(), item_repo.as_ref(), document_repo.as_ref()).await?;
 
         Ok(())
     }
 }
 
-/// What startup sync should do with a canonical entity, based on whether its
-/// published vault file still exists.
-#[derive(Debug, PartialEq, Eq)]
-enum ReconcileAction {
-    /// Vault file present and already marked published, or an unpublished draft:
-    /// keep the TOML and refresh the database row.
-    Keep,
-    /// Vault file present but not yet marked published: stamp `published_at` so a
-    /// future deletion can be detected, then refresh the database row.
-    MarkPublished,
-    /// Previously published but the vault file is gone: drop the canonical TOML.
-    Delete,
-}
-
-/// Exact stored-path reconciliation (no re-discovery of renamed files): a missing
-/// file for a previously-published entity is treated as a deletion.
-fn reconcile_action(vault: &Vault, vault_path: &str, published_at: &Option<String>) -> ReconcileAction {
-    let file_exists = vault
-        .resolve_relative(&PathBuf::from(vault_path))
-        .map(|full| full.exists())
-        .unwrap_or(false);
-
-    if file_exists {
-        if published_at.is_none() {
-            ReconcileAction::MarkPublished
-        } else {
-            ReconcileAction::Keep
-        }
-    } else if published_at.is_some() {
-        ReconcileAction::Delete
-    } else {
-        ReconcileAction::Keep
-    }
-}
-
 async fn sync_npcs(
     store: &EntityStore,
-    vault: &Vault,
     database: &db::Database,
     npc_repo: &dyn NpcRepository,
     document_repo: &dyn DocumentRepository,
@@ -94,17 +65,14 @@ async fn sync_npcs(
         .map_err(|err| err.to_string())?;
     let mut synced_ids = HashSet::new();
 
-    for mut frontmatter in frontmatters {
-        match reconcile_action(vault, &frontmatter.vault_path, &frontmatter.published_at) {
-            ReconcileAction::Delete => {
-                store.delete_npc(&frontmatter.slug).map_err(|err| err.to_string())?;
-                continue;
-            }
-            ReconcileAction::MarkPublished => {
-                frontmatter.published_at = Some(now_timestamp());
-                store.save_npc(&frontmatter).map_err(|err| err.to_string())?;
-            }
-            ReconcileAction::Keep => {}
+    for frontmatter in frontmatters {
+        // Published entities are reaped: their record lives in Obsidian now, so drop
+        // the DB row, document index, and the backing TOML.
+        if frontmatter.published_at.is_some() {
+            npc_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_npc(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
         }
 
         let row = npc_row_from_frontmatter(&frontmatter)?;
@@ -138,7 +106,6 @@ async fn sync_npcs(
 
 async fn sync_locations(
     store: &EntityStore,
-    vault: &Vault,
     database: &db::Database,
     location_repo: &dyn LocationRepository,
     document_repo: &dyn DocumentRepository,
@@ -148,17 +115,12 @@ async fn sync_locations(
         .map_err(|err| err.to_string())?;
     let mut synced_ids = HashSet::new();
 
-    for mut frontmatter in frontmatters {
-        match reconcile_action(vault, &frontmatter.vault_path, &frontmatter.published_at) {
-            ReconcileAction::Delete => {
-                store.delete_location(&frontmatter.slug).map_err(|err| err.to_string())?;
-                continue;
-            }
-            ReconcileAction::MarkPublished => {
-                frontmatter.published_at = Some(now_timestamp());
-                store.save_location(&frontmatter).map_err(|err| err.to_string())?;
-            }
-            ReconcileAction::Keep => {}
+    for frontmatter in frontmatters {
+        if frontmatter.published_at.is_some() {
+            location_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_location(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
         }
 
         let row = location_row_from_frontmatter(&frontmatter)?;
@@ -192,7 +154,6 @@ async fn sync_locations(
 
 async fn sync_factions(
     store: &EntityStore,
-    vault: &Vault,
     database: &db::Database,
     faction_repo: &dyn FactionRepository,
     document_repo: &dyn DocumentRepository,
@@ -202,17 +163,12 @@ async fn sync_factions(
         .map_err(|err| err.to_string())?;
     let mut synced_ids = HashSet::new();
 
-    for mut frontmatter in frontmatters {
-        match reconcile_action(vault, &frontmatter.vault_path, &frontmatter.published_at) {
-            ReconcileAction::Delete => {
-                store.delete_faction(&frontmatter.slug).map_err(|err| err.to_string())?;
-                continue;
-            }
-            ReconcileAction::MarkPublished => {
-                frontmatter.published_at = Some(now_timestamp());
-                store.save_faction(&frontmatter).map_err(|err| err.to_string())?;
-            }
-            ReconcileAction::Keep => {}
+    for frontmatter in frontmatters {
+        if frontmatter.published_at.is_some() {
+            faction_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_faction(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
         }
 
         let row = faction_row_from_frontmatter(&frontmatter)?;
@@ -246,7 +202,6 @@ async fn sync_factions(
 
 async fn sync_items(
     store: &EntityStore,
-    vault: &Vault,
     database: &db::Database,
     item_repo: &dyn ItemRepository,
     document_repo: &dyn DocumentRepository,
@@ -256,17 +211,12 @@ async fn sync_items(
         .map_err(|err| err.to_string())?;
     let mut synced_ids = HashSet::new();
 
-    for mut frontmatter in frontmatters {
-        match reconcile_action(vault, &frontmatter.vault_path, &frontmatter.published_at) {
-            ReconcileAction::Delete => {
-                store.delete_item(&frontmatter.slug).map_err(|err| err.to_string())?;
-                continue;
-            }
-            ReconcileAction::MarkPublished => {
-                frontmatter.published_at = Some(now_timestamp());
-                store.save_item(&frontmatter).map_err(|err| err.to_string())?;
-            }
-            ReconcileAction::Keep => {}
+    for frontmatter in frontmatters {
+        if frontmatter.published_at.is_some() {
+            item_repo.delete_by_id(database, &frontmatter.id).await?;
+            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
+            store.delete_item(&frontmatter.slug).map_err(|err| err.to_string())?;
+            continue;
         }
 
         let row = item_row_from_frontmatter(&frontmatter)?;
@@ -298,7 +248,7 @@ async fn sync_items(
     Ok(())
 }
 
-fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {
+pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {
     Ok(db::NpcRow {
         id: frontmatter.id.clone(),
         slug: frontmatter.slug.clone(),
@@ -321,7 +271,7 @@ fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, 
     })
 }
 
-fn location_row_from_frontmatter(
+pub(crate) fn location_row_from_frontmatter(
     frontmatter: &LocationFrontmatter,
 ) -> Result<db::LocationRow, String> {
     Ok(db::LocationRow {
@@ -343,7 +293,7 @@ fn location_row_from_frontmatter(
     })
 }
 
-fn faction_row_from_frontmatter(
+pub(crate) fn faction_row_from_frontmatter(
     frontmatter: &FactionFrontmatter,
 ) -> Result<db::FactionRow, String> {
     Ok(db::FactionRow {
@@ -375,7 +325,7 @@ fn faction_row_from_frontmatter(
     })
 }
 
-fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result<db::ItemRow, String> {
+pub(crate) fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result<db::ItemRow, String> {
     Ok(db::ItemRow {
         id: frontmatter.id.clone(),
         slug: frontmatter.slug.clone(),
@@ -488,80 +438,8 @@ pub fn unique_markdown_path_for_name(
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        location_row_from_frontmatter, npc_row_from_frontmatter, reconcile_action, ReconcileAction,
-    };
-    use dnd_core::vault::Vault;
+    use super::{location_row_from_frontmatter, npc_row_from_frontmatter};
     use runebound_models::{LocationFrontmatter, NpcFrontmatter};
-    use std::path::PathBuf;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn temp_vault(tag: &str) -> (Vault, PathBuf) {
-        static COUNTER: AtomicUsize = AtomicUsize::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!(
-            "dnd_sync_test_{}_{}_{}",
-            std::process::id(),
-            tag,
-            n
-        ));
-        std::fs::create_dir_all(&root).expect("create temp vault root");
-        (Vault::new(root.clone()), root)
-    }
-
-    #[test]
-    fn reconcile_marks_published_when_file_present_and_unmarked() {
-        let (vault, root) = temp_vault("present_unmarked");
-        vault
-            .write_relative(&PathBuf::from("npcs/Lirael.md"), "body")
-            .expect("write");
-
-        let action = reconcile_action(&vault, "npcs/Lirael.md", &None);
-        assert_eq!(action, ReconcileAction::MarkPublished);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn reconcile_keeps_when_file_present_and_already_marked() {
-        let (vault, root) = temp_vault("present_marked");
-        vault
-            .write_relative(&PathBuf::from("npcs/Lirael.md"), "body")
-            .expect("write");
-
-        let action = reconcile_action(
-            &vault,
-            "npcs/Lirael.md",
-            &Some("2026-06-15T00:00:00Z".to_string()),
-        );
-        assert_eq!(action, ReconcileAction::Keep);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn reconcile_deletes_when_published_file_missing() {
-        let (vault, root) = temp_vault("missing_published");
-
-        let action = reconcile_action(
-            &vault,
-            "npcs/Gone.md",
-            &Some("2026-06-15T00:00:00Z".to_string()),
-        );
-        assert_eq!(action, ReconcileAction::Delete);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
-
-    #[test]
-    fn reconcile_keeps_unpublished_draft_when_file_missing() {
-        let (vault, root) = temp_vault("missing_unpublished");
-
-        let action = reconcile_action(&vault, "npcs/Draft.md", &None);
-        assert_eq!(action, ReconcileAction::Keep);
-
-        let _ = std::fs::remove_dir_all(&root);
-    }
 
     #[test]
     fn npc_row_from_frontmatter_serializes_carrying() {

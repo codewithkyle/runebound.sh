@@ -5,9 +5,13 @@ use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::publish::render_location_markdown;
-use crate::services::vault_sync::{move_vault_file, unique_markdown_path_for_name, unique_trash_path};
+use crate::services::vault_sync::{
+    faction_row_from_frontmatter, item_row_from_frontmatter, location_row_from_frontmatter,
+    move_vault_file, npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
+};
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
+use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
     LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
     unique_slug_for_dir,
@@ -504,6 +508,7 @@ impl EntityAdminService {
                 payload_json,
                 created_at: now.clone(),
                 undone_at: None,
+                operation: "delete".to_string(),
             };
             soft_delete_repo
                 .insert(database.as_ref(), &soft_delete_row)
@@ -563,6 +568,7 @@ impl EntityAdminService {
                 payload_json,
                 created_at: now.clone(),
                 undone_at: None,
+                operation: "delete".to_string(),
             };
             soft_delete_repo
                 .insert(database.as_ref(), &soft_delete_row)
@@ -629,6 +635,7 @@ impl EntityAdminService {
                 payload_json,
                 created_at: now.clone(),
                 undone_at: None,
+                operation: "delete".to_string(),
             };
             soft_delete_repo
                 .insert(database.as_ref(), &soft_delete_row)
@@ -689,6 +696,7 @@ impl EntityAdminService {
                 payload_json,
                 created_at: now.clone(),
                 undone_at: None,
+                operation: "delete".to_string(),
             };
             soft_delete_repo
                 .insert(database.as_ref(), &soft_delete_row)
@@ -735,6 +743,10 @@ impl EntityAdminService {
         else {
             return Err("nothing to undo".to_string());
         };
+
+        if soft_delete.operation == "publish" {
+            return self.undo_publish(state, &soft_delete).await;
+        }
 
         let now = now_timestamp();
 
@@ -1008,6 +1020,156 @@ impl EntityAdminService {
             soft_delete.entity_type
         ))
     }
+
+    /// Retires a just-published entity from the app: records a reversible `publish`
+    /// recovery row, then removes the DB row + document index so it no longer
+    /// appears in typeaheads and can't be edited/previewed. The canonical TOML
+    /// (with `published_at` set) and the published vault `.md` are left untouched.
+    pub async fn soft_delete_for_publish(
+        &self,
+        state: &AppState,
+        entity_type: EntityType,
+        slug: &str,
+    ) -> Result<(), String> {
+        let database = state.database();
+        let document_repo = state.document_repo();
+        let soft_delete_repo = state.soft_delete_repo();
+        let now = now_timestamp();
+
+        // Look up the live row (without deleting yet) so the recovery record is
+        // written before anything is destroyed.
+        let Some((id, name, vault_path)) = (match entity_type {
+            EntityType::Npc => state
+                .npc_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
+            EntityType::Location => state
+                .location_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
+            EntityType::Faction => state
+                .faction_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
+            EntityType::Item => state
+                .item_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
+        }) else {
+            // Already gone from the DB (e.g. double publish) — nothing to retire.
+            return Ok(());
+        };
+
+        let normalized = normalize_relative_path_for_storage(&vault_path);
+        let payload = PublishPayload {
+            id: id.clone(),
+            slug: slug.to_string(),
+            name: name.clone(),
+            vault_path: normalized.clone(),
+        };
+        let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+
+        let soft_delete_row = db::SoftDeleteRow {
+            id: 0,
+            entity_type: entity_type.as_str().to_string(),
+            entity_id: id.clone(),
+            name,
+            slug: slug.to_string(),
+            original_vault_path: normalized.clone(),
+            trash_vault_path: String::new(),
+            payload_json,
+            created_at: now,
+            undone_at: None,
+            operation: "publish".to_string(),
+        };
+        soft_delete_repo
+            .insert(database.as_ref(), &soft_delete_row)
+            .await?;
+
+        match entity_type {
+            EntityType::Npc => state.npc_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::Location => state.location_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::Faction => state.faction_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::Item => state.item_repo().delete_by_id(database.as_ref(), &id).await?,
+        }
+        document_repo
+            .delete_by_vault_path(database.as_ref(), &normalized)
+            .await?;
+
+        Ok(())
+    }
+
+    /// Reverses a `publish`: restores the entity DB row + document index from the
+    /// canonical store and clears `published_at`. The vault `.md` is left in place.
+    async fn undo_publish(
+        &self,
+        state: &AppState,
+        soft_delete: &db::SoftDeleteRow,
+    ) -> Result<UndoSoftDeleteResult, String> {
+        let database = state.database();
+        let document_repo = state.document_repo();
+        let soft_delete_repo = state.soft_delete_repo();
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let now = now_timestamp();
+        let slug = soft_delete.slug.as_str();
+        let missing = || format!("cannot undo publish: canonical {} record is missing", soft_delete.entity_type);
+
+        match soft_delete.entity_type.as_str() {
+            "npc" => {
+                let mut frontmatter = store.load_npc(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_npc(&frontmatter).map_err(|err| err.to_string())?;
+                let row = npc_row_from_frontmatter(&frontmatter)?;
+                state.npc_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "npc", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::Npc, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
+            "location" => {
+                let mut frontmatter = store.load_location(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_location(&frontmatter).map_err(|err| err.to_string())?;
+                let row = location_row_from_frontmatter(&frontmatter)?;
+                state.location_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "location", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::Location, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
+            "faction" => {
+                let mut frontmatter = store.load_faction(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_faction(&frontmatter).map_err(|err| err.to_string())?;
+                let row = faction_row_from_frontmatter(&frontmatter)?;
+                state.faction_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "faction", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::Faction, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
+            "item" => {
+                let mut frontmatter = store.load_item(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_item(&frontmatter).map_err(|err| err.to_string())?;
+                let row = item_row_from_frontmatter(&frontmatter)?;
+                state.item_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "item", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::Item, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
+            other => Err(format!("cannot undo publish for unknown entity type: {other}")),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1047,7 +1209,7 @@ pub struct EnsureLocationResult {
     pub created_record: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityType {
     Npc,
@@ -1117,6 +1279,16 @@ pub struct EntityDetails {
     pub history: Option<String>,
     pub value: Option<String>,
     pub created_at: Option<String>,
+}
+
+/// Recovery record for a `publish` soft-delete. The full entity data is restored
+/// from the canonical store on undo, so this only needs identifying fields.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PublishPayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

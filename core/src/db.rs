@@ -111,6 +111,7 @@ pub struct SoftDeleteRow {
     pub payload_json: String,
     pub created_at: String,
     pub undone_at: Option<String>,
+    pub operation: String,
 }
 
 pub async fn search_npcs_by_name(
@@ -743,8 +744,9 @@ pub async fn insert_soft_delete(pool: &SqlitePool, row: &SoftDeleteRow) -> Resul
             trash_vault_path,
             payload_json,
             created_at,
-            undone_at
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            undone_at,
+            operation
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
     )
     .bind(&row.entity_type)
     .bind(&row.entity_id)
@@ -755,6 +757,7 @@ pub async fn insert_soft_delete(pool: &SqlitePool, row: &SoftDeleteRow) -> Resul
     .bind(&row.payload_json)
     .bind(&row.created_at)
     .bind(&row.undone_at)
+    .bind(&row.operation)
     .execute(pool)
     .await
     .context("failed to insert soft delete row")?;
@@ -764,7 +767,7 @@ pub async fn insert_soft_delete(pool: &SqlitePool, row: &SoftDeleteRow) -> Resul
 
 pub async fn latest_pending_soft_delete(pool: &SqlitePool) -> Result<Option<SoftDeleteRow>> {
     let row = sqlx::query(
-        "SELECT id, entity_type, entity_id, name, slug, original_vault_path, trash_vault_path, payload_json, created_at, undone_at
+        "SELECT id, entity_type, entity_id, name, slug, original_vault_path, trash_vault_path, payload_json, created_at, undone_at, operation
          FROM soft_deletes
          WHERE undone_at IS NULL
          ORDER BY id DESC
@@ -786,6 +789,19 @@ pub async fn mark_soft_delete_undone(pool: &SqlitePool, id: i64, undone_at: &str
         .context("failed to mark soft delete as undone")?;
 
     Ok(())
+}
+
+/// Finalizes any still-pending `publish` recovery records so they can no longer be
+/// undone (a publish that survives to a restart is permanent). Returns the count.
+pub async fn finalize_pending_publishes(pool: &SqlitePool, finalized_at: &str) -> Result<u64> {
+    let result =
+        sqlx::query("UPDATE soft_deletes SET undone_at = ?1 WHERE operation = 'publish' AND undone_at IS NULL")
+            .bind(finalized_at)
+            .execute(pool)
+            .await
+            .context("failed to finalize pending publishes")?;
+
+    Ok(result.rows_affected())
 }
 
 pub async fn insert_generation(
@@ -1049,5 +1065,77 @@ fn row_to_soft_delete(row: sqlx::sqlite::SqliteRow) -> Result<SoftDeleteRow> {
             .try_get("created_at")
             .context("soft_deletes.created_at missing")?,
         undone_at: row.try_get("undone_at").ok(),
+        operation: row
+            .try_get("operation")
+            .context("soft_deletes.operation missing")?,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    async fn temp_db() -> Database {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "dnd_db_test_{}_{}.sqlite",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_file(&path);
+        init_database_at_path(&path).await.expect("init test db")
+    }
+
+    fn sample_row(entity_id: &str, operation: &str) -> SoftDeleteRow {
+        SoftDeleteRow {
+            id: 0,
+            entity_type: "npc".to_string(),
+            entity_id: entity_id.to_string(),
+            name: "Jimmy".to_string(),
+            slug: "jimmy".to_string(),
+            original_vault_path: "npcs/Jimmy.md".to_string(),
+            trash_vault_path: String::new(),
+            payload_json: "{}".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            undone_at: None,
+            operation: operation.to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn operation_round_trips_and_finalize_consumes_publishes() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+
+        insert_soft_delete(pool, &sample_row("npc_1", "delete"))
+            .await
+            .expect("insert delete");
+        insert_soft_delete(pool, &sample_row("npc_2", "publish"))
+            .await
+            .expect("insert publish");
+
+        // Latest pending is the publish (highest id); operation round-trips.
+        let latest = latest_pending_soft_delete(pool)
+            .await
+            .expect("query")
+            .expect("a pending row");
+        assert_eq!(latest.operation, "publish");
+        assert_eq!(latest.entity_id, "npc_2");
+
+        // Finalizing consumes exactly the pending publish, not the delete.
+        let finalized = finalize_pending_publishes(pool, "2026-06-15T01:00:00Z")
+            .await
+            .expect("finalize");
+        assert_eq!(finalized, 1);
+
+        // The delete record is now the only thing left to undo.
+        let latest = latest_pending_soft_delete(pool)
+            .await
+            .expect("query")
+            .expect("a pending row");
+        assert_eq!(latest.operation, "delete");
+        assert_eq!(latest.entity_id, "npc_1");
+    }
 }
