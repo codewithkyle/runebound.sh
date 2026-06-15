@@ -999,6 +999,12 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "test ollama") {
     return OLLAMA_TEST_LABEL;
   }
+  if (lowered === "ping" || lowered === "reconnect") {
+    return OLLAMA_TEST_LABEL;
+  }
+  if (lowered === "config test") {
+    return OLLAMA_TEST_LABEL;
+  }
   if (lowered === "model" || lowered === "setup model") {
     return OLLAMA_TEST_LABEL;
   }

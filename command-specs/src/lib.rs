@@ -852,12 +852,28 @@ pub fn command_manifest() -> CommandManifest {
                 execution: CommandExecution::Core,
                 show_in_autocomplete: true,
             },
+            CommandSpec {
+                name: "ping".to_string(),
+                summary: "Test whether the Ollama LLM server is running".to_string(),
+                examples: vec!["ping".to_string(), "reconnect".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Core,
+                show_in_autocomplete: true,
+            },
         ],
         aliases: vec![
             CommandAlias {
                 from: vec!["history".to_string(), "clear".to_string()],
                 to: vec!["clear".to_string(), "--history".to_string()],
                 summary: "history clear alias".to_string(),
+            },
+            CommandAlias {
+                from: vec!["reconnect".to_string()],
+                to: vec!["ping".to_string()],
+                summary: "reconnect alias for ping".to_string(),
             },
             CommandAlias {
                 from: vec!["setup".to_string(), "start".to_string()],

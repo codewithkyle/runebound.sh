@@ -101,6 +101,7 @@ fn build_core_handler_registry() -> HandlerRegistry<CoreHandler> {
     registry.register(help_handler_entry());
     registry.register(exit_handler_entry());
     registry.register(setup_handler_entry());
+    registry.register(ping_handler_entry());
     registry
 }
 
@@ -160,6 +161,24 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
                         render_command_help(invocation.manifest, "exit"),
                     )),
                     _ => bail!("unknown exit command. use `exit help`"),
+                }
+            })
+        }),
+    )
+}
+
+fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
+    HandlerEntry::new(
+        "ping",
+        metadata_for("ping"),
+        CoreHandler::new(|invocation| {
+            Box::pin(async move {
+                match invocation.lowered.len() {
+                    0 | 1 => execute_ping(invocation.workspace_root).await,
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                        render_command_help(invocation.manifest, "ping"),
+                    )),
+                    _ => bail!("unknown ping command. use `ping help`"),
                 }
             })
         }),
@@ -1312,6 +1331,55 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
 
 /// Short timeout for boot/status probes so a dead server doesn't stall startup.
 pub const OLLAMA_BOOT_TIMEOUT_SECONDS: u64 = 5;
+
+/// Probe the configured Ollama server to confirm the LLM is running.
+///
+/// Backs the `ping` command (and its `reconnect` alias). Fails (so the spinner
+/// flips to error) when the server is unreachable; reports a warning when the
+/// server answers but the configured model is missing.
+async fn execute_ping(workspace_root: &Path) -> Result<CommandOutput> {
+    let loaded = load_effective(workspace_root)?;
+    let config = loaded.effective;
+
+    if config.ollama.base_url.trim().is_empty() {
+        bail!("no Ollama server is configured. run `setup llm` to configure one.");
+    }
+
+    let health = health::check_ollama_health(&config, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
+    let endpoint = config.ollama.base_url.clone();
+    let model = config
+        .ollama
+        .model
+        .clone()
+        .unwrap_or_else(|| "(not set)".to_string());
+
+    if !health.reachable {
+        bail!("Ollama is offline: {}.", health.detail);
+    }
+
+    let (tone, line) = if health.model_available {
+        (
+            StatusTone::Success,
+            format!("Ollama is online; model {model} is available."),
+        )
+    } else {
+        (
+            StatusTone::Warning,
+            format!("Ollama is online, but {}.", health.detail),
+        )
+    };
+
+    let text = format!("## Ollama ping\n{line}\n\nendpoint: {endpoint}\nmodel: {model}");
+    let output_doc = doc()
+        .with_block(heading(2, "Ollama ping"))
+        .with_block(status(tone, line))
+        .with_block(list(vec![
+            vec![text_node(format!("endpoint: {endpoint}"))],
+            vec![text_node(format!("model: {model}"))],
+        ]));
+
+    Ok(CommandOutput::with_doc(text, output_doc))
+}
 
 /// Render the welcome/MOTD system-status output with an accurate connection line.
 ///

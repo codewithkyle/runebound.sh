@@ -432,6 +432,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_ping_command() {
+        let parsed = parse_command_input("ping");
+        assert!(
+            parsed.valid,
+            "expected ping to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["ping"]);
+    }
+
+    #[test]
+    fn reconnect_aliases_to_ping() {
+        let parsed = parse_command_input("reconnect");
+        assert!(
+            parsed.valid,
+            "expected reconnect to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["ping"]);
+    }
+
+    #[test]
     fn normalizes_markdown_wrapped_help_command() {
         assert_eq!(normalize_command_input("`help`"), "help");
         let parsed = parse_command_input("`help`");
