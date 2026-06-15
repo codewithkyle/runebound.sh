@@ -16,7 +16,7 @@ pub async fn handle_date(
     }
 
     if lowered.starts_with("date set") {
-        return date_set(trimmed).await;
+        return date_set(invocation.tokens).await;
     }
 
     if lowered == "date" {
@@ -75,9 +75,7 @@ Examples:
     Ok(Some(ok_response(output.to_string(), None)))
 }
 
-async fn date_set(
-    trimmed: &str,
-) -> CommandResult {
+async fn date_set(tokens: &[String]) -> CommandResult {
     let stored = match calendar::load_calendar() {
         Ok(Some(c)) => c,
         Ok(None) => {
@@ -94,8 +92,8 @@ async fn date_set(
         }
     };
 
-    let remainder = trimmed["date set".len()..].trim();
-    let parts: Vec<&str> = remainder.split_whitespace().collect();
+    // Tokens are `["date", "set", <component>, <value>...]`; skip the command words.
+    let parts: Vec<&str> = tokens.iter().skip(2).map(String::as_str).collect();
 
     if parts.is_empty() {
         return Ok(Some(ok_response(
@@ -204,15 +202,12 @@ fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
         }
     };
 
+    // `set_month_index` clamps the day into the new month's range for us.
     if let Err(e) = stored.state.set_month_index(month_index, &stored.definition) {
         return Ok(Some(ok_response(
             format!("invalid month: {}", e),
             None,
         )));
-    }
-
-    if stored.state.day > stored.definition.month_len.get(&stored.definition.months[month_index]).copied().unwrap_or(0) {
-        stored.state.day = stored.definition.month_len.get(&stored.definition.months[month_index]).copied().unwrap_or(1);
     }
 
     if let Err(e) = calendar::save_calendar(&stored) {

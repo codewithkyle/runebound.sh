@@ -57,9 +57,6 @@ pub async fn handle_publish(
                 )))
             }
         }
-    } else if lowered == "publish help" {
-        // Already handled above, but keep guard for safety.
-        return publish_help();
     } else {
         let admin = EntityAdminService;
         let Some(details) = admin

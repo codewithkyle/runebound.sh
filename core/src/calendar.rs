@@ -190,6 +190,16 @@ impl CalendarState {
             );
         }
         self.month_index = index;
+        // Months can have different lengths, so clamp the current day into the new
+        // month's range (e.g. moving from a 50-day month on day 50 to a 30-day month).
+        let month_len = definition
+            .month_len
+            .get(&definition.months[index])
+            .copied()
+            .unwrap_or(0);
+        if self.day > month_len {
+            self.day = month_len.max(1);
+        }
         Ok(())
     }
 
@@ -706,49 +716,6 @@ pub fn ordinal_suffix(day: u32) -> &'static str {
     }
 }
 
-pub fn format_date(calendar: &StoredCalendar) -> String {
-    let month_name = calendar
-        .definition
-        .months
-        .get(calendar.state.month_index)
-        .map(|s| s.as_str())
-        .unwrap_or("Unknown");
-
-    let day_with_suffix = format!(
-        "{}{}",
-        calendar.state.day,
-        ordinal_suffix(calendar.state.day)
-    );
-
-    let weekday = calendar
-        .definition
-        .weekdays
-        .get(weekday_index(&calendar.state, &calendar.definition))
-        .map(|s| s.as_str())
-        .unwrap_or("Unknown");
-
-    let hour_12 = if calendar.state.hour_24 == 0 {
-        12
-    } else if calendar.state.hour_24 > 12 {
-        calendar.state.hour_24 - 12
-    } else {
-        calendar.state.hour_24
-    };
-
-    let am_pm = if calendar.state.hour_24 < 12 {
-        "AM"
-    } else {
-        "PM"
-    };
-
-    let minute_str = format!("{:02}", calendar.state.minute);
-
-    format!(
-        "{} of {} {}:{} {} ({})",
-        day_with_suffix, month_name, hour_12, minute_str, am_pm, weekday
-    )
-}
-
 pub fn format_date_conversational(calendar: &StoredCalendar) -> String {
     let month_name = calendar
         .definition
@@ -1047,8 +1014,11 @@ mod tests {
         }"#;
         let calendar = import_donjon_json(json).expect("import should succeed");
 
-        let formatted = format_date(&calendar);
-        assert_eq!(formatted, "1st of Emberwane 12:00 AM (Moonday)");
+        let formatted = format_date_conversational(&calendar);
+        assert_eq!(
+            formatted,
+            "It is the 1st of Emberwane in the year 0 at 12:00 AM (Moonday)"
+        );
     }
 
     #[test]
@@ -1070,8 +1040,11 @@ mod tests {
         calendar.state.hour_24 = 14;
         calendar.state.minute = 30;
 
-        let formatted = format_date(&calendar);
-        assert_eq!(formatted, "15th of Emberwane 2:30 PM (Fithday)");
+        let formatted = format_date_conversational(&calendar);
+        assert_eq!(
+            formatted,
+            "It is the 15th of Emberwane in the year 0 at 2:30 PM (Fithday)"
+        );
     }
 
     #[test]
