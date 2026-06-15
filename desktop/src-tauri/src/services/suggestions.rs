@@ -62,60 +62,40 @@ impl SuggestionService {
             editor.active_kind()
         };
         let is_npc = matches!(active_kind, Some(EntityKind::Npc));
-        let is_location = matches!(active_kind, Some(EntityKind::Location));
-        let is_faction = matches!(active_kind, Some(EntityKind::Faction));
-        let is_item = matches!(active_kind, Some(EntityKind::Item));
+
+        // Resolve the current input context (entity editor takes precedence over an
+        // in-progress setup wizard) and keep only commands the manifest declares
+        // visible there. This replaces the former hard-coded per-kind blacklist.
+        let context = match active_kind {
+            Some(kind) => command_manifest::InputContext::EntityEditor(kind.as_str().to_string()),
+            None => {
+                let onboarding_active = {
+                    let service = state.command_service.lock().await;
+                    service.session().onboarding.active
+                };
+                if onboarding_active {
+                    command_manifest::InputContext::ConfigEditor
+                } else {
+                    command_manifest::InputContext::Default
+                }
+            }
+        };
 
         suggestions.retain(|suggestion| {
-            let completion = suggestion.completion.trim().to_ascii_lowercase();
-            let label = suggestion.label.trim().to_ascii_lowercase();
-
-        if !is_npc {
-            if completion == "npc"
-                || completion.starts_with("npc ")
-                || label == "npc"
-                || label.starts_with("npc ")
-            {
-                return false;
+            let root = suggestion
+                .completion
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            match find_command(&manifest, &root) {
+                // Known command roots are gated by their declared availability.
+                Some(command) => {
+                    command_manifest::command_availability(&command.name).is_visible_in(&context)
+                }
+                // Non-command suggestions (entity-name search, etc.) are left alone.
+                None => true,
             }
-        }
-
-        if active_kind.is_none() && (completion == "reroll" || label == "reroll") {
-            return false;
-        }
-
-            if !is_location
-                && (completion == "location"
-                    || completion.starts_with("location ")
-                    || label == "location"
-                    || label.starts_with("location "))
-            {
-                return false;
-            }
-
-            if !is_faction
-                && (completion == "faction"
-                    || completion.starts_with("faction ")
-                    || label == "faction"
-                    || label.starts_with("faction "))
-            {
-                return false;
-            }
-
-            if !is_item
-                && (completion == "item"
-                    || completion.starts_with("item ")
-                    || label == "item"
-                    || label.starts_with("item "))
-            {
-                return false;
-            }
-
-            if active_kind.is_none() && (completion == "cancel" || label == "cancel") {
-                return false;
-            }
-
-            true
         });
 
         let trimmed = input.trim();

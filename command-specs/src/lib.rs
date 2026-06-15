@@ -105,6 +105,84 @@ pub struct CommandAlias {
     pub summary: String,
 }
 
+/// Runtime input context that gates which commands are offered in autocomplete.
+///
+/// Derived from editor state: an open entity draft, the setup/config wizard, or
+/// neither (the default command surface).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputContext {
+    Default,
+    ConfigEditor,
+    /// An entity draft is open; the tag is the entity's command root ("npc", ...).
+    EntityEditor(String),
+}
+
+/// Declarative visibility of a command across input contexts.
+///
+/// This is the single source of truth for context-gated autocomplete: the runtime
+/// asks [`command_availability`] for a command and never hard-codes per-command
+/// visibility rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandAvailability {
+    /// Default surface only (no editor open): create, calendar, undo, ...
+    Default,
+    /// Every context (help, clear).
+    Always,
+    /// Only while the setup/config editor is active.
+    ConfigEditor,
+    /// Any active editor — config or entity (save, cancel).
+    AnyEditor,
+    /// Default surface plus any open entity draft (publish).
+    DefaultOrEntityEditor,
+    /// Only while some entity draft is open (reroll).
+    EntityEditorOnly,
+    /// Only while the matching entity kind's editor is active (npc, location, ...).
+    EntityScoped(&'static str),
+}
+
+impl CommandAvailability {
+    pub fn is_visible_in(self, context: &InputContext) -> bool {
+        match self {
+            CommandAvailability::Always => true,
+            CommandAvailability::Default => matches!(context, InputContext::Default),
+            CommandAvailability::ConfigEditor => matches!(context, InputContext::ConfigEditor),
+            CommandAvailability::AnyEditor => matches!(
+                context,
+                InputContext::ConfigEditor | InputContext::EntityEditor(_)
+            ),
+            CommandAvailability::DefaultOrEntityEditor => matches!(
+                context,
+                InputContext::Default | InputContext::EntityEditor(_)
+            ),
+            CommandAvailability::EntityEditorOnly => {
+                matches!(context, InputContext::EntityEditor(_))
+            }
+            CommandAvailability::EntityScoped(tag) => {
+                matches!(context, InputContext::EntityEditor(active) if active == tag)
+            }
+        }
+    }
+}
+
+/// Single source of truth for which input context(s) each command is offered in.
+///
+/// Adding a new entity kind is data-only: add an `EntityScoped` arm here and a
+/// schema entry; the suggestion filter itself never changes. Commands not listed
+/// default to the default surface.
+pub fn command_availability(name: &str) -> CommandAvailability {
+    match name {
+        "npc" => CommandAvailability::EntityScoped("npc"),
+        "location" => CommandAvailability::EntityScoped("location"),
+        "faction" => CommandAvailability::EntityScoped("faction"),
+        "item" => CommandAvailability::EntityScoped("item"),
+        "reroll" => CommandAvailability::EntityEditorOnly,
+        "save" | "cancel" => CommandAvailability::AnyEditor,
+        "publish" => CommandAvailability::DefaultOrEntityEditor,
+        "help" | "clear" => CommandAvailability::Always,
+        _ => CommandAvailability::Default,
+    }
+}
+
 pub fn handler_metadata_for(root: &str) -> Option<HandlerMetadataDescriptor> {
     let manifest = command_manifest();
     let command = manifest
