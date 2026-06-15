@@ -9,6 +9,7 @@ use dnd_core::vault::Vault;
 use serde::Serialize;
 
 use crate::app_state::{self, AppState};
+use crate::entities::{EntityKind, rerollable_fields, settable_fields};
 use crate::services::entity_admin::EntityType;
 use crate::utils::normalize_relative_path_for_storage;
 
@@ -379,6 +380,7 @@ fn build_argument_suggestions(
         .subcommand
         .as_ref()
         .and_then(|item| command.subcommands.iter().find(|sub| sub.name == *item));
+    let subcommand_name = subcommand.as_ref().map(|item| item.name.as_str());
 
     if command.name == "npc" && subcommand.is_some_and(|item| item.name == "travel") {
         let normalized: Vec<String> = parsed
@@ -396,131 +398,15 @@ fn build_argument_suggestions(
         }
     }
 
-    if command.name == "npc"
-        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
-    {
-        let field_names = [
-            "name",
-            "race",
-            "occupation",
-            "sex",
-            "age",
-            "height",
-            "weight",
-            "background",
-            "want",
-            "secret",
-            "carrying",
-        ];
-        let args = &parsed.normalized_tokens[2..];
-        let should_suggest_fields =
-            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
-
-        if should_suggest_fields {
-            let prefix = parsed.completion.current_token.to_ascii_lowercase();
-            let base = replace_current_token(input, &parsed.completion.current_token);
-            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
-                "npc set"
-            } else {
-                "npc reroll"
-            };
-
-            return field_names
-                .iter()
-                .filter(|field| field.starts_with(&prefix))
-                .map(|field| CommandSuggestion {
-                    label: format!("{prefix_label} {field}"),
-                    completion: format!("{base}{field} "),
-                    helper_text: Some(SuggestionHelperText::Command),
-                })
-                .collect();
-        }
-    }
-
-    if command.name == "location"
-        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
-    {
-        let field_names = [
-            "name",
-            "kind",
-            "kind_custom",
-            "visual",
-            "history",
-            "exports",
-            "tone",
-            "authority",
-            "danger",
-            "tension",
-        ];
-        let args = &parsed.normalized_tokens[2..];
-        let should_suggest_fields =
-            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
-
-        if should_suggest_fields {
-            let prefix = parsed.completion.current_token.to_ascii_lowercase();
-            let base = replace_current_token(input, &parsed.completion.current_token);
-            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
-                "location set"
-            } else {
-                "location reroll"
-            };
-
-            return field_names
-                .iter()
-                .filter(|field| field.starts_with(&prefix))
-                .map(|field| CommandSuggestion {
-                    label: format!("{prefix_label} {field}"),
-                    completion: format!("{base}{field} "),
-                    helper_text: Some(SuggestionHelperText::Command),
-                })
-                .collect();
-        }
-    }
-
-    if command.name == "faction"
-        && subcommand.is_some_and(|item| item.name == "set" || item.name == "reroll")
-    {
-        let field_names = [
-            "name",
-            "kind",
-            "kind_custom",
-            "public",
-            "agenda",
-            "methods",
-            "leadership",
-            "headquarters",
-            "influence",
-            "resources",
-            "allies",
-            "rivals",
-            "reputation",
-            "tension",
-            "goals_short",
-            "goals_long",
-            "symbol",
-        ];
-        let args = &parsed.normalized_tokens[2..];
-        let should_suggest_fields =
-            args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
-
-        if should_suggest_fields {
-            let prefix = parsed.completion.current_token.to_ascii_lowercase();
-            let base = replace_current_token(input, &parsed.completion.current_token);
-            let prefix_label = if subcommand.is_some_and(|item| item.name == "set") {
-                "faction set"
-            } else {
-                "faction reroll"
-            };
-
-            return field_names
-                .iter()
-                .filter(|field| field.starts_with(&prefix))
-                .map(|field| CommandSuggestion {
-                    label: format!("{prefix_label} {field}"),
-                    completion: format!("{base}{field} "),
-                    helper_text: Some(SuggestionHelperText::Command),
-                })
-                .collect();
+    if let Some(kind) = entity_kind_for_root(command.name.as_str()) {
+        if let Some(suggestions) = build_entity_field_argument_suggestions(
+            kind,
+            command,
+            subcommand_name,
+            parsed,
+            input,
+        ) {
+            return suggestions;
         }
     }
 
@@ -559,6 +445,58 @@ fn build_argument_suggestions(
             }
         })
         .collect()
+}
+
+fn build_entity_field_argument_suggestions(
+    kind: EntityKind,
+    command: &CommandSpec,
+    subcommand: Option<&str>,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    let subcommand = subcommand?;
+    if subcommand != "set" && subcommand != "reroll" {
+        return None;
+    }
+
+    let args = &parsed.normalized_tokens[2..];
+    let should_suggest_fields =
+        args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
+    if !should_suggest_fields {
+        return None;
+    }
+
+    let prefix = parsed.completion.current_token.to_ascii_lowercase();
+    let base = replace_current_token(input, &parsed.completion.current_token);
+    let field_names: Vec<&'static str> = if subcommand == "set" {
+        settable_fields(kind).map(|spec| spec.display_name).collect()
+    } else {
+        rerollable_fields(kind)
+            .map(|spec| spec.display_name)
+            .collect()
+    };
+
+    let prefix_label = format!("{} {}", command.name, subcommand);
+    Some(
+        field_names
+            .into_iter()
+            .filter(|field| field.starts_with(&prefix))
+            .map(|field| CommandSuggestion {
+                label: format!("{prefix_label} {field}"),
+                completion: format!("{base}{field} "),
+                helper_text: Some(SuggestionHelperText::Command),
+            })
+            .collect(),
+    )
+}
+
+fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
+    match root {
+        "npc" => Some(EntityKind::Npc),
+        "location" => Some(EntityKind::Location),
+        "faction" => Some(EntityKind::Faction),
+        _ => None,
+    }
 }
 
 fn find_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {

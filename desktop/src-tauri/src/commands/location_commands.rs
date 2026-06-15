@@ -1,5 +1,11 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::entities::{
+    canonical_field_name,
+    format_valid_field_list,
+    EntityKind,
+    FieldAccess,
+};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
@@ -137,8 +143,14 @@ async fn location_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Resul
         editor.location_draft.clone()
     }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
 
-    let Some(canonical) = canonical_location_set_field(field) else {
-        return Ok(Some(ok_response(format!("unknown location field: {}. valid fields: name, kind, kind_custom, visual, history, exports, tone, authority, danger, tension", field), None)));
+    let Some(canonical) =
+        canonical_field_name(EntityKind::Location, field, FieldAccess::Set)
+    else {
+        let valid_fields = format_valid_field_list(EntityKind::Location, FieldAccess::Set);
+        return Ok(Some(ok_response(
+            format!("unknown location field: {}. valid fields: {}", field, valid_fields),
+            None,
+        )));
     };
 
     match canonical {
@@ -302,22 +314,6 @@ async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<Comma
     ].join("\n");
 
     Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))))
-}
-
-pub fn canonical_location_set_field(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "name" => Some("name"),
-        "kind" | "kind_type" => Some("kind_type"),
-        "kind_custom" | "custom_kind" => Some("kind_custom"),
-        "visual" | "visual_description" | "description" => Some("visual_description"),
-        "history" | "history_background" | "background" => Some("history_background"),
-        "exports" => Some("exports"),
-        "tone" => Some("tone"),
-        "authority" => Some("authority"),
-        "danger" | "danger_level" => Some("danger_level"),
-        "tension" | "current_tension" => Some("current_tension"),
-        _ => None,
-    }
 }
 
 pub fn normalize_location_kind_type(value: &str) -> Result<String, String> {

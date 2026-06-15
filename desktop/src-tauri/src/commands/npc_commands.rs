@@ -1,5 +1,11 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::entities::{
+    canonical_field_name,
+    format_valid_field_list,
+    EntityKind,
+    FieldAccess,
+};
 use crate::services::entity_admin::{EntityAdminService, EnsureLocationInput};
 use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraftInput};
 use crate::services::entity_reroll::{
@@ -157,12 +163,12 @@ pub async fn npc_set(
         editor.npc_draft.clone()
     }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
-    let Some(canonical) = canonical_npc_set_field(field) else {
+    let Some(canonical) =
+        canonical_field_name(EntityKind::Npc, field, FieldAccess::Set)
+    else {
+        let valid_fields = format_valid_field_list(EntityKind::Npc, FieldAccess::Set);
         return Ok(Some(ok_response(
-            format!(
-                "unknown npc field: {}. valid fields: name, race, occupation, sex, age, height, weight, background, want, secret, carrying",
-                field
-            ),
+            format!("unknown npc field: {}. valid fields: {}", field, valid_fields),
             None,
         )));
     };
@@ -355,23 +361,6 @@ pub async fn npc_reroll(
     }
 
     Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))
-}
-
-pub fn canonical_npc_set_field(raw: &str) -> Option<&'static str> {
-    match raw.trim().to_ascii_lowercase().as_str() {
-        "name" => Some("name"),
-        "race" => Some("race"),
-        "occupation" => Some("occupation"),
-        "sex" => Some("sex"),
-        "age" => Some("age"),
-        "height" => Some("height"),
-        "weight" | "weight_lbs" => Some("weight_lbs"),
-        "background" => Some("background"),
-        "want" | "need" | "want_need" => Some("want_need"),
-        "secret" | "obstacle" | "secret_obstacle" => Some("secret_obstacle"),
-        "carrying" => Some("carrying"),
-        _ => None,
-    }
 }
 
 fn merge_seed_and_reroll_prompt(seed_prompt: &Option<String>, reroll_prompt: Option<String>) -> Option<String> {

@@ -1,5 +1,11 @@
 use crate::app_state::{AppState, EditorMode};
 use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::entities::{
+    canonical_field_name,
+    format_valid_field_list,
+    EntityKind,
+    FieldAccess,
+};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
@@ -132,8 +138,15 @@ async fn faction_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Result
         editor.faction_draft.clone()
     }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
-    let field = canonical_faction_reroll_field(field)?;
-    match field {
+    let canonical = canonical_field_name(EntityKind::Faction, field, FieldAccess::Set)
+        .ok_or_else(|| {
+            let valid_fields = format_valid_field_list(EntityKind::Faction, FieldAccess::Set);
+            format!(
+                "unknown faction reroll field: {}. valid fields: {}",
+                field, valid_fields
+            )
+        })?;
+    match canonical {
         "name" => draft.name = value.to_string(),
         "kind_type" => {
             draft.kind_type = normalize_faction_kind_type(value)?;
@@ -324,31 +337,6 @@ async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<Comman
     ].join("\n");
 
     Ok(Some(ok_response(output, Some(CommandClientEvent::ClearDrafts))))
-}
-
-pub fn canonical_faction_reroll_field(raw: &str) -> Result<&'static str, String> {
-    let normalized = raw.trim().to_ascii_lowercase();
-    let field = match normalized.as_str() {
-        "name" => "name",
-        "kind" | "kind_type" => "kind_type",
-        "kind_custom" => "kind_custom",
-        "public" | "public_description" => "public_description",
-        "agenda" | "true_agenda" => "true_agenda",
-        "methods" => "methods",
-        "leadership" => "leadership",
-        "hq" | "headquarters" => "headquarters",
-        "influence" | "sphere_of_influence" => "sphere_of_influence",
-        "resources" | "resources_assets" => "resources_assets",
-        "allies" => "allies",
-        "rivals" | "rivals_enemies" => "rivals_enemies",
-        "reputation" => "reputation",
-        "tension" | "current_tension" => "current_tension",
-        "goals_short" | "goals_short_term" => "goals_short_term",
-        "goals_long" | "goals_long_term" => "goals_long_term",
-        "symbol" | "sigil" | "banner" | "symbol_description" => "symbol_description",
-        _ => return Err(format!("unknown faction reroll field: {}. valid fields: name, kind, kind_custom, public, agenda, methods, leadership, headquarters, influence, resources, allies, rivals, reputation, tension, goals_short, goals_long, symbol", raw)),
-    };
-    Ok(field)
 }
 
 pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {

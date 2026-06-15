@@ -2,6 +2,7 @@
 
 mod app_state;
 mod commands;
+mod entities;
 mod repositories;
 mod router;
 mod services;
