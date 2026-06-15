@@ -264,7 +264,6 @@ impl EntityDomain for NpcDomain {
             .save_npc_draft(
                 SaveNpcDraftInput {
                     id: draft.id.clone(),
-                    slug: draft.slug.clone(),
                     name: draft.name.clone(),
                     race: draft.race.clone(),
                     occupation: draft.occupation.clone(),

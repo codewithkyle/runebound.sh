@@ -242,7 +242,6 @@ impl EntityPersistenceService {
             return Err("location name cannot be empty".to_string());
         }
 
-        let _legacy_slug_input = input.slug.trim();
         let previous_vault_path_input = normalize_relative_path_for_storage(input.vault_path.trim());
 
         let kind_type = normalize_location_kind_type(&input.kind_type)?;
@@ -822,7 +821,6 @@ impl EntityPersistenceService {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveNpcDraftInput {
     pub id: String,
-    pub slug: String,
     pub name: String,
     pub race: String,
     pub occupation: String,
@@ -850,7 +848,6 @@ pub struct SaveNpcDraftResult {
 pub struct SaveLocationDraftInput {
     pub id: String,
     pub name: String,
-    pub slug: String,
     pub vault_path: String,
     pub kind_type: String,
     pub kind_custom: Option<String>,
@@ -875,7 +872,6 @@ pub struct SaveLocationDraftResult {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveFactionDraftInput {
     pub id: String,
-    pub slug: String,
     pub name: String,
     pub vault_path: String,
     pub kind_type: String,
@@ -908,9 +904,7 @@ pub struct SaveFactionDraftResult {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SaveItemDraftInput {
     pub id: String,
-    pub slug: String,
     pub name: String,
-    pub vault_path: String,
     pub category: String,
     pub rarity: String,
     pub attunement: String,

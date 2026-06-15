@@ -352,7 +352,6 @@ impl EntityDomain for FactionDomain {
             .save_faction_draft(
                 SaveFactionDraftInput {
                     id: draft.id.clone(),
-                    slug: draft.slug.clone(),
                     name: draft.name.clone(),
                     vault_path: draft.vault_path.clone(),
                     kind_type: draft.kind_type.clone(),

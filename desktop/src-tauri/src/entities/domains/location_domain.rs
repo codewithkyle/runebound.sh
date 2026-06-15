@@ -294,7 +294,6 @@ impl EntityDomain for LocationDomain {
                 SaveLocationDraftInput {
                     id: draft.id.clone(),
                     name: draft.name.clone(),
-                    slug: draft.slug.clone(),
                     vault_path: draft.vault_path.clone(),
                     kind_type: draft.kind_type.clone(),
                     kind_custom: draft.kind_custom.clone(),
