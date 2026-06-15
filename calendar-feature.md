@@ -88,3 +88,15 @@
 - **Tests:** Run `cargo test` for affected crates and add targeted unit tests (import parsing, setters, delta math).
 - **Documentation:** Update `docs/cli.md` (command UX), `docs/architecture.md` (storage location, module overview), and optionally `docs/render.md` if new output nodes are introduced.
 - **Manual verification:** After implementation, exercise the flows inside the desktop UI: import, view date, set fields, run +/- adjustments, confirm history and autocomplete behave per `docs/feature-development.md`.
+
+## Phase 4 — Lunar Phases (Bonus)
+
+### Goals
+- Provide a standalone `moon` command that reports the current phase for each configured moon.
+- Reuse `lunar_cyc` (cycle lengths) and `lunar_shf` (phase offsets) captured during calendar import.
+
+### Workstream
+1. **Core Helpers:** add `moon_phase_info(&StoredCalendar)` plus supporting types (`MoonPhaseKind`, `MoonPhaseInfo`, `total_days_since_epoch`) that compute each moon’s age and map it to standard lunar phases.
+2. **Handler:** create `desktop/src-tauri/src/commands/moon_commands.rs` with `moon`/`moon help` handling; output each moon’s phase, day-in-cycle, and cycle length; handle missing lunar metadata with actionable errors.
+3. **Manifest & Docs:** register the `moon` command in `command-specs`, document usage in `docs/cli.md`, and mention the requirement for lunar data exported from donjon.
+4. **Testing:** unit-test the moon phase math for multiple cycles/shifts; manually verify via the desktop CLI after importing a calendar that includes lunar data.

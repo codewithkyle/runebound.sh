@@ -224,7 +224,7 @@ impl CalendarState {
         Ok(())
     }
 
-    fn total_minutes(&self, definition: &CalendarDefinition) -> i64 {
+    pub fn total_minutes(&self, definition: &CalendarDefinition) -> i64 {
         let year_minutes = i64::from(self.year) * i64::from(definition.year_len) * MINUTES_PER_DAY;
         let month_days = days_before_month(definition, self.month_index) as i64;
         let day_offset = i64::from(self.day.saturating_sub(1));
@@ -464,6 +464,118 @@ fn days_before_month(definition: &CalendarDefinition, month_index: usize) -> u32
         .take(month_index)
         .map(|name| definition.month_len.get(name).copied().unwrap_or(0))
         .sum()
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MoonPhaseKind {
+    New,
+    WaxingCrescent,
+    FirstQuarter,
+    WaxingGibbous,
+    Full,
+    WaningGibbous,
+    LastQuarter,
+    WaningCrescent,
+}
+
+#[derive(Debug, Clone)]
+pub struct MoonPhaseInfo {
+    pub name: String,
+    pub phase: MoonPhaseKind,
+    pub age: u32,
+    pub cycle_length: u32,
+}
+
+pub fn moon_phase_info(calendar: &StoredCalendar) -> Result<Vec<MoonPhaseInfo>> {
+    if calendar.definition.moons.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let cycles = lunar_cycle_lengths(calendar)?;
+    let shifts = lunar_shifts(calendar)?;
+    let total_days = total_days_since_epoch(&calendar.state, &calendar.definition);
+
+    let mut infos = Vec::new();
+    for moon in &calendar.definition.moons {
+        let cycle_length = cycles
+            .get(moon)
+            .copied()
+            .ok_or_else(|| anyhow!("missing cycle length for moon '{}'", moon))?;
+        if cycle_length == 0 {
+            return Err(anyhow!(
+                "cycle length for '{}' must be greater than 0",
+                moon
+            ));
+        }
+
+        let shift = shifts.get(moon).copied().unwrap_or(0);
+        let shift_i64 = i64::from(shift);
+        let shifted_days = total_days + shift_i64;
+        let cycle_len_i64 = i64::from(cycle_length);
+        let age = (shifted_days.rem_euclid(cycle_len_i64)) as u32;
+        let phase = phase_from_age(age, cycle_length);
+
+        infos.push(MoonPhaseInfo {
+            name: moon.clone(),
+            phase,
+            age,
+            cycle_length,
+        });
+    }
+
+    infos.sort_by(|a, b| {
+        a.name
+            .to_ascii_lowercase()
+            .cmp(&b.name.to_ascii_lowercase())
+    });
+    Ok(infos)
+}
+
+fn lunar_cycle_lengths(calendar: &StoredCalendar) -> Result<HashMap<String, u32>> {
+    match calendar.definition.notes.get("lunar_cyc") {
+        Some(value) => {
+            let map: HashMap<String, u32> = serde_json::from_value(value.clone())
+                .map_err(|err| anyhow!("invalid lunar_cyc data: {}", err))?;
+            Ok(map)
+        }
+        None => Err(anyhow!(
+            "calendar includes moons but is missing 'lunar_cyc' data in notes"
+        )),
+    }
+}
+
+fn lunar_shifts(calendar: &StoredCalendar) -> Result<HashMap<String, i32>> {
+    match calendar.definition.notes.get("lunar_shf") {
+        Some(value) => {
+            let map: HashMap<String, i32> = serde_json::from_value(value.clone())
+                .map_err(|err| anyhow!("invalid lunar_shf data: {}", err))?;
+            Ok(map)
+        }
+        None => Ok(HashMap::new()),
+    }
+}
+
+pub fn total_days_since_epoch(state: &CalendarState, definition: &CalendarDefinition) -> i64 {
+    let minutes = state.total_minutes(definition);
+    minutes / MINUTES_PER_DAY
+}
+
+fn phase_from_age(age: u32, cycle_length: u32) -> MoonPhaseKind {
+    if cycle_length == 0 {
+        return MoonPhaseKind::New;
+    }
+    let fraction = age as f64 / cycle_length as f64;
+    let bucket = (fraction * 8.0).floor() as u32 % 8;
+    match bucket {
+        0 => MoonPhaseKind::New,
+        1 => MoonPhaseKind::WaxingCrescent,
+        2 => MoonPhaseKind::FirstQuarter,
+        3 => MoonPhaseKind::WaxingGibbous,
+        4 => MoonPhaseKind::Full,
+        5 => MoonPhaseKind::WaningGibbous,
+        6 => MoonPhaseKind::LastQuarter,
+        _ => MoonPhaseKind::WaningCrescent,
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1144,5 +1256,53 @@ mod tests {
         assert_eq!(calendar.state.day, 1);
         assert_eq!(calendar.state.hour_24, 0);
         assert_eq!(calendar.state.minute, 0);
+    }
+
+    #[test]
+    fn computes_basic_moon_phase() {
+        let json = r#"{
+            "year_len": 28,
+            "events": 0,
+            "n_months": 1,
+            "months": ["Luna"],
+            "month_len": {"Luna": 28},
+            "week_len": 7,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5", "D6", "D7"],
+            "n_moons": 1,
+            "moons": ["Selene"],
+            "lunar_cyc": {"Selene": 28},
+            "lunar_shf": {"Selene": 0},
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+        let phases = moon_phase_info(&calendar).expect("phase info");
+        assert_eq!(phases.len(), 1);
+        assert_eq!(phases[0].phase, MoonPhaseKind::New);
+        assert_eq!(phases[0].age, 0);
+    }
+
+    #[test]
+    fn moon_phase_respects_shift_and_day_progression() {
+        let json = r#"{
+            "year_len": 60,
+            "events": 0,
+            "n_months": 2,
+            "months": ["First", "Second"],
+            "month_len": {"First": 30, "Second": 30},
+            "week_len": 5,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5"],
+            "n_moons": 1,
+            "moons": ["Luna"],
+            "lunar_cyc": {"Luna": 20},
+            "lunar_shf": {"Luna": 3},
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let mut calendar = import_donjon_json(json).expect("import should succeed");
+        calendar.state.day = 10;
+        let info = moon_phase_info(&calendar).expect("phase info");
+        assert_eq!(info[0].cycle_length, 20);
+        assert_eq!(info[0].age, ((9 + 3) % 20) as u32);
     }
 }

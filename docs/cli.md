@@ -289,7 +289,27 @@ Where `<unit>` is one of:
 
 ---
 
-## 12. Related Docs
+## 12. Moon Command
+
+Display the current phase for each moon defined in the active calendar.
+
+### Usage
+
+```
+moon
+```
+
+### Requirements
+
+- Requires an imported calendar that includes lunar data (`lunar_cyc`, optional `lunar_shf`).
+
+### Output
+
+- Lists each moon, its phase (new/full/etc.), and its day within the cycle.
+
+---
+
+## 13. Related Docs
 
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts

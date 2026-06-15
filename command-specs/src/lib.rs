@@ -786,6 +786,17 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "moon".to_string(),
+                summary: "Show the current moon phases".to_string(),
+                examples: vec!["moon".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "exit".to_string(),
                 summary: "Exit the application".to_string(),
                 examples: vec!["exit".to_string()],
