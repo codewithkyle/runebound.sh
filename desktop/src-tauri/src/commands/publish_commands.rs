@@ -3,6 +3,7 @@ use std::path::PathBuf;
 
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::entity_store::EntityStore;
+use dnd_core::npc::now_timestamp;
 use dnd_core::vault::Vault;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
@@ -186,6 +187,41 @@ pub async fn handle_publish(
 
     fs::write(&full_path, markdown)
         .map_err(|err| format!("failed to write {}: {err}", full_path.display()))?;
+
+    // Record the publish in the canonical store: stamp `published_at` so startup
+    // sync knows this entity has a vault file, and persist the exact path we wrote
+    // to so sync's path-based reconciliation matches the real file.
+    let now = now_timestamp();
+    match target.entity_type {
+        EntityType::Npc => {
+            if let Some(mut frontmatter) = store.load_npc(&target.slug).map_err(|err| err.to_string())? {
+                frontmatter.vault_path = vault_path.clone();
+                frontmatter.published_at = Some(now);
+                store.save_npc(&frontmatter).map_err(|err| err.to_string())?;
+            }
+        }
+        EntityType::Location => {
+            if let Some(mut frontmatter) = store.load_location(&target.slug).map_err(|err| err.to_string())? {
+                frontmatter.vault_path = vault_path.clone();
+                frontmatter.published_at = Some(now);
+                store.save_location(&frontmatter).map_err(|err| err.to_string())?;
+            }
+        }
+        EntityType::Faction => {
+            if let Some(mut frontmatter) = store.load_faction(&target.slug).map_err(|err| err.to_string())? {
+                frontmatter.vault_path = vault_path.clone();
+                frontmatter.published_at = Some(now);
+                store.save_faction(&frontmatter).map_err(|err| err.to_string())?;
+            }
+        }
+        EntityType::Item => {
+            if let Some(mut frontmatter) = store.load_item(&target.slug).map_err(|err| err.to_string())? {
+                frontmatter.vault_path = vault_path.clone();
+                frontmatter.published_at = Some(now);
+                store.save_item(&frontmatter).map_err(|err| err.to_string())?;
+            }
+        }
+    }
 
     Ok(Some(ok_response(
         format!("Published {} to {}", target.name, relative.display()),

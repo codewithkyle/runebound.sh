@@ -216,6 +216,7 @@ mod tests {
             location: "Silversong".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T12:00:00Z".to_string(),
+            published_at: None,
         };
 
         let markdown = render_npc_markdown(&frontmatter);
@@ -250,6 +251,7 @@ mod tests {
             symbol_description: "A burned coin.".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
+            published_at: None,
         };
 
         let markdown = render_faction_markdown(&frontmatter);
@@ -284,6 +286,7 @@ mod tests {
             symbol_description: "A burned coin.".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
+            published_at: None,
         };
 
         let markdown = render_faction_markdown(&frontmatter);

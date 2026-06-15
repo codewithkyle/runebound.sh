@@ -103,6 +103,7 @@ impl EntityAdminService {
                 current_tension: "Unknown".to_string(),
                 created_at: created_at.clone(),
                 updated_at: now.clone(),
+                published_at: None,
             });
             vault
                 .write_relative(&PathBuf::from(&relative_path), &content)

@@ -116,6 +116,8 @@ pub struct NpcFrontmatter {
     pub location: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,6 +140,8 @@ pub struct LocationFrontmatter {
     pub current_tension: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -167,6 +171,8 @@ pub struct FactionFrontmatter {
     pub symbol_description: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -189,6 +195,8 @@ pub struct ItemFrontmatter {
     pub location: String,
     pub created_at: String,
     pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
 }
 
 use super::output::{
