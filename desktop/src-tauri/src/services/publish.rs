@@ -8,18 +8,13 @@ use crate::utils::normalize_unknown_text;
 
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
     let mut out = String::new();
-    writeln!(&mut out, "# {}", frontmatter.name).ok();
-    writeln!(&mut out).ok();
-    writeln!(&mut out, "| Attribute | Value |").ok();
-    writeln!(&mut out, "| --- | --- |").ok();
-    write_row(&mut out, "Race", &frontmatter.race);
-    write_row(&mut out, "Occupation", &frontmatter.occupation);
-    write_row(&mut out, "Sex", &frontmatter.sex);
-    write_row(&mut out, "Age", &frontmatter.age);
-    write_row(&mut out, "Height", &frontmatter.height);
-    write_row(&mut out, "Weight", &frontmatter.weight_lbs);
-    write_row(&mut out, "Location", &frontmatter.location);
-    write_row(&mut out, "Slug", &frontmatter.slug);
+    write_attr_line(&mut out, "Race", &frontmatter.race);
+    write_attr_line(&mut out, "Occupation", &frontmatter.occupation);
+    write_attr_line(&mut out, "Sex", &frontmatter.sex);
+    write_attr_line(&mut out, "Age", &frontmatter.age);
+    write_attr_line(&mut out, "Height", &frontmatter.height);
+    write_attr_line(&mut out, "Weight", &frontmatter.weight_lbs);
+    write_attr_line(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Background", &frontmatter.background);
@@ -27,27 +22,15 @@ pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
     write_section(&mut out, "Secret", &frontmatter.secret_obstacle);
     write_list_section(&mut out, "Carrying", &frontmatter.carrying);
 
-    writeln!(
-        &mut out,
-        "\n---\n_Published via runebound.sh on {}._",
-        frontmatter.updated_at
-    )
-    .ok();
     out
 }
 
 pub fn render_location_markdown(frontmatter: &LocationFrontmatter) -> String {
     let mut out = String::new();
-    writeln!(&mut out, "# {}", frontmatter.name).ok();
-    writeln!(&mut out).ok();
-    writeln!(&mut out, "| Attribute | Value |").ok();
-    writeln!(&mut out, "| --- | --- |").ok();
-    write_row(&mut out, "Kind", &kind_display(frontmatter));
-    write_row(&mut out, "Tone", &frontmatter.tone);
-    write_row(&mut out, "Authority", &frontmatter.authority);
-    write_row(&mut out, "Danger", &frontmatter.danger_level);
-    write_row(&mut out, "Slug", &frontmatter.slug);
-    write_row(&mut out, "Path", &frontmatter.vault_path);
+    write_attr_line(&mut out, "Kind", &kind_display(frontmatter));
+    write_attr_line(&mut out, "Tone", &frontmatter.tone);
+    write_attr_line(&mut out, "Authority", &frontmatter.authority);
+    write_attr_line(&mut out, "Danger", &frontmatter.danger_level);
     writeln!(&mut out).ok();
 
     write_section(
@@ -67,32 +50,20 @@ pub fn render_location_markdown(frontmatter: &LocationFrontmatter) -> String {
         &frontmatter.current_tension,
     );
 
-    writeln!(
-        &mut out,
-        "\n---\n_Published via runebound.sh on {}._",
-        frontmatter.updated_at
-    )
-    .ok();
     out
 }
 
 pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
     let mut out = String::new();
-    writeln!(&mut out, "# {}", frontmatter.name).ok();
-    writeln!(&mut out).ok();
-    writeln!(&mut out, "| Attribute | Value |").ok();
-    writeln!(&mut out, "| --- | --- |").ok();
-    write_row(&mut out, "Kind", &frontmatter.kind_type);
+    write_attr_line(&mut out, "Kind", &frontmatter.kind_type);
     if let Some(custom) = &frontmatter.kind_custom {
         if !custom.trim().is_empty() {
-            write_row(&mut out, "Kind (custom)", custom);
+            write_attr_line(&mut out, "Kind (custom)", custom);
         }
     }
-    write_row(&mut out, "Headquarters", &frontmatter.headquarters);
-    write_row(&mut out, "Sphere", &frontmatter.sphere_of_influence);
-    write_row(&mut out, "Reputation", &frontmatter.reputation);
-    write_row(&mut out, "Slug", &frontmatter.slug);
-    write_row(&mut out, "Path", &frontmatter.vault_path);
+    write_attr_line(&mut out, "Headquarters", &frontmatter.headquarters);
+    write_attr_line(&mut out, "Sphere", &frontmatter.sphere_of_influence);
+    write_attr_line(&mut out, "Reputation", &frontmatter.reputation);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Public Description", &frontmatter.public_description);
@@ -107,28 +78,16 @@ pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
     write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
     write_section(&mut out, "Symbol", &frontmatter.symbol_description);
 
-    writeln!(
-        &mut out,
-        "\n---\n_Published via runebound.sh on {}._",
-        frontmatter.updated_at
-    )
-    .ok();
     out
 }
 
 pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     let mut out = String::new();
-    writeln!(&mut out, "# {}", frontmatter.name).ok();
-    writeln!(&mut out).ok();
-    writeln!(&mut out, "| Attribute | Value |").ok();
-    writeln!(&mut out, "| --- | --- |").ok();
-    write_row(&mut out, "Category", &frontmatter.category);
-    write_row(&mut out, "Rarity", &frontmatter.rarity);
-    write_row(&mut out, "Attunement", &frontmatter.attunement);
-    write_row(&mut out, "Value", &frontmatter.value);
-    write_row(&mut out, "Location", &frontmatter.location);
-    write_row(&mut out, "Slug", &frontmatter.slug);
-    write_row(&mut out, "Path", &frontmatter.vault_path);
+    write_attr_line(&mut out, "Category", &frontmatter.category);
+    write_attr_line(&mut out, "Rarity", &frontmatter.rarity);
+    write_attr_line(&mut out, "Attunement", &frontmatter.attunement);
+    write_attr_line(&mut out, "Value", &frontmatter.value);
+    write_attr_line(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Appearance", &frontmatter.appearance);
@@ -137,18 +96,14 @@ pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     write_section(&mut out, "History", &frontmatter.history);
     write_list_section(&mut out, "Materials", &frontmatter.materials);
 
-    writeln!(
-        &mut out,
-        "\n---\n_Published via runebound.sh on {}._",
-        frontmatter.updated_at
-    )
-    .ok();
     out
 }
 
-fn write_row(out: &mut String, label: &str, value: &str) {
+fn write_attr_line(out: &mut String, label: &str, value: &str) {
     let normalized = normalize_unknown_text(value);
-    writeln!(out, "| {label} | {normalized} |").ok();
+    if normalized != "Unknown" {
+        writeln!(out, "**{label}:** {normalized}").ok();
+    }
 }
 
 fn write_section(out: &mut String, title: &str, value: &str) {
@@ -197,7 +152,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn npc_renderer_includes_metadata_table() {
+    fn npc_renderer_includes_attributes() {
         let frontmatter = NpcFrontmatter {
             doc_type: "npc".to_string(),
             id: "npc_1".to_string(),
@@ -220,7 +175,7 @@ mod tests {
         };
 
         let markdown = render_npc_markdown(&frontmatter);
-        assert!(markdown.contains("| Race | Elf |"));
+        assert!(markdown.contains("**Race:** Elf"));
         assert!(markdown.contains("## Background"));
         assert!(markdown.contains("- Silver quill"));
     }

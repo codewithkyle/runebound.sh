@@ -419,6 +419,11 @@ impl ItemRepository for ProdItemRepository {
 
 #[async_trait]
 pub trait DocumentRepository: Send + Sync {
+    async fn find_by_vault_path(
+        &self,
+        database: &Database,
+        vault_path: &str,
+    ) -> Result<Option<String>, String>;
     async fn upsert_index(
         &self,
         database: &Database,
@@ -440,6 +445,16 @@ pub struct ProdDocumentRepository;
 
 #[async_trait]
 impl DocumentRepository for ProdDocumentRepository {
+    async fn find_by_vault_path(
+        &self,
+        database: &Database,
+        vault_path: &str,
+    ) -> Result<Option<String>, String> {
+        core_db::find_document_by_vault_path(&database.pool, vault_path)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
     async fn upsert_index(
         &self,
         database: &Database,

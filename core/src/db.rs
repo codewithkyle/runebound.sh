@@ -637,6 +637,19 @@ pub async fn upsert_item(pool: &SqlitePool, item: &ItemRow) -> Result<()> {
     Ok(())
 }
 
+pub async fn find_document_by_vault_path(
+    pool: &SqlitePool,
+    vault_path: &str,
+) -> Result<Option<String>> {
+    let row = sqlx::query("SELECT slug FROM documents WHERE vault_path = ?1")
+        .bind(vault_path)
+        .fetch_optional(pool)
+        .await
+        .context("failed to find document by vault path")?;
+
+    Ok(row.map(|r| r.get::<String, _>("slug")))
+}
+
 pub async fn upsert_document_index(
     pool: &SqlitePool,
     doc_type: &str,

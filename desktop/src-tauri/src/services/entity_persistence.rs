@@ -1,7 +1,7 @@
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
     FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION,
-    now_timestamp, slugify, unique_slug_for_dir_with_ext,
+    normalize_markdown_file_stem, now_timestamp, slugify, unique_slug_for_dir_with_ext,
 };
 use dnd_core::serialization::{
     carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
@@ -79,7 +79,27 @@ impl EntityPersistenceService {
             .as_ref()
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
-        let vault_path = format!("npcs/{slug}.md");
+        let vault_path = if let Some(current) = existing.as_ref() {
+            if current.name == name {
+                current.vault_path.clone()
+            } else {
+                self.unique_readable_vault_path(
+                    document_repo.as_ref(),
+                    database.as_ref(),
+                    "npcs",
+                    name,
+                )
+                .await?
+            }
+        } else {
+            self.unique_readable_vault_path(
+                document_repo.as_ref(),
+                database.as_ref(),
+                "npcs",
+                name,
+            )
+            .await?
+        };
 
         let frontmatter = NpcFrontmatter {
             doc_type: "npc".to_string(),
@@ -234,7 +254,13 @@ impl EntityPersistenceService {
         } else if let Some(current) = existing.as_ref() {
             normalize_relative_path_for_storage(&current.vault_path)
         } else {
-            format!("locations/{slug}.md")
+            self.unique_readable_vault_path(
+                document_repo.as_ref(),
+                database.as_ref(),
+                "locations",
+                name,
+            )
+            .await?
         };
 
         let frontmatter = LocationFrontmatter {
@@ -379,7 +405,13 @@ impl EntityPersistenceService {
         } else if let Some(row) = existing.as_ref() {
             normalize_relative_path_for_storage(&row.vault_path)
         } else {
-            format!("factions/{slug}.md")
+            self.unique_readable_vault_path(
+                document_repo.as_ref(),
+                database.as_ref(),
+                "factions",
+                input.name.trim(),
+            )
+            .await?
         };
 
         let frontmatter = FactionFrontmatter {
@@ -473,6 +505,27 @@ impl EntityPersistenceService {
         })
     }
 
+    async fn unique_readable_vault_path(
+        &self,
+        document_repo: &dyn crate::repositories::DocumentRepository,
+        database: &db::Database,
+        relative_dir: &str,
+        display_name: &str,
+    ) -> Result<String, String> {
+        let base = normalize_markdown_file_stem(display_name);
+        let mut candidate = format!("{relative_dir}/{base}.md");
+        let mut idx = 2;
+        while document_repo
+            .find_by_vault_path(database, &candidate)
+            .await?
+            .is_some()
+        {
+            candidate = format!("{relative_dir}/{base} {idx}.md");
+            idx += 1;
+        }
+        Ok(candidate)
+    }
+
     pub async fn save_item_draft(
         &self,
         input: SaveItemDraftInput,
@@ -523,10 +576,17 @@ impl EntityPersistenceService {
             .as_ref()
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
-        let vault_path = existing
-            .as_ref()
-            .map(|row| normalize_relative_path_for_storage(&row.vault_path))
-            .unwrap_or_else(|| format!("items/{slug}.md"));
+        let vault_path = if let Some(current) = existing.as_ref() {
+            normalize_relative_path_for_storage(&current.vault_path)
+        } else {
+            self.unique_readable_vault_path(
+                document_repo.as_ref(),
+                database.as_ref(),
+                "items",
+                name,
+            )
+            .await?
+        };
 
         let frontmatter = ItemFrontmatter {
             doc_type: "item".to_string(),
