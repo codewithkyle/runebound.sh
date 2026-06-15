@@ -1,7 +1,15 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, LocationDraftSession};
-use crate::commands::ok_response;
+use crate::entities::common::{
+    entity_message_response,
+    entity_response_with_event,
+    merge_seed_and_reroll_prompt,
+    no_active_draft_message,
+    normalize_unknown_list,
+    normalize_unknown_text,
+    parse_list_csv,
+};
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, LOCATION_SCHEMA};
 use crate::entities::EntityKind;
@@ -15,13 +23,6 @@ pub struct LocationDomain;
 impl LocationDomain {
     pub fn new() -> Self {
         Self
-    }
-
-    fn no_draft_response(&self) -> EntityDomainResult {
-        Ok(Some(ok_response(
-            "no active location draft. run create location or load <name>.".to_string(),
-            None,
-        )))
     }
 }
 
@@ -55,22 +56,19 @@ impl EntityDomain for LocationDomain {
             editor.get_location().cloned()
         };
         let Some(draft) = draft else {
-            return self.no_draft_response();
+            return entity_message_response(no_active_draft_message(EntityKind::Location));
         };
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             location_summary_text(&draft),
-            Some(location_event_from_draft(&draft)),
-        )))
+            location_event_from_draft(&draft),
+        )
     }
 
     async fn rename(&self, value: &str, state: &AppState) -> EntityDomainResult {
         let name = value.trim();
         if name.is_empty() {
-            return Ok(Some(ok_response(
-                "location name cannot be empty.".to_string(),
-                None,
-            )));
+            return entity_message_response("location name cannot be empty.");
         }
 
         let updated = {
@@ -85,27 +83,24 @@ impl EntityDomain for LocationDomain {
             snapshot
         };
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             location_summary_text(&updated),
-            Some(location_event_from_draft(&updated)),
-        )))
+            location_event_from_draft(&updated),
+        )
     }
 
     async fn set_field(&self, field: &str, value: &str, state: &AppState) -> EntityDomainResult {
         let trimmed_value = value.trim();
         if trimmed_value.is_empty() {
-            return Ok(Some(ok_response(
-                "location set value cannot be empty.".to_string(),
-                None,
-            )));
+            return entity_message_response("location set value cannot be empty.");
         }
 
         let Some(canonical) = canonical_field_name(EntityKind::Location, field, FieldAccess::Set) else {
             let valid_fields = format_valid_field_list(EntityKind::Location, FieldAccess::Set);
-            return Ok(Some(ok_response(
-                format!("unknown location field: {}. valid fields: {}", field, valid_fields),
-                None,
-            )));
+            return entity_message_response(format!(
+                "unknown location field: {}. valid fields: {}",
+                field, valid_fields
+            ));
         };
 
         let updated = {
@@ -141,10 +136,9 @@ impl EntityDomain for LocationDomain {
                     .as_ref()
                     .is_none_or(|item| item.trim().is_empty())
             {
-                return Ok(Some(ok_response(
-                    "kind_custom is required when kind is other. use location set kind_custom <value>.".to_string(),
-                    None,
-                )));
+                return entity_message_response(
+                    "kind_custom is required when kind is other. use location set kind_custom <value>.",
+                );
             }
             if draft.kind_type != "other" {
                 draft.kind_custom = None;
@@ -156,10 +150,10 @@ impl EntityDomain for LocationDomain {
             snapshot
         };
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             location_summary_text(&updated),
-            Some(location_event_from_draft(&updated)),
-        )))
+            location_event_from_draft(&updated),
+        )
     }
 
     async fn reroll_field(
@@ -169,10 +163,7 @@ impl EntityDomain for LocationDomain {
         state: &AppState,
     ) -> EntityDomainResult {
         if field.trim().is_empty() {
-            return Ok(Some(ok_response(
-                "usage: location reroll <field> [prompt]".to_string(),
-                None,
-            )));
+            return entity_message_response("usage: location reroll <field> [prompt]");
         }
 
         let mut draft = {
@@ -277,10 +268,10 @@ impl EntityDomain for LocationDomain {
             editor.clear_kind(EntityKind::Npc);
         }
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             location_summary_text(&draft),
-            Some(location_event_from_draft(&draft)),
-        )))
+            location_event_from_draft(&draft),
+        )
     }
 
     async fn save(&self, state: &AppState) -> EntityDomainResult {
@@ -327,10 +318,7 @@ impl EntityDomain for LocationDomain {
         ]
         .join("\n");
 
-        Ok(Some(ok_response(
-            output,
-            Some(CommandClientEvent::ClearDrafts),
-        )))
+        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
@@ -339,36 +327,10 @@ impl EntityDomain for LocationDomain {
             editor.take_location()
         };
         if removed.is_none() {
-            return self.no_draft_response();
+            return entity_message_response(no_active_draft_message(EntityKind::Location));
         }
 
-        Ok(Some(ok_response(
-            "location draft discarded.".to_string(),
-            Some(CommandClientEvent::ClearDrafts),
-        )))
-    }
-}
-
-fn merge_seed_and_reroll_prompt(
-    seed_prompt: &Option<String>,
-    reroll_prompt: Option<String>,
-) -> Option<String> {
-    let seed_prompt = seed_prompt
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    let reroll_prompt = reroll_prompt
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    match (seed_prompt, reroll_prompt) {
-        (Some(seed), Some(reroll)) => Some(format!(
-            "Seed context from original create command:\n{}\n\nReroll request:\n{}",
-            seed, reroll
-        )),
-        (Some(seed), None) => Some(seed.to_string()),
-        (None, Some(reroll)) => Some(reroll.to_string()),
-        (None, None) => None,
+        entity_response_with_event("location draft discarded.", CommandClientEvent::ClearDrafts)
     }
 }
 
@@ -414,14 +376,6 @@ pub fn normalize_location_danger_level(value: &str) -> Result<String, String> {
     }
 }
 
-pub fn parse_list_csv(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
-}
-
 pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
@@ -454,8 +408,6 @@ pub fn location_summary_text(draft: &LocationDraftSession) -> String {
 }
 
 pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent {
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
     use runebound_models::drafts::location_entity_card;
 
     let normalized_draft = LocationDraftSession {
@@ -465,13 +417,13 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         vault_path: draft.vault_path.clone(),
         kind_type: draft.kind_type.clone(),
         kind_custom: draft.kind_custom.clone(),
-        visual_description: core_normalize_unknown(&draft.visual_description),
-        history_background: core_normalize_unknown(&draft.history_background),
-        exports: core_normalize_list(draft.exports.clone()),
-        tone: core_normalize_unknown(&draft.tone),
-        authority: core_normalize_unknown(&draft.authority),
-        danger_level: core_normalize_unknown(&draft.danger_level),
-        current_tension: core_normalize_unknown(&draft.current_tension),
+        visual_description: normalize_unknown_text(&draft.visual_description),
+        history_background: normalize_unknown_text(&draft.history_background),
+        exports: normalize_unknown_list(draft.exports.clone()),
+        tone: normalize_unknown_text(&draft.tone),
+        authority: normalize_unknown_text(&draft.authority),
+        danger_level: normalize_unknown_text(&draft.danger_level),
+        current_tension: normalize_unknown_text(&draft.current_tension),
         seed_prompt: draft.seed_prompt.clone(),
     };
     let entity_card_doc = location_entity_card(&normalized_draft);

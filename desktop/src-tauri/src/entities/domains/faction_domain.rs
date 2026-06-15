@@ -1,7 +1,15 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, FactionDraftSession};
-use crate::commands::ok_response;
+use crate::entities::common::{
+    entity_message_response,
+    entity_response_with_event,
+    merge_seed_and_reroll_prompt,
+    no_active_draft_message,
+    normalize_unknown_list,
+    normalize_unknown_text,
+    parse_list_csv,
+};
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, FACTION_SCHEMA};
 use crate::entities::EntityKind;
@@ -15,13 +23,6 @@ pub struct FactionDomain;
 impl FactionDomain {
     pub fn new() -> Self {
         Self
-    }
-
-    fn no_draft_response(&self) -> EntityDomainResult {
-        Ok(Some(ok_response(
-            "no active faction draft. run create faction or load <name>.".to_string(),
-            None,
-        )))
     }
 }
 
@@ -55,22 +56,19 @@ impl EntityDomain for FactionDomain {
             editor.get_faction().cloned()
         };
         let Some(draft) = draft else {
-            return self.no_draft_response();
+            return entity_message_response(no_active_draft_message(EntityKind::Faction));
         };
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             faction_summary_text(&draft),
-            Some(faction_event_from_draft(&draft)),
-        )))
+            faction_event_from_draft(&draft),
+        )
     }
 
     async fn rename(&self, value: &str, state: &AppState) -> EntityDomainResult {
         let name = value.trim();
         if name.is_empty() {
-            return Ok(Some(ok_response(
-                "faction name cannot be empty.".to_string(),
-                None,
-            )));
+            return entity_message_response("faction name cannot be empty.");
         }
 
         let updated = {
@@ -86,19 +84,16 @@ impl EntityDomain for FactionDomain {
             snapshot
         };
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             faction_summary_text(&updated),
-            Some(faction_event_from_draft(&updated)),
-        )))
+            faction_event_from_draft(&updated),
+        )
     }
 
     async fn set_field(&self, field: &str, value: &str, state: &AppState) -> EntityDomainResult {
         let trimmed_value = value.trim();
         if trimmed_value.is_empty() {
-            return Ok(Some(ok_response(
-                "faction set value cannot be empty.".to_string(),
-                None,
-            )));
+            return entity_message_response("faction set value cannot be empty.");
         }
 
         let canonical = canonical_field_name(EntityKind::Faction, field, FieldAccess::Set)
@@ -154,10 +149,9 @@ impl EntityDomain for FactionDomain {
                     .as_ref()
                     .is_none_or(|item| item.trim().is_empty())
             {
-                return Ok(Some(ok_response(
-                    "kind_custom is required when kind is other. use faction set kind_custom <value>.".to_string(),
-                    None,
-                )));
+                return entity_message_response(
+                    "kind_custom is required when kind is other. use faction set kind_custom <value>.",
+                );
             }
             if draft.kind_type != "other" {
                 draft.kind_custom = None;
@@ -170,10 +164,10 @@ impl EntityDomain for FactionDomain {
             snapshot
         };
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             faction_summary_text(&updated),
-            Some(faction_event_from_draft(&updated)),
-        )))
+            faction_event_from_draft(&updated),
+        )
     }
 
     async fn reroll_field(
@@ -183,10 +177,7 @@ impl EntityDomain for FactionDomain {
         state: &AppState,
     ) -> EntityDomainResult {
         if field.trim().is_empty() {
-            return Ok(Some(ok_response(
-                "usage: faction reroll <field> [prompt]".to_string(),
-                None,
-            )));
+            return entity_message_response("usage: faction reroll <field> [prompt]");
         }
 
         let mut draft = {
@@ -336,10 +327,10 @@ impl EntityDomain for FactionDomain {
             editor.clear_kind(EntityKind::Location);
         }
 
-        Ok(Some(ok_response(
+        entity_response_with_event(
             faction_summary_text(&draft),
-            Some(faction_event_from_draft(&draft)),
-        )))
+            faction_event_from_draft(&draft),
+        )
     }
 
     async fn save(&self, state: &AppState) -> EntityDomainResult {
@@ -393,10 +384,7 @@ impl EntityDomain for FactionDomain {
         ]
         .join("\n");
 
-        Ok(Some(ok_response(
-            output,
-            Some(CommandClientEvent::ClearDrafts),
-        )))
+        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
@@ -405,36 +393,10 @@ impl EntityDomain for FactionDomain {
             editor.take_faction()
         };
         if removed.is_none() {
-            return self.no_draft_response();
+            return entity_message_response(no_active_draft_message(EntityKind::Faction));
         }
 
-        Ok(Some(ok_response(
-            "faction draft discarded.".to_string(),
-            Some(CommandClientEvent::ClearDrafts),
-        )))
-    }
-}
-
-fn merge_seed_and_reroll_prompt(
-    seed_prompt: &Option<String>,
-    reroll_prompt: Option<String>,
-) -> Option<String> {
-    let seed_prompt = seed_prompt
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    let reroll_prompt = reroll_prompt
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    match (seed_prompt, reroll_prompt) {
-        (Some(seed), Some(reroll)) => Some(format!(
-            "Seed context from original create command:\n{}\n\nReroll request:\n{}",
-            seed, reroll
-        )),
-        (Some(seed), None) => Some(seed.to_string()),
-        (None, Some(reroll)) => Some(reroll.to_string()),
-        (None, None) => None,
+        entity_response_with_event("faction draft discarded.", CommandClientEvent::ClearDrafts)
     }
 }
 
@@ -460,27 +422,6 @@ pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
             FACTION_KIND_TYPES.join(", ")
         ))
     }
-}
-
-pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    if cleaned.is_empty() {
-        vec!["Unknown".to_string()]
-    } else {
-        cleaned
-    }
-}
-
-pub fn parse_list_csv(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
 }
 
 pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
@@ -509,8 +450,6 @@ pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
 }
 
 pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
     use runebound_models::drafts::faction_entity_card;
 
     let normalized_draft = FactionDraftSession {
@@ -520,20 +459,20 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
         vault_path: draft.vault_path.clone(),
         kind_type: draft.kind_type.clone(),
         kind_custom: draft.kind_custom.clone(),
-        public_description: core_normalize_unknown(&draft.public_description),
-        true_agenda: core_normalize_unknown(&draft.true_agenda),
-        methods: core_normalize_unknown(&draft.methods),
-        leadership: core_normalize_unknown(&draft.leadership),
-        headquarters: core_normalize_unknown(&draft.headquarters),
-        sphere_of_influence: core_normalize_unknown(&draft.sphere_of_influence),
-        resources_assets: core_normalize_unknown(&draft.resources_assets),
-        allies: core_normalize_list(draft.allies.clone()),
-        rivals_enemies: core_normalize_list(draft.rivals_enemies.clone()),
-        reputation: core_normalize_unknown(&draft.reputation),
-        current_tension: core_normalize_unknown(&draft.current_tension),
-        goals_short_term: core_normalize_list(draft.goals_short_term.clone()),
-        goals_long_term: core_normalize_list(draft.goals_long_term.clone()),
-        symbol_description: core_normalize_unknown(&draft.symbol_description),
+        public_description: normalize_unknown_text(&draft.public_description),
+        true_agenda: normalize_unknown_text(&draft.true_agenda),
+        methods: normalize_unknown_text(&draft.methods),
+        leadership: normalize_unknown_text(&draft.leadership),
+        headquarters: normalize_unknown_text(&draft.headquarters),
+        sphere_of_influence: normalize_unknown_text(&draft.sphere_of_influence),
+        resources_assets: normalize_unknown_text(&draft.resources_assets),
+        allies: normalize_unknown_list(draft.allies.clone()),
+        rivals_enemies: normalize_unknown_list(draft.rivals_enemies.clone()),
+        reputation: normalize_unknown_text(&draft.reputation),
+        current_tension: normalize_unknown_text(&draft.current_tension),
+        goals_short_term: normalize_unknown_list(draft.goals_short_term.clone()),
+        goals_long_term: normalize_unknown_list(draft.goals_long_term.clone()),
+        symbol_description: normalize_unknown_text(&draft.symbol_description),
         seed_prompt: draft.seed_prompt.clone(),
     };
     let entity_card_doc = faction_entity_card(&normalized_draft);

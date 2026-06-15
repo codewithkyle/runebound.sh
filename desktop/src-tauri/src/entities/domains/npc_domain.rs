@@ -1,7 +1,14 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, NpcDraftSession};
-use crate::commands::ok_response;
+use crate::entities::common::{
+    entity_message_response,
+    entity_response_with_event,
+    merge_seed_and_reroll_prompt,
+    no_active_draft_message,
+    normalize_unknown_list,
+    normalize_unknown_text,
+};
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, NPC_SCHEMA};
 use crate::entities::EntityKind;
@@ -15,13 +22,6 @@ pub struct NpcDomain;
 impl NpcDomain {
     pub fn new() -> Self {
         Self
-    }
-
-    fn no_draft_response(&self) -> EntityDomainResult {
-        Ok(Some(ok_response(
-            "no active npc draft. run create npc or load <name>.".to_string(),
-            None,
-        )))
     }
 }
 
@@ -57,22 +57,16 @@ impl EntityDomain for NpcDomain {
         };
 
         let Some(draft) = draft else {
-            return self.no_draft_response();
+            return entity_message_response(no_active_draft_message(EntityKind::Npc));
         };
 
-        Ok(Some(ok_response(
-            npc_summary_text(&draft),
-            Some(npc_event_from_draft(&draft)),
-        )))
+        entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
     }
 
     async fn rename(&self, value: &str, state: &AppState) -> EntityDomainResult {
         let name = value.trim();
         if name.is_empty() {
-            return Ok(Some(ok_response(
-                "npc name cannot be empty.".to_string(),
-                None,
-            )));
+            return entity_message_response("npc name cannot be empty.");
         }
 
         let updated = {
@@ -87,27 +81,21 @@ impl EntityDomain for NpcDomain {
             snapshot
         };
 
-        Ok(Some(ok_response(
-            npc_summary_text(&updated),
-            Some(npc_event_from_draft(&updated)),
-        )))
+        entity_response_with_event(npc_summary_text(&updated), npc_event_from_draft(&updated))
     }
 
     async fn set_field(&self, field: &str, value: &str, state: &AppState) -> EntityDomainResult {
         let trimmed_value = value.trim();
         if trimmed_value.is_empty() {
-            return Ok(Some(ok_response(
-                "npc set value cannot be empty.".to_string(),
-                None,
-            )));
+            return entity_message_response("npc set value cannot be empty.");
         }
 
         let Some(canonical) = canonical_field_name(EntityKind::Npc, field, FieldAccess::Set) else {
             let valid_fields = format_valid_field_list(EntityKind::Npc, FieldAccess::Set);
-            return Ok(Some(ok_response(
-                format!("unknown npc field: {}. valid fields: {}", field, valid_fields),
-                None,
-            )));
+            return entity_message_response(format!(
+                "unknown npc field: {}. valid fields: {}",
+                field, valid_fields
+            ));
         };
 
         let updated = {
@@ -137,10 +125,7 @@ impl EntityDomain for NpcDomain {
             snapshot
         };
 
-        Ok(Some(ok_response(
-            npc_summary_text(&updated),
-            Some(npc_event_from_draft(&updated)),
-        )))
+        entity_response_with_event(npc_summary_text(&updated), npc_event_from_draft(&updated))
     }
 
     async fn reroll_field(
@@ -150,10 +135,7 @@ impl EntityDomain for NpcDomain {
         state: &AppState,
     ) -> EntityDomainResult {
         if field.trim().is_empty() {
-            return Ok(Some(ok_response(
-                "usage: npc reroll <field> [prompt]".to_string(),
-                None,
-            )));
+            return entity_message_response("usage: npc reroll <field> [prompt]");
         }
 
         let mut draft = {
@@ -260,10 +242,7 @@ impl EntityDomain for NpcDomain {
             editor.clear_kind(EntityKind::Location);
         }
 
-        Ok(Some(ok_response(
-            npc_summary_text(&draft),
-            Some(npc_event_from_draft(&draft)),
-        )))
+        entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
     }
 
     async fn save(&self, state: &AppState) -> EntityDomainResult {
@@ -310,10 +289,7 @@ impl EntityDomain for NpcDomain {
         ]
         .join("\n");
 
-        Ok(Some(ok_response(
-            output,
-            Some(CommandClientEvent::ClearDrafts),
-        )))
+        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
@@ -323,37 +299,10 @@ impl EntityDomain for NpcDomain {
         };
 
         if removed.is_none() {
-            return self.no_draft_response();
+            return entity_message_response(no_active_draft_message(EntityKind::Npc));
         }
 
-        Ok(Some(ok_response(
-            "npc draft discarded.".to_string(),
-            Some(CommandClientEvent::ClearDrafts),
-        )))
-    }
-}
-
-fn merge_seed_and_reroll_prompt(
-    seed_prompt: &Option<String>,
-    reroll_prompt: Option<String>,
-) -> Option<String> {
-    let seed_prompt = seed_prompt
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-    let reroll_prompt = reroll_prompt
-        .as_ref()
-        .map(|value| value.trim())
-        .filter(|value| !value.is_empty());
-
-    match (seed_prompt, reroll_prompt) {
-        (Some(seed), Some(reroll)) => Some(format!(
-            "Seed context from original create command:\n{}\n\nReroll request:\n{}",
-            seed, reroll
-        )),
-        (Some(seed), None) => Some(seed.to_string()),
-        (None, Some(reroll)) => Some(reroll.to_string()),
-        (None, None) => None,
+        entity_response_with_event("npc draft discarded.", CommandClientEvent::ClearDrafts)
     }
 }
 
@@ -376,28 +325,26 @@ pub fn npc_summary_text(draft: &NpcDraftSession) -> String {
 }
 
 pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
-    use dnd_core::npc::normalize_unknown_list as core_normalize_list;
-    use dnd_core::npc::normalize_unknown_text as core_normalize_unknown;
     use runebound_models::drafts::npc_entity_card;
 
     let normalized_draft = NpcDraftSession {
         id: draft.id.clone(),
         name: draft.name.clone(),
-        race: core_normalize_unknown(&draft.race),
-        occupation: core_normalize_unknown(&draft.occupation),
+        race: normalize_unknown_text(&draft.race),
+        occupation: normalize_unknown_text(&draft.occupation),
         sex: match draft.sex.to_lowercase().as_str() {
             "male" => "Male".to_string(),
             "female" => "Female".to_string(),
             _ => draft.sex.clone(),
         },
-        age: core_normalize_unknown(&draft.age),
-        height: core_normalize_unknown(&draft.height),
-        weight_lbs: core_normalize_unknown(&draft.weight_lbs),
-        background: core_normalize_unknown(&draft.background),
-        want_need: core_normalize_unknown(&draft.want_need),
-        secret_obstacle: core_normalize_unknown(&draft.secret_obstacle),
-        carrying: core_normalize_list(draft.carrying.clone()),
-        location: core_normalize_unknown(&draft.location),
+        age: normalize_unknown_text(&draft.age),
+        height: normalize_unknown_text(&draft.height),
+        weight_lbs: normalize_unknown_text(&draft.weight_lbs),
+        background: normalize_unknown_text(&draft.background),
+        want_need: normalize_unknown_text(&draft.want_need),
+        secret_obstacle: normalize_unknown_text(&draft.secret_obstacle),
+        carrying: normalize_unknown_list(draft.carrying.clone()),
+        location: normalize_unknown_text(&draft.location),
         seed_prompt: draft.seed_prompt.clone(),
     };
     let entity_card_doc = npc_entity_card(&normalized_draft);
