@@ -71,31 +71,43 @@ pub async fn handle_publish(
     let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
     let (markdown, vault_path) = match target.entity_type {
         EntityType::Npc => {
-            let frontmatter = store
+            let frontmatter = match store
                 .load_npc(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| missing_canonical_message(&target))?;
+            {
+                Some(data) => data,
+                None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
+            };
             (render_npc_markdown(&frontmatter), frontmatter.vault_path)
         }
         EntityType::Location => {
-            let frontmatter = store
+            let frontmatter = match store
                 .load_location(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| missing_canonical_message(&target))?;
+            {
+                Some(data) => data,
+                None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
+            };
             (render_location_markdown(&frontmatter), frontmatter.vault_path)
         }
         EntityType::Faction => {
-            let frontmatter = store
+            let frontmatter = match store
                 .load_faction(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| missing_canonical_message(&target))?;
+            {
+                Some(data) => data,
+                None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
+            };
             (render_faction_markdown(&frontmatter), frontmatter.vault_path)
         }
         EntityType::Item => {
-            let frontmatter = store
+            let frontmatter = match store
                 .load_item(&target.slug)
                 .map_err(|err| err.to_string())?
-                .ok_or_else(|| missing_canonical_message(&target))?;
+            {
+                Some(data) => data,
+                None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
+            };
             (render_item_markdown(&frontmatter), frontmatter.vault_path)
         }
     };

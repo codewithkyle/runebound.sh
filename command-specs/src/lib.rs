@@ -803,12 +803,7 @@ pub fn command_manifest() -> CommandManifest {
                     "publish Lirael".to_string(),
                     "publish obsidian-gate".to_string(),
                 ],
-                subcommands: vec![SubcommandSpec {
-                    name: "help".to_string(),
-                    summary: "Show publish command help".to_string(),
-                    options: Vec::new(),
-                    examples: vec!["publish help".to_string()],
-                }],
+                subcommands: Vec::new(),
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: Some("publish help".to_string()),
