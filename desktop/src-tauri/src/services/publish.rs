@@ -73,7 +73,7 @@ pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
     write_section(&mut out, "True Agenda", &frontmatter.true_agenda);
     write_section(&mut out, "Methods", &frontmatter.methods);
     write_section(&mut out, "Leadership", &frontmatter.leadership);
-    write_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
+    write_text_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
     write_list_section(&mut out, "Allies", &frontmatter.allies);
     write_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
     write_section(&mut out, "Current Tension", &frontmatter.current_tension);
@@ -135,6 +135,47 @@ fn write_list_section(out: &mut String, title: &str, values: &[String]) {
     writeln!(out).ok();
 }
 
+fn write_text_list_section(out: &mut String, title: &str, value: &str) {
+    let normalized = normalize_unknown_text(value);
+    if normalized == "Unknown" {
+        return;
+    }
+
+    let mut items = parse_text_list_items(&normalized);
+
+    if items.is_empty() {
+        items.push(normalized);
+    }
+
+    writeln!(out, "## {title}").ok();
+    for item in items {
+        writeln!(out, "- {}", item).ok();
+    }
+    writeln!(out).ok();
+}
+
+fn parse_text_list_items(value: &str) -> Vec<String> {
+    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(value) {
+        let cleaned: Vec<String> = parsed
+            .into_iter()
+            .map(|item| normalize_unknown_text(&item))
+            .filter(|item| item != "Unknown")
+            .collect();
+        if !cleaned.is_empty() {
+            return cleaned;
+        }
+    }
+
+    value
+        .split(|ch| matches!(ch, '\n' | ';' | ','))
+        .map(|chunk| chunk.trim())
+        .map(|chunk| chunk.trim_start_matches(|c| matches!(c, '-' | '*' | '•' | '[' | ']')))
+        .map(|chunk| chunk.trim_matches(|c| c == '[' || c == ']'))
+        .map(|chunk| normalize_unknown_text(chunk))
+        .filter(|chunk| chunk != "Unknown")
+        .collect()
+}
+
 fn kind_display(frontmatter: &LocationFrontmatter) -> String {
     let kind = normalize_unknown_text(&frontmatter.kind_type);
     if kind.to_ascii_lowercase() != "other" {
@@ -181,5 +222,72 @@ mod tests {
         assert!(markdown.contains("**Race:** Elf"));
         assert!(markdown.contains("## Background"));
         assert!(markdown.contains("- Silver quill"));
+    }
+
+    #[test]
+    fn faction_resources_render_as_list() {
+        let frontmatter = FactionFrontmatter {
+            doc_type: "faction".to_string(),
+            id: "fac_1".to_string(),
+            slug: "ashen-circle".to_string(),
+            name: "Ashen Circle".to_string(),
+            vault_path: "factions/Ashen Circle.md".to_string(),
+            kind_type: "guild".to_string(),
+            kind_custom: None,
+            public_description: "A secretive guild.".to_string(),
+            true_agenda: "Protect forbidden lore.".to_string(),
+            methods: "Shadow operations.".to_string(),
+            leadership: "Triumvirate".to_string(),
+            headquarters: "Smolderkeep".to_string(),
+            sphere_of_influence: "Borderlands".to_string(),
+            resources_assets: "Hidden vaults;Arcane scouts".to_string(),
+            allies: vec![],
+            rivals_enemies: vec![],
+            reputation: "Feared".to_string(),
+            current_tension: "Hunters closing in.".to_string(),
+            goals_short_term: vec![],
+            goals_long_term: vec![],
+            symbol_description: "A burned coin.".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+
+        let markdown = render_faction_markdown(&frontmatter);
+        assert!(markdown.contains("## Resources & Assets"));
+        assert!(markdown.contains("- Hidden vaults"));
+        assert!(markdown.contains("- Arcane scouts"));
+    }
+
+    #[test]
+    fn faction_resources_handle_json_array_string() {
+        let frontmatter = FactionFrontmatter {
+            doc_type: "faction".to_string(),
+            id: "fac_1".to_string(),
+            slug: "ashen-circle".to_string(),
+            name: "Ashen Circle".to_string(),
+            vault_path: "factions/Ashen Circle.md".to_string(),
+            kind_type: "guild".to_string(),
+            kind_custom: None,
+            public_description: "A secretive guild.".to_string(),
+            true_agenda: "Protect forbidden lore.".to_string(),
+            methods: "Shadow operations.".to_string(),
+            leadership: "Triumvirate".to_string(),
+            headquarters: "Smolderkeep".to_string(),
+            sphere_of_influence: "Borderlands".to_string(),
+            resources_assets: "[\"Hidden vaults\", \"Arcane scouts\"]".to_string(),
+            allies: vec![],
+            rivals_enemies: vec![],
+            reputation: "Feared".to_string(),
+            current_tension: "Hunters closing in.".to_string(),
+            goals_short_term: vec![],
+            goals_long_term: vec![],
+            symbol_description: "A burned coin.".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+
+        let markdown = render_faction_markdown(&frontmatter);
+        assert!(markdown.contains("- Hidden vaults"));
+        assert!(markdown.contains("- Arcane scouts"));
     }
 }
