@@ -41,6 +41,7 @@ async fn suggest_command_input(
 async fn run_command(
     input: String,
     state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<CommandResponse, String> {
     let normalized_input = normalize_command_input(&input);
     let parsed = parse_command_input(&normalized_input);
@@ -59,7 +60,7 @@ async fn run_command(
     }
 
     if let Some(response) =
-        router::dispatch_desktop_command(&normalized_input, &parsed.normalized_tokens, state.clone())
+        router::dispatch_desktop_command(&normalized_input, &parsed.normalized_tokens, state.clone(), app_handle.clone())
             .await?
     {
         let skip_history_push = matches!(
@@ -134,6 +135,7 @@ fn main() {
     }
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
         .invoke_handler(tauri::generate_handler![
             run_command,

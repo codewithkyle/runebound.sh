@@ -50,6 +50,7 @@ pub struct DesktopHandlerInvocation<'a> {
     pub tokens: &'a [String],
     pub lowered: &'a [String],
     pub state: State<'a, AppState>,
+    pub app_handle: tauri::AppHandle,
 }
 
 pub fn desktop_handler_registry() -> &'static HandlerRegistry<DesktopHandler> {

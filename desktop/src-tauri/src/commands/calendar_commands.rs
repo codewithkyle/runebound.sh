@@ -4,6 +4,7 @@ use dnd_core::calendar::{self, StoredCalendar};
 use runebound_models::{
     doc, entity_card, entity_row, heading, paragraph_text, CommandResponse, OutputDoc,
 };
+use tauri_plugin_dialog::DialogExt;
 
 use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
 
@@ -50,7 +51,7 @@ Examples:
 
 async fn calendar_import(
     trimmed: &str,
-    _invocation: DesktopHandlerInvocation<'_>,
+    invocation: DesktopHandlerInvocation<'_>,
 ) -> CommandResult {
     let path = if trimmed.len() > "calendar import".len() {
         let remainder = trimmed["calendar import".len()..].trim();
@@ -66,32 +67,29 @@ async fn calendar_import(
     let path = match path {
         Some(p) => PathBuf::from(p),
         None => {
-            let guidance = [
-                "## Calendar Import",
-                "",
-                "No path provided.",
-                "",
-                "Usage: calendar import <path>",
-                "",
-                "To import a calendar, provide the path to a JSON file exported from:",
-                "https://donjon.bin.sh/fantasy/calendar/",
-                "",
-                "Example:",
-            ].join("\n");
+            let picked = invocation
+                .app_handle
+                .dialog()
+                .file()
+                .add_filter("JSON files", &["json"])
+                .set_title("Select Calendar File")
+                .blocking_pick_file();
 
-            let doc = doc()
-                .with_block(heading(2, "Calendar Import"))
-                .with_block(paragraph_text("No path provided."))
-                .with_block(paragraph_text("Usage: calendar import <path>"))
-                .with_block(paragraph_text("To import a calendar, provide the path to a JSON file exported from:"))
-                .with_block(paragraph_text("https://donjon.bin.sh/fantasy/calendar/"))
-                .with_block(paragraph_text("Example:"));
-
-            return Ok(Some(ok_response_with_doc(
-                guidance,
-                Some(doc),
-                None,
-            )));
+            match picked {
+                Some(fp) => {
+                    use tauri_plugin_dialog::FilePath;
+                    match fp {
+                        FilePath::Path(p) => p,
+                        FilePath::Url(u) => PathBuf::from(u.as_str()),
+                    }
+                }
+                None => {
+                    return Ok(Some(ok_response(
+                        "Calendar import cancelled.".to_string(),
+                        None,
+                    )));
+                }
+            }
         }
     };
 

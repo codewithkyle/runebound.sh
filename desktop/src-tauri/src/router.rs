@@ -13,6 +13,7 @@ pub(crate) async fn dispatch_desktop_command(
     input: &str,
     tokens: &[String],
     state: State<'_, AppState>,
+    app_handle: tauri::AppHandle,
 ) -> Result<Option<CommandResponse>, String> {
     if tokens.is_empty() {
         return Ok(None);
@@ -30,6 +31,7 @@ pub(crate) async fn dispatch_desktop_command(
             tokens,
             lowered: &lowered,
             state: state.clone(),
+            app_handle: app_handle.clone(),
         };
         return entry.execute(invocation).await;
     }
