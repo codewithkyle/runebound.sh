@@ -1100,6 +1100,27 @@ fn rewrite_onboarding_tokens(
     None
 }
 
+/// Reject `-h`/`--help` anywhere in a command, returning the phrase-help hint to
+/// surface instead. Shared by the core dispatch path and the desktop dispatch seam
+/// (`main.rs`) so the rejection is uniform across Core and Desktop commands.
+pub fn reject_help_flags(tokens: &[String]) -> Option<String> {
+    let has_help_flag = tokens
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("-h") || token.eq_ignore_ascii_case("--help"));
+    if !has_help_flag {
+        return None;
+    }
+
+    let hint = tokens
+        .first()
+        .map(|root| {
+            let root = root.to_ascii_lowercase();
+            format!("use `{root} help` or `help {root}`")
+        })
+        .unwrap_or_else(|| "use `help`".to_string());
+    Some(format!("`-h`/`--help` is not supported; {hint}"))
+}
+
 async fn execute_dispatched(
     workspace_root: &Path,
     tokens: &[String],
@@ -1107,21 +1128,14 @@ async fn execute_dispatched(
     session: &mut SessionState,
     raw_input: &str,
 ) -> Result<CommandOutput> {
+    if let Some(message) = reject_help_flags(tokens) {
+        bail!("{message}");
+    }
+
     let lowered: Vec<String> = tokens
         .iter()
         .map(|token| token.to_ascii_lowercase())
         .collect();
-
-    if lowered
-        .iter()
-        .any(|token| token == "-h" || token == "--help")
-    {
-        let hint = lowered
-            .first()
-            .map(|root| format!("use `{root} help` or `help {root}`"))
-            .unwrap_or_else(|| "use `help`".to_string());
-        bail!("`-h`/`--help` is not supported; {hint}");
-    }
 
     let registry = core_handler_registry();
     let handler_name = if lowered.is_empty() {
