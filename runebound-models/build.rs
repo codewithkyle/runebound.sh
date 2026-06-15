@@ -81,8 +81,7 @@ fn generate_typescript() -> String {
     out.push_str("  abilities: string;\n");
     out.push_str("  drawbacks: string;\n");
     out.push_str("  history: string;\n");
-    out.push_str("  value_gp: string;\n");
-    out.push_str("  current_owner: string;\n");
+    out.push_str("  value: string;\n");
     out.push_str("  location: string;\n");
     out.push_str("};\n\n");
 
@@ -162,8 +161,7 @@ fn generate_typescript() -> String {
     out.push_str("  abilities: string;\n");
     out.push_str("  drawbacks: string;\n");
     out.push_str("  history: string;\n");
-    out.push_str("  value_gp: string;\n");
-    out.push_str("  current_owner: string;\n");
+    out.push_str("  value: string;\n");
     out.push_str("  location: string;\n");
     out.push_str("  created_at: string;\n");
     out.push_str("  updated_at: string;\n");

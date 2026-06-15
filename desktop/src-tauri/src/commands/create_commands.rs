@@ -293,8 +293,7 @@ async fn create_item(
         abilities: seed.abilities,
         drawbacks: seed.drawbacks,
         history: seed.history,
-        value_gp: seed.value_gp,
-        current_owner: seed.current_owner,
+        value: seed.value,
         location: seed.location,
     };
 

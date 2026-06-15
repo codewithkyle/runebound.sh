@@ -401,8 +401,7 @@ impl AiGenerationService {
                 "abilities",
                 "drawbacks",
                 "history",
-                "value_gp",
-                "current_owner",
+                "value",
                 "location"
             ],
             "properties": {
@@ -415,8 +414,7 @@ impl AiGenerationService {
                 "abilities": { "type": "string", "minLength": 1 },
                 "drawbacks": { "type": "string" },
                 "history": { "type": "string", "minLength": 1 },
-                "value_gp": { "type": "string", "minLength": 1 },
-                "current_owner": { "type": "string", "minLength": 1 },
+                "value": { "type": "string", "minLength": 1 },
                 "location": { "type": "string", "minLength": 1 }
             },
             "additionalProperties": false
@@ -448,7 +446,7 @@ impl AiGenerationService {
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance (1-2 sentences), abilities (1-3 sentences), drawbacks (0-2 sentences, or 'None'), history (1-3 sentences), value text, current owner, and location.{}",
+                        "You generate concise tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance (1-2 sentences), abilities (1-3 sentences), drawbacks (0-2 sentences, or 'None'), history (1-3 sentences), value in format like '1000gp' or '250sp' or '50cp', and location.{}",
                         ITEM_CATEGORIES.join(", "),
                         ITEM_RARITIES.join(", "),
                         repair_note
@@ -487,8 +485,7 @@ impl AiGenerationService {
             seed.abilities = normalize_unknown_text(&seed.abilities);
             seed.drawbacks = normalize_unknown_text(&seed.drawbacks);
             seed.history = normalize_unknown_text(&seed.history);
-            seed.value_gp = normalize_unknown_text(&seed.value_gp);
-            seed.current_owner = normalize_unknown_text(&seed.current_owner);
+            seed.value = normalize_unknown_text(&seed.value);
             seed.location = normalize_unknown_text(&seed.location);
 
             if seed.name.is_empty() {
@@ -568,8 +565,7 @@ pub struct ItemSeed {
     pub abilities: String,
     pub drawbacks: String,
     pub history: String,
-    pub value_gp: String,
-    pub current_owner: String,
+    pub value: String,
     pub location: String,
 }
 

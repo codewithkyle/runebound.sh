@@ -671,8 +671,7 @@ impl EntityPersistenceService {
         let abilities = normalize_unknown_text(&input.abilities);
         let drawbacks = normalize_unknown_text(&input.drawbacks);
         let history = normalize_unknown_text(&input.history);
-        let value_gp = normalize_unknown_text(&input.value_gp);
-        let current_owner = normalize_unknown_text(&input.current_owner);
+        let value = normalize_unknown_text(&input.value);
         let location = normalize_unknown_text(&input.location);
 
         let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
@@ -748,8 +747,7 @@ impl EntityPersistenceService {
             abilities: abilities.clone(),
             drawbacks: drawbacks.clone(),
             history: history.clone(),
-            value_gp: value_gp.clone(),
-            current_owner: current_owner.clone(),
+            value: value.clone(),
             location: location.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
@@ -779,8 +777,7 @@ impl EntityPersistenceService {
             abilities,
             drawbacks,
             history,
-            value_gp,
-            current_owner,
+            value,
             location,
             created_at: created_at.clone(),
             updated_at: now.clone(),
@@ -929,8 +926,7 @@ pub struct SaveItemDraftInput {
     pub abilities: String,
     pub drawbacks: String,
     pub history: String,
-    pub value_gp: String,
-    pub current_owner: String,
+    pub value: String,
     pub location: String,
 }
 

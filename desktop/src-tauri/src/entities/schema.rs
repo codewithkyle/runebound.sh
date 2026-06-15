@@ -360,7 +360,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
     },
 ];
 
-const ITEM_FIELDS: [EntityFieldSpec; 12] = [
+const ITEM_FIELDS: [EntityFieldSpec; 11] = [
     EntityFieldSpec {
         canonical: "name",
         display_name: "name",
@@ -434,17 +434,9 @@ const ITEM_FIELDS: [EntityFieldSpec; 12] = [
         rerollable: true,
     },
     EntityFieldSpec {
-        canonical: "value_gp",
+        canonical: "value",
         display_name: "value",
-        aliases: &["value", "value_gp"],
-        value_kind: ValueKind::Text,
-        settable: true,
-        rerollable: true,
-    },
-    EntityFieldSpec {
-        canonical: "current_owner",
-        display_name: "owner",
-        aliases: &["owner", "current_owner"],
+        aliases: &["value"],
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,

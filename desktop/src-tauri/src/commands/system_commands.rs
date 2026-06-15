@@ -236,8 +236,7 @@ async fn reroll_current_item(state: tauri::State<'_, AppState>) -> Result<Option
     draft.abilities = seed.abilities;
     draft.drawbacks = seed.drawbacks;
     draft.history = seed.history;
-    draft.value_gp = seed.value_gp;
-    draft.current_owner = seed.current_owner;
+    draft.value = seed.value;
     draft.location = seed.location;
 
     {

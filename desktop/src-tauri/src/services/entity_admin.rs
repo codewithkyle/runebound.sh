@@ -249,8 +249,7 @@ impl EntityAdminService {
                 abilities: None,
                 drawbacks: None,
                 history: None,
-                value_gp: None,
-                current_owner: None,
+                value: None,
                 created_at: Some(npc.created_at),
             }));
         }
@@ -306,8 +305,7 @@ impl EntityAdminService {
                 abilities: None,
                 drawbacks: None,
                 history: None,
-                value_gp: None,
-                current_owner: None,
+                value: None,
                 created_at: Some(location.created_at),
             }));
         }
@@ -363,8 +361,7 @@ impl EntityAdminService {
                 abilities: None,
                 drawbacks: None,
                 history: None,
-                value_gp: None,
-                current_owner: None,
+                value: None,
                 created_at: Some(faction.created_at),
             }));
         }
@@ -420,8 +417,7 @@ impl EntityAdminService {
                 abilities: Some(item.abilities),
                 drawbacks: Some(item.drawbacks),
                 history: Some(item.history),
-                value_gp: Some(item.value_gp),
-                current_owner: Some(item.current_owner),
+                value: Some(item.value),
                 created_at: Some(item.created_at),
             }));
         }
@@ -673,8 +669,7 @@ impl EntityAdminService {
                 abilities: item.abilities,
                 drawbacks: item.drawbacks,
                 history: item.history,
-                value_gp: item.value_gp,
-                current_owner: item.current_owner,
+                value: item.value,
                 location: item.location,
                 created_at: item.created_at,
                 updated_at: item.updated_at,
@@ -972,8 +967,7 @@ impl EntityAdminService {
                 abilities: payload.abilities,
                 drawbacks: payload.drawbacks,
                 history: payload.history,
-                value_gp: payload.value_gp,
-                current_owner: payload.current_owner,
+                value: payload.value,
                 location: payload.location,
                 created_at: payload.created_at,
                 updated_at: now.clone(),
@@ -1119,8 +1113,7 @@ pub struct EntityDetails {
     pub abilities: Option<String>,
     pub drawbacks: Option<String>,
     pub history: Option<String>,
-    pub value_gp: Option<String>,
-    pub current_owner: Option<String>,
+    pub value: Option<String>,
     pub created_at: Option<String>,
 }
 
@@ -1204,8 +1197,7 @@ struct ItemDeletePayload {
     abilities: String,
     drawbacks: String,
     history: String,
-    value_gp: String,
-    current_owner: String,
+    value: String,
     location: String,
     created_at: String,
     updated_at: String,

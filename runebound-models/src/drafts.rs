@@ -89,8 +89,7 @@ pub struct ItemDraft {
     pub abilities: String,
     pub drawbacks: String,
     pub history: String,
-    pub value_gp: String,
-    pub current_owner: String,
+    pub value: String,
     pub location: String,
 }
 
@@ -180,8 +179,7 @@ pub struct ItemFrontmatter {
     pub abilities: String,
     pub drawbacks: String,
     pub history: String,
-    pub value_gp: String,
-    pub current_owner: String,
+    pub value: String,
     pub location: String,
     pub created_at: String,
     pub updated_at: String,
@@ -360,8 +358,7 @@ pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
         entity_row("Abilities:", normalize_unknown_text(&draft.abilities)),
         entity_row("Drawbacks:", normalize_unknown_text(&draft.drawbacks)),
         entity_row("History:", normalize_unknown_text(&draft.history)),
-        entity_row("Value:", normalize_unknown_text(&draft.value_gp)),
-        entity_row("Owner:", normalize_unknown_text(&draft.current_owner)),
+        entity_row("Value:", normalize_unknown_text(&draft.value)),
         entity_row("Location:", normalize_unknown_text(&draft.location)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];

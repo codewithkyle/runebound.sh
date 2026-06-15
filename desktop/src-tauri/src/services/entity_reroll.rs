@@ -706,8 +706,7 @@ impl EntityRerollService {
             "abilities" => "Describe abilities/powers in 1-3 sentences.",
             "drawbacks" => "Describe drawbacks/costs in up to 2 sentences (or 'None').",
             "history" => "Describe history/origin in 1-3 sentences.",
-            "value_gp" => "Provide estimated value text such as '250 gp' or 'Priceless'.",
-            "current_owner" => "Provide current owner name or 'Unknown'.",
+            "value" => "Provide estimated value in format like '1000gp' or '250sp' or '50cp' (amount + currency suffix).",
             "location" => "Provide current location or hiding place.",
             _ => "Generate a concise field value.",
         };
@@ -841,8 +840,7 @@ impl EntityRerollService {
                     "abilities" => normalized.eq_ignore_ascii_case(input.item.abilities.trim()),
                     "drawbacks" => normalized.eq_ignore_ascii_case(input.item.drawbacks.trim()),
                     "history" => normalized.eq_ignore_ascii_case(input.item.history.trim()),
-                    "value_gp" => normalized.eq_ignore_ascii_case(input.item.value_gp.trim()),
-                    "current_owner" => normalized.eq_ignore_ascii_case(input.item.current_owner.trim()),
+                    "value" => normalized.eq_ignore_ascii_case(input.item.value.trim()),
                     "location" => normalized.eq_ignore_ascii_case(input.item.location.trim()),
                     _ => false,
                 };
@@ -973,8 +971,7 @@ pub struct ItemRerollContext {
     pub abilities: String,
     pub drawbacks: String,
     pub history: String,
-    pub value_gp: String,
-    pub current_owner: String,
+    pub value: String,
     pub location: String,
 }
 
@@ -1136,12 +1133,11 @@ fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {
         "abilities" | "ability" => "abilities",
         "drawbacks" | "drawback" => "drawbacks",
         "history" => "history",
-        "value" | "value_gp" => "value_gp",
-        "owner" | "current_owner" => "current_owner",
+        "value" => "value",
         "location" => "location",
         _ => {
             return Err(format!(
-                "unknown item reroll field: {}. valid fields: name, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, owner, location",
+                "unknown item reroll field: {}. valid fields: name, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location",
                 raw
             ))
         }
@@ -1151,7 +1147,7 @@ fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {
 
 fn item_context_summary(context: &ItemRerollContext) -> String {
     format!(
-        "name={}, category={}, rarity={}, attunement={}, materials={}, appearance={}, abilities={}, drawbacks={}, history={}, value={}, current_owner={}, location={}",
+        "name={}, category={}, rarity={}, attunement={}, materials={}, appearance={}, abilities={}, drawbacks={}, history={}, value={}, location={}",
         context.name,
         context.category,
         context.rarity,
@@ -1161,8 +1157,7 @@ fn item_context_summary(context: &ItemRerollContext) -> String {
         context.abilities,
         context.drawbacks,
         context.history,
-        context.value_gp,
-        context.current_owner,
+        context.value,
         context.location
     )
 }

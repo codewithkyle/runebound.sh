@@ -118,8 +118,7 @@ impl EntityDomain for ItemDomain {
                 "abilities" => draft.abilities = normalize_unknown_text(trimmed_value),
                 "drawbacks" => draft.drawbacks = normalize_unknown_text(trimmed_value),
                 "history" => draft.history = normalize_unknown_text(trimmed_value),
-                "value_gp" => draft.value_gp = normalize_unknown_text(trimmed_value),
-                "current_owner" => draft.current_owner = normalize_unknown_text(trimmed_value),
+                "value" => draft.value = normalize_unknown_text(trimmed_value),
                 "location" => draft.location = normalize_unknown_text(trimmed_value),
                 _ => {}
             }
@@ -167,8 +166,7 @@ impl EntityDomain for ItemDomain {
                         abilities: draft.abilities.clone(),
                         drawbacks: draft.drawbacks.clone(),
                         history: draft.history.clone(),
-                        value_gp: draft.value_gp.clone(),
-                        current_owner: draft.current_owner.clone(),
+                        value: draft.value.clone(),
                         location: draft.location.clone(),
                     },
                 },
@@ -224,14 +222,9 @@ impl EntityDomain for ItemDomain {
                     draft.history = value;
                 }
             }
-            "value_gp" => {
+            "value" => {
                 if let Some(value) = rerolled.value {
-                    draft.value_gp = value;
-                }
-            }
-            "current_owner" => {
-                if let Some(value) = rerolled.value {
-                    draft.current_owner = value;
+                    draft.value = value;
                 }
             }
             "location" => {
@@ -273,8 +266,7 @@ impl EntityDomain for ItemDomain {
                     abilities: draft.abilities.clone(),
                     drawbacks: draft.drawbacks.clone(),
                     history: draft.history.clone(),
-                    value_gp: draft.value_gp.clone(),
-                    current_owner: draft.current_owner.clone(),
+                    value: draft.value.clone(),
                     location: draft.location.clone(),
                 },
                 state,
@@ -314,7 +306,7 @@ impl EntityDomain for ItemDomain {
 
 pub fn item_summary_text(draft: &ItemDraftSession) -> String {
     format!(
-        "## Item Draft\nname: {}\nslug: {}\ncategory: {}\nrarity: {}\nattunement: {}\nmaterials: {}\nappearance: {}\nabilities: {}\ndrawbacks: {}\nhistory: {}\nvalue: {}\nowner: {}\nlocation: {}",
+        "## Item Draft\nname: {}\nslug: {}\ncategory: {}\nrarity: {}\nattunement: {}\nmaterials: {}\nappearance: {}\nabilities: {}\ndrawbacks: {}\nhistory: {}\nvalue: {}\nlocation: {}",
         draft.name,
         draft.slug,
         draft.category,
@@ -325,8 +317,7 @@ pub fn item_summary_text(draft: &ItemDraftSession) -> String {
         draft.abilities,
         draft.drawbacks,
         draft.history,
-        draft.value_gp,
-        draft.current_owner,
+        draft.value,
         draft.location,
     )
 }
@@ -348,8 +339,7 @@ pub fn item_event_from_draft(draft: &ItemDraftSession) -> CommandClientEvent {
         abilities: normalize_unknown_text(&draft.abilities),
         drawbacks: normalize_unknown_text(&draft.drawbacks),
         history: normalize_unknown_text(&draft.history),
-        value_gp: normalize_unknown_text(&draft.value_gp),
-        current_owner: normalize_unknown_text(&draft.current_owner),
+        value: normalize_unknown_text(&draft.value),
         location: normalize_unknown_text(&draft.location),
     };
     let entity_card = item_entity_card(&normalized);

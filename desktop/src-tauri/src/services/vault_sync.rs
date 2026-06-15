@@ -742,14 +742,9 @@ fn scan_item_row_from_markdown(relative_path: &str, contents: &str) -> db::ItemR
             .and_then(|value| value.get("history").and_then(toml::Value::as_str))
             .map(normalize_unknown_text)
             .unwrap_or_else(|| "Unknown".to_string()),
-        value_gp: parsed
+        value: parsed
             .as_ref()
-            .and_then(|value| value.get("value_gp").and_then(toml::Value::as_str))
-            .map(normalize_unknown_text)
-            .unwrap_or_else(|| "Unknown".to_string()),
-        current_owner: parsed
-            .as_ref()
-            .and_then(|value| value.get("current_owner").and_then(toml::Value::as_str))
+            .and_then(|value| value.get("value").and_then(toml::Value::as_str))
             .map(normalize_unknown_text)
             .unwrap_or_else(|| "Unknown".to_string()),
         location: parsed

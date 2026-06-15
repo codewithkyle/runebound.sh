@@ -73,8 +73,7 @@ export type ItemDraft = {
   abilities: string;
   drawbacks: string;
   history: string;
-  value_gp: string;
-  current_owner: string;
+  value: string;
   location: string;
 };
 
@@ -154,8 +153,7 @@ export type ItemFrontmatter = {
   abilities: string;
   drawbacks: string;
   history: string;
-  value_gp: string;
-  current_owner: string;
+  value: string;
   location: string;
   created_at: string;
   updated_at: string;

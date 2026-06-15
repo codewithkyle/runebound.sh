@@ -251,8 +251,7 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
                 abilities: entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string()),
                 drawbacks: entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string()),
                 history: entity.history.clone().unwrap_or_else(|| "Unknown".to_string()),
-                value_gp: entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string()),
-                current_owner: entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string()),
+                value: entity.value.clone().unwrap_or_else(|| "Unknown".to_string()),
                 location: entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
             };
             {
@@ -342,8 +341,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             rows.push(entity_row("abilities", entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("drawbacks", entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("history", entity.history.clone().unwrap_or_else(|| "Unknown".to_string())));
-            rows.push(entity_row("value", entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string())));
-            rows.push(entity_row("owner", entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("value", entity.value.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("location", entity.location.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc { blocks: vec![entity_card("Item", rows)] }
@@ -418,7 +416,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 .map(|items| items.join(", "))
                 .unwrap_or_else(|| "Unknown".to_string());
             format!(
-                "## Item\nname: {}\nslug: {}\ncategory: {}\nrarity: {}\nattunement: {}\nmaterials: {}\nappearance: {}\nabilities: {}\ndrawbacks: {}\nhistory: {}\nvalue: {}\nowner: {}\nlocation: {}\npath: {}",
+                "## Item\nname: {}\nslug: {}\ncategory: {}\nrarity: {}\nattunement: {}\nmaterials: {}\nappearance: {}\nabilities: {}\ndrawbacks: {}\nhistory: {}\nvalue: {}\nlocation: {}\npath: {}",
                 entity.name,
                 entity.slug,
                 entity.category.clone().unwrap_or_else(|| "other".to_string()),
@@ -429,8 +427,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 entity.abilities.clone().unwrap_or_else(|| "Unknown".to_string()),
                 entity.drawbacks.clone().unwrap_or_else(|| "Unknown".to_string()),
                 entity.history.clone().unwrap_or_else(|| "Unknown".to_string()),
-                entity.value_gp.clone().unwrap_or_else(|| "Unknown".to_string()),
-                entity.current_owner.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.value.clone().unwrap_or_else(|| "Unknown".to_string()),
                 entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
                 path_for_display(&entity.vault_path)
             )
