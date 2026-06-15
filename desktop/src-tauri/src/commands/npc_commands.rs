@@ -6,6 +6,8 @@ use crate::entities::common::{
     command_message_response,
     command_no_active_draft,
     command_response_with_event,
+    entity_reroll_field_help,
+    entity_set_field_help,
     parse_reroll_field_and_prompt,
 };
 use crate::entities::domains::{npc_event_from_draft, npc_summary_text};
@@ -44,6 +46,10 @@ pub async fn handle_npc(
         return domain.rename(name, state_ref).await;
     }
 
+    if lowered == "npc set help" {
+        return entity_set_field_help(EntityKind::Npc);
+    }
+
     if lowered.starts_with("npc set ") {
         let mut parts = trimmed.splitn(4, char::is_whitespace);
         let _ = parts.next();
@@ -59,6 +65,10 @@ pub async fn handle_npc(
 
     if lowered == "npc save" {
         return domain.save(state_ref).await;
+    }
+
+    if lowered == "npc reroll help" {
+        return entity_reroll_field_help(EntityKind::Npc);
     }
 
     if lowered == "npc reroll" || lowered.starts_with("npc reroll ") {

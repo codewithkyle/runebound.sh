@@ -5,6 +5,8 @@ use crate::commands::DesktopHandlerInvocation;
 use crate::entities::common::{
     command_message_response,
     command_no_active_draft,
+    entity_reroll_field_help,
+    entity_set_field_help,
     parse_reroll_field_and_prompt,
 };
 use crate::entities::{CommandResult, EntityDomain, EntityKind};
@@ -41,6 +43,10 @@ pub async fn handle_location(
         return domain.rename(name, state_ref).await;
     }
 
+    if lowered == "location set help" {
+        return entity_set_field_help(EntityKind::Location);
+    }
+
     if lowered.starts_with("location set ") {
         let mut parts = trimmed.splitn(4, char::is_whitespace);
         let _ = parts.next();
@@ -52,6 +58,10 @@ pub async fn handle_location(
 
     if lowered == "location save" {
         return domain.save(state_ref).await;
+    }
+
+    if lowered == "location reroll help" {
+        return entity_reroll_field_help(EntityKind::Location);
     }
 
     if lowered == "location reroll" || lowered.starts_with("location reroll ") {

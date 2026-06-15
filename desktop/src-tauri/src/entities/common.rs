@@ -4,6 +4,7 @@ use runebound_models::CommandResponse;
 use crate::commands::ok_response;
 use crate::entities::domain::EntityDomainResult;
 use crate::entities::kind::EntityKind;
+use crate::entities::schema::{FieldAccess, format_field_help};
 use crate::utils::normalize_optional_prompt;
 
 pub use crate::utils::{
@@ -56,6 +57,16 @@ pub fn command_response_with_event(
 
 pub fn command_no_active_draft(kind: EntityKind) -> CommandResult {
     command_message_response(no_active_draft_message(kind))
+}
+
+/// Help for `<entity> set` listing the settable fields and their descriptions.
+pub fn entity_set_field_help(kind: EntityKind) -> CommandResult {
+    command_message_response(format_field_help(kind, FieldAccess::Set))
+}
+
+/// Help for `<entity> reroll` listing the rerollable fields and their descriptions.
+pub fn entity_reroll_field_help(kind: EntityKind) -> CommandResult {
+    command_message_response(format_field_help(kind, FieldAccess::Reroll))
 }
 
 pub fn entity_ok_response(

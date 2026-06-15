@@ -5,6 +5,8 @@ use crate::commands::DesktopHandlerInvocation;
 use crate::entities::common::{
     command_message_response,
     command_no_active_draft,
+    entity_reroll_field_help,
+    entity_set_field_help,
     parse_reroll_field_and_prompt,
 };
 use crate::entities::{CommandResult, EntityDomain, EntityKind};
@@ -41,6 +43,10 @@ pub async fn handle_faction(
         return domain.rename(name, state_ref).await;
     }
 
+    if lowered == "faction set help" {
+        return entity_set_field_help(EntityKind::Faction);
+    }
+
     if lowered.starts_with("faction set ") {
         let mut parts = trimmed.splitn(4, char::is_whitespace);
         let _ = parts.next();
@@ -52,6 +58,10 @@ pub async fn handle_faction(
 
     if lowered == "faction save" {
         return domain.save(state_ref).await;
+    }
+
+    if lowered == "faction reroll help" {
+        return entity_reroll_field_help(EntityKind::Faction);
     }
 
     if lowered == "faction reroll" || lowered.starts_with("faction reroll ") {
