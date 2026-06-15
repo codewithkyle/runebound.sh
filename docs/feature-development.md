@@ -54,22 +54,29 @@ Validation focus:
 
 Example entity classes: `item`, `dungeon`, `quest`.
 
+### Entity schema + domain
+
+1. Add the new `EntityKind` variant and schema constants in `desktop/src-tauri/src/entities/{kind,schema}.rs`.
+2. Implement `<Entity>Domain` under `entities/domains/`, using helpers from `entities/common.rs` for consistent messaging.
+3. Register the domain inside `build_default_registry()` so command handlers and system commands can resolve it.
+4. Extend `DraftEnvelope` and the `EditorSession` helpers in `app_state.rs` with `get_/set_/take_` methods for the new draft type.
+
 ### Backend data and persistence
 
 1. Add DB schema and CRUD in `core/src/db.rs` (+ migration)
 2. Add repository trait + production implementation in `desktop/src-tauri/src/repositories/mod.rs`
 3. Add persistence workflow in `desktop/src-tauri/src/services/entity_persistence.rs`
-4. Add admin resolution/load/delete/undo support in `desktop/src-tauri/src/services/entity_admin.rs`
-5. Add vault-sync scanning/import behavior in `desktop/src-tauri/src/services/vault_sync.rs`
+4. Add reroll + AI-generation helpers in `desktop/src-tauri/src/services/entity_reroll.rs` (and `services/ai_generation.rs` if seed prompts change)
+5. Add admin resolution/load/delete/undo support in `desktop/src-tauri/src/services/entity_admin.rs`
+6. Add vault-sync scanning/import behavior in `desktop/src-tauri/src/services/vault_sync.rs`
 
 ### Commands and editor state
 
-1. Add draft model and card builder in `runebound-models/src/drafts.rs`
-2. Extend app state/editor mode in `desktop/src-tauri/src/app_state.rs`
-3. Add create/edit command module under `desktop/src-tauri/src/commands/`
-   (mirror the existing `item_commands.rs` wiring when adding new entities)
-4. Register handler in `desktop/src-tauri/src/commands/mod.rs`
-5. Extend shared entity actions (`load/show/preview/delete/undo`) in `desktop/src-tauri/src/commands/entity_commands.rs`
+1. Add draft/frontmatter model + card builder in `runebound-models/src/drafts.rs`
+2. Add create/edit command module under `desktop/src-tauri/src/commands/` (mirror `item_commands.rs` for expected UX)
+3. Register handler in `desktop/src-tauri/src/commands/mod.rs`
+4. Extend shared entity actions (`load/show/preview/delete/undo`) in `desktop/src-tauri/src/commands/entity_commands.rs`
+5. Update `services/suggestions.rs` so autocomplete filters, field lists, and entity search handle the new type.
 
 ### Frontend integration
 
@@ -77,6 +84,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 2. Regenerate TS models (`cargo build -p runebound-models`)
 3. Handle new event/draft pathways in `desktop/src/App.tsx`
 4. Verify card rendering through existing `OutputRenderer` path
+5. Confirm client events (draft load, clear, etc.) trigger the desired UI flows
 
 ---
 
@@ -103,7 +111,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 1. Keep parser authority backend-first (`core/src/command_parse.rs`)
 2. Add completion behavior in `desktop/src-tauri/src/services/suggestions.rs`
-3. Keep mode filtering aligned with `EditorMode`
+3. Keep mode filtering aligned with `EditorSession::active_kind`
 4. Verify frontend suggestion rendering without adding semantics in frontend parser code
 
 ---

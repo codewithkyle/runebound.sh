@@ -70,7 +70,7 @@ CommandSpec (command-specs)
 desktop/src-tauri/src/
 |- main.rs                 # Tauri command wiring and app startup
 |- router.rs               # registry dispatch + fallback entity resolution
-|- app_state.rs            # AppState, EditorSession, EditorMode
+|- app_state.rs            # AppState, EditorSession map-backed DraftEnvelope store
 |- commands/
 |  |- mod.rs               # registry construction + shared response helpers
 |  |- create_commands.rs   # create npc|location|faction|item
@@ -79,7 +79,13 @@ desktop/src-tauri/src/
 |  |- faction_commands.rs  # faction show|rename|set|reroll|save|cancel
 |  |- item_commands.rs     # item show|rename|set|reroll|save|cancel
 |  |- entity_commands.rs   # load|show|preview|delete|undo
-|  `- system_commands.rs   # mode-aware save|reroll|cancel
+|  `- system_commands.rs   # active-kind save|reroll|cancel
+|- entities/
+|  |- kind.rs              # EntityKind + helpers
+|  |- schema.rs            # EntityFieldSpec + EntitySchema
+|  |- domain.rs            # EntityDomain trait + result helpers
+|  |- registry.rs          # EntityDomainRegistry builder
+|  `- domains/             # npc|location|faction|item domain adapters
 |- repositories/
 |  `- mod.rs               # repository traits + Prod* implementations
 `- services/
@@ -95,7 +101,19 @@ desktop/src-tauri/src/
 
 ---
 
-## 4. Command Manifest and Metadata Rules
+## 4. Entity Domain Architecture
+
+Entities now share one additive architecture:
+
+- **Kinds:** `EntityKind` enumerates every supported entity and exposes helpers (`as_str`, `command_root`, `display_name`). All command/service dispatch takes a kind instead of bespoke enums.
+- **Schemas:** `EntitySchema` + `EntityFieldSpec` in `entities/schema.rs` declare canonical fields, aliases, value kinds, and access guards. Validation, suggestions, and help text all consume these specs.
+- **Domains:** Each entity implements the `EntityDomain` trait (`entities/domain.rs`) to encapsulate help, show, rename, set, reroll, save, and cancel flows. Domain implementations live under `entities/domains/` and use shared helpers from `entities/common.rs`.
+- **Registry:** `EntityDomainRegistry` (`entities/registry.rs`) owns `Arc<dyn EntityDomain>` instances. Command handlers resolve domains by kind, so adding a new entity means registering it once during startup.
+- **Editor session:** `app_state.rs` stores drafts in a `HashMap<EntityKind, DraftEnvelope>`. `active_kind` drives `system save/reroll/cancel`. New entities only need `set_<kind>/get_<kind>` helpers plus `DraftEnvelope` variants.
+
+This setup keeps command modules small and makes onboarding new entity types a mostly additive change set: define schema, implement domain, register it, wire persistence/reroll, and expose CLI + frontend hooks.
+
+## 5. Command Manifest and Metadata Rules
 
 The manifest in `command-specs/src/lib.rs` is the single source of truth for:
 
@@ -116,7 +134,7 @@ If you rename or add command tokens without updating manifest entries, help/auto
 
 ---
 
-## 5. Repository and Service Boundaries
+## 6. Repository and Service Boundaries
 
 ### Repository Rules
 
@@ -140,7 +158,7 @@ Use command modules for command syntax and user-facing response behavior. Use se
 
 ---
 
-## 6. Shared Models and Contracts
+## 7. Shared Models and Contracts
 
 `runebound-models` is the cross-layer contract for:
 
@@ -161,7 +179,7 @@ Do not define parallel, hand-rolled TS interfaces for model concepts already in 
 
 ---
 
-## 7. Extension Playbooks
+## 8. Extension Playbooks
 
 ### A) Add New Top-Level Command
 
@@ -179,23 +197,21 @@ No router changes are needed for normal top-level command additions.
 3. Update suggestion behavior if field/value completion is expected
 4. Add/verify phrase help output
 
-### C) Add New Entity Type (example: `quest`, `item`, `dungeon`)
+### C) Add New Entity Type (example: `item`, `quest`, `dungeon`)
 
-1. Add row model + CRUD in `core/src/db.rs` and migration SQL
-2. Add repository trait + production impl in `desktop/src-tauri/src/repositories/mod.rs`
-3. Add draft/frontmatter model and card builder in `runebound-models/src/drafts.rs`
-4. Add event variants in `runebound-models/src/events.rs` if needed
-5. Extend `AppState` and `EditorMode` in `desktop/src-tauri/src/app_state.rs`
-6. Add domain command module and register it in `desktop/src-tauri/src/commands/mod.rs`
-7. Extend entity load/show/delete/undo resolution paths in `desktop/src-tauri/src/commands/entity_commands.rs` and `desktop/src-tauri/src/services/entity_admin.rs`
-8. Extend persistence/reroll/generation services as required
-9. Extend suggestion filtering/completion in `desktop/src-tauri/src/services/suggestions.rs`
-10. Update frontend event handling/rendering in `desktop/src/App.tsx`
-11. Update vault sync scan/import support in `desktop/src-tauri/src/services/vault_sync.rs`
+1. **Schema + kind**: add `EntityKind` variant, schema constants, and helper exports in `entities/{kind,schema}.rs`.
+2. **Domain**: implement `<Entity>Domain` under `entities/domains/`, hook into shared helpers, and register it inside `build_default_registry()`.
+3. **Draft storage**: add `DraftEnvelope::<Entity>` variants plus `get_/set_/take_` helpers in `app_state.rs`.
+4. **Data layer**: create migration (`core/migrations`), extend `core/src/db.rs`, and add repository trait + prod impl.
+5. **Services**: add persistence/reroll/admin logic (`services/entity_{persistence,reroll,admin}.rs`) and ensure vault sync covers the new table.
+6. **Commands**: add CLI module (pattern after `commands/item_commands.rs`) and register handler entries.
+7. **Shared entity commands**: update `commands/entity_commands.rs` load/show/delete/undo flows to hydrate drafts + events; extend `SuggestionService` filters as needed.
+8. **Front-end + contracts**: add draft/frontmatter + card builder + events to `runebound-models`, regenerate TS, and handle the client event in `desktop/src/App.tsx`.
+9. **Docs/tests**: update `docs/` playbooks and run the verification checklist.
 
 ---
 
-## 8. Anti-Patterns
+## 9. Anti-Patterns
 
 | Anti-Pattern | Why It Is Wrong | Correct Approach |
 |---|---|---|
@@ -207,7 +223,7 @@ No router changes are needed for normal top-level command additions.
 
 ---
 
-## 9. Known Friction Points
+## 10. Known Friction Points
 
 The refactor provides a strong base, but these are still active complexity points:
 
@@ -219,7 +235,7 @@ This is acceptable for current velocity, but if entity count grows rapidly, cons
 
 ---
 
-## 10. Feature Development Checklist
+## 11. Feature Development Checklist
 
 Before merging any feature that changes commands/entities:
 
@@ -235,7 +251,7 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-## 11. Related Docs
+## 12. Related Docs
 
 - `docs/cli.md` for command UX contracts and command implementation checklist
 - `docs/render.md` for output rendering rules and card/output extension guidance

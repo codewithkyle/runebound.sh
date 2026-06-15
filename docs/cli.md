@@ -75,13 +75,13 @@ Key behavior:
 
 - `Tab` completes current suggestion
 - suggestions stay live as user edits
-- suggestions are filtered by `EditorMode`
+- suggestions are filtered by the active editor kind (`EntityKind` from `EditorSession`)
 
-Current editor modes:
+Current active kinds:
 
 - `None`, `Npc`, `Location`, `Faction`, `Item`
 
-When adding an entity mode, update `EditorMode`, command handlers, and suggestion filters together.
+When adding a new entity, update `EntityKind`, schemas, command handlers, and suggestion filters together.
 
 ---
 
@@ -127,6 +127,13 @@ For any new command, ensure at least one explicit `command_ref` path exists in g
 3. Update suggestion field lists in `services/suggestions.rs`
 4. Verify command refs and usage text stay aligned with behavior
 
+### Entity Command Rules
+
+- Entity roots (`npc`, `location`, `faction`, `item`, future kinds) must delegate to their `EntityDomain` implementations.
+- `system save|reroll|cancel` rely on `EditorSession::active_kind`; keep drafts synchronized whenever commands mutate state.
+- `entity_commands.rs` (load/show/preview/delete/undo) must hydrate drafts and emit client events using the shared builders in `entities/domains/*`.
+- Register every entity domain with `EntityDomainRegistry` in `main.rs` so registry lookups succeed inside command modules.
+
 ---
 
 ## 7. Maintenance Rules
@@ -149,7 +156,7 @@ Before merging any CLI or command behavior change:
 - [ ] `help <command>` and `<command> help` produce expected content
 - [ ] Autocomplete shows command/subcommands/fields correctly
 - [ ] Actionable output uses clickable command refs
-- [ ] Editor mode transitions still behave correctly
+- [ ] Active draft kind transitions still behave correctly (create/load/save/cancel/reroll)
 - [ ] Keyboard invariants still hold (`Enter`, `Tab`, arrows, `Ctrl+C`)
 - [ ] `make build` passes
 
