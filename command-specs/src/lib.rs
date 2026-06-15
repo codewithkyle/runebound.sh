@@ -729,6 +729,39 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "date".to_string(),
+                summary: "Inspect and modify the current calendar date".to_string(),
+                examples: vec![
+                    "date".to_string(),
+                    "date set year 5".to_string(),
+                    "date set month Emberwane".to_string(),
+                    "date set day 14".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "set".to_string(),
+                        summary: "Set a component of the current date".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "date set year 5".to_string(),
+                            "date set month Emberwane".to_string(),
+                            "date set day 14".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show date command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["date help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("date help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "exit".to_string(),
                 summary: "Exit the application".to_string(),
                 examples: vec!["exit".to_string()],

@@ -161,6 +161,57 @@ impl CalendarState {
         self.hour_24 = 0;
         self.minute = 0;
     }
+
+    pub fn set_year(&mut self, year: i32) -> Result<()> {
+        if year < 0 {
+            bail!("year must be 0 or greater");
+        }
+        self.year = year;
+        Ok(())
+    }
+
+    pub fn set_month_index(&mut self, index: usize, definition: &CalendarDefinition) -> Result<()> {
+        if index >= definition.months.len() {
+            bail!(
+                "month index {} is out of bounds ({} months available)",
+                index,
+                definition.months.len()
+            );
+        }
+        self.month_index = index;
+        Ok(())
+    }
+
+    pub fn set_day(&mut self, day: u32, definition: &CalendarDefinition) -> Result<()> {
+        let month_name = &definition.months[self.month_index];
+        let month_len = definition.month_len.get(month_name).copied().unwrap_or(0);
+        if day == 0 || day > month_len {
+            bail!(
+                "day {} must be between 1 and {} for month '{}'",
+                day,
+                month_len,
+                month_name
+            );
+        }
+        self.day = day;
+        Ok(())
+    }
+
+    pub fn set_hour(&mut self, hour: u8) -> Result<()> {
+        if hour >= 24 {
+            bail!("hour must be between 0 and 23");
+        }
+        self.hour_24 = hour;
+        Ok(())
+    }
+
+    pub fn set_minute(&mut self, minute: u8) -> Result<()> {
+        if minute >= 60 {
+            bail!("minute must be between 0 and 59");
+        }
+        self.minute = minute;
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -255,6 +306,122 @@ pub fn save_calendar(calendar: &StoredCalendar) -> Result<PathBuf> {
 pub fn calendar_toml_path() -> Result<PathBuf> {
     let paths = config_paths(Path::new(""))?;
     Ok(paths.calendar)
+}
+
+pub fn weekday_index(state: &CalendarState, def: &CalendarDefinition) -> usize {
+    let mut total_days: u32 = 0;
+    for i in 0..state.month_index {
+        let month_name = &def.months[i];
+        total_days += def.month_len.get(month_name).copied().unwrap_or(0);
+    }
+    total_days += state.day - 1;
+    ((def.first_day + total_days) % def.week_len) as usize
+}
+
+pub fn ordinal_suffix(day: u32) -> &'static str {
+    match day {
+        1 | 21 | 31 => "st",
+        2 | 22 => "nd",
+        3 | 23 => "rd",
+        _ => "th",
+    }
+}
+
+pub fn format_date(calendar: &StoredCalendar) -> String {
+    let month_name = calendar
+        .definition
+        .months
+        .get(calendar.state.month_index)
+        .map(|s| s.as_str())
+        .unwrap_or("Unknown");
+
+    let day_with_suffix = format!(
+        "{}{}",
+        calendar.state.day,
+        ordinal_suffix(calendar.state.day)
+    );
+
+    let weekday = calendar
+        .definition
+        .weekdays
+        .get(weekday_index(&calendar.state, &calendar.definition))
+        .map(|s| s.as_str())
+        .unwrap_or("Unknown");
+
+    let hour_12 = if calendar.state.hour_24 == 0 {
+        12
+    } else if calendar.state.hour_24 > 12 {
+        calendar.state.hour_24 - 12
+    } else {
+        calendar.state.hour_24
+    };
+
+    let am_pm = if calendar.state.hour_24 < 12 {
+        "AM"
+    } else {
+        "PM"
+    };
+
+    let minute_str = format!("{:02}", calendar.state.minute);
+
+    format!(
+        "{} of {} {}:{} {} ({})",
+        day_with_suffix,
+        month_name,
+        hour_12,
+        minute_str,
+        am_pm,
+        weekday
+    )
+}
+
+pub fn format_date_conversational(calendar: &StoredCalendar) -> String {
+    let month_name = calendar
+        .definition
+        .months
+        .get(calendar.state.month_index)
+        .map(|s| s.as_str())
+        .unwrap_or("Unknown");
+
+    let day_with_suffix = format!(
+        "{}{}",
+        calendar.state.day,
+        ordinal_suffix(calendar.state.day)
+    );
+
+    let weekday = calendar
+        .definition
+        .weekdays
+        .get(weekday_index(&calendar.state, &calendar.definition))
+        .map(|s| s.as_str())
+        .unwrap_or("Unknown");
+
+    let hour_12 = if calendar.state.hour_24 == 0 {
+        12
+    } else if calendar.state.hour_24 > 12 {
+        calendar.state.hour_24 - 12
+    } else {
+        calendar.state.hour_24
+    };
+
+    let am_pm = if calendar.state.hour_24 < 12 {
+        "AM"
+    } else {
+        "PM"
+    };
+
+    let minute_str = format!("{:02}", calendar.state.minute);
+
+    format!(
+        "It is the {} of {} in the year {} at {}:{} {} ({})",
+        day_with_suffix,
+        month_name,
+        calendar.state.year,
+        hour_12,
+        minute_str,
+        am_pm,
+        weekday
+    )
 }
 
 #[cfg(test)]
@@ -388,5 +555,223 @@ mod tests {
         assert_eq!(state.day, 1);
         assert_eq!(state.hour_24, 0);
         assert_eq!(state.minute, 0);
+    }
+
+    #[test]
+    fn ordinal_suffix_st() {
+        assert_eq!(ordinal_suffix(1), "st");
+        assert_eq!(ordinal_suffix(21), "st");
+        assert_eq!(ordinal_suffix(31), "st");
+    }
+
+    #[test]
+    fn ordinal_suffix_nd() {
+        assert_eq!(ordinal_suffix(2), "nd");
+        assert_eq!(ordinal_suffix(22), "nd");
+    }
+
+    #[test]
+    fn ordinal_suffix_rd() {
+        assert_eq!(ordinal_suffix(3), "rd");
+        assert_eq!(ordinal_suffix(23), "rd");
+    }
+
+    #[test]
+    fn ordinal_suffix_th() {
+        assert_eq!(ordinal_suffix(4), "th");
+        assert_eq!(ordinal_suffix(11), "th");
+        assert_eq!(ordinal_suffix(12), "th");
+        assert_eq!(ordinal_suffix(13), "th");
+        assert_eq!(ordinal_suffix(14), "th");
+        assert_eq!(ordinal_suffix(24), "th");
+    }
+
+    #[test]
+    fn weekday_index_first_day_zero() {
+        let json = r#"{
+            "year_len": 14,
+            "n_months": 2,
+            "months": ["Jan", "Feb"],
+            "month_len": {"Jan": 7, "Feb": 7},
+            "week_len": 7,
+            "weekdays": ["Day1", "Day2", "Day3", "Day4", "Day5", "Day6", "Day7"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+
+        let state = CalendarState {
+            year: 0,
+            month_index: 0,
+            day: 1,
+            hour_24: 0,
+            minute: 0,
+        };
+        assert_eq!(weekday_index(&state, &calendar.definition), 0);
+
+        let state = CalendarState {
+            year: 0,
+            month_index: 0,
+            day: 3,
+            hour_24: 0,
+            minute: 0,
+        };
+        assert_eq!(weekday_index(&state, &calendar.definition), 2);
+    }
+
+    #[test]
+    fn weekday_index_first_day_non_zero() {
+        let json = r#"{
+            "year_len": 14,
+            "n_months": 2,
+            "months": ["Jan", "Feb"],
+            "month_len": {"Jan": 7, "Feb": 7},
+            "week_len": 7,
+            "weekdays": ["Day1", "Day2", "Day3", "Day4", "Day5", "Day6", "Day7"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 3,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+
+        let state = CalendarState {
+            year: 0,
+            month_index: 0,
+            day: 1,
+            hour_24: 0,
+            minute: 0,
+        };
+        assert_eq!(weekday_index(&state, &calendar.definition), 3);
+    }
+
+    #[test]
+    fn format_date_midnight() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 1,
+            "moons": ["Moon"],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+
+        let formatted = format_date(&calendar);
+        assert_eq!(formatted, "1st of Emberwane 12:00 AM (Moonday)");
+    }
+
+    #[test]
+    fn format_date_afternoon() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 1,
+            "moons": ["Moon"],
+            "first_day": 3,
+            "notes": {}
+        }"#;
+        let mut calendar = import_donjon_json(json).expect("import should succeed");
+        calendar.state.day = 15;
+        calendar.state.hour_24 = 14;
+        calendar.state.minute = 30;
+
+        let formatted = format_date(&calendar);
+        assert_eq!(formatted, "15th of Emberwane 2:30 PM (Fithday)");
+    }
+
+    #[test]
+    fn set_year_rejects_negative() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+        let mut state = calendar.state;
+
+        let result = state.set_year(-1);
+        assert!(result.is_err());
+        assert_eq!(state.year, 0);
+    }
+
+    #[test]
+    fn set_year_accepts_zero() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+        let mut state = calendar.state;
+
+        state.set_year(5).expect("should accept year 5");
+        assert_eq!(state.year, 5);
+    }
+
+    #[test]
+    fn set_day_rejects_zero() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+        let mut state = calendar.state;
+
+        let result = state.set_day(0, &calendar.definition);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn set_day_rejects_too_large() {
+        let json = r#"{
+            "year_len": 300,
+            "n_months": 6,
+            "months": ["Emberwane", "Stonewake", "Highbloom", "Redreach", "Goldfall", "Deepnight"],
+            "month_len": {"Emberwane": 50, "Stonewake": 50, "Highbloom": 50, "Redreach": 50, "Goldfall": 50, "Deepnight": 50},
+            "week_len": 7,
+            "weekdays": ["Moonday", "Thirday", "Midweekday", "Fithday", "Fastday", "Restday", "Sunday"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+        let mut state = calendar.state;
+
+        let result = state.set_day(51, &calendar.definition);
+        assert!(result.is_err());
     }
 }

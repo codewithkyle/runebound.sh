@@ -209,7 +209,44 @@ Imported calendars are normalized to TOML and stored at:
 
 ---
 
-## 10. Related Docs
+## 10. Date Commands
+
+The `date` command displays and modifies the currently loaded calendar date.
+
+### Usage
+
+```
+date
+date set year <number>
+date set month <month-name>
+date set day <number>
+```
+
+### Examples
+
+```
+date
+date set year 5
+date set month Emberwane
+date set day 14
+```
+
+### Requirements
+
+- Requires an imported calendar (`calendar import`)
+- Year must be ≥ 0
+- Month name is case-insensitive; must match an existing month
+- Day must be within the valid range for the selected month
+
+### Output Format
+
+Current date displays as: "14th of Emberwane 2:30 PM (Moonday)"
+
+The weekday is computed from the calendar's `first_day` offset and `week_len`.
+
+---
+
+## 11. Related Docs
 
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts
