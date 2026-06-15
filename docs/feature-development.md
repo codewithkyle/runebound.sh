@@ -1,0 +1,171 @@
+# Feature Development Playbook
+
+> **Purpose:** This is the practical implementation guide for building new features on the refactored architecture.
+
+---
+
+## 1. Start Here: Layer Responsibilities
+
+- `command-specs` defines command metadata and aliases
+- `commands/*.rs` handles command syntax and user-facing responses
+- `services/*.rs` handles workflows and domain logic
+- `repositories/mod.rs` handles database and vault boundaries
+- `runebound-models` defines shared Rust and TS contracts
+- `desktop/src/App.tsx` integrates frontend events and rendering
+
+If your change crosses backend/frontend boundaries, model it in `runebound-models` first.
+
+---
+
+## 2. Playbook A: Add a New Top-Level Command
+
+Example: add `quest`.
+
+1. Add command metadata in `command-specs/src/lib.rs`
+2. Create `desktop/src-tauri/src/commands/quest_commands.rs`
+3. Add `quest_handler_entry()` in `desktop/src-tauri/src/commands/mod.rs`
+4. Register it in `build_desktop_handler_registry()`
+5. Add structured response output and command refs
+6. Update suggestion behavior only if command has custom argument completions
+
+Notes:
+
+- do not add command logic in `router.rs`
+- no `main.rs` command branching
+
+---
+
+## 3. Playbook B: Add a New Subcommand
+
+1. Add subcommand metadata under the parent `CommandSpec`
+2. Implement behavior in the existing domain handler module
+3. If subcommand introduces new field names or argument completion, update `services/suggestions.rs`
+4. Add explicit usage and help output paths
+
+Validation focus:
+
+- `help <command>` and `<command> help`
+- autocomplete visibility
+- clickability for suggested next actions
+
+---
+
+## 4. Playbook C: Add a New Entity Type
+
+Example entity classes: `item`, `dungeon`, `quest`.
+
+### Backend data and persistence
+
+1. Add DB schema and CRUD in `core/src/db.rs` (+ migration)
+2. Add repository trait + production implementation in `desktop/src-tauri/src/repositories/mod.rs`
+3. Add persistence workflow in `desktop/src-tauri/src/services/entity_persistence.rs`
+4. Add admin resolution/load/delete/undo support in `desktop/src-tauri/src/services/entity_admin.rs`
+5. Add vault-sync scanning/import behavior in `desktop/src-tauri/src/services/vault_sync.rs`
+
+### Commands and editor state
+
+1. Add draft model and card builder in `runebound-models/src/drafts.rs`
+2. Extend app state/editor mode in `desktop/src-tauri/src/app_state.rs`
+3. Add create/edit command module under `desktop/src-tauri/src/commands/`
+4. Register handler in `desktop/src-tauri/src/commands/mod.rs`
+5. Extend shared entity actions (`load/show/preview/delete/undo`) in `desktop/src-tauri/src/commands/entity_commands.rs`
+
+### Frontend integration
+
+1. Extend events/types in `runebound-models/src/events.rs` if needed
+2. Regenerate TS models (`cargo build -p runebound-models`)
+3. Handle new event/draft pathways in `desktop/src/App.tsx`
+4. Verify card rendering through existing `OutputRenderer` path
+
+---
+
+## 5. Playbook D: Add New Card/Output UI
+
+### New custom card for existing/new entity
+
+1. Build card in `runebound-models/src/drafts.rs`
+2. Return card via `CommandClientEvent`
+3. Ensure app integration branch exists in `desktop/src/App.tsx`
+4. Prefer generic `entity_card` block unless a genuinely new block type is needed
+
+### New output block type
+
+1. Add `OutputBlock` variant in `runebound-models/src/output.rs`
+2. Regenerate TS
+3. Render variant in `desktop/src/output/renderer.tsx`
+4. Add styles in `desktop/src/index.css`
+5. Add fallback parse behavior only if plain-text compatibility matters
+
+---
+
+## 6. Playbook E: Add New Suggestion Behavior
+
+1. Keep parser authority backend-first (`core/src/command_parse.rs`)
+2. Add completion behavior in `desktop/src-tauri/src/services/suggestions.rs`
+3. Keep mode filtering aligned with `EditorMode`
+4. Verify frontend suggestion rendering without adding semantics in frontend parser code
+
+---
+
+## 7. Output and UX Standards
+
+- Prefer `output_doc` for non-trivial output
+- Use `command_ref` for actionable text
+- Keep usage/help copy concise and stable
+- Reject `-h` and `--help`; phrase help only
+- Keep keyboard UX stable (`Enter`, `Tab`, arrows, `Ctrl+C`)
+
+---
+
+## 8. Anti-Patterns to Avoid
+
+- command logic in `router.rs` or `main.rs`
+- direct DB access from command handlers
+- duplicate Rust/TS model definitions
+- frontend-only command semantics
+- markdown heuristic dependence for new feature clickability
+
+---
+
+## 9. Definition of Done Checklist
+
+Use this for every feature PR:
+
+- [ ] architecture layer boundaries respected
+- [ ] manifest updated for all command surface changes
+- [ ] handlers implemented and registered
+- [ ] repository + service paths updated where persistence/workflows changed
+- [ ] output uses `output_doc` and explicit `command_ref` for actions
+- [ ] shared models updated in `runebound-models` and TS regenerated
+- [ ] frontend integration updated (`App.tsx`, renderer/theme/css if needed)
+- [ ] autocomplete and mode filtering validated
+- [ ] core command help and phrase-help behavior validated
+- [ ] `make build` passes
+- [ ] primary user flows manually exercised
+
+---
+
+## 10. Suggested PR Verification Commands
+
+```bash
+cargo build -p runebound-models
+make build
+```
+
+Then manually test the affected command flows in desktop UI:
+
+- create/load/show/edit/save/cancel/reroll as applicable
+- help and autocomplete coverage
+- clickable output actions
+
+---
+
+## 11. Related Docs
+
+- `docs/architecture.md`
+- `docs/cli.md`
+- `docs/render.md`
+
+---
+
+*Last updated: 2026-06-14*

@@ -1,21 +1,16 @@
 use crate::repositories::{Database, GenerationRepository};
+use crate::utils::{
+    normalize_faction_seed, normalize_location_seed, normalize_sex, normalize_unknown_list,
+    normalize_unknown_text, validate_faction_details, validate_location_details,
+};
 use dnd_core::config::{load_effective, validate_for_runtime};
-use dnd_core::npc::{slugify, UNKNOWN_LOCATION};
 use dnd_core::vault::Vault;
+use runebound_models::utils::{
+    FACTION_KIND_TYPES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
+};
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::Duration;
-
-const LOCATION_KIND_TYPES: [&str; 10] = [
-    "hamlet", "town", "city", "dungeon", "hideout", "ruin", "guildhall", "landmark", "wilderness", "other",
-];
-
-const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
-
-const FACTION_KIND_TYPES: [&str; 10] = [
-    "guild", "cult", "military_order", "noble_house", "criminal_syndicate", "mercantile_league",
-    "religious_order", "arcane_circle", "revolutionary_cell", "other",
-];
 
 pub struct AiGenerationService;
 
@@ -369,6 +364,7 @@ impl AiGenerationService {
 
         Err("failed to generate valid structured faction output from ollama".to_string())
     }
+
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -429,148 +425,13 @@ pub struct VaultReferenceEntry {
     pub is_dir: bool,
 }
 
-#[derive(Debug, Clone)]
-pub struct ActiveReferenceQuery {
-    pub at_index: usize,
-    pub query: String,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct PromptReferenceContext {
     pub system_context: String,
 }
 
-fn normalize_sex(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized == "male" || normalized == "female" { Ok(normalized) } else { Err("sex must be one of: male, female".to_string()) }
-}
 
-fn normalize_unknown_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() { "Unknown".to_string() } else { trimmed.to_string() }
-}
-
-fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values.into_iter().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).collect();
-    if cleaned.is_empty() { vec!["Unknown".to_string()] } else { cleaned }
-}
-
-fn parse_carrying_csv(value: &str) -> Vec<String> {
-    let items: Vec<String> = value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect();
-    normalize_unknown_list(items)
-}
-
-fn normalize_location_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if LOCATION_KIND_TYPES.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("kind_type must be one of: {}", LOCATION_KIND_TYPES.join(", "))) }
-}
-
-fn normalize_location_danger_level(value: &str) -> Result<String, String> {
-    let trimmed = value.trim();
-    let normalized = if trimmed.eq_ignore_ascii_case("unknown") { "Unknown".to_string() } else { trimmed.to_ascii_lowercase() };
-    if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("danger_level must be one of: {}", LOCATION_DANGER_LEVELS.join(", "))) }
-}
-
-fn parse_list_csv(value: &str) -> Vec<String> {
-    value.split(',').map(|item| item.trim().to_string()).filter(|item| !item.is_empty()).collect()
-}
-
-fn normalize_exports(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values.into_iter().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).collect();
-    if cleaned.is_empty() { vec!["Unknown".to_string()] } else { cleaned }
-}
-
-fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    if FACTION_KIND_TYPES.contains(&normalized.as_str()) { Ok(normalized) } else { Err(format!("kind_type must be one of: {}", FACTION_KIND_TYPES.join(", "))) }
-}
-
-fn sentence_count(value: &str) -> usize {
-    value.split_terminator(['.', '!', '?']).filter(|part| !part.trim().is_empty()).count()
-}
-
-fn word_count(value: &str) -> usize {
-    value.split_whitespace().count()
-}
-
-fn validate_sentence_range(value: &str, min: usize, max: usize, field: &str) -> Result<(), String> {
-    let count = sentence_count(value);
-    if count < min || count > max { return Err(format!("{field} must be {min}-{max} sentences; got {count}")); }
-    Ok(())
-}
-
-fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, String> {
-    seed.name = seed.name.trim().to_string();
-    seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
-    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
-    if seed.kind_type == "other" {
-        if seed.kind_custom.as_ref().is_none_or(|value| value.trim().is_empty()) { return Err("kind_custom is required when kind_type is other".to_string()); }
-    } else {
-        seed.kind_custom = None;
-    }
-    seed.visual_description = normalize_unknown_text(&seed.visual_description);
-    seed.history_background = normalize_unknown_text(&seed.history_background);
-    seed.exports = normalize_exports(seed.exports);
-    seed.tone = normalize_unknown_text(&seed.tone);
-    seed.authority = normalize_unknown_text(&seed.authority);
-    seed.danger_level = normalize_location_danger_level(&seed.danger_level)?;
-    seed.current_tension = normalize_unknown_text(&seed.current_tension);
-    Ok(seed)
-}
-
-fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
-    if seed.name.trim().is_empty() { return Err("location name cannot be empty".to_string()); }
-    if seed.visual_description != "Unknown" { validate_sentence_range(&seed.visual_description, 1, 3, "visual_description")?; }
-    if seed.history_background != "Unknown" { validate_sentence_range(&seed.history_background, 2, 5, "history_background")?; }
-    if seed.current_tension != "Unknown" { validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?; }
-    if seed.exports.is_empty() || seed.exports.len() > 3 { return Err("exports must have 1-3 items".to_string()); }
-    if !(seed.exports.len() == 1 && seed.exports[0] == "Unknown") {
-        let empty_item = seed.exports.iter().any(|item| item.trim().is_empty());
-        if empty_item { return Err("exports cannot contain empty items".to_string()); }
-    }
-    if seed.tone != "Unknown" {
-        let tone_words = word_count(&seed.tone);
-        if !(2..=5).contains(&tone_words) { return Err(format!("tone must be 2-5 words; got {tone_words}")); }
-    }
-    Ok(())
-}
-
-fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, String> {
-    seed.name = seed.name.trim().to_string();
-    seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
-    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
-    if seed.kind_type == "other" {
-        if seed.kind_custom.as_ref().is_none_or(|value| value.trim().is_empty()) { return Err("kind_custom is required when kind_type is other".to_string()); }
-    } else {
-        seed.kind_custom = None;
-    }
-    seed.public_description = normalize_unknown_text(&seed.public_description);
-    seed.true_agenda = normalize_unknown_text(&seed.true_agenda);
-    seed.methods = normalize_unknown_text(&seed.methods);
-    seed.leadership = normalize_unknown_text(&seed.leadership);
-    seed.headquarters = normalize_unknown_text(&seed.headquarters);
-    seed.sphere_of_influence = normalize_unknown_text(&seed.sphere_of_influence);
-    seed.resources_assets = normalize_unknown_text(&seed.resources_assets);
-    seed.allies = normalize_unknown_list(seed.allies);
-    seed.rivals_enemies = normalize_unknown_list(seed.rivals_enemies);
-    seed.reputation = normalize_unknown_text(&seed.reputation);
-    seed.current_tension = normalize_unknown_text(&seed.current_tension);
-    seed.goals_short_term = normalize_unknown_list(seed.goals_short_term);
-    seed.goals_long_term = normalize_unknown_list(seed.goals_long_term);
-    seed.symbol_description = normalize_unknown_text(&seed.symbol_description);
-    Ok(seed)
-}
-
-fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
-    if seed.name.trim().is_empty() { return Err("faction name cannot be empty".to_string()); }
-    if seed.public_description != "Unknown" { validate_sentence_range(&seed.public_description, 1, 3, "public_description")?; }
-    if seed.true_agenda != "Unknown" { validate_sentence_range(&seed.true_agenda, 1, 3, "true_agenda")?; }
-    if seed.current_tension != "Unknown" { validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?; }
-    if seed.symbol_description != "Unknown" { validate_sentence_range(&seed.symbol_description, 1, 1, "symbol_description")?; }
-    Ok(())
-}
-
-fn parse_recent_npc_seeds(payloads: Vec<String>) -> Vec<NpcSeed> {
+pub(crate) fn parse_recent_npc_seeds(payloads: Vec<String>) -> Vec<NpcSeed> {
     payloads.into_iter().filter_map(|payload| serde_json::from_str::<NpcSeed>(&payload).ok()).collect()
 }
 
@@ -606,11 +467,11 @@ fn occupation_tokens(value: &str) -> Vec<String> {
         .split_whitespace().map(|token| token.trim().to_ascii_lowercase()).filter(|token| !token.is_empty() && !STOP_WORDS.contains(&token.as_str())).collect()
 }
 
-fn occupation_anchor(value: &str) -> String {
+pub(crate) fn occupation_anchor(value: &str) -> String {
     occupation_tokens(value).into_iter().next().unwrap_or_else(|| "unknown".to_string())
 }
 
-fn recent_occupation_anchor_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
+pub(crate) fn recent_occupation_anchor_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
     seeds.iter().map(|seed| occupation_anchor(&seed.occupation)).filter(|anchor| !anchor.is_empty() && anchor != "unknown").collect()
 }
 
@@ -623,13 +484,14 @@ fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
     seeds.iter().take(10).map(|seed| format!("{} | {} | {} | {}", seed.name, seed.race, seed.sex, seed.occupation)).collect::<Vec<_>>().join("; ")
 }
 
-fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> String {
+pub(crate) fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> String {
     let mut anchors: Vec<String> = recent_occupation_anchor_set(seeds).into_iter().collect();
     if anchors.is_empty() { return "none".to_string(); }
     anchors.sort();
     anchors.truncate(12);
     anchors.join(", ")
 }
+
 
 fn is_reference_boundary_char(ch: char) -> bool {
     ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"')
@@ -639,15 +501,6 @@ fn can_start_reference_at(input: &str, at_index: usize) -> bool {
     if at_index == 0 { return true; }
     let before = input[..at_index].chars().next_back();
     before.is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '\''))
-}
-
-fn extract_active_reference_query(input: &str) -> Option<ActiveReferenceQuery> {
-    for (idx, ch) in input.char_indices().rev() {
-        if ch != '@' { continue; }
-        if !can_start_reference_at(input, idx) { continue; }
-        return Some(ActiveReferenceQuery { at_index: idx, query: input[idx + 1..].to_string() });
-    }
-    None
 }
 
 fn should_ignore_reference_component(component: &str) -> bool {
@@ -662,10 +515,6 @@ fn markdown_reference_key(relative_path: &str) -> Option<String> {
     let stem = path.file_stem().and_then(|value| value.to_str()).map(str::trim).filter(|value| !value.is_empty())?;
     let parent = path.parent().and_then(|value| value.to_str()).unwrap_or("");
     if parent.is_empty() { Some(stem.to_string()) } else { Some(format!("{parent}/{stem}")) }
-}
-
-fn is_top_level_reference_key(key: &str, is_dir: bool) -> bool {
-    if is_dir { let trimmed = key.trim_end_matches('/'); !trimmed.is_empty() && !trimmed.contains('/') } else { !key.contains('/') }
 }
 
 fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry>, String> {
@@ -702,24 +551,6 @@ fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry
     let mut out: Vec<VaultReferenceEntry> = entries.into_values().collect();
     out.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
     Ok(out)
-}
-
-fn build_reference_suggestions_from_entries(input: &str, active: &ActiveReferenceQuery, entries: &[VaultReferenceEntry]) -> Vec<CommandSuggestion> {
-    let query_lower = active.query.replace('\\', "/").to_lowercase();
-    let mut ranked: Vec<&VaultReferenceEntry> = entries.iter().filter(|entry| {
-        if query_lower.is_empty() { return is_top_level_reference_key(&entry.key, entry.is_dir); }
-        entry.key_lower.starts_with(&query_lower)
-    }).collect();
-
-    ranked.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
-    ranked.into_iter().take(12).map(|entry| {
-        let completion_suffix = if entry.is_dir { "" } else { " " };
-        CommandSuggestion {
-            label: format!("@{}", entry.key),
-            completion: format!("{}@{}{}", &input[..active.at_index], entry.key, completion_suffix),
-            helper_text: Some(SuggestionHelperText::Reference),
-        }
-    }).collect()
 }
 
 fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) -> Vec<String> {
@@ -788,19 +619,87 @@ fn extract_runebound_toml(contents: &str) -> Option<String> {
     if block.is_empty() { None } else { Some(block.to_string()) }
 }
 
-#[derive(Debug, Clone, serde::Serialize)]
-pub struct CommandSuggestion {
-    pub label: String,
-    pub completion: String,
-    pub helper_text: Option<SuggestionHelperText>,
-}
+#[cfg(test)]
+mod tests {
+    use super::{describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, NpcSeed};
 
-#[derive(Debug, Clone, serde::Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum SuggestionHelperText {
-    Command,
-    Npc,
-    Location,
-    Faction,
-    Reference,
+    #[test]
+    fn occupation_anchor_ignores_descriptive_fillers() {
+        assert_eq!(
+            occupation_anchor("former cartographer, current wanderer"),
+            "cartographer"
+        );
+        assert_eq!(occupation_anchor("Cartographer & explorer (deceased)"), "cartographer");
+    }
+
+    #[test]
+    fn recent_occupation_anchor_set_collects_unique_roots() {
+        let seeds = vec![
+            NpcSeed {
+                name: "A".to_string(),
+                race: "Human".to_string(),
+                occupation: "former cartographer, current wanderer".to_string(),
+                sex: "male".to_string(),
+                age: "30".to_string(),
+                height: "5'10\"".to_string(),
+                weight_lbs: "170".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+            NpcSeed {
+                name: "B".to_string(),
+                race: "Elf".to_string(),
+                occupation: "cartographer & explorer (deceased)".to_string(),
+                sex: "female".to_string(),
+                age: "29".to_string(),
+                height: "5'8\"".to_string(),
+                weight_lbs: "130".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+        ];
+
+        let anchors = recent_occupation_anchor_set(&seeds);
+        assert_eq!(anchors.len(), 1);
+        assert!(anchors.contains("cartographer"));
+    }
+
+    #[test]
+    fn describe_recent_occupation_anchors_is_compact_and_unique() {
+        let seeds = vec![
+            NpcSeed {
+                name: "A".to_string(),
+                race: "Human".to_string(),
+                occupation: "former cartographer".to_string(),
+                sex: "male".to_string(),
+                age: "30".to_string(),
+                height: "5'10\"".to_string(),
+                weight_lbs: "170".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+            NpcSeed {
+                name: "B".to_string(),
+                race: "Elf".to_string(),
+                occupation: "cartographer and explorer".to_string(),
+                sex: "female".to_string(),
+                age: "29".to_string(),
+                height: "5'8\"".to_string(),
+                weight_lbs: "130".to_string(),
+                background: "Unknown".to_string(),
+                want_need: "Unknown".to_string(),
+                secret_obstacle: "Unknown".to_string(),
+                carrying: vec!["Unknown".to_string()],
+            },
+        ];
+
+        let described = describe_recent_npc_occupation_anchors(&seeds);
+        assert_eq!(described, "cartographer");
+    }
 }

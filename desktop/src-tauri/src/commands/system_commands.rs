@@ -1,6 +1,13 @@
 use crate::app_state::{AppState, EditorMode};
-use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::commands::{
+    faction_event_from_draft, faction_summary_text, ok_response, DesktopHandlerInvocation,
+};
 use crate::services::ai_generation::AiGenerationService;
+use crate::services::entity_persistence::{
+    EntityPersistenceService, SaveFactionDraftInput, SaveFactionDraftResult,
+    SaveLocationDraftInput, SaveLocationDraftResult, SaveNpcDraftInput, SaveNpcDraftResult,
+};
+use crate::utils::path_for_display;
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
@@ -174,8 +181,6 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
 }
 
 async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::commands::{faction_summary_text, faction_event_from_draft};
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.faction_draft.clone()
@@ -225,8 +230,6 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
 }
 
 async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::SaveNpcDraftInput;
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.npc_draft.clone()
@@ -271,8 +274,6 @@ async fn npc_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandRes
 }
 
 async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::SaveLocationDraftInput;
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.location_draft.clone()
@@ -317,8 +318,6 @@ async fn location_save(state: tauri::State<'_, AppState>) -> Result<Option<Comma
 }
 
 async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::SaveFactionDraftInput;
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.faction_draft.clone()
@@ -384,18 +383,26 @@ pub fn normalize_sex(value: &str) -> Result<String, String> {
     if normalized == "male" || normalized == "female" { Ok(normalized) } else { Err("sex must be one of: male, female".to_string()) }
 }
 
-pub fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
+async fn save_npc_draft(
+    input: SaveNpcDraftInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<SaveNpcDraftResult, String> {
+    let service = EntityPersistenceService;
+    service.save_npc_draft(input, state.inner()).await
 }
 
-async fn save_npc_draft(input: crate::utils::SaveNpcDraftInput, state: tauri::State<'_, AppState>) -> Result<crate::utils::SaveNpcDraftResult, String> {
-    crate::utils::save_npc_draft_impl(input, state).await
+async fn save_location_draft(
+    input: SaveLocationDraftInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<SaveLocationDraftResult, String> {
+    let service = EntityPersistenceService;
+    service.save_location_draft(input, state.inner()).await
 }
 
-async fn save_location_draft(input: crate::utils::SaveLocationDraftInput, state: tauri::State<'_, AppState>) -> Result<crate::utils::SaveLocationDraftResult, String> {
-    crate::utils::save_location_draft_impl(input, state).await
-}
-
-async fn save_faction_draft(input: crate::utils::SaveFactionDraftInput, state: tauri::State<'_, AppState>) -> Result<crate::utils::SaveFactionDraftResult, String> {
-    crate::utils::save_faction_draft_impl(input, state).await
+async fn save_faction_draft(
+    input: SaveFactionDraftInput,
+    state: tauri::State<'_, AppState>,
+) -> Result<SaveFactionDraftResult, String> {
+    let service = EntityPersistenceService;
+    service.save_faction_draft(input, state.inner()).await
 }

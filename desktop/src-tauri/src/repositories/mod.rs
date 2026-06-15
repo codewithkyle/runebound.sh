@@ -10,11 +10,17 @@ pub mod db {
 pub use db::Database;
 
 pub trait VaultRepository: Send + Sync {
+    #[allow(dead_code)]
     fn read_file(&self, vault: &Vault, path: &str) -> Result<Option<String>, String>;
+    #[allow(dead_code)]
     fn write_file(&self, vault: &Vault, path: &str, contents: &str) -> Result<(), String>;
+    #[allow(dead_code)]
     fn move_file(&self, vault: &Vault, from: &str, to: &str) -> Result<(), String>;
+    #[allow(dead_code)]
     fn file_exists(&self, vault: &Vault, path: &str) -> Result<bool, String>;
+    #[allow(dead_code)]
     fn resolve_path(&self, vault: &Vault, path: &str) -> Result<PathBuf, String>;
+    #[allow(dead_code)]
     fn ensure_root_exists(&self, vault: &Vault) -> Result<(), String>;
     fn ensure_structure(&self, vault: &Vault) -> Result<(), String>;
 }
@@ -87,6 +93,7 @@ impl VaultRepository for ProdVaultRepository {
     }
 }
 
+#[allow(dead_code)]
 fn normalize_relative_path(path: &str) -> String {
     path.replace('\\', "/")
 }

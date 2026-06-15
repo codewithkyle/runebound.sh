@@ -280,7 +280,22 @@ fn is_quote_start_boundary(prev: Option<char>) -> bool {
         None => true,
         Some(ch) => {
             ch.is_whitespace()
-                || matches!(ch, '=' | ':' | ',' | ';' | '(' | ')' | '[' | ']' | '{' | '}' | '<' | '>' | '|' | '&')
+                || matches!(
+                    ch,
+                    '=' | ':'
+                        | ','
+                        | ';'
+                        | '('
+                        | ')'
+                        | '['
+                        | ']'
+                        | '{'
+                        | '}'
+                        | '<'
+                        | '>'
+                        | '|'
+                        | '&'
+                )
         }
     }
 }

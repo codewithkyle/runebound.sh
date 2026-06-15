@@ -1,408 +1,246 @@
 # Architecture and Design Patterns
 
-> **Purpose:** This document preserves the architectural decisions, patterns, and extension guidelines established during the 2026 refactoring. Future agents MUST read this before modifying command routing, entity types, or the module structure.
+> **Purpose:** This document captures the current, post-refactor architecture and the rules for extending it safely. Read this before changing command routing, entity types, persistence, or rendering contracts.
 
 ---
 
 ## 1. Workspace Overview
 
-The project is a Rust workspace with a Tauri desktop frontend. The architecture is split into **crates** by responsibility, with the desktop backend layered internally into **commands**, **repositories**, **services**, and **models**.
+The project is a Rust workspace with a Tauri desktop frontend. Responsibilities are split by crate, and the desktop backend is layered by module boundary:
+
+- `commands/` for command-domain behavior
+- `services/` for business workflows and orchestration
+- `repositories/` for database and vault access boundaries
+- `runebound-models` for shared Rust and TypeScript contracts
 
 ### Crates
 
 | Crate | Responsibility | Key Exports |
 |---|---|---|
-| `core` (`dnd_core`) | Config, database, vault, shared NPC/location logic, command parsing, command execution (TUI + desktop) | `db`, `vault`, `command_manifest`, `command_parse`, `command` |
-| `command-handler` | Generic `CommandHandler` trait, `HandlerRegistry`, `HandlerEntry`, `HandlerMetadata` | Reusable dispatch machinery for any frontend |
-| `command-specs` | **Single source of truth** for command definitions (manifest, specs, aliases, execution targets) | `command_manifest()`, `CommandManifest`, `CommandSpec`, `HandlerMetadataDescriptor` |
-| `runebound-models` | Shared Rust models with **TypeScript codegen** via `build.rs` | `NpcDraft`, `LocationDraft`, `FactionDraft`, `OutputDoc`, `events` |
-| `desktop/src-tauri` | Tauri backend; delegates to `core` for non-desktop commands | `commands/`, `repositories/`, `services/`, `router.rs` |
+| `core` (`dnd_core`) | Config, database, vault, command parsing, core command execution | `db`, `vault`, `command`, `command_manifest`, `command_parse` |
+| `command-handler` | Generic dispatch primitives | `CommandHandler`, `HandlerEntry`, `HandlerRegistry`, `HandlerMetadata` |
+| `command-specs` | Command manifest source of truth | `command_manifest()`, `CommandManifest`, `CommandSpec`, `handler_metadata_for()` |
+| `runebound-models` | Shared models + TS generation | `NpcDraft`, `LocationDraft`, `FactionDraft`, `OutputDoc`, `events` |
+| `desktop/src-tauri` | Desktop command backend | `commands/`, `services/`, `repositories/`, `router.rs`, `main.rs` |
 
 ---
 
 ## 2. Command Dispatch Architecture
 
-### Philosophy
+All commands follow one path:
 
-**All commands flow through the same pattern:**
+1. Parse input
+2. Normalize aliases/help form
+3. Resolve root token via registry
+4. Execute handler
+5. Return `CommandResponse`
 
-1. Parse → 2. Normalize → 3. Lookup in registry → 4. Execute handler → 5. Return `CommandResponse`
+There are two registries using the same `command-handler` crate:
 
-There are **two registries** that share the same `command-handler` crate:
+- Core registry in `core/src/command.rs` for `status`, `config`, `help`, `exit`, `setup`
+- Desktop registry in `desktop/src-tauri/src/commands/mod.rs` for desktop interaction commands
 
-- **`core` registry** (`core/src/command.rs`): For `Core` execution commands (e.g., `status`, `config`, `help`, `exit`, `setup`)
-- **Desktop registry** (`desktop/src-tauri/src/commands/mod.rs`): For `Desktop` execution commands (e.g., `create`, `npc`, `location`, `faction`, `load`, `show`, `delete`, `undo`, `save`, `reroll`, `cancel`, `clear`, `history`)
-
-### The Three Types
+### Dispatch Types
 
 ```text
-CommandSpec (in command-specs)
-    ↓
-HandlerMetadata (in command-handler)
-    ↓
-HandlerEntry<Bridge> (in command-handler)
-    ↓
-HandlerRegistry<Bridge> (in command-handler)
+CommandSpec (command-specs)
+  -> HandlerMetadata
+  -> HandlerEntry<Bridge>
+  -> HandlerRegistry<Bridge>
 ```
 
-- **`CommandSpec`** — Declarative metadata (name, summary, subcommands, examples, execution target). This is the **single source of truth**.
-- **`HandlerMetadata`** — Runtime metadata for the registry (summary, examples, aliases, execution target). Converted from `CommandSpec` via `handler_metadata_for()`.
-- **`HandlerEntry`** — A named handler with metadata and a `HandlerBridge` implementation.
-- **`HandlerRegistry`** — A `HashMap<&'static str, HandlerEntry>` that resolves the first token of a command to its handler.
+- `CommandSpec` is declarative and canonical metadata
+- `HandlerMetadata` is runtime registry metadata
+- `HandlerEntry` binds a name, metadata, and a bridge-backed handler
+- `HandlerRegistry` resolves command root to handler
 
-### The Bridge Pattern
+### Router Contract
 
-Both core and desktop use a **bridge** to adapt their specific invocation context to the generic `CommandHandler` trait:
+`desktop/src-tauri/src/router.rs` is dispatch-only:
 
-```rust
-// Core
-struct CoreHandler {
-    inner: Arc<dyn Fn(CoreHandlerInvocation<'_>) -> CoreHandlerFuture<'_> + Send + Sync>,
-}
-
-// Desktop
-struct DesktopHandler {
-    inner: Arc<dyn Fn(DesktopHandlerInvocation<'_>) -> CommandHandlerFuture<'_> + Send + Sync>,
-}
-```
-
-Each has a different `Invocation<'a>` struct because the desktop needs `State<'_, AppState>` while the core needs `&Path` (workspace root) and `&mut SessionState`.
-
-### The Registry Builder
-
-```rust
-fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
-    let mut registry = HandlerRegistry::new();
-    registry.register(exit_handler_entry());
-    registry.register(clear_handler_entry());
-    // ... one entry per top-level command
-    registry
-}
-```
-
-**Adding a new top-level command requires exactly one new `register()` call here.**
+- If command root exists in desktop registry, invoke handler
+- Else, optionally resolve free-form entity references for load/show behavior
+- No business logic should be added here
 
 ---
 
-## 3. Command Manifest & Specs
+## 3. Current Desktop Module Layout
 
-### The Golden Rule
-
-> **The command manifest is the single source of truth.** Every command, subcommand, alias, example, and execution target lives in `command-specs/src/lib.rs`.
-
-The manifest serves:
-- **Autocomplete** (`suggest_command_input` in `main.rs` reads it)
-- **Help text generation** (`render_command_help`, `render_subcommand_help`)
-- **Registry metadata** (`handler_metadata_for()`)
-- **Execution target routing** (`Core` vs `Desktop`)
-
-### Adding a New Top-Level Command
-
-1. Open `command-specs/src/lib.rs`
-2. Add a `CommandSpec` to the `commands` vec in `command_manifest()`:
-   ```rust
-   CommandSpec {
-       name: "quest".to_string(),
-       summary: "Create and manage quests".to_string(),
-       examples: vec!["quest show".to_string()],
-       subcommands: vec![
-           SubcommandSpec { name: "show".to_string(), summary: "...".to_string(), ... },
-       ],
-       options: Vec::new(),
-       requires_subcommand: true,
-       canonical_help_command: Some("quest help".to_string()),
-       execution: CommandExecution::Desktop,
-       show_in_autocomplete: true,
-   }
-   ```
-3. Add any aliases to the `aliases` vec.
-
----
-
-## 4. Desktop Layer Architecture
-
-### Module Layout
-
-```
+```text
 desktop/src-tauri/src/
-├── main.rs              # Tauri commands, suggestion engine, vault sync, startup
-│                        # ⚠️ Still contains legacy business logic (see §9)
-├── router.rs            # 51 lines. Dispatches to desktop registry or core service.
-├── app_state.rs         # AppState, EditorSession, EditorMode, draft type aliases
-├── commands/
-│   ├── mod.rs           # DesktopHandlerRegistry, ok_response helpers, all handler entries
-│   ├── create_commands.rs   # create npc|location|faction
-│   ├── npc_commands.rs      # npc show|rename|set|travel|reroll|save|cancel
-│   ├── location_commands.rs # location show|rename|set|reroll|save|cancel
-│   ├── faction_commands.rs  # faction show|rename|set|reroll|save|cancel
-│   ├── entity_commands.rs   # load, show, preview, delete, undo
-│   └── system_commands.rs   # save, reroll, cancel (mode-aware)
-├── repositories/
-│   └── mod.rs           # Repository traits + Prod* implementations
-├── services/
-│   ├── mod.rs           # Module declarations
-│   └── ai_generation.rs # AiGenerationService (generate_*_seed, prompt context, schema)
-└── utils.rs             # ⚠️ Transitional bridge types (see §9)
+|- main.rs                 # Tauri command wiring and app startup
+|- router.rs               # registry dispatch + fallback entity resolution
+|- app_state.rs            # AppState, EditorSession, EditorMode
+|- commands/
+|  |- mod.rs               # registry construction + shared response helpers
+|  |- create_commands.rs   # create npc|location|faction
+|  |- npc_commands.rs      # npc show|rename|set|travel|reroll|save|cancel
+|  |- location_commands.rs # location show|rename|set|reroll|save|cancel
+|  |- faction_commands.rs  # faction show|rename|set|reroll|save|cancel
+|  |- entity_commands.rs   # load|show|preview|delete|undo
+|  `- system_commands.rs   # mode-aware save|reroll|cancel
+|- repositories/
+|  `- mod.rs               # repository traits + Prod* implementations
+`- services/
+   |- ai_generation.rs     # seed generation
+   |- entity_reroll.rs     # field reroll generation
+   |- entity_persistence.rs# save workflows
+   |- entity_admin.rs      # resolve/load/delete/undo/ensure helpers
+   |- suggestions.rs       # autocomplete and reference suggestions
+   `- vault_sync.rs        # startup vault -> db sync
 ```
 
-### Design Principle: One File Per Command Domain
-
-Each command domain (create, npc, location, faction, entity, system) has its own file. This is **not** optional. Do not add new command logic to `router.rs` or `main.rs`.
+`main.rs` is now thin application wiring, not a command business logic sink.
 
 ---
 
-## 5. Repository Pattern
+## 4. Command Manifest and Metadata Rules
 
-### Philosophy
+The manifest in `command-specs/src/lib.rs` is the single source of truth for:
 
-All database and vault access goes through **traits** with **production implementations**. This enables:
-- Unit testing with mock repositories
-- Consistent error handling (`Result<T, String>`)
-- Clear boundaries between business logic and I/O
+- command names, subcommands, examples
+- aliases
+- execution target (`Core` or `Desktop`)
+- autocomplete visibility
+- canonical help command for clickability
 
-### Current Repositories
+Manifest data is consumed by:
 
-| Trait | Prod Impl | Wraps |
+- backend suggestion service (`desktop/src-tauri/src/services/suggestions.rs`)
+- help renderers in `core/src/command.rs`
+- desktop/core registry metadata generation
+- frontend command clickability fallbacks
+
+If you rename or add command tokens without updating manifest entries, help/autocomplete/clickability will drift.
+
+---
+
+## 5. Repository and Service Boundaries
+
+### Repository Rules
+
+Use repositories from `AppState` for all DB/vault operations in command/service code.
+
+- Allowed: `state.npc_repo().find_by_name_or_slug(...)`
+- Not allowed: direct `core::db::*` calls from handlers
+
+### Service Rules
+
+Handlers orchestrate; services implement workflows.
+
+- `AiGenerationService` handles seed generation
+- `EntityRerollService` handles field rerolls
+- `EntityPersistenceService` handles save + write + index upsert paths
+- `EntityAdminService` handles entity resolve/load/delete/undo and ensure-location flows
+- `SuggestionService` handles autocomplete and reference suggestions
+- `VaultSyncService` handles startup scan and reconciliation
+
+Use command modules for command syntax and user-facing response behavior. Use services for heavy domain logic.
+
+---
+
+## 6. Shared Models and Contracts
+
+`runebound-models` is the cross-layer contract for:
+
+- editor drafts
+- output documents and inline nodes
+- command events and command responses
+
+### Rule: Model First
+
+When introducing new domain concepts used by both backend and frontend:
+
+1. Add Rust model in `runebound-models/src/*`
+2. Ensure `build.rs` exports TS type
+3. Regenerate via `cargo build -p runebound-models`
+4. Consume generated TS model in frontend
+
+Do not define parallel, hand-rolled TS interfaces for model concepts already in `runebound-models`.
+
+---
+
+## 7. Extension Playbooks
+
+### A) Add New Top-Level Command
+
+1. Add `CommandSpec` in `command-specs/src/lib.rs`
+2. Implement handler in `desktop/src-tauri/src/commands/<domain>_commands.rs` (or `core/src/command.rs` for core)
+3. Register handler entry in `desktop/src-tauri/src/commands/mod.rs` (or core registry)
+4. Verify help/autocomplete/clickability paths
+
+No router changes are needed for normal top-level command additions.
+
+### B) Add New Subcommand
+
+1. Add subcommand metadata in `command-specs/src/lib.rs`
+2. Implement syntax and behavior in the domain command module
+3. Update suggestion behavior if field/value completion is expected
+4. Add/verify phrase help output
+
+### C) Add New Entity Type (example: `quest`, `item`, `dungeon`)
+
+1. Add row model + CRUD in `core/src/db.rs` and migration SQL
+2. Add repository trait + production impl in `desktop/src-tauri/src/repositories/mod.rs`
+3. Add draft/frontmatter model and card builder in `runebound-models/src/drafts.rs`
+4. Add event variants in `runebound-models/src/events.rs` if needed
+5. Extend `AppState` and `EditorMode` in `desktop/src-tauri/src/app_state.rs`
+6. Add domain command module and register it in `desktop/src-tauri/src/commands/mod.rs`
+7. Extend entity load/show/delete/undo resolution paths in `desktop/src-tauri/src/commands/entity_commands.rs` and `desktop/src-tauri/src/services/entity_admin.rs`
+8. Extend persistence/reroll/generation services as required
+9. Extend suggestion filtering/completion in `desktop/src-tauri/src/services/suggestions.rs`
+10. Update frontend event handling/rendering in `desktop/src/App.tsx`
+11. Update vault sync scan/import support in `desktop/src-tauri/src/services/vault_sync.rs`
+
+---
+
+## 8. Anti-Patterns
+
+| Anti-Pattern | Why It Is Wrong | Correct Approach |
 |---|---|---|
-| `NpcRepository` | `ProdNpcRepository` | `core::db` NPC queries |
-| `LocationRepository` | `ProdLocationRepository` | `core::db` location queries |
-| `FactionRepository` | `ProdFactionRepository` | `core::db` faction queries |
-| `DocumentRepository` | `ProdDocumentRepository` | `core::db` document index queries |
-| `GenerationRepository` | `ProdGenerationRepository` | `core::db` generation history |
-| `SoftDeleteRepository` | `ProdSoftDeleteRepository` | `core::db` soft-delete table |
-| `VaultRepository` | `ProdVaultRepository` | `Vault` read/write/move/exist checks |
-
-### Accessing Repositories
-
-```rust
-let database = state.database();
-let npc_repo = state.npc_repo();
-npc_repo.find_by_name_or_slug(database.as_ref(), "Elara").await?;
-```
-
-**Rule:** Command handlers never call `core::db` functions directly. Always go through the repository trait.
+| Command business logic in `router.rs` | Breaks dispatch-only router contract | Put behavior in `commands/*.rs` and services |
+| Direct `core::db` calls from handlers | Bypasses testable boundaries | Use repositories from `AppState` |
+| Duplicated cross-layer types | Causes drift between Rust and TS | Use `runebound-models` first |
+| Large, ad-hoc parsing in frontend for command semantics | Duplicates backend command rules | Keep parser authority backend-first |
+| Depending on markdown heuristics for command links | Fragile clickability | Emit explicit `command_ref` nodes |
 
 ---
 
-## 6. Service Layer
+## 9. Known Friction Points
 
-### AiGenerationService
+The refactor provides a strong base, but these are still active complexity points:
 
-The `AiGenerationService` struct encapsulates all Ollama API calls:
+- high duplication across `npc/location/faction` command modules
+- large service modules (`entity_admin`, `entity_reroll`, `suggestions`) that may benefit from entity-agnostic abstractions
+- many explicit type branches when adding a brand-new entity class
 
-```rust
-impl AiGenerationService {
-    pub async fn generate_npc_seed(...) -> Result<NpcSeed, String>
-    pub async fn generate_location_seed(...) -> Result<LocationSeed, String>
-    pub async fn generate_faction_seed(...) -> Result<FactionSeed, String>
-}
-```
-
-**Rule:** Command handlers (`create_commands.rs`, `system_commands.rs`) call the service. They do not build HTTP clients or JSON schemas directly.
+This is acceptable for current velocity, but if entity count grows rapidly, consider shared entity capability traits and more table-driven field specs.
 
 ---
 
-## 7. Shared Models (runebound-models)
+## 10. Feature Development Checklist
 
-### Philosophy
+Before merging any feature that changes commands/entities:
 
-Rust and TypeScript must share the same types. We use `runebound-models` with a `build.rs` script that generates `desktop/src/generated/models.ts`.
-
-### Key Types
-
-- `NpcDraft`, `LocationDraft`, `FactionDraft` — Editor session state
-- `OutputDoc`, `OutputBlock`, `InlineNode` — Structured command output
-- `CommandClientEvent`, `CommandResponse`, `OutputSegment` — Event/response types
-- `events` module — Draft-specific event builders (e.g. `npc_entity_card()`)
-
-### Rule: Add new entity types here first
-
-1. Add Rust structs to `runebound-models/src/`
-2. Add to `build.rs` TypeScript generation
-3. Import in frontend via `desktop/src/generated/models.ts`
-4. Never define a separate TS interface for the same concept.
+- [ ] Manifest updates complete in `command-specs/src/lib.rs`
+- [ ] Handler implementation placed in correct command domain module
+- [ ] Registry registration updated
+- [ ] Repository/service boundaries respected (no direct DB from handlers)
+- [ ] `output_doc` and `command_ref` used for actionable output
+- [ ] Frontend model usage comes from generated `desktop/src/generated/models.ts`
+- [ ] Suggestions updated when command surface or fields changed
+- [ ] `make build` passes
+- [ ] Primary user flow manually verified (help, run, save/cancel, load/show where applicable)
 
 ---
 
-## 8. Extending the System
+## 11. Related Docs
 
-### Adding a New Top-Level Command
-
-**Example:** Adding a `quest` command.
-
-1. **`command-specs/src/lib.rs`**
-   - Add `CommandSpec` for `quest` with subcommands and `execution: Desktop`
-
-2. **`desktop/src-tauri/src/commands/quest_commands.rs`** (new file)
-   - Implement `pub async fn handle_quest(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String>`
-   - Handle subcommands: `show`, `set`, `rename`, `reroll`, `save`, `cancel`, `help`
-   - Use `ok_response()` and `CommandClientEvent` for UI events
-
-3. **`desktop/src-tauri/src/commands/mod.rs`**
-   - Add `pub mod quest_commands;`
-   - Add `quest_handler_entry()` function
-   - Register it in `build_desktop_handler_registry()`
-
-4. **`desktop/src-tauri/src/router.rs`**
-   - **No changes needed.** The registry already dispatches by first token.
-
-### Adding a New Entity Type
-
-**Example:** Adding a `Quest` entity type.
-
-1. **`core/src/db.rs`**
-   - Add `QuestRow` struct
-   - Add SQL queries: `find_quest_by_name_or_slug`, `upsert_quest`, `search_quests_by_name`, `delete_quest_by_id`, `list_quests`
-
-2. **`desktop/src-tauri/src/repositories/mod.rs`**
-   - Add `QuestRepository` trait
-   - Add `ProdQuestRepository`
-
-3. **`runebound-models`**
-   - Add `QuestDraft` struct
-   - Add `events::quest_entity_card()` builder
-   - Add to `build.rs` TypeScript generation
-
-4. **`desktop/src-tauri/src/app_state.rs`**
-   - Add `quest_repo: Arc<dyn QuestRepository>` to `AppState`
-   - Add `quest_draft: Option<QuestDraft>` to `EditorSession`
-   - Add `EditorMode::Quest` variant
-
-5. **`desktop/src-tauri/src/commands/create_commands.rs`**
-   - Add `create quest` handling
-   - Call `AiGenerationService::generate_quest_seed(...)` (add to service first)
-
-6. **`desktop/src-tauri/src/commands/quest_commands.rs`** (new file)
-   - Implement `show`, `rename`, `set`, `reroll`, `save`, `cancel`, `help`
-
-7. **`desktop/src-tauri/src/commands/entity_commands.rs`**
-   - Add `EntityType::Quest` variant
-   - Update `build_load_response`, `build_preview_response`, `build_entity_card_doc`, `build_entity_card_text`
-
-8. **`desktop/src-tauri/src/commands/mod.rs`**
-   - Register `quest` handler entry
-
-9. **`desktop/src-tauri/src/main.rs`**
-   - Add `scan_quest_row_from_markdown()`
-   - Update `sync_database_from_vault()` to scan `quests/` directory
-   - Update `suggest_command_input()` to show/hide `quest` suggestions based on `EditorMode::Quest`
-
-10. **`desktop/src/App.tsx`** (frontend)
-    - Add `QuestDraft` card rendering
-
-### Adding a New Subcommand to an Existing Command
-
-1. Add the subcommand to `CommandSpec` in `command-specs/src/lib.rs`
-2. Add the match arm in the relevant `commands/*.rs` handler
-3. **Do not** touch the router or registry unless it's a new top-level command.
-
----
-
-## 9. Current Transitional State
-
-### What Is Clean
-
-- ✅ `command-handler` crate — generic, reusable, no business logic
-- ✅ `command-specs` crate — single source of truth for command metadata
-- ✅ `router.rs` — 51 lines, pure dispatch
-- ✅ `commands/` modules — one domain per file, no cross-domain leakage
-- ✅ `repositories/` — trait-based, consistent
-- ✅ `services/ai_generation.rs` — clean service boundary
-- ✅ `runebound-models` — shared Rust + TS types
-
-### What Is Still Legacy
-
-- ⚠️ **`main.rs` is 5,575 lines** because it still contains the original implementations of:
-  - `generate_npc_seed`, `generate_location_seed`, `generate_faction_seed`
-  - `reroll_npc_field`, `reroll_location_field`, `reroll_faction_field`
-  - `save_npc_draft`, `save_location_draft`, `save_faction_draft`
-  - `sync_database_from_vault`
-  - `suggest_command_input` (autocomplete engine)
-  - Markdown scanning: `scan_npc_row_from_markdown`, `scan_location_row_from_markdown`, `scan_faction_row_from_markdown`
-
-  These are **business logic implementations**, not plumbing. The next refactoring phase should move them into `services/` or `repositories/` so `main.rs` becomes pure Tauri command wiring.
-
-- ⚠️ **`utils.rs` is 1,134 lines of bridge code** — It exists because `main.rs` and `commands/` use different type namespaces. `utils.rs` converts `crate::NpcRerollContext` ↔ `utils::NpcRerollContext`, etc. Once the legacy implementations in `main.rs` are moved into `services/` and `commands/` uses the same types directly, `utils.rs` can shrink dramatically.
-
-- ⚠️ **AI generation logic exists in two places** — `services/ai_generation.rs` has the clean service methods that `commands/` calls. `main.rs` still has the original free functions that `utils.rs` wraps. The `services/` version is the canonical path. The `main.rs` versions are legacy and should be removed in the next phase.
-
-### What This Means for Agents
-
-- **Do not add new logic to `main.rs`.** Put it in the appropriate `commands/` module or `services/` file.
-- **Do not add new command dispatch logic to `router.rs`.** Use the registry.
-- **Do not duplicate types in `utils.rs`.** If you need a type, use the one from `runebound-models` or `services::ai_generation` directly.
-- **When calling a function that exists in both `main.rs` and `services/`, prefer the `services/` version.**
-
----
-
-## 10. Anti-Patterns (Do Not Do These)
-
-| Anti-Pattern | Why It's Wrong | Correct Approach |
-|---|---|---|
-| Inline command logic in `router.rs` | `router.rs` is dispatch-only; adding logic here breaks the architecture | Create a `commands/*.rs` module and register it |
-| Bypass repository traits to call `core::db` directly | Breaks testability, couples commands to SQL schema | Add a repository trait and use `state.npc_repo()` |
-| Define frontend types independently of `runebound-models` | Creates drift between Rust and TS | Add to `runebound-models` and generate TS |
-| Add new entity logic without updating `entity_commands.rs` | Load/show/preview/delete will be broken | Always add to `EntityType`, `EntityDetails`, and `build_*` helpers |
-| Duplicate `AiGenerationService` logic in a command handler | Service is the canonical boundary | Add a method to `AiGenerationService` and call it |
-| Use `crate::SomeType` in command handlers when `utils::SomeType` exists | Deepens the bridge-code mess | Import from `runebound_models` or `services::ai_generation` directly |
-| Add `if lowered == "..."` chains in `main.rs` | Reverts to the pre-refactor architecture | Use the registry + `commands/*.rs` modules |
-
----
-
-## 11. Future Refactoring Targets
-
-These are known, intentional next steps. They are **not** bugs or oversights.
-
-1. **Move `save_*_draft`, `reroll_*_field`, `generate_*_seed` from `main.rs` into `services/`**
-   - Estimated reduction: ~2,000 lines from `main.rs`
-   - Then remove `utils.rs` bridge code
-
-2. **Move `scan_*_row_from_markdown` and `sync_database_from_vault` into `repositories/` or a new `services/vault_sync.rs`**
-   - Estimated reduction: ~800 lines from `main.rs`
-
-3. **Move `suggest_command_input` autocomplete engine into `commands/` or a new `services/suggestions.rs`**
-   - Estimated reduction: ~600 lines from `main.rs`
-
-4. **Move `main.rs` free functions (normalization, validation, path helpers) into `core` or `services/` as appropriate**
-   - Target: `main.rs` under 500 lines (pure Tauri command wiring)
-
-5. **Add `async-trait` to `command-handler` if we want to avoid the `HandlerBridge` closure pattern**
-   - Currently the bridge uses `Arc<dyn Fn(...)>` for lifetime flexibility. This is idiomatic but verbose.
-
----
-
-## 12. Quick Reference
-
-### Where to add code for common tasks
-
-| Task | File(s) |
-|---|---|
-| New top-level command | `command-specs/src/lib.rs`, `commands/<domain>_commands.rs`, `commands/mod.rs` |
-| New subcommand | `command-specs/src/lib.rs` (spec), `commands/<domain>_commands.rs` (impl) |
-| New entity type | `runebound-models`, `core/src/db.rs`, `repositories/mod.rs`, `app_state.rs`, `commands/entity_commands.rs`, `commands/create_commands.rs`, `services/ai_generation.rs` |
-| New AI generation flow | `services/ai_generation.rs` |
-| New database query | `core/src/db.rs`, then `repositories/mod.rs` trait |
-| New frontend type | `runebound-models/src/` + `build.rs` |
-| New autocomplete behavior | `main.rs` (legacy, move to `services/` when possible) |
-| New vault sync behavior | `main.rs` (legacy, move to `services/` when possible) |
-
-### Type Import Hierarchy
-
-```text
-runebound-models           ← canonical source of truth
-    ↓
-desktop commands/          ← import from runebound-models
-    ↓
-desktop services/          ← import from runebound-models and commands/
-    ↓
-desktop repositories/      ← import from core::db, re-export as traits
-    ↓
-core                       ← owns db, vault, config, parse
-```
-
-**Never import from `utils.rs` into new code.** `utils.rs` is a transitional bridge. Import from `runebound_models` or `services::ai_generation` directly.
+- `docs/cli.md` for command UX contracts and command implementation checklist
+- `docs/render.md` for output rendering rules and card/output extension guidance
+- `docs/feature-development.md` for end-to-end implementation playbooks
 
 ---
 
 *Last updated: 2026-06-14*  
-*If this document is outdated, update it before adding new features.*
+*If this document drifts from the codebase, update it in the same PR as the architecture change.*

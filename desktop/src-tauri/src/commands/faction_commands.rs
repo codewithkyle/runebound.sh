@@ -3,8 +3,12 @@ use crate::commands::{ok_response, DesktopHandlerInvocation};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::CommandResponse;
 
+use crate::services::entity_persistence::{EntityPersistenceService, SaveFactionDraftInput};
+use crate::services::entity_reroll::{
+    EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
+};
 use crate::utils::{
-    reroll_faction_field, FactionRerollContext, RerollFactionFieldInput,
+    normalize_optional_prompt, path_for_display,
 };
 use crate::app_state::FactionDraftSession;
 
@@ -174,8 +178,6 @@ async fn faction_set(trimmed: &str, state: tauri::State<'_, AppState>) -> Result
 }
 
 async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::normalize_optional_prompt;
-
     if trimmed.eq_ignore_ascii_case("faction reroll") {
         return Ok(Some(ok_response("usage: faction reroll <field> [prompt]".to_string(), None)));
     }
@@ -197,32 +199,40 @@ async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
 
     let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
-    let rerolled = reroll_faction_field(
-        RerollFactionFieldInput {
-            field,
-            prompt,
-            faction: FactionRerollContext {
-                name: draft.name.clone(),
-                kind_type: draft.kind_type.clone(),
-                kind_custom: draft.kind_custom.clone(),
-                public_description: draft.public_description.clone(),
-                true_agenda: draft.true_agenda.clone(),
-                methods: draft.methods.clone(),
-                leadership: draft.leadership.clone(),
-                headquarters: draft.headquarters.clone(),
-                sphere_of_influence: draft.sphere_of_influence.clone(),
-                resources_assets: draft.resources_assets.clone(),
-                allies: draft.allies.clone(),
-                rivals_enemies: draft.rivals_enemies.clone(),
-                reputation: draft.reputation.clone(),
-                current_tension: draft.current_tension.clone(),
-                goals_short_term: draft.goals_short_term.clone(),
-                goals_long_term: draft.goals_long_term.clone(),
-                symbol_description: draft.symbol_description.clone(),
+    let reroll_service = EntityRerollService;
+    let workspace_root = state.workspace_root.clone();
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let rerolled = reroll_service
+        .reroll_faction_field(
+            RerollFactionFieldInput {
+                field,
+                prompt,
+                faction: FactionRerollContext {
+                    name: draft.name.clone(),
+                    kind_type: draft.kind_type.clone(),
+                    kind_custom: draft.kind_custom.clone(),
+                    public_description: draft.public_description.clone(),
+                    true_agenda: draft.true_agenda.clone(),
+                    methods: draft.methods.clone(),
+                    leadership: draft.leadership.clone(),
+                    headquarters: draft.headquarters.clone(),
+                    sphere_of_influence: draft.sphere_of_influence.clone(),
+                    resources_assets: draft.resources_assets.clone(),
+                    allies: draft.allies.clone(),
+                    rivals_enemies: draft.rivals_enemies.clone(),
+                    reputation: draft.reputation.clone(),
+                    current_tension: draft.current_tension.clone(),
+                    goals_short_term: draft.goals_short_term.clone(),
+                    goals_long_term: draft.goals_long_term.clone(),
+                    symbol_description: draft.symbol_description.clone(),
+                },
             },
-        },
-        state.clone(),
-    ).await?;
+            &workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
 
     match rerolled.field.as_str() {
         "name" => { if let Some(value) = rerolled.value { draft.name = value; } }
@@ -263,14 +273,14 @@ async fn faction_reroll(trimmed: &str, state: tauri::State<'_, AppState>) -> Res
 }
 
 async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
-    use crate::utils::{save_faction_draft_impl, SaveFactionDraftInput};
-
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.faction_draft.clone()
     }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
-    let result = save_faction_draft_impl(
+    let persistence = EntityPersistenceService;
+    let result = persistence
+        .save_faction_draft(
         SaveFactionDraftInput {
             id: draft.id.clone(),
             slug: draft.slug.clone(),
@@ -293,8 +303,9 @@ async fn faction_save(state: tauri::State<'_, AppState>) -> Result<Option<Comman
             goals_long_term: draft.goals_long_term.clone(),
             symbol_description: draft.symbol_description.clone(),
         },
-        state.clone(),
-    ).await?;
+            state.inner(),
+        )
+        .await?;
 
     {
         let mut editor = state.editor_session.lock().await;
@@ -404,8 +415,4 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
     };
     let entity_card_doc = faction_entity_card(&normalized_draft);
     CommandClientEvent::LoadFactionDraftWithCard { draft: normalized_draft, entity_card: entity_card_doc }
-}
-
-pub fn path_for_display(path: &str) -> String {
-    if std::path::MAIN_SEPARATOR == '\\' { path.replace('/', "\\") } else { path.replace('\\', "/") }
 }
