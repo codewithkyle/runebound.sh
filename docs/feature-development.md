@@ -39,7 +39,11 @@ Notes:
 
 1. Add subcommand metadata under the parent `CommandSpec`
 2. Implement behavior in the existing domain handler module
-3. If subcommand introduces new field names or argument completion, update `services/suggestions.rs`
+3. If the subcommand changes field names or argument completion, update `services/suggestions.rs`:
+   - add the field to the appropriate schema + `settable_fields`/`rerollable_fields`
+   - ensure `entity_kind_for_root()` returns the expected `EntityKind`
+   - extend command filtering so system commands (`save`, `reroll`, `cancel`) stay visible for the correct drafts
+   - add/refresh suggestion tests (`cargo test suggestions`)
 4. Add explicit usage and help output paths
 
 Validation focus:
@@ -76,7 +80,11 @@ Example entity classes: `item`, `dungeon`, `quest`.
 2. Add create/edit command module under `desktop/src-tauri/src/commands/` (mirror `item_commands.rs` for expected UX)
 3. Register handler in `desktop/src-tauri/src/commands/mod.rs`
 4. Extend shared entity actions (`load/show/preview/delete/undo`) in `desktop/src-tauri/src/commands/entity_commands.rs`
-5. Update `services/suggestions.rs` so autocomplete filters, field lists, and entity search handle the new type.
+5. Update `services/suggestions.rs` so autocomplete filters, field lists, and entity search handle the new type. Confirm all of the following:
+   - `entity_kind_for_root()` returns the new kind
+   - `build_entity_field_argument_suggestions()` pulls from the new schema via `settable_fields`/`rerollable_fields`
+   - System commands (`save`, `reroll`, `cancel`) remain visible whenever any draft of the new kind is active
+   - Tests cover the new root/subcommand completions (`cargo test suggestions`)
 
 ### Frontend integration
 
@@ -109,10 +117,15 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 ## 6. Playbook E: Add New Suggestion Behavior
 
-1. Keep parser authority backend-first (`core/src/command_parse.rs`)
-2. Add completion behavior in `desktop/src-tauri/src/services/suggestions.rs`
-3. Keep mode filtering aligned with `EditorSession::active_kind`
-4. Verify frontend suggestion rendering without adding semantics in frontend parser code
+1. Keep parser authority backend-first (`core/src/command_parse.rs`). Do not duplicate parse rules in the frontend.
+2. Update `desktop/src-tauri/src/services/suggestions.rs` in all relevant stages:
+   - **Root stage:** ensure new roots have manifest coverage and appear unless intentionally hidden.
+   - **Subcommand stage:** confirm `find_command()` + manifest data expose the subcommand.
+   - **Argument stage:** update `build_entity_field_argument_suggestions()` (or a new helper) so field lists remain in sync with schemas. Always update `entity_kind_for_root()` when adding a new entity root.
+   - **System filters:** verify that `save`, `reroll`, and `cancel` stay visible whenever any draft is active. Filters should only hide these commands when `active_kind` is `None`.
+3. Add or update `#[cfg(test)]` coverage in `services/suggestions.rs` for every new root/subcommand/field completion. The guideline is “every new suggestion path gets a test.”
+4. Run `cargo test suggestions` (from `desktop/src-tauri`) after any change to autocomplete logic.
+5. Verify frontend rendering without duplicating semantics in the frontend parser; the UI should simply display the backend-provided suggestions.
 
 ---
 
@@ -147,7 +160,7 @@ Use this for every feature PR:
 - [ ] output uses `output_doc` and explicit `command_ref` for actions
 - [ ] shared models updated in `runebound-models` and TS regenerated
 - [ ] frontend integration updated (`App.tsx`, renderer/theme/css if needed)
-- [ ] autocomplete and mode filtering validated
+- [ ] autocomplete and mode filtering validated (`cargo test suggestions`)
 - [ ] core command help and phrase-help behavior validated
 - [ ] `make build` passes
 - [ ] primary user flows manually exercised

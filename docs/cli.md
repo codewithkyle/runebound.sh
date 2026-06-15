@@ -76,6 +76,10 @@ Key behavior:
 - `Tab` completes current suggestion
 - suggestions stay live as user edits
 - suggestions are filtered by the active editor kind (`EntityKind` from `EditorSession`)
+- Global system commands (`save`, `reroll`, `cancel`) must stay visible whenever any draft is active; only hide them when `active_kind` is `None`
+- `entity_kind_for_root()` in `services/suggestions.rs` must map every supported root to its `EntityKind` so field completions work
+- `build_entity_field_argument_suggestions()` pulls directly from `settable_fields`/`rerollable_fields`; add schema entries before exposing new fields
+- Every autocomplete change requires a matching unit test in `services/suggestions.rs` (`cargo test suggestions`)
 
 Current active kinds:
 
