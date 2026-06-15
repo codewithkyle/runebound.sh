@@ -96,7 +96,7 @@ impl AiGenerationService {
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age should be years, height should be imperial like 5'11\", weight_lbs should be lbs as text like 180. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}",
+                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age must be numeric text with no commas, separators, or trailing punctuation (e.g., '133', not '1,133' or '133,'). Height should be imperial like 5'11\", weight_lbs should be lbs as text like 180 with no commas. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}",
                         recent_occupation_context, recent_context, repair_note,
                         if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
                     )
@@ -753,8 +753,8 @@ fn build_prompt_reference_context(prompt: &str, entries: &[VaultReferenceEntry],
     for key in keys.into_iter().take(MAX_REFERENCE_DOCS) {
         let Some(path) = path_by_key.get(&key.to_lowercase()) else { continue };
         let contents = match vault.read_relative(std::path::Path::new(path)) { Ok(value) => value, Err(err) => { eprintln!("reference context warning: failed reading {}: {}", path, err); continue; } };
-        let Some(runebound) = extract_runebound_toml(&contents) else { continue };
-        let metadata = if runebound.len() > MAX_METADATA_CHARS_PER_DOC { format!("{}...", &runebound[..MAX_METADATA_CHARS_PER_DOC]) } else { runebound };
+        let Some(payload) = reference_payload_from_markdown(&contents) else { continue };
+        let metadata = if payload.len() > MAX_METADATA_CHARS_PER_DOC { format!("{}...", &payload[..MAX_METADATA_CHARS_PER_DOC]) } else { payload };
         blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
     }
 
@@ -771,9 +771,17 @@ fn extract_runebound_toml(contents: &str) -> Option<String> {
     if block.is_empty() { None } else { Some(block.to_string()) }
 }
 
+fn reference_payload_from_markdown(contents: &str) -> Option<String> {
+    if let Some(block) = extract_runebound_toml(contents) {
+        return Some(block);
+    }
+    let trimmed = contents.trim();
+    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, NpcSeed};
+    use super::{describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown, NpcSeed};
 
     #[test]
     fn occupation_anchor_ignores_descriptive_fillers() {
@@ -853,5 +861,20 @@ mod tests {
 
         let described = describe_recent_npc_occupation_anchors(&seeds);
         assert_eq!(described, "cartographer");
+    }
+    #[test]
+    fn reference_payload_prefers_runebound_block() {
+        let markdown = "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Jimmy\"\n```\n\nExtra text";
+        let payload = reference_payload_from_markdown(markdown).expect("payload");
+        assert!(payload.contains("type = \"npc\""));
+        assert!(!payload.contains("Extra text"));
+    }
+
+    #[test]
+    fn reference_payload_falls_back_to_full_file() {
+        let markdown = "# Notes about Jimmy\nNo runebound block present.";
+        let payload = reference_payload_from_markdown(markdown).expect("payload");
+        assert!(payload.contains("Notes about Jimmy"));
+        assert!(payload.contains("No runebound block"));
     }
 }

@@ -194,9 +194,17 @@ pub fn normalize_markdown_file_stem(value: &str) -> String {
 pub fn normalize_unknown_text(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
+        return "Unknown".to_string();
+    }
+
+    let sanitized = trimmed
+        .trim_matches(|ch: char| matches!(ch, ',' | ';'))
+        .trim();
+
+    if sanitized.is_empty() {
         "Unknown".to_string()
     } else {
-        trimmed.to_string()
+        sanitized.to_string()
     }
 }
 
@@ -338,5 +346,12 @@ mod tests {
     #[test]
     fn normalize_unknown_text_preserves() {
         assert_eq!(normalize_unknown_text("something"), "something");
+    }
+
+    #[test]
+    fn normalize_unknown_text_trims_edge_commas() {
+        assert_eq!(normalize_unknown_text(",133"), "133");
+        assert_eq!(normalize_unknown_text("243,"), "243");
+        assert_eq!(normalize_unknown_text(",523,"), "523");
     }
 }
