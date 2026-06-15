@@ -1,4 +1,7 @@
 use crate::repositories::{Database, GenerationRepository};
+use crate::services::ollama_chat::{
+    attempt_seed, build_chat_client, load_generation_config, post_chat_for_content,
+};
 use crate::services::vault_ref::{
     VaultReferenceEntry, extract_prompt_reference_keys, load_vault_reference_entries,
 };
@@ -8,7 +11,7 @@ use crate::utils::{
     normalize_unknown_list, normalize_unknown_text, validate_faction_details,
     validate_location_details,
 };
-use dnd_core::config::{load_effective, validate_for_runtime};
+use dnd_core::config::AppConfig;
 use dnd_core::entity_store::EntityStore;
 use dnd_core::vault::Vault;
 use runebound_models::utils::{
@@ -17,7 +20,6 @@ use runebound_models::utils::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Tokens reserved within the context window for the model's own output, so the
 /// capacity warning fires before the prompt crowds out room to respond.
@@ -46,6 +48,29 @@ fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
     }
 }
 
+/// Assemble the `@reference` prompt context from the configured vault, tolerating a
+/// missing or unreadable vault by returning empty context.
+fn build_reference_context(
+    config: &AppConfig,
+    user_prompt: &str,
+    workspace_root: &Path,
+) -> PromptReferenceContext {
+    let Some(vault_path) = config.vault.path.clone() else {
+        return PromptReferenceContext::default();
+    };
+    let vault = Vault::new(vault_path);
+    if vault.ensure_root_exists().is_err() {
+        return PromptReferenceContext::default();
+    }
+    match load_vault_reference_entries(&vault) {
+        Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault, workspace_root),
+        Err(err) => {
+            eprintln!("reference context warning: {err}");
+            PromptReferenceContext::default()
+        }
+    }
+}
+
 pub struct AiGenerationService;
 
 impl AiGenerationService {
@@ -56,32 +81,12 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<NpcSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config.ollama.model.clone().ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "npc_seed", 20)
@@ -118,18 +123,13 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build().map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_names = HashSet::new();
         let mut seen_attempt_occupation_anchors = HashSet::new();
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64).unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations." };
 
             let payload = serde_json::json!({
@@ -147,15 +147,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client.post(&url).json(&payload).send().await.map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
 
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value.get("message").and_then(|msg| msg.get("content")).and_then(|content| content.as_str()) else { continue };
-
-            let parsed: Result<NpcSeed, _> = serde_json::from_str(content);
+            let parsed: Result<NpcSeed, _> = serde_json::from_str(&content);
             let Ok(mut seed) = parsed else { continue };
 
             seed.name = seed.name.trim().to_string();
@@ -197,32 +193,12 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<LocationSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config.ollama.model.clone().ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "location_seed", 20)
@@ -255,17 +231,12 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build().map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_names = HashSet::new();
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64).unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
 
             let payload = serde_json::json!({
@@ -283,15 +254,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client.post(&url).json(&payload).send().await.map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
 
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value.get("message").and_then(|msg| msg.get("content")).and_then(|content| content.as_str()) else { continue };
-
-            let parsed: Result<LocationSeed, _> = serde_json::from_str(content);
+            let parsed: Result<LocationSeed, _> = serde_json::from_str(&content);
             let Ok(seed) = parsed else { continue };
 
             let seed = match normalize_location_seed(seed) {
@@ -322,32 +289,12 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<FactionSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config.ollama.model.clone().ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "faction_seed", 20)
@@ -388,17 +335,12 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build().map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_names = HashSet::new();
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64).unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
 
             let payload = serde_json::json!({
@@ -416,15 +358,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client.post(&url).json(&payload).send().await.map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
 
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value.get("message").and_then(|msg| msg.get("content")).and_then(|content| content.as_str()) else { continue };
-
-            let parsed: Result<FactionSeed, _> = serde_json::from_str(content);
+            let parsed: Result<FactionSeed, _> = serde_json::from_str(&content);
             let Ok(seed) = parsed else { continue };
 
             let seed = match normalize_faction_seed(seed) {
@@ -455,14 +393,7 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<ItemSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt
             .as_ref()
@@ -470,24 +401,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one magical or legendary item.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
             + estimate_tokens(&reference_context.system_context)
@@ -525,18 +439,10 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 {
                 ""
             } else {
@@ -560,26 +466,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: Result<ItemSeed, _> = serde_json::from_str(content);
+            let parsed: Result<ItemSeed, _> = serde_json::from_str(&content);
             let Ok(mut seed) = parsed else { continue };
 
             seed.name = seed.name.trim().to_string();

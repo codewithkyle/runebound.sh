@@ -5,6 +5,9 @@ use crate::services::ai_generation::{
     parse_recent_npc_seeds,
     recent_occupation_anchor_set,
 };
+use crate::services::ollama_chat::{
+    attempt_seed, build_chat_client, load_generation_config, post_chat_for_content,
+};
 use crate::utils::{
     normalize_exports,
     normalize_faction_kind_type,
@@ -16,10 +19,8 @@ use crate::utils::{
     normalize_unknown_list,
     normalize_unknown_text,
 };
-use dnd_core::config::{load_effective, validate_for_runtime};
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
 
 pub struct EntityRerollService;
 
@@ -32,14 +33,7 @@ impl EntityRerollService {
         generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollNpcFieldResult, String> {
         let field = canonical_npc_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -110,20 +104,12 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_occupation_anchors = HashSet::new();
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -161,26 +147,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(_) => continue,
             };
@@ -264,14 +235,7 @@ impl EntityRerollService {
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollLocationFieldResult, String> {
         let field = canonical_location_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -320,18 +284,10 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -361,26 +317,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(_) => continue,
             };
@@ -459,14 +400,7 @@ impl EntityRerollService {
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollFactionFieldResult, String> {
         let field = canonical_faction_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -529,18 +463,10 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -570,26 +496,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(_) => continue,
             };
@@ -679,14 +590,7 @@ impl EntityRerollService {
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollItemFieldResult, String> {
         let field = canonical_item_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -736,18 +640,10 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -777,26 +673,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(value) => value,
                 Err(_) => continue,
             };

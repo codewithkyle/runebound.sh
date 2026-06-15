@@ -6,3 +6,4 @@ pub mod vault_sync;
 pub mod suggestions;
 pub mod publish;
 pub mod vault_ref;
+pub mod ollama_chat;
