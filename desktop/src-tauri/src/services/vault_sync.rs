@@ -11,7 +11,7 @@ use crate::repositories::{db, DocumentRepository, FactionRepository, LocationRep
 use crate::utils::{
     normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
     normalize_location_kind_type, normalize_relative_path_for_storage, normalize_unknown_list,
-    normalize_unknown_text,
+    normalize_unknown_text, parse_list_csv,
 };
 
 pub struct VaultSyncService;
@@ -748,14 +748,6 @@ fn file_stem_name(relative_path: &str) -> String {
         .filter(|value| !value.is_empty())
         .unwrap_or("Unknown")
         .to_string()
-}
-
-fn parse_list_csv(value: &str) -> Vec<String> {
-    value
-        .split(',')
-        .map(|item| item.trim().to_string())
-        .filter(|item| !item.is_empty())
-        .collect()
 }
 
 #[cfg(test)]

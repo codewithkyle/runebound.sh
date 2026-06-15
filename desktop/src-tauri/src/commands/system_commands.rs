@@ -1,9 +1,15 @@
 use crate::app_state::AppState;
 use crate::commands::{
-    faction_event_from_draft, faction_summary_text, ok_response, DesktopHandlerInvocation,
+    faction_event_from_draft, faction_summary_text, DesktopHandlerInvocation,
+};
+use crate::entities::common::{
+    command_message_response,
+    entity_message_response,
+    entity_response_with_event,
 };
 use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
+use crate::utils::{normalize_sex, normalize_unknown_list, normalize_unknown_text};
 use runebound_models::CommandResponse;
 
 
@@ -22,7 +28,7 @@ pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Opt
                 .expect("domain not registered");
             domain.save(invocation.state.inner()).await
         }
-        None => Ok(Some(ok_response("no active draft to save.".to_string(), None))),
+        None => command_message_response("no active draft to save."),
     }
 }
 
@@ -36,7 +42,7 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         Some(EntityKind::Npc) => reroll_current_npc(invocation.state.clone()).await,
         Some(EntityKind::Location) => reroll_current_location(invocation.state.clone()).await,
         Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone()).await,
-        None => Ok(Some(ok_response("no active draft to reroll.".to_string(), None))),
+        None => command_message_response("no active draft to reroll."),
     }
 }
 
@@ -55,10 +61,7 @@ pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<O
                 .expect("domain not registered");
             domain.cancel(invocation.state.inner()).await
         }
-        None => Ok(Some(ok_response(
-            "no active draft to cancel.".to_string(),
-            None,
-        ))),
+        None => command_message_response("no active draft to cancel."),
     }
 }
 
@@ -70,7 +73,7 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
         editor.get_npc().cloned()
     };
     let Some(mut draft) = draft else {
-        return Ok(Some(ok_response("no active npc draft.".to_string(), None)));
+        return entity_message_response("no active npc draft.");
     };
 
     let ai = AiGenerationService;
@@ -102,7 +105,7 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>) -> Result<Option<
         editor.clear_kind(EntityKind::Location);
     }
 
-    Ok(Some(ok_response(npc_summary_text(&draft), Some(npc_event_from_draft(&draft)))))
+    entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
 }
 
 async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -113,7 +116,7 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
         editor.get_location().cloned()
     };
     let Some(mut draft) = draft else {
-        return Ok(Some(ok_response("no active location draft.".to_string(), None)));
+        return entity_message_response("no active location draft.");
     };
 
     let ai = AiGenerationService;
@@ -144,7 +147,10 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>) -> Result<Op
         editor.clear_kind(EntityKind::Npc);
     }
 
-    Ok(Some(ok_response(location_summary_text(&draft), Some(location_event_from_draft(&draft)))))
+    entity_response_with_event(
+        location_summary_text(&draft),
+        location_event_from_draft(&draft),
+    )
 }
 
 async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Option<CommandResponse>, String> {
@@ -153,7 +159,7 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
         editor.get_faction().cloned()
     };
     let Some(mut draft) = draft else {
-        return Ok(Some(ok_response("no active faction draft.".to_string(), None)));
+        return entity_message_response("no active faction draft.");
     };
 
     let ai = AiGenerationService;
@@ -192,20 +198,8 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>) -> Result<Opt
         editor.clear_kind(EntityKind::Location);
     }
 
-    Ok(Some(ok_response(faction_summary_text(&draft), Some(faction_event_from_draft(&draft)))))
-}
-
-pub fn normalize_unknown_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() { "Unknown".to_string() } else { trimmed.to_string() }
-}
-
-pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values.into_iter().map(|value| value.trim().to_string()).filter(|value| !value.is_empty()).collect();
-    if cleaned.is_empty() { vec!["Unknown".to_string()] } else { cleaned }
-}
-
-pub fn normalize_sex(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized == "male" || normalized == "female" { Ok(normalized) } else { Err("sex must be one of: male, female".to_string()) }
+    entity_response_with_event(
+        faction_summary_text(&draft),
+        faction_event_from_draft(&draft),
+    )
 }

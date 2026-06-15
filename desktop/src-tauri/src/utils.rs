@@ -5,6 +5,7 @@ use crate::services::ai_generation::{FactionSeed, LocationSeed};
 pub use runebound_models::utils::{
     normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
     normalize_location_kind_type, normalize_sex, normalize_unknown_list, normalize_unknown_text,
+    parse_list_csv,
 };
 
 pub fn parse_carrying_csv(value: &str) -> Vec<String> {

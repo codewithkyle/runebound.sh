@@ -1,18 +1,28 @@
 use crate::app_state::AppState;
 use crate::commands::{
-    ok_response, DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
+    DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
     location_event_from_draft, location_summary_text, npc_event_from_draft, npc_summary_text,
+};
+use crate::entities::common::{
+    command_message_response,
+    command_response_with_event,
+    CommandResult,
 };
 use crate::entities::EntityKind;
 use crate::services::ai_generation::AiGenerationService;
+use crate::utils::{
+    normalize_optional_prompt,
+    normalize_sex,
+    normalize_unknown_list,
+    normalize_unknown_text,
+};
 use dnd_core::npc::UNKNOWN_LOCATION;
-use runebound_models::CommandResponse;
 
 use crate::app_state::{FactionDraftSession, LocationDraftSession, NpcDraftSession};
 
 pub async fn handle_create(
     invocation: DesktopHandlerInvocation<'_>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -21,19 +31,15 @@ pub async fn handle_create(
     let lowered = trimmed.to_ascii_lowercase();
 
     if lowered == "create help" {
-        return Ok(Some(ok_response(
-            [
-                "## Create commands",
-                "create npc",
-                "create npc <prompt text>",
-                "create location",
-                "create location <prompt text>",
-                "create faction",
-                "create faction <prompt text>",
-            ]
-            .join("\n"),
-            None,
-        )));
+        return command_message_response([
+            "## Create commands",
+            "create npc",
+            "create npc <prompt text>",
+            "create location",
+            "create location <prompt text>",
+            "create faction",
+            "create faction <prompt text>",
+        ].join("\n"));
     }
 
     if lowered == "create npc" || lowered.starts_with("create npc ") {
@@ -48,16 +54,13 @@ pub async fn handle_create(
         return create_faction(trimmed, invocation.state.clone()).await;
     }
 
-    Ok(Some(ok_response(
-        "unknown create command. use `create help`".to_string(),
-        None,
-    )))
+    command_message_response("unknown create command. use `create help`")
 }
 
 async fn create_npc(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     let prompt = if trimmed.len() > 10 {
         let value = trimmed[10..].trim();
         if value.is_empty() {
@@ -106,16 +109,13 @@ async fn create_npc(
         editor.clear_kind(EntityKind::Location);
     }
 
-    Ok(Some(ok_response(
-        npc_summary_text(&draft),
-        Some(npc_event_from_draft(&draft)),
-    )))
+    command_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
 }
 
 async fn create_location(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 15 {
@@ -166,16 +166,16 @@ async fn create_location(
         editor.clear_kind(EntityKind::Npc);
     }
 
-    Ok(Some(ok_response(
+    command_response_with_event(
         location_summary_text(&draft),
-        Some(location_event_from_draft(&draft)),
-    )))
+        location_event_from_draft(&draft),
+    )
 }
 
 async fn create_faction(
     trimmed: &str,
     state: tauri::State<'_, AppState>,
-) -> Result<Option<CommandResponse>, String> {
+) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 14 {
@@ -234,52 +234,10 @@ async fn create_faction(
         editor.clear_kind(EntityKind::Location);
     }
 
-    Ok(Some(ok_response(
+    command_response_with_event(
         faction_summary_text(&draft),
-        Some(faction_event_from_draft(&draft)),
-    )))
-}
-
-fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
-    prompt.map(|p| {
-        let trimmed = p.trim();
-        if trimmed.is_empty() {
-            String::new()
-        } else {
-            trimmed.to_string()
-        }
-    })
-}
-
-fn normalize_unknown_text(value: &str) -> String {
-    let trimmed = value.trim();
-    if trimmed.is_empty() {
-        "Unknown".to_string()
-    } else {
-        trimmed.to_string()
-    }
-}
-
-fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    if cleaned.is_empty() {
-        vec!["Unknown".to_string()]
-    } else {
-        cleaned
-    }
-}
-
-fn normalize_sex(value: &str) -> Result<String, String> {
-    let normalized = value.trim().to_ascii_lowercase();
-    if normalized == "male" || normalized == "female" {
-        Ok(normalized)
-    } else {
-        Err("sex must be one of: male, female".to_string())
-    }
+        faction_event_from_draft(&draft),
+    )
 }
 
 fn make_entity_id(prefix: &str) -> String {

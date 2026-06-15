@@ -258,6 +258,7 @@ Deliverables:
    - unknown normalization wrappers
    - summary/event response scaffolding
 2. Move entity-common logic into `entities/common.rs`
+3. Expose shared command-layer helpers (response wrappers, reroll parsing, normalized list utilities) so CLI handlers reuse the same workflows as domains
 
 Acceptance:
 

@@ -11,5 +11,6 @@ pub use schema::{
     settable_fields,
 };
 
+pub use common::CommandResult;
 pub use domain::EntityDomain;
 pub use registry::{build_default_registry, EntityDomainRegistry};
