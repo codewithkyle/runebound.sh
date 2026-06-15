@@ -147,11 +147,22 @@ pub fn slugify(value: &str) -> String {
 }
 
 pub fn unique_slug_for_dir(root: &Path, relative_dir: &str, base_slug: &str) -> String {
+    unique_slug_for_dir_with_ext(root, relative_dir, base_slug, "md")
+}
+
+pub fn unique_slug_for_dir_with_ext(
+    root: &Path,
+    relative_dir: &str,
+    base_slug: &str,
+    extension: &str,
+) -> String {
     let mut candidate = base_slug.to_string();
     let mut idx = 2;
 
     loop {
-        let path = root.join(relative_dir).join(format!("{candidate}.md"));
+        let path = root
+            .join(relative_dir)
+            .join(format!("{candidate}.{extension}"));
         if !path.exists() {
             return candidate;
         }

@@ -90,6 +90,7 @@ impl EntityAdminService {
                 id: id.clone(),
                 slug: slug.clone(),
                 name: canonical_name.clone(),
+                vault_path: relative_path.clone(),
                 kind_type: "other".to_string(),
                 kind_custom: Some("Unknown".to_string()),
                 visual_description: "Unknown".to_string(),

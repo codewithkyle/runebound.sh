@@ -1,0 +1,227 @@
+use std::fmt::Write;
+
+use runebound_models::{
+    FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
+};
+
+use crate::utils::normalize_unknown_text;
+
+pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
+    let mut out = String::new();
+    writeln!(&mut out, "# {}", frontmatter.name).ok();
+    writeln!(&mut out).ok();
+    writeln!(&mut out, "| Attribute | Value |").ok();
+    writeln!(&mut out, "| --- | --- |").ok();
+    write_row(&mut out, "Race", &frontmatter.race);
+    write_row(&mut out, "Occupation", &frontmatter.occupation);
+    write_row(&mut out, "Sex", &frontmatter.sex);
+    write_row(&mut out, "Age", &frontmatter.age);
+    write_row(&mut out, "Height", &frontmatter.height);
+    write_row(&mut out, "Weight", &frontmatter.weight_lbs);
+    write_row(&mut out, "Location", &frontmatter.location);
+    write_row(&mut out, "Slug", &frontmatter.slug);
+    writeln!(&mut out).ok();
+
+    write_section(&mut out, "Background", &frontmatter.background);
+    write_section(&mut out, "Goals", &frontmatter.want_need);
+    write_section(&mut out, "Secret", &frontmatter.secret_obstacle);
+    write_list_section(&mut out, "Carrying", &frontmatter.carrying);
+
+    writeln!(
+        &mut out,
+        "\n---\n_Published via runebound.sh on {}._",
+        frontmatter.updated_at
+    )
+    .ok();
+    out
+}
+
+pub fn render_location_markdown(frontmatter: &LocationFrontmatter) -> String {
+    let mut out = String::new();
+    writeln!(&mut out, "# {}", frontmatter.name).ok();
+    writeln!(&mut out).ok();
+    writeln!(&mut out, "| Attribute | Value |").ok();
+    writeln!(&mut out, "| --- | --- |").ok();
+    write_row(&mut out, "Kind", &kind_display(frontmatter));
+    write_row(&mut out, "Tone", &frontmatter.tone);
+    write_row(&mut out, "Authority", &frontmatter.authority);
+    write_row(&mut out, "Danger", &frontmatter.danger_level);
+    write_row(&mut out, "Slug", &frontmatter.slug);
+    write_row(&mut out, "Path", &frontmatter.vault_path);
+    writeln!(&mut out).ok();
+
+    write_section(
+        &mut out,
+        "Visual Description",
+        &frontmatter.visual_description,
+    );
+    write_section(
+        &mut out,
+        "History",
+        &frontmatter.history_background,
+    );
+    write_list_section(&mut out, "Exports", &frontmatter.exports);
+    write_section(
+        &mut out,
+        "Current Tension",
+        &frontmatter.current_tension,
+    );
+
+    writeln!(
+        &mut out,
+        "\n---\n_Published via runebound.sh on {}._",
+        frontmatter.updated_at
+    )
+    .ok();
+    out
+}
+
+pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
+    let mut out = String::new();
+    writeln!(&mut out, "# {}", frontmatter.name).ok();
+    writeln!(&mut out).ok();
+    writeln!(&mut out, "| Attribute | Value |").ok();
+    writeln!(&mut out, "| --- | --- |").ok();
+    write_row(&mut out, "Kind", &frontmatter.kind_type);
+    if let Some(custom) = &frontmatter.kind_custom {
+        if !custom.trim().is_empty() {
+            write_row(&mut out, "Kind (custom)", custom);
+        }
+    }
+    write_row(&mut out, "Headquarters", &frontmatter.headquarters);
+    write_row(&mut out, "Sphere", &frontmatter.sphere_of_influence);
+    write_row(&mut out, "Reputation", &frontmatter.reputation);
+    write_row(&mut out, "Slug", &frontmatter.slug);
+    write_row(&mut out, "Path", &frontmatter.vault_path);
+    writeln!(&mut out).ok();
+
+    write_section(&mut out, "Public Description", &frontmatter.public_description);
+    write_section(&mut out, "True Agenda", &frontmatter.true_agenda);
+    write_section(&mut out, "Methods", &frontmatter.methods);
+    write_section(&mut out, "Leadership", &frontmatter.leadership);
+    write_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
+    write_list_section(&mut out, "Allies", &frontmatter.allies);
+    write_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
+    write_section(&mut out, "Current Tension", &frontmatter.current_tension);
+    write_list_section(&mut out, "Short-Term Goals", &frontmatter.goals_short_term);
+    write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
+    write_section(&mut out, "Symbol", &frontmatter.symbol_description);
+
+    writeln!(
+        &mut out,
+        "\n---\n_Published via runebound.sh on {}._",
+        frontmatter.updated_at
+    )
+    .ok();
+    out
+}
+
+pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
+    let mut out = String::new();
+    writeln!(&mut out, "# {}", frontmatter.name).ok();
+    writeln!(&mut out).ok();
+    writeln!(&mut out, "| Attribute | Value |").ok();
+    writeln!(&mut out, "| --- | --- |").ok();
+    write_row(&mut out, "Category", &frontmatter.category);
+    write_row(&mut out, "Rarity", &frontmatter.rarity);
+    write_row(&mut out, "Attunement", &frontmatter.attunement);
+    write_row(&mut out, "Value", &frontmatter.value);
+    write_row(&mut out, "Location", &frontmatter.location);
+    write_row(&mut out, "Slug", &frontmatter.slug);
+    write_row(&mut out, "Path", &frontmatter.vault_path);
+    writeln!(&mut out).ok();
+
+    write_section(&mut out, "Appearance", &frontmatter.appearance);
+    write_section(&mut out, "Abilities", &frontmatter.abilities);
+    write_section(&mut out, "Drawbacks", &frontmatter.drawbacks);
+    write_section(&mut out, "History", &frontmatter.history);
+    write_list_section(&mut out, "Materials", &frontmatter.materials);
+
+    writeln!(
+        &mut out,
+        "\n---\n_Published via runebound.sh on {}._",
+        frontmatter.updated_at
+    )
+    .ok();
+    out
+}
+
+fn write_row(out: &mut String, label: &str, value: &str) {
+    let normalized = normalize_unknown_text(value);
+    writeln!(out, "| {label} | {normalized} |").ok();
+}
+
+fn write_section(out: &mut String, title: &str, value: &str) {
+    let normalized = normalize_unknown_text(value);
+    if normalized == "Unknown" {
+        return;
+    }
+    writeln!(out, "## {title}").ok();
+    writeln!(out, "{}", normalized).ok();
+    writeln!(out).ok();
+}
+
+fn write_list_section(out: &mut String, title: &str, values: &[String]) {
+    let items: Vec<String> = values
+        .iter()
+        .map(|v| normalize_unknown_text(v))
+        .filter(|v| v != "Unknown")
+        .collect();
+    if items.is_empty() {
+        return;
+    }
+    writeln!(out, "## {title}").ok();
+    for item in items {
+        writeln!(out, "- {}", item).ok();
+    }
+    writeln!(out).ok();
+}
+
+fn kind_display(frontmatter: &LocationFrontmatter) -> String {
+    let kind = normalize_unknown_text(&frontmatter.kind_type);
+    if kind.to_ascii_lowercase() != "other" {
+        return kind;
+    }
+    match frontmatter
+        .kind_custom
+        .as_ref()
+        .map(|value| normalize_unknown_text(value))
+    {
+        Some(custom) if custom != "Unknown" => format!("Other ({custom})"),
+        _ => "Other".to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npc_renderer_includes_metadata_table() {
+        let frontmatter = NpcFrontmatter {
+            doc_type: "npc".to_string(),
+            id: "npc_1".to_string(),
+            slug: "lirael".to_string(),
+            name: "Lirael Drake".to_string(),
+            vault_path: "npcs/lirael.md".to_string(),
+            race: "Elf".to_string(),
+            occupation: "Archivist".to_string(),
+            sex: "female".to_string(),
+            age: "133".to_string(),
+            height: "5'9\"".to_string(),
+            weight_lbs: "140".to_string(),
+            background: "Raised in the argent library.".to_string(),
+            want_need: "Safeguard forbidden scrolls.".to_string(),
+            secret_obstacle: "Cursed with prophetic dreams.".to_string(),
+            carrying: vec!["Silver quill".to_string()],
+            location: "Silversong".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T12:00:00Z".to_string(),
+        };
+
+        let markdown = render_npc_markdown(&frontmatter);
+        assert!(markdown.contains("| Race | Elf |"));
+        assert!(markdown.contains("## Background"));
+        assert!(markdown.contains("- Silver quill"));
+    }
+}

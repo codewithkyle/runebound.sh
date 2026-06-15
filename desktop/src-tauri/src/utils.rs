@@ -29,7 +29,12 @@ pub fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
 }
 
 pub fn normalize_relative_path_for_storage(path: &str) -> String {
-    path.replace('\\', "/")
+    path
+        .replace('\\', "/")
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 pub fn path_for_display(path: &str) -> String {

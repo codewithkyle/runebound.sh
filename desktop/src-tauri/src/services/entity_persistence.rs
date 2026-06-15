@@ -1,22 +1,16 @@
-use std::fs;
-use std::path::PathBuf;
-
-use dnd_core::config::{load_effective, validate_for_runtime};
+use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
     FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION,
-    merge_runebound_block, now_timestamp, render_faction_markdown, render_item_markdown,
-    render_location_markdown, render_npc_markdown, slugify, unique_slug_for_dir,
+    now_timestamp, slugify, unique_slug_for_dir_with_ext,
 };
 use dnd_core::serialization::{
     carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
 };
-use dnd_core::vault::Vault;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::ai_generation::LocationSeed;
-use crate::services::vault_sync::{read_vault_file_if_exists, unique_markdown_path_for_name};
 use crate::utils::{
     normalize_exports, normalize_faction_kind_type, normalize_item_category, normalize_item_rarity,
     normalize_location_danger_level, normalize_location_kind_type, normalize_relative_path_for_storage,
@@ -60,17 +54,7 @@ impl EntityPersistenceService {
             input.location.trim().to_string()
         };
 
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        vault.ensure_structure().map_err(|err| err.to_string())?;
-
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
         let database = state.database();
         let npc_repo = state.npc_repo();
         let document_repo = state.document_repo();
@@ -80,52 +64,29 @@ impl EntityPersistenceService {
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
 
-        let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
-            let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
-            let desired_base_slug = slugify(name);
-            let desired_path = unique_markdown_path_for_name(
-                &vault,
-                "npcs",
-                name,
-                Some(current_vault_path.as_str()),
-            )?;
-
-            if desired_base_slug == current.slug {
-                (
-                    current.slug,
-                    desired_path.clone(),
-                    current.created_at,
-                    if desired_path == current_vault_path {
-                        None
-                    } else {
-                        Some(current_vault_path)
-                    },
-                )
+        let base_slug = slugify(name);
+        let slug = if let Some(current) = existing.as_ref() {
+            if current.slug == base_slug {
+                current.slug.clone()
             } else {
-                let next_slug = unique_slug_for_dir(vault.root(), "npcs", &desired_base_slug);
-                (
-                    next_slug,
-                    desired_path,
-                    current.created_at,
-                    Some(current_vault_path),
-                )
+                unique_slug_for_dir_with_ext(store.root(), "npcs", &base_slug, "toml")
             }
         } else {
-            let base_slug = slugify(name);
-            let slug = unique_slug_for_dir(vault.root(), "npcs", &base_slug);
-            (
-                slug.clone(),
-                unique_markdown_path_for_name(&vault, "npcs", name, None)?,
-                now.clone(),
-                None,
-            )
+            unique_slug_for_dir_with_ext(store.root(), "npcs", &base_slug, "toml")
         };
 
-        let markdown = render_npc_markdown(&NpcFrontmatter {
+        let created_at = existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+        let vault_path = format!("npcs/{slug}.md");
+
+        let frontmatter = NpcFrontmatter {
             doc_type: "npc".to_string(),
             id: input.id.trim().to_string(),
             slug: slug.clone(),
             name: name.to_string(),
+            vault_path: vault_path.clone(),
             race: race.to_string(),
             occupation: occupation.clone(),
             sex: sex.clone(),
@@ -139,30 +100,18 @@ impl EntityPersistenceService {
             location: location.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
-        })
-        .map_err(|err| err.to_string())?;
-
-        let existing_markdown = if let Some(ref old_path) = previous_path {
-            if old_path != &relative_path {
-                match read_vault_file_if_exists(&vault, old_path) {
-                    Ok(Some(contents)) => Some(contents),
-                    Ok(None) => read_vault_file_if_exists(&vault, &relative_path)?,
-                    Err(err) => return Err(err),
-                }
-            } else {
-                read_vault_file_if_exists(&vault, &relative_path)?
-            }
-        } else {
-            read_vault_file_if_exists(&vault, &relative_path)?
-        };
-        let merged_markdown = match existing_markdown {
-            Some(existing) => merge_runebound_block(&existing, &markdown),
-            None => markdown,
         };
 
-        vault
-            .write_relative(&PathBuf::from(&relative_path), &merged_markdown)
+        store
+            .save_npc(&frontmatter)
             .map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_npc(&current.slug)
+                    .map_err(|err| err.to_string())?
+            }
+        }
 
         let npc_row = db::NpcRow {
             id: input.id.trim().to_string(),
@@ -179,7 +128,7 @@ impl EntityPersistenceService {
             secret_obstacle,
             carrying: carrying_db,
             location,
-            vault_path: relative_path.clone(),
+            vault_path: vault_path.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
         };
@@ -198,26 +147,6 @@ impl EntityPersistenceService {
                 &npc_row.updated_at,
             )
             .await?;
-
-        if let Some(old_path) = previous_path {
-            if old_path != npc_row.vault_path {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &old_path)
-                    .await?;
-
-                if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
-                    if old_full_path.exists() {
-                        fs::remove_file(&old_full_path).map_err(|err| {
-                            format!(
-                                "failed to remove old npc file {}: {}",
-                                old_full_path.display(),
-                                err
-                            )
-                        })?;
-                    }
-                }
-            }
-        }
 
         Ok(SaveNpcDraftResult {
             id: npc_row.id,
@@ -241,8 +170,6 @@ impl EntityPersistenceService {
         if name.is_empty() {
             return Err("location name cannot be empty".to_string());
         }
-
-        let previous_vault_path_input = normalize_relative_path_for_storage(input.vault_path.trim());
 
         let kind_type = normalize_location_kind_type(&input.kind_type)?;
         let mut kind_custom = input.kind_custom.map(|value| normalize_unknown_text(&value));
@@ -278,17 +205,7 @@ impl EntityPersistenceService {
         })?;
         let exports_db = exports_to_db_text(&exports)?;
 
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
         let database = state.database();
         let location_repo = state.location_repo();
         let document_repo = state.document_repo();
@@ -296,55 +213,36 @@ impl EntityPersistenceService {
         let existing = location_repo
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
-
-        let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
-            let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
-            let desired_base_slug = slugify(name);
-            let desired_path = unique_markdown_path_for_name(
-                &vault,
-                "locations",
-                name,
-                Some(current_vault_path.as_str()),
-            )?;
-
-            if desired_base_slug == current.slug {
-                (
-                    current.slug,
-                    desired_path.clone(),
-                    current.created_at,
-                    if desired_path == current_vault_path {
-                        None
-                    } else {
-                        Some(current_vault_path)
-                    },
-                )
+        let base_slug = slugify(name);
+        let slug = if let Some(current) = existing.as_ref() {
+            if current.slug == base_slug {
+                current.slug.clone()
             } else {
-                (
-                    unique_slug_for_dir(vault.root(), "locations", &desired_base_slug),
-                    desired_path,
-                    current.created_at,
-                    Some(current_vault_path),
-                )
+                unique_slug_for_dir_with_ext(store.root(), "locations", &base_slug, "toml")
             }
         } else {
-            let base_slug = slugify(name);
-            (
-                unique_slug_for_dir(vault.root(), "locations", &base_slug),
-                unique_markdown_path_for_name(&vault, "locations", name, None)?,
-                now.clone(),
-                if previous_vault_path_input.is_empty() {
-                    None
-                } else {
-                    Some(previous_vault_path_input.to_string())
-                },
-            )
+            unique_slug_for_dir_with_ext(store.root(), "locations", &base_slug, "toml")
         };
 
-        let markdown = render_location_markdown(&LocationFrontmatter {
+        let created_at = existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+        let requested_path = normalize_relative_path_for_storage(input.vault_path.trim());
+        let vault_path = if !requested_path.is_empty() {
+            requested_path
+        } else if let Some(current) = existing.as_ref() {
+            normalize_relative_path_for_storage(&current.vault_path)
+        } else {
+            format!("locations/{slug}.md")
+        };
+
+        let frontmatter = LocationFrontmatter {
             doc_type: "location".to_string(),
             id: input.id.trim().to_string(),
             slug: slug.clone(),
             name: name.to_string(),
+            vault_path: vault_path.clone(),
             kind_type: kind_type.clone(),
             kind_custom: kind_custom.clone(),
             visual_description: visual_description.clone(),
@@ -356,36 +254,24 @@ impl EntityPersistenceService {
             current_tension: current_tension.clone(),
             created_at: created_at.clone(),
             updated_at: now.clone(),
-        })
-        .map_err(|err| err.to_string())?;
-
-        let existing_markdown = if let Some(ref old_path) = previous_path {
-            if old_path != &relative_path {
-                match read_vault_file_if_exists(&vault, old_path) {
-                    Ok(Some(contents)) => Some(contents),
-                    Ok(None) => read_vault_file_if_exists(&vault, &relative_path)?,
-                    Err(err) => return Err(err),
-                }
-            } else {
-                read_vault_file_if_exists(&vault, &relative_path)?
-            }
-        } else {
-            read_vault_file_if_exists(&vault, &relative_path)?
-        };
-        let merged_markdown = match existing_markdown {
-            Some(existing) => merge_runebound_block(&existing, &markdown),
-            None => markdown,
         };
 
-        vault
-            .write_relative(&PathBuf::from(&relative_path), &merged_markdown)
+        store
+            .save_location(&frontmatter)
             .map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_location(&current.slug)
+                    .map_err(|err| err.to_string())?;
+            }
+        }
 
         let location_row = db::LocationRow {
             id: input.id.trim().to_string(),
             slug,
             name: name.to_string(),
-            vault_path: relative_path.clone(),
+            vault_path: vault_path.clone(),
             kind_type,
             kind_custom,
             visual_description,
@@ -413,26 +299,6 @@ impl EntityPersistenceService {
                 &location_row.updated_at,
             )
             .await?;
-
-        if let Some(old_path) = previous_path {
-            if old_path != location_row.vault_path {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &old_path)
-                    .await?;
-
-                if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
-                    if old_full_path.exists() {
-                        fs::remove_file(&old_full_path).map_err(|err| {
-                            format!(
-                                "failed to remove old location file {}: {}",
-                                old_full_path.display(),
-                                err
-                            )
-                        })?;
-                    }
-                }
-            }
-        }
 
         Ok(SaveLocationDraftResult {
             id: location_row.id,
@@ -483,17 +349,7 @@ impl EntityPersistenceService {
         let goals_long_term = normalize_unknown_list(input.goals_long_term);
         let symbol_description = normalize_unknown_text(&input.symbol_description);
 
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
         let database = state.database();
         let faction_repo = state.faction_repo();
         let document_repo = state.document_repo();
@@ -501,44 +357,37 @@ impl EntityPersistenceService {
         let existing = faction_repo
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
-
-        let provided_relative_path = normalize_relative_path_for_storage(input.vault_path.trim());
-        let previous_path = if let Some(row) = existing.as_ref() {
-            Some(normalize_relative_path_for_storage(&row.vault_path))
-        } else if !provided_relative_path.is_empty() {
-            Some(provided_relative_path)
-        } else {
-            None
-        };
         let created_at = existing
             .as_ref()
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
 
-        // Always regenerate slug from the current name
         let desired_base_slug = slugify(&input.name);
         let slug = if let Some(row) = existing.as_ref() {
             if row.slug == desired_base_slug {
                 row.slug.clone()
             } else {
-                unique_slug_for_dir(vault.root(), "factions", &desired_base_slug)
+                unique_slug_for_dir_with_ext(store.root(), "factions", &desired_base_slug, "toml")
             }
         } else {
-            unique_slug_for_dir(vault.root(), "factions", &desired_base_slug)
+            unique_slug_for_dir_with_ext(store.root(), "factions", &desired_base_slug, "toml")
         };
 
-        let desired_path = unique_markdown_path_for_name(
-            &vault,
-            "factions",
-            &input.name,
-            previous_path.as_deref(),
-        )?;
+        let requested_path = normalize_relative_path_for_storage(input.vault_path.trim());
+        let vault_path = if !requested_path.is_empty() {
+            requested_path
+        } else if let Some(row) = existing.as_ref() {
+            normalize_relative_path_for_storage(&row.vault_path)
+        } else {
+            format!("factions/{slug}.md")
+        };
 
         let frontmatter = FactionFrontmatter {
             doc_type: "faction".to_string(),
             id: input.id.trim().to_string(),
             slug: slug.clone(),
             name: input.name.trim().to_string(),
+            vault_path: vault_path.clone(),
             kind_type: kind_type.clone(),
             kind_custom: kind_custom.clone(),
             public_description: public_description.clone(),
@@ -559,16 +408,16 @@ impl EntityPersistenceService {
             updated_at: now.clone(),
         };
 
-        let runebound_block = render_faction_markdown(&frontmatter).map_err(|err| err.to_string())?;
-        let existing_file = read_vault_file_if_exists(&vault, &desired_path)?;
-        let content = if let Some(current) = existing_file {
-            merge_runebound_block(&current, &runebound_block)
-        } else {
-            runebound_block
-        };
-        vault
-            .write_relative(&PathBuf::from(&desired_path), &content)
+        store
+            .save_faction(&frontmatter)
             .map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_faction(&current.slug)
+                    .map_err(|err| err.to_string())?;
+            }
+        }
 
         let allies_db = faction_list_to_db_text(&allies)?;
         let rivals_db = faction_list_to_db_text(&rivals_enemies)?;
@@ -579,7 +428,7 @@ impl EntityPersistenceService {
             id: input.id.trim().to_string(),
             slug,
             name: input.name.trim().to_string(),
-            vault_path: desired_path,
+            vault_path: vault_path.clone(),
             kind_type,
             kind_custom,
             public_description,
@@ -614,25 +463,6 @@ impl EntityPersistenceService {
                 &faction_row.updated_at,
             )
             .await?;
-
-        if let Some(old_path) = previous_path {
-            if old_path != faction_row.vault_path {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &old_path)
-                    .await?;
-                if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
-                    if old_full_path.exists() {
-                        fs::remove_file(&old_full_path).map_err(|err| {
-                            format!(
-                                "failed to remove old faction file {}: {}",
-                                old_full_path.display(),
-                                err
-                            )
-                        })?;
-                    }
-                }
-            }
-        }
 
         Ok(SaveFactionDraftResult {
             id: faction_row.id,
@@ -669,17 +499,7 @@ impl EntityPersistenceService {
         let value = normalize_unknown_text(&input.value);
         let location = normalize_unknown_text(&input.location);
 
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
         let database = state.database();
         let item_repo = state.item_repo();
         let document_repo = state.document_repo();
@@ -688,48 +508,32 @@ impl EntityPersistenceService {
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
 
-        // Always regenerate slug from the current name
         let desired_base_slug = slugify(name);
-
-        let (slug, relative_path, created_at, previous_path) = if let Some(current) = existing {
-            let current_vault_path = normalize_relative_path_for_storage(&current.vault_path);
-            let desired_path = unique_markdown_path_for_name(
-                &vault,
-                "items",
-                name,
-                Some(current_vault_path.as_str()),
-            )?;
-
-            let slug = if current.slug == desired_base_slug {
-                current.slug
+        let slug = if let Some(current) = existing.as_ref() {
+            if current.slug == desired_base_slug {
+                current.slug.clone()
             } else {
-                unique_slug_for_dir(vault.root(), "items", &desired_base_slug)
-            };
-
-            (
-                slug,
-                desired_path.clone(),
-                current.created_at,
-                if desired_path == current_vault_path {
-                    None
-                } else {
-                    Some(current_vault_path)
-                },
-            )
+                unique_slug_for_dir_with_ext(store.root(), "items", &desired_base_slug, "toml")
+            }
         } else {
-            (
-                unique_slug_for_dir(vault.root(), "items", &desired_base_slug),
-                unique_markdown_path_for_name(&vault, "items", name, None)?,
-                now.clone(),
-                None,
-            )
+            unique_slug_for_dir_with_ext(store.root(), "items", &desired_base_slug, "toml")
         };
+
+        let created_at = existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+        let vault_path = existing
+            .as_ref()
+            .map(|row| normalize_relative_path_for_storage(&row.vault_path))
+            .unwrap_or_else(|| format!("items/{slug}.md"));
 
         let frontmatter = ItemFrontmatter {
             doc_type: "item".to_string(),
             id: input.id.trim().to_string(),
             slug: slug.clone(),
             name: name.to_string(),
+            vault_path: vault_path.clone(),
             category: category.clone(),
             rarity: rarity.clone(),
             attunement: attunement.clone(),
@@ -744,22 +548,22 @@ impl EntityPersistenceService {
             updated_at: now.clone(),
         };
 
-        let markdown = render_item_markdown(&frontmatter).map_err(|err| err.to_string())?;
-        let existing_markdown = read_vault_file_if_exists(&vault, &relative_path)?;
-        let content = if let Some(current) = existing_markdown {
-            merge_runebound_block(&current, &markdown)
-        } else {
-            markdown
-        };
-        vault
-            .write_relative(&PathBuf::from(&relative_path), &content)
+        store
+            .save_item(&frontmatter)
             .map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_item(&current.slug)
+                    .map_err(|err| err.to_string())?;
+            }
+        }
 
         let item_row = db::ItemRow {
             id: input.id.trim().to_string(),
             slug,
             name: name.to_string(),
-            vault_path: relative_path.clone(),
+            vault_path: vault_path.clone(),
             category,
             rarity,
             attunement,
@@ -788,25 +592,6 @@ impl EntityPersistenceService {
                 &item_row.updated_at,
             )
             .await?;
-
-        if let Some(old_path) = previous_path {
-            if old_path != item_row.vault_path {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &old_path)
-                    .await?;
-                if let Ok(old_full_path) = vault.resolve_relative(&PathBuf::from(&old_path)) {
-                    if old_full_path.exists() {
-                        fs::remove_file(&old_full_path).map_err(|err| {
-                            format!(
-                                "failed to remove old item file {}: {}",
-                                old_full_path.display(),
-                                err
-                            )
-                        })?;
-                    }
-                }
-            }
-        }
 
         Ok(SaveItemDraftResult {
             id: item_row.id,

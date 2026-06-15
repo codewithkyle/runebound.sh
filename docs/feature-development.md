@@ -12,6 +12,7 @@
 - `repositories/mod.rs` handles database and vault boundaries
 - `runebound-models` defines shared Rust and TS contracts
 - `desktop/src/App.tsx` integrates frontend events and rendering
+- Canonical entity data is stored as TOML under `~/.config/runebound.sh/entities/<kind>/<slug>.toml`; Obsidian files are generated via `publish`
 
 If your change crosses backend/frontend boundaries, model it in `runebound-models` first.
 

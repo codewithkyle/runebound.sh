@@ -91,6 +91,7 @@ fn generate_typescript() -> String {
     out.push_str("  id: string;\n");
     out.push_str("  slug: string;\n");
     out.push_str("  name: string;\n");
+    out.push_str("  vault_path: string;\n");
     out.push_str("  race: string;\n");
     out.push_str("  occupation: string;\n");
     out.push_str("  sex: string;\n");
@@ -111,6 +112,7 @@ fn generate_typescript() -> String {
     out.push_str("  id: string;\n");
     out.push_str("  slug: string;\n");
     out.push_str("  name: string;\n");
+    out.push_str("  vault_path: string;\n");
     out.push_str("  kind_type: string;\n");
     out.push_str("  kind_custom?: string | null;\n");
     out.push_str("  visual_description: string;\n");
@@ -129,6 +131,7 @@ fn generate_typescript() -> String {
     out.push_str("  id: string;\n");
     out.push_str("  slug: string;\n");
     out.push_str("  name: string;\n");
+    out.push_str("  vault_path: string;\n");
     out.push_str("  kind_type: string;\n");
     out.push_str("  kind_custom?: string | null;\n");
     out.push_str("  public_description: string;\n");
@@ -154,6 +157,7 @@ fn generate_typescript() -> String {
     out.push_str("  id: string;\n");
     out.push_str("  slug: string;\n");
     out.push_str("  name: string;\n");
+    out.push_str("  vault_path: string;\n");
     out.push_str("  category: string;\n");
     out.push_str("  rarity: string;\n");
     out.push_str("  attunement: string;\n");

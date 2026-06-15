@@ -48,6 +48,7 @@ pub struct UiConfig {
 pub struct ConfigPaths {
     pub global: PathBuf,
     pub calendar: PathBuf,
+    pub entities: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -161,10 +162,16 @@ pub fn config_paths(_workspace_root: &Path) -> Result<ConfigPaths> {
     let config_base =
         dirs::config_dir().ok_or_else(|| anyhow!("unable to find config directory"))?;
 
-    let global = config_base.join(APP_DIR_NAME).join("config.toml");
-    let calendar = config_base.join(APP_DIR_NAME).join("calendar.toml");
+    let app_root = config_base.join(APP_DIR_NAME);
+    let global = app_root.join("config.toml");
+    let calendar = app_root.join("calendar.toml");
+    let entities = app_root.join("entities");
 
-    Ok(ConfigPaths { global, calendar })
+    Ok(ConfigPaths {
+        global,
+        calendar,
+        entities,
+    })
 }
 
 pub fn required_issues(config: &AppConfig) -> Vec<String> {

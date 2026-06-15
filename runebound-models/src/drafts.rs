@@ -102,6 +102,7 @@ pub struct NpcFrontmatter {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub vault_path: String,
     pub race: String,
     pub occupation: String,
     pub sex: String,
@@ -124,6 +125,7 @@ pub struct LocationFrontmatter {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub vault_path: String,
     pub kind_type: String,
     #[serde(default)]
     pub kind_custom: Option<String>,
@@ -145,6 +147,7 @@ pub struct FactionFrontmatter {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub vault_path: String,
     pub kind_type: String,
     #[serde(default)]
     pub kind_custom: Option<String>,
@@ -173,6 +176,7 @@ pub struct ItemFrontmatter {
     pub id: String,
     pub slug: String,
     pub name: String,
+    pub vault_path: String,
     pub category: String,
     pub rarity: String,
     pub attunement: String,

@@ -423,6 +423,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_start_setup_command() {
+        let parsed = parse_command_input("start setup");
+        assert!(
+            parsed.valid,
+            "expected start setup to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["start", "setup"]);
+        assert_eq!(parsed.canonical_input, "start setup");
+    }
+
+    #[test]
     fn tokenizes_words_with_inline_apostrophes() {
         let parsed = parse_command_input("create npc mariner's concordance");
         assert!(parsed.valid);

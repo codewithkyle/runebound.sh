@@ -4,3 +4,4 @@ pub mod entity_persistence;
 pub mod entity_reroll;
 pub mod vault_sync;
 pub mod suggestions;
+pub mod publish;
