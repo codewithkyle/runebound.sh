@@ -1,9 +1,51 @@
 use serde::{Deserialize, Serialize};
 
+/// Which section(s) of setup an onboarding session is scoped to.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OnboardingFlow {
+    /// `start setup` — vault → ollama url → model → save.
+    #[default]
+    Full,
+    /// `setup vault` — vault only; saves that section and exits.
+    Vault,
+    /// `setup llm` — ollama url + model only; saves that section and exits.
+    Llm,
+}
+
+/// Sub-state of the vault step, used to disambiguate menu input from a typed path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum VaultStepState {
+    /// Not currently at the vault step.
+    #[default]
+    Inactive,
+    /// Vault menu has been shown; awaiting a 1/2/3 choice.
+    MenuShown,
+    /// User chose "type a path"; awaiting the typed path.
+    AwaitingPath,
+}
+
+/// Sub-state of the Ollama step, used to disambiguate menu input from a typed URL.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum OllamaStepState {
+    /// Not currently at the Ollama step.
+    #[default]
+    Inactive,
+    /// Ollama menu has been shown; awaiting a 1/2 (or continue) choice.
+    MenuShown,
+    /// User chose "configure a new server"; awaiting the typed URL.
+    AwaitingUrl,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OnboardingSession {
     pub active: bool,
     pub step: u8,
+    pub flow: OnboardingFlow,
+    pub vault_substate: VaultStepState,
+    pub ollama_substate: OllamaStepState,
     pub vault_path: String,
     pub ollama_base_url: String,
     pub ollama_models: Vec<String>,
@@ -15,6 +57,9 @@ impl Default for OnboardingSession {
         Self {
             active: false,
             step: 0,
+            flow: OnboardingFlow::Full,
+            vault_substate: VaultStepState::Inactive,
+            ollama_substate: OllamaStepState::Inactive,
             vault_path: String::new(),
             ollama_base_url: "http://127.0.0.1:11434".to_string(),
             ollama_models: Vec::new(),

@@ -10,6 +10,7 @@ pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
 pub mod publish_commands;
+pub mod setup_commands;
 
 use std::future::Future;
 use std::pin::Pin;

@@ -388,6 +388,28 @@ mod tests {
     }
 
     #[test]
+    fn parses_setup_vault_command() {
+        let parsed = parse_command_input("setup vault");
+        assert!(
+            parsed.valid,
+            "expected setup vault to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["setup", "vault"]);
+    }
+
+    #[test]
+    fn parses_setup_llm_command() {
+        let parsed = parse_command_input("setup llm");
+        assert!(
+            parsed.valid,
+            "expected setup llm to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert_eq!(parsed.normalized_tokens, vec!["setup", "llm"]);
+    }
+
+    #[test]
     fn normalizes_markdown_wrapped_help_command() {
         assert_eq!(normalize_command_input("`help`"), "help");
         let parsed = parse_command_input("`help`");

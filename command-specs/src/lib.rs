@@ -649,12 +649,26 @@ pub fn command_manifest() -> CommandManifest {
                 name: "setup".to_string(),
                 summary: "Guided setup helper commands".to_string(),
                 examples: vec!["setup help".to_string()],
-                subcommands: vec![SubcommandSpec {
-                    name: "help".to_string(),
-                    summary: "Show guided setup command help".to_string(),
-                    options: Vec::new(),
-                    examples: vec!["setup help".to_string()],
-                }],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show guided setup command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["setup help".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "vault".to_string(),
+                        summary: "Change which Obsidian vault is used".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["setup vault".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "llm".to_string(),
+                        summary: "Change the LLM host/port and model".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["setup llm".to_string()],
+                    },
+                ],
                 options: Vec::new(),
                 requires_subcommand: true,
                 canonical_help_command: Some("setup help".to_string()),
