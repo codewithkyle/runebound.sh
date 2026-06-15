@@ -158,7 +158,7 @@ mod tests {
             id: "npc_1".to_string(),
             slug: "lirael".to_string(),
             name: "Lirael Drake".to_string(),
-            vault_path: "npcs/lirael.md".to_string(),
+            vault_path: "npcs/Lirael Drake.md".to_string(),
             race: "Elf".to_string(),
             occupation: "Archivist".to_string(),
             sex: "female".to_string(),

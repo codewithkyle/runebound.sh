@@ -80,16 +80,24 @@ impl EntityPersistenceService {
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
         let vault_path = if let Some(current) = existing.as_ref() {
-            if current.name == name {
-                current.vault_path.clone()
-            } else {
-                self.unique_readable_vault_path(
+            let readable = self
+                .unique_readable_vault_path(
                     document_repo.as_ref(),
                     database.as_ref(),
                     "npcs",
                     name,
+                    Some(&current.slug),
                 )
-                .await?
+                .await?;
+            if normalize_relative_path_for_storage(&current.vault_path)
+                == normalize_relative_path_for_storage(&readable)
+            {
+                current.vault_path.clone()
+            } else {
+                document_repo
+                    .delete_by_vault_path(database.as_ref(), &current.vault_path)
+                    .await?;
+                readable
             }
         } else {
             self.unique_readable_vault_path(
@@ -97,6 +105,7 @@ impl EntityPersistenceService {
                 database.as_ref(),
                 "npcs",
                 name,
+                None,
             )
             .await?
         };
@@ -252,13 +261,32 @@ impl EntityPersistenceService {
         let vault_path = if !requested_path.is_empty() {
             requested_path
         } else if let Some(current) = existing.as_ref() {
-            normalize_relative_path_for_storage(&current.vault_path)
+            let readable = self
+                .unique_readable_vault_path(
+                    document_repo.as_ref(),
+                    database.as_ref(),
+                    "locations",
+                    name,
+                    Some(&current.slug),
+                )
+                .await?;
+            if normalize_relative_path_for_storage(&current.vault_path)
+                == normalize_relative_path_for_storage(&readable)
+            {
+                current.vault_path.clone()
+            } else {
+                document_repo
+                    .delete_by_vault_path(database.as_ref(), &current.vault_path)
+                    .await?;
+                readable
+            }
         } else {
             self.unique_readable_vault_path(
                 document_repo.as_ref(),
                 database.as_ref(),
                 "locations",
                 name,
+                None,
             )
             .await?
         };
@@ -403,13 +431,32 @@ impl EntityPersistenceService {
         let vault_path = if !requested_path.is_empty() {
             requested_path
         } else if let Some(row) = existing.as_ref() {
-            normalize_relative_path_for_storage(&row.vault_path)
+            let readable = self
+                .unique_readable_vault_path(
+                    document_repo.as_ref(),
+                    database.as_ref(),
+                    "factions",
+                    input.name.trim(),
+                    Some(&row.slug),
+                )
+                .await?;
+            if normalize_relative_path_for_storage(&row.vault_path)
+                == normalize_relative_path_for_storage(&readable)
+            {
+                row.vault_path.clone()
+            } else {
+                document_repo
+                    .delete_by_vault_path(database.as_ref(), &row.vault_path)
+                    .await?;
+                readable
+            }
         } else {
             self.unique_readable_vault_path(
                 document_repo.as_ref(),
                 database.as_ref(),
                 "factions",
                 input.name.trim(),
+                None,
             )
             .await?
         };
@@ -511,15 +558,18 @@ impl EntityPersistenceService {
         database: &db::Database,
         relative_dir: &str,
         display_name: &str,
+        current_slug: Option<&str>,
     ) -> Result<String, String> {
         let base = normalize_markdown_file_stem(display_name);
         let mut candidate = format!("{relative_dir}/{base}.md");
         let mut idx = 2;
-        while document_repo
+        while let Some(found_slug) = document_repo
             .find_by_vault_path(database, &candidate)
             .await?
-            .is_some()
         {
+            if current_slug == Some(found_slug.as_str()) {
+                return Ok(candidate);
+            }
             candidate = format!("{relative_dir}/{base} {idx}.md");
             idx += 1;
         }
@@ -577,13 +627,32 @@ impl EntityPersistenceService {
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
         let vault_path = if let Some(current) = existing.as_ref() {
-            normalize_relative_path_for_storage(&current.vault_path)
+            let readable = self
+                .unique_readable_vault_path(
+                    document_repo.as_ref(),
+                    database.as_ref(),
+                    "items",
+                    name,
+                    Some(&current.slug),
+                )
+                .await?;
+            if normalize_relative_path_for_storage(&current.vault_path)
+                == normalize_relative_path_for_storage(&readable)
+            {
+                current.vault_path.clone()
+            } else {
+                document_repo
+                    .delete_by_vault_path(database.as_ref(), &current.vault_path)
+                    .await?;
+                readable
+            }
         } else {
             self.unique_readable_vault_path(
                 document_repo.as_ref(),
                 database.as_ref(),
                 "items",
                 name,
+                None,
             )
             .await?
         };

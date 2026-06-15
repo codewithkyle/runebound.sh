@@ -14,6 +14,7 @@ use crate::services::entity_persistence::{
     EntityPersistenceService, SaveFactionDraftInput, SaveItemDraftInput, SaveLocationDraftInput,
     SaveNpcDraftInput,
 };
+use crate::utils::normalize_relative_path_for_storage;
 use crate::services::publish::{
     render_faction_markdown, render_item_markdown, render_location_markdown, render_npc_markdown,
 };
@@ -82,7 +83,10 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            (render_npc_markdown(&frontmatter), frontmatter.vault_path)
+            (
+                render_npc_markdown(&frontmatter),
+                resolved_publish_path(EntityType::Npc, &frontmatter.slug, &frontmatter.vault_path),
+            )
         }
         EntityType::Location => {
             let frontmatter = match store
@@ -92,7 +96,14 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            (render_location_markdown(&frontmatter), frontmatter.vault_path)
+            (
+                render_location_markdown(&frontmatter),
+                resolved_publish_path(
+                    EntityType::Location,
+                    &frontmatter.slug,
+                    &frontmatter.vault_path,
+                ),
+            )
         }
         EntityType::Faction => {
             let frontmatter = match store
@@ -102,7 +113,14 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            (render_faction_markdown(&frontmatter), frontmatter.vault_path)
+            (
+                render_faction_markdown(&frontmatter),
+                resolved_publish_path(
+                    EntityType::Faction,
+                    &frontmatter.slug,
+                    &frontmatter.vault_path,
+                ),
+            )
         }
         EntityType::Item => {
             let frontmatter = match store
@@ -112,7 +130,14 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            (render_item_markdown(&frontmatter), frontmatter.vault_path)
+            (
+                render_item_markdown(&frontmatter),
+                resolved_publish_path(
+                    EntityType::Item,
+                    &frontmatter.slug,
+                    &frontmatter.vault_path,
+                ),
+            )
         }
     };
 
@@ -203,6 +228,88 @@ fn command_root_for(entity_type: &EntityType) -> &'static str {
         EntityType::Location => "location",
         EntityType::Faction => "faction",
         EntityType::Item => "item",
+    }
+}
+
+fn resolved_publish_path(entity_type: EntityType, slug: &str, stored_path: &str) -> String {
+    let normalized = normalize_relative_path_for_storage(stored_path);
+    let slug_default = normalize_relative_path_for_storage(&format!(
+        "{}/{}.md",
+        entity_directory(&entity_type),
+        slug
+    ));
+
+    if normalized.eq_ignore_ascii_case(&slug_default) {
+        format!(
+            "{}/{}.md",
+            entity_directory(&entity_type),
+            title_case_from_slug(slug)
+        )
+    } else {
+        stored_path.to_string()
+    }
+}
+
+fn entity_directory(entity_type: &EntityType) -> &'static str {
+    match entity_type {
+        EntityType::Npc => "npcs",
+        EntityType::Location => "locations",
+        EntityType::Faction => "factions",
+        EntityType::Item => "items",
+    }
+}
+
+fn title_case_from_slug(slug: &str) -> String {
+    slug.split('-')
+        .filter(|segment| !segment.is_empty())
+        .map(|segment| {
+            let mut chars = segment.chars();
+            let Some(first) = chars.next() else {
+                return String::new();
+            };
+            let mut out = String::with_capacity(segment.len());
+            out.push(first.to_ascii_uppercase());
+            for ch in chars {
+                if ch.is_ascii_alphabetic() {
+                    out.push(ch.to_ascii_lowercase());
+                } else {
+                    out.push(ch);
+                }
+            }
+            out
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_based_paths_are_title_cased() {
+        let path = resolved_publish_path(EntityType::Npc, "lirael-drake", "npcs/lirael-drake.md");
+        assert_eq!(path, "npcs/Lirael Drake.md");
+    }
+
+    #[test]
+    fn slug_suffix_is_preserved() {
+        let path = resolved_publish_path(
+            EntityType::Npc,
+            "shadow-clan-2",
+            "npcs/shadow-clan-2.md",
+        );
+        assert_eq!(path, "npcs/Shadow Clan 2.md");
+    }
+
+    #[test]
+    fn custom_paths_are_left_alone() {
+        let path = resolved_publish_path(
+            EntityType::Location,
+            "ember-vault",
+            "locations/subfolders/ember-vault.md",
+        );
+        assert_eq!(path, "locations/subfolders/ember-vault.md");
     }
 }
 

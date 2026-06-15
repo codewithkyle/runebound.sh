@@ -326,7 +326,7 @@ publish help
 - If you have an active draft loaded in the editor, `publish` with no arguments targets that draft.
 - Pulls the canonical TOML record from `~/.config/runebound.sh/entities/...`.
 - Renders entity data into a structured markdown layout (metadata table, sections, bullet lists).
-- Writes to the entity's `vault_path` (e.g., `npcs/lirael.md`).
+- Writes to the entity's `vault_path` (e.g., `npcs/Lirael Drake.md`).
 - If the file already exists you must confirm the overwrite; declining leaves the file untouched.
 - Publishing is one-way—manual edits inside Obsidian are not synced back. Re-run `publish` after making changes via commands.
 - Startup sync mirrors the canonical TOML store into the SQLite database; Obsidian files are treated purely as render targets.
