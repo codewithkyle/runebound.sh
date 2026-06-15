@@ -34,6 +34,8 @@ pub struct OllamaConfig {
     pub model: Option<String>,
     #[serde(default = "default_ollama_timeout_seconds")]
     pub timeout_seconds: u64,
+    #[serde(default = "default_ollama_num_ctx")]
+    pub num_ctx: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -77,6 +79,7 @@ struct PartialOllamaConfig {
     base_url: Option<String>,
     model: Option<String>,
     timeout_seconds: Option<u64>,
+    num_ctx: Option<u32>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -111,6 +114,7 @@ impl Default for OllamaConfig {
             base_url: default_ollama_base_url(),
             model: None,
             timeout_seconds: default_ollama_timeout_seconds(),
+            num_ctx: default_ollama_num_ctx(),
         }
     }
 }
@@ -191,6 +195,10 @@ pub fn required_issues(config: &AppConfig) -> Vec<String> {
         issues.push("ollama.timeout_seconds must be greater than 0".to_string());
     }
 
+    if config.ollama.num_ctx < 512 {
+        issues.push("ollama.num_ctx must be at least 512".to_string());
+    }
+
     issues
 }
 
@@ -235,6 +243,9 @@ fn apply_partial(base: &mut AppConfig, partial: PartialAppConfig) {
         if let Some(timeout_seconds) = ollama.timeout_seconds {
             base.ollama.timeout_seconds = timeout_seconds;
         }
+        if let Some(num_ctx) = ollama.num_ctx {
+            base.ollama.num_ctx = num_ctx;
+        }
     }
 
     if let Some(ui) = partial.ui {
@@ -261,4 +272,8 @@ fn default_ollama_base_url() -> String {
 
 fn default_ollama_timeout_seconds() -> u64 {
     120
+}
+
+fn default_ollama_num_ctx() -> u32 {
+    8192
 }
