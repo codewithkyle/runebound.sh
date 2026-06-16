@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::commands::DesktopHandlerInvocation;
+use crate::commands::{DesktopHandlerInvocation, command_action_response};
 use crate::entities::common::{
     command_message_response,
     command_message_response_with_doc,
@@ -79,7 +79,11 @@ pub async fn handle_npc(
         return handle_npc_reroll(trimmed, state_ref, &domain).await;
     }
 
-    command_message_response("unknown npc command. use `npc help`")
+    Ok(Some(command_action_response(
+        "unknown npc command. use ",
+        "npc help",
+        "",
+    )))
 }
 
 async fn handle_npc_reroll(

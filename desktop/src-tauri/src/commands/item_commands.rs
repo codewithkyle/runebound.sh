@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::commands::DesktopHandlerInvocation;
+use crate::commands::{DesktopHandlerInvocation, command_action_response};
 use crate::entities::common::{
-    command_message_response,
     command_message_response_with_doc,
     command_no_active_draft,
     entity_help_doc,
@@ -70,7 +69,11 @@ pub async fn handle_item(invocation: DesktopHandlerInvocation<'_>) -> CommandRes
         return handle_item_reroll(trimmed, state_ref, &domain).await;
     }
 
-    command_message_response("unknown item command. use `item help`")
+    Ok(Some(command_action_response(
+        "unknown item command. use ",
+        "item help",
+        "",
+    )))
 }
 
 async fn handle_item_reroll(

@@ -1,7 +1,7 @@
 use dnd_core::calendar::{self, format_date_conversational, StoredCalendar};
 use runebound_models::CommandResponse;
 
-use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::commands::{DesktopHandlerInvocation, command_action_response, ok_response};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
@@ -23,9 +23,10 @@ pub async fn handle_date(
         return date_show(invocation).await;
     }
 
-    Ok(Some(ok_response(
-        "unknown date command. use `date help`".to_string(),
-        None,
+    Ok(Some(command_action_response(
+        "unknown date command. use ",
+        "date help",
+        "",
     )))
 }
 
@@ -33,9 +34,10 @@ async fn date_show(_invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let stored = match calendar::load_calendar() {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return Ok(Some(ok_response(
-                "No calendar loaded. Use `calendar import` to import a calendar.".to_string(),
-                None,
+            return Ok(Some(command_action_response(
+                "No calendar loaded. Use ",
+                "calendar import",
+                " to import a calendar.",
             )));
         }
         Err(e) => {
@@ -79,9 +81,10 @@ async fn date_set(tokens: &[String]) -> CommandResult {
     let stored = match calendar::load_calendar() {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return Ok(Some(ok_response(
-                "No calendar loaded. Use `calendar import` to import a calendar.".to_string(),
-                None,
+            return Ok(Some(command_action_response(
+                "No calendar loaded. Use ",
+                "calendar import",
+                " to import a calendar.",
             )));
         }
         Err(e) => {

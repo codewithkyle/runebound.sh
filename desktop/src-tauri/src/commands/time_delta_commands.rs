@@ -1,6 +1,6 @@
 use dnd_core::calendar::{self, format_date_conversational, CalendarDelta, StoredCalendar};
 
-use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::commands::{DesktopHandlerInvocation, command_action_response, ok_response};
 
 use super::date_commands::CommandResult;
 
@@ -21,9 +21,10 @@ pub async fn handle_time_delta(invocation: DesktopHandlerInvocation<'_>) -> Comm
     let mut stored = match load_calendar_state()? {
         Some(calendar) => calendar,
         None => {
-            return Ok(Some(ok_response(
-                "No calendar loaded. Use `calendar import` to import a calendar.".to_string(),
-                None,
+            return Ok(Some(command_action_response(
+                "No calendar loaded. Use ",
+                "calendar import",
+                " to import a calendar.",
             )));
         }
     };

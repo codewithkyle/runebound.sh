@@ -20,6 +20,7 @@ use command_handler::{HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegis
 use runebound_models::{
     CommandClientEvent, CommandResponse, OutputSegment, OutputSegmentKind, OutputDoc,
 };
+use runebound_models::output::{command_ref, doc, paragraph_with_inlines, text_node};
 use tauri::State;
 
 use crate::app_state::AppState;
@@ -118,6 +119,20 @@ pub fn ok_response_with_doc(
         output_doc,
         client_event,
     }
+}
+
+/// A response whose `output_doc` is a single paragraph `prefix` + clickable
+/// `command` + `suffix`. The plain-text fallback embeds the command in backticks,
+/// matching the prior wording. Use for actionable guidance (`use \`X help\``,
+/// `run \`calendar import\``, …) so the command is clickable.
+pub fn command_action_response(prefix: &str, command: &str, suffix: &str) -> CommandResponse {
+    let fallback = format!("{prefix}`{command}`{suffix}");
+    let document = doc().with_block(paragraph_with_inlines(vec![
+        text_node(prefix.to_string()),
+        command_ref(command.to_string(), command.to_string()),
+        text_node(suffix.to_string()),
+    ]));
+    ok_response_with_doc(fallback, Some(document), None)
 }
 
 pub fn exit_handler_entry() -> HandlerEntry<DesktopHandler> {

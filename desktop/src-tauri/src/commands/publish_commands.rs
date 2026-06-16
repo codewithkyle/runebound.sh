@@ -8,7 +8,7 @@ use dnd_core::vault::Vault;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
 use crate::app_state::{AppState, FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
-use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
 use crate::entities::EntityKind;
 use crate::services::entity_admin::{EntityAdminService, EntityDetails, EntityType};
 use crate::services::entity_persistence::{
@@ -20,6 +20,9 @@ use crate::services::publish::{
     render_faction_markdown, render_item_markdown, render_location_markdown, render_npc_markdown,
 };
 use runebound_models::{CommandClientEvent, CommandResponse};
+use runebound_models::output::{
+    command_ref, doc, paragraph_with_inlines, status, text_node, StatusTone,
+};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
@@ -257,14 +260,22 @@ pub async fn handle_publish(
         None
     };
 
-    Ok(Some(ok_response(
-        format!(
-            "Published {} to {}. It has been retired from the app — Obsidian is now its home. Run `undo` to bring it back.",
-            target.name,
-            relative.display()
-        ),
-        event,
-    )))
+    let location = relative.display();
+    let message = format!(
+        "Published {} to {}. It has been retired from the app — Obsidian is now its home. Run `undo` to bring it back.",
+        target.name, location
+    );
+    let document = doc()
+        .with_block(status(
+            StatusTone::Success,
+            format!("Published {} to {}.", target.name, location),
+        ))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("It has been retired from the app — Obsidian is now its home. Run "),
+            command_ref("undo", "undo"),
+            text_node(" to bring it back."),
+        ]));
+    Ok(Some(ok_response_with_doc(message, Some(document), event)))
 }
 
 fn publish_help() -> CommandResult {

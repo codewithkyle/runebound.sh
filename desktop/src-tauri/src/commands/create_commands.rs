@@ -1,8 +1,8 @@
 use crate::app_state::AppState;
 use crate::commands::{
-    DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text,
-    item_event_from_draft, item_summary_text, location_event_from_draft, location_summary_text,
-    npc_event_from_draft, npc_summary_text,
+    DesktopHandlerInvocation, command_action_response, faction_event_from_draft,
+    faction_summary_text, item_event_from_draft, item_summary_text, location_event_from_draft,
+    location_summary_text, npc_event_from_draft, npc_summary_text,
 };
 use crate::entities::common::{
     command_message_response,
@@ -62,7 +62,11 @@ pub async fn handle_create(
         return create_item(trimmed, invocation.state.clone()).await;
     }
 
-    command_message_response("unknown create command. use `create help`")
+    Ok(Some(command_action_response(
+        "unknown create command. use ",
+        "create help",
+        "",
+    )))
 }
 
 async fn create_npc(
