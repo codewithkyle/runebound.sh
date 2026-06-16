@@ -689,6 +689,7 @@ impl EntityPersistenceService {
             return Err("dungeon name cannot be empty".to_string());
         }
 
+        let location = normalize_unknown_text(&input.location);
         let premise = normalize_unknown_text(&input.premise);
         let topology = normalize_dungeon_topology(&input.topology)?;
         let tone = normalize_dungeon_tone(&input.tone)?;
@@ -743,6 +744,7 @@ impl EntityPersistenceService {
             slug: slug.clone(),
             name: name.to_string(),
             vault_path: vault_path.clone(),
+            location: location.clone(),
             premise: premise.clone(),
             topology: topology.clone(),
             tone: tone.clone(),
@@ -772,6 +774,7 @@ impl EntityPersistenceService {
             slug,
             name: name.to_string(),
             vault_path: vault_path.clone(),
+            location,
             premise,
             topology,
             tone,
@@ -1269,6 +1272,8 @@ pub struct SaveDungeonDraftInput {
     pub id: String,
     pub name: String,
     pub vault_path: String,
+    #[serde(default)]
+    pub location: String,
     pub premise: String,
     pub topology: String,
     pub tone: String,

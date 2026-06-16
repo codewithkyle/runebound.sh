@@ -498,6 +498,7 @@ pub(crate) fn dungeon_row_from_frontmatter(
         slug: frontmatter.slug.clone(),
         name: frontmatter.name.clone(),
         vault_path: frontmatter.vault_path.clone(),
+        location: frontmatter.location.clone(),
         premise: frontmatter.premise.clone(),
         topology: frontmatter.topology.clone(),
         tone: frontmatter.tone.clone(),

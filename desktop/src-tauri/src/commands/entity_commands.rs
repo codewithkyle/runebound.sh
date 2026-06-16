@@ -330,6 +330,7 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
                 name: entity.name.clone(),
                 slug: entity.slug.clone(),
                 vault_path: path_for_display(&entity.vault_path),
+                location: entity.location.clone().unwrap_or_default(),
                 premise: entity.premise.clone().unwrap_or_else(|| "Unknown".to_string()),
                 topology: entity.topology.clone().unwrap_or_else(|| "none".to_string()),
                 tone: entity.tone.clone().unwrap_or_else(|| "tragedy".to_string()),
@@ -454,6 +455,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             OutputDoc { blocks: vec![entity_card("God", rows)] }
         }
         EntityType::Dungeon => {
+            rows.push(entity_row("location", entity.location.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("premise", entity.premise.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("topology", entity.topology.clone().unwrap_or_else(|| "none".to_string())));
             rows.push(entity_row("tone", entity.tone.clone().unwrap_or_else(|| "Unknown".to_string())));
@@ -603,9 +605,10 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 .collect::<Vec<_>>()
                 .join("\n");
             format!(
-                "## Dungeon\nname: {}\nslug: {}\npremise: {}\ntopology: {}\ntone: {}\ntwist: {}\npath: {}\n{}",
+                "## Dungeon\nname: {}\nslug: {}\nlocation: {}\npremise: {}\ntopology: {}\ntone: {}\ntwist: {}\npath: {}\n{}",
                 entity.name,
                 entity.slug,
+                entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
                 entity.premise.clone().unwrap_or_else(|| "Unknown".to_string()),
                 entity.topology.clone().unwrap_or_else(|| "none".to_string()),
                 entity.tone.clone().unwrap_or_else(|| "Unknown".to_string()),

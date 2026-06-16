@@ -269,6 +269,7 @@ async fn handle_step_e(trimmed: &str, state: &AppState) -> CommandResult {
         name: seed.name.trim().to_string(),
         slug: slugify(seed.name.trim()),
         vault_path: String::new(),
+        location: normalize_unknown_text(&seed.location),
         premise: normalize_unknown_text(&seed.premise),
         topology,
         tone,

@@ -887,7 +887,7 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field to 2-3 sentences and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 2-3 sentences (for combat: tactics/behavior, never creature names). lever is one hook/question in 1-2 sentences. read_aloud is 2-3 sentences of STATIC VISUAL only (shape, scale, materials, light, notable objects — no action). {loot_rule} Pick a content_type that fits this beat's function and ideally differs from its current one to keep variety.{reference_suffix}",
+                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field to 2-3 sentences and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 2-3 sentences (for combat: tactics/behavior, never creature names). lever is one hook/question in 1-2 sentences. read_aloud is 2-3 sentences of STATIC VISUAL only (shape, scale, materials, light, notable objects — no action). This beat is a room or area INSIDE the dungeon's single location (shown below) — keep it there; do not move the party to a new region, town, or building. {loot_rule} Pick a content_type that fits this beat's function (match its MEANING, not just the word: forge = a place to craft magic items; foreshadowing/history/map are overlays that layer onto a concrete beat, never the whole beat) and ideally differs from its current one to keep variety.{reference_suffix}",
                             loot_rule = loot_rule,
                             reference_suffix = reference_suffix
                         )
@@ -969,10 +969,11 @@ impl EntityRerollService {
     ) -> Result<RerollDungeonFieldResult, String> {
         let field = match input.field.trim().to_ascii_lowercase().as_str() {
             "premise" | "spine" => "premise",
+            "location" | "place" => "location",
             "name" => "name",
             other => {
                 return Err(format!(
-                    "unknown dungeon reroll field: {}. rerollable fields: name, premise (or a beat name)",
+                    "unknown dungeon reroll field: {}. rerollable fields: name, location, premise (or a beat name)",
                     other
                 ))
             }
@@ -990,10 +991,12 @@ impl EntityRerollService {
 
         let instruction = match field {
             "premise" => "Generate a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).",
+            "location" => "Generate the single bounded place all five beats sit inside — one short phrase naming one explorable location the party moves deeper into (e.g. 'a drowned bell-foundry'), never a region or a journey.",
             _ => "Generate a concise, evocative name for the dungeon.",
         };
         let current = match field {
             "premise" => input.dungeon.premise.clone(),
+            "location" => input.dungeon.location.clone(),
             _ => input.dungeon.name.clone(),
         };
 
@@ -1349,6 +1352,7 @@ pub struct RerollGodFieldResult {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DungeonRerollContext {
     pub name: String,
+    pub location: String,
     pub premise: String,
     pub topology: String,
     pub tone: String,
@@ -1360,6 +1364,7 @@ impl DungeonRerollContext {
     pub fn from_draft(draft: &runebound_models::DungeonDraft) -> Self {
         Self {
             name: draft.name.clone(),
+            location: draft.location.clone(),
             premise: draft.premise.clone(),
             topology: draft.topology.clone(),
             tone: draft.tone.clone(),
@@ -1619,6 +1624,7 @@ fn dungeon_context_summary(
     skip_index: Option<usize>,
 ) -> String {
     let mut lines = vec![
+        format!("location (all beats are rooms/areas inside this one place): {}", context.location),
         format!("premise (spine): {}", context.premise),
         format!("tone: {}", context.tone),
         format!("twist: {}", context.twist),

@@ -175,6 +175,7 @@ pub fn render_dungeon_markdown_with_links(
     } else {
         writeln!(&mut out, "**Topology:** {topology}").ok();
     }
+    write_attr_line(&mut out, "Location", &frontmatter.location);
     write_attr_line(&mut out, "Tone", &frontmatter.tone);
     writeln!(&mut out).ok();
 
@@ -856,6 +857,7 @@ mod tests {
             slug: "the-sunken-forge".to_string(),
             name: "The Sunken Forge".to_string(),
             vault_path: "dungeons/The Sunken Forge.md".to_string(),
+            location: "A drowned bell-foundry beneath the tide line.".to_string(),
             premise: "A drowned forge that still burns.".to_string(),
             topology: "The Moose".to_string(),
             tone: "tragedy".to_string(),

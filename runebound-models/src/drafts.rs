@@ -152,6 +152,8 @@ pub struct DungeonDraft {
     pub name: String,
     pub slug: String,
     pub vault_path: String,
+    #[serde(default)]
+    pub location: String, // the single bounded place all five beats sit inside
     pub premise: String, // the spine / top-line (feature-dungeons.md §6)
     pub topology: String, // one of DUNGEON_TOPOLOGIES, or "none"
     pub tone: String,    // "tragedy" | "comedy"
@@ -315,6 +317,8 @@ pub struct DungeonFrontmatter {
     pub slug: String,
     pub name: String,
     pub vault_path: String,
+    #[serde(default)]
+    pub location: String,
     pub premise: String,
     pub topology: String,
     pub tone: String,
@@ -600,7 +604,12 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
             normalize_unknown_text(&draft.premise)
         ),
     ));
-    // 2. topology line
+    // 2. location line — the single bounded place all five beats sit inside
+    let location = normalize_unknown_text(&draft.location);
+    if location != "Unknown" {
+        out.push(status(StatusTone::Info, format!("Location: {location}")));
+    }
+    // 3. topology line
     let topo = if draft.topology.is_empty() || draft.topology == "none" {
         "Topology: none (lay it out freely)".to_string()
     } else {

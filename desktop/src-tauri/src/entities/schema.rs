@@ -635,12 +635,21 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
 // by the domain (`dungeon set <beat> <field>`), not through this flat schema.
 // topology/tone/twist are structural dials chosen in the creation flow: they are
 // settable (re-pick) but not rerollable (the LLM does not invent them).
-const DUNGEON_FIELDS: [EntityFieldSpec; 5] = [
+const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
     EntityFieldSpec {
         canonical: "name",
         display_name: "name",
         aliases: &["name"],
         description: "Name of the dungeon.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "location",
+        display_name: "location",
+        aliases: &["location", "place"],
+        description: "The single bounded place all five beats sit inside.",
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
@@ -965,7 +974,7 @@ mod tests {
             // Events are narrative-only: no settable or rerollable fields.
             (EntityKind::Event, 0, 0),
             (EntityKind::God, 14, 14),
-            (EntityKind::Dungeon, 5, 2),
+            (EntityKind::Dungeon, 6, 3),
         ];
         for (kind, settable, rerollable) in expected {
             assert_eq!(

@@ -205,6 +205,7 @@ impl EntityDomain for DungeonDomain {
                     draft.name = trimmed_value.to_string();
                     draft.slug = slugify(trimmed_value);
                 }
+                "location" => draft.location = trimmed_value.to_string(),
                 "premise" => draft.premise = trimmed_value.to_string(),
                 "topology" => draft.topology = normalize_dungeon_topology(trimmed_value)?,
                 "tone" => draft.tone = normalize_dungeon_tone(trimmed_value)?,
@@ -310,6 +311,7 @@ impl EntityDomain for DungeonDomain {
                     draft.slug = slugify(&value);
                     draft.name = value;
                 }
+                "location" => draft.location = value,
                 "premise" => draft.premise = value,
                 _ => {}
             }
@@ -342,6 +344,7 @@ impl EntityDomain for DungeonDomain {
                     id: draft.id.clone(),
                     name: draft.name.clone(),
                     vault_path: draft.vault_path.clone(),
+                    location: draft.location.clone(),
                     premise: draft.premise.clone(),
                     topology: draft.topology.clone(),
                     tone: draft.tone.clone(),
@@ -390,6 +393,7 @@ pub fn dungeon_summary_text(draft: &DungeonDraftSession) -> String {
         "## Dungeon Draft".to_string(),
         format!("name: {}", draft.name),
         format!("slug: {}", draft.slug),
+        format!("location: {}", draft.location),
         format!("premise: {}", draft.premise),
         format!("topology: {}", draft.topology),
         format!("tone: {}", draft.tone),
@@ -415,6 +419,7 @@ pub fn dungeon_event_from_draft(draft: &DungeonDraftSession) -> CommandClientEve
     use runebound_models::drafts::dungeon_entity_card;
 
     let mut normalized_draft = draft.clone();
+    normalized_draft.location = normalize_unknown_text(&draft.location);
     normalized_draft.premise = normalize_unknown_text(&draft.premise);
     for beat in normalized_draft.beats.iter_mut() {
         beat.content_type = normalize_unknown_text(&beat.content_type);

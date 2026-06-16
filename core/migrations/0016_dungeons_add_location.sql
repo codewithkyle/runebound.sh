@@ -1,0 +1,1 @@
+ALTER TABLE dungeons ADD COLUMN location TEXT NOT NULL DEFAULT '';

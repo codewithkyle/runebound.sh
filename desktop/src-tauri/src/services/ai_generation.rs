@@ -766,10 +766,11 @@ impl AiGenerationService {
         });
         let schema = serde_json::json!({
             "type": "object",
-            "required": ["name", "premise", "beats"],
+            "required": ["name", "location", "premise", "beats"],
             "additionalProperties": false,
             "properties": {
                 "name": { "type": "string", "minLength": 1 },
+                "location": { "type": "string", "minLength": 1 },
                 "premise": { "type": "string", "minLength": 1 },
                 "beats": {
                     "type": "array",
@@ -788,10 +789,10 @@ impl AiGenerationService {
             None => "No premise was supplied; invent a small, self-contained dungeon that fills space without depending on outside content.".to_string(),
         };
         let topology_directive = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
-            "Topology: none — do not impose a spatial shape; the GM will lay it out.".to_string()
+            "Topology: none — the GM will draw the floorplan; still keep all five beats inside the one location, connected as a single explorable space.".to_string()
         } else {
             format!(
-                "Topology: {topology} — let this flow shape inform the beats, especially the Setback (a middle-entrance or looping form means a Setback that dumps players back toward the Entrance)."
+                "Topology: {topology} — this is how the rooms WITHIN the one location connect; let it inform the beats, especially the Setback (a middle-entrance or looping form means a Setback that dumps players back toward the Entrance)."
             )
         };
         let linkage_directive = if context.is_empty() {
@@ -804,12 +805,16 @@ impl AiGenerationService {
 
         let system_prompt = format!(
             "You are a 5-room-dungeon ORACLE for a D&D game master. You emit a tight, index-card skeleton the GM will tweak — never finished boxed text. The north star is SPECIFIC BUT UNRESOLVED: each field throws a concrete spark but never states the answer; plant questions, not conclusions.\n\n\
-Return only JSON: name, premise (one-line spine summarizing the whole dungeon), and exactly five beats in order. The five beats are fixed dramatic FUNCTIONS — beat 1 Entrance (setup: what stops a random NPC from entering?), beat 2 Puzzle (the opposite of the entrance: roleplay, a locked-door→key chain, or a trap — avoid Simon-Says/logic puzzles), beat 3 Setback (the meat: a twist/trap/one-way exit that halts progress; this is where players PAY), beat 4 Climax (the boss: tactical and surprising), beat 5 Resolution (payoff: reward, plot twist, or humble pie). Do not output the function names; just order the beats correctly.\n\n\
-Each beat has: content_type (one of: {content_types}), idea (2-3 sentences of what happens here; for combat carry tactics/behavior, NEVER creature names — GMs slot their own monsters), lever (ONE complication, question, or hook the GM can pull, in 1-2 sentences), loot (a conditional reward line OR null), and read_aloud (2-3 sentences of STATIC VISUAL only — shape, scale, materials, light, one or two notable objects; no action, no NPC behavior; this doubles as a map-making seed, so keep it sensory and concrete). Favor one-object-triple-duty: the notable object in read_aloud is also the loot's hiding place and the lever's hook.\n\n\
+Return only JSON: name, location, premise (one-line spine summarizing the whole dungeon), and exactly five beats in order.\n\n\
+ONE LOCATION. First commit to a single bounded place the party physically occupies and moves DEEPER into — e.g. \"a drowned bell-foundry\", \"a hijacked customs house\", \"the flooded undercroft of a collapsed cathedral\". Return it as `location`. ALL FIVE BEATS ARE ROOMS OR AREAS INSIDE THIS ONE LOCATION. The party advances through it; they never travel to another region, town, or building. If a beat moves the party somewhere new, you are writing a quest, not a dungeon — pull it back inside the location. Keep monsters, factions, and props consistent across all five beats (the same creatures named in beat 1 are still the threat in beat 4).\n\n\
+The five beats are fixed dramatic FUNCTIONS — beat 1 Entrance (setup: what stops a random NPC from getting in? hidden, gated by a check, or guarded?), beat 2 Puzzle (the opposite of the entrance: roleplay, a locked-door→key chain, or a trap — avoid Simon-Says/logic puzzles), beat 3 Setback (the meat: a twist/trap/one-way exit that halts progress; this is where players PAY), beat 4 Climax (the PEAK: the dungeon's central tension breaks in a confrontation, reversal, or revelation — a boss fight is the most common staging but NOT required; never a beat where the party merely keeps moving or the decisive moment happens offstage), beat 5 Resolution (payoff: reward, plot twist, or humble pie). Do not output the function names; just order the beats correctly.\n\n\
+CONTENT TYPES — give each beat the one that genuinely fits, matching the MEANING below, not just the word:\n\
+Rooms (can anchor a whole beat): combat (a fight; carry tactics, behavior, terrain — NEVER name creatures, GMs slot their own); cache (a stash of loot or rewards); forge (a place to CRAFT or repair magic items — use only when crafting actually happens here); puzzle (a locked-door→key chain of one or more steps, reskinned — never a riddle/logic/Simon-Says); offshoot (an optional side passage or dead end off the main path); sidekick (where a dungeon-only ally is met and may join for this dungeon, then leaves after); oddity (the world-significant artifact that is the very reason this dungeon exists); factions (a rivalry/alliance dynamic running across the dungeon — who wants what, who hates whom).\n\
+Overlays (a LAYER on a beat, never the entire beat — the beat still needs a concrete room, obstacle, or confrontation underneath): foreshadowing (a hint of something later in this dungeon or the wider campaign); history (lore of the place, its people, or its monsters); map (reveals world/hexcrawl context — connective tissue to other dungeons).\n\n\
+Each beat has: content_type (one of the names above), idea (2-3 sentences of what happens here, inside the location; for combat carry tactics/behavior, NEVER creature names — GMs slot their own monsters), lever (ONE complication, question, or hook the GM can pull, in 1-2 sentences), loot (a conditional reward line OR null), and read_aloud (2-3 sentences of STATIC VISUAL only — shape, scale, materials, light, one or two notable objects; no action, no NPC behavior; this doubles as a map-making seed, so keep it sensory and concrete). Favor one-object-triple-duty: the notable object in read_aloud is also the loot's hiding place and the lever's hook.\n\n\
 LOOT IS CONDITIONAL: weight it to the payoff. Put loot on the Resolution, sometimes the Climax (the boss's hoard) or a Cache offshoot. Set loot to null everywhere else, ESPECIALLY the Setback (that beat is the cost, not the collection).\n\n\
 Tone: {tone}. Twist (shape of the middle beats): {twist}. {premise_directive} {topology_directive}{linkage}\n\n\
 Keep every field tight — 2-3 sentences at most; a full paragraph of boxed text is over-generating. Avoid repeating these recent dungeons: {recent}.{reference}",
-            content_types = DUNGEON_CONTENT_TYPES.join(", "),
             tone = tone,
             twist = twist,
             premise_directive = premise_directive,
@@ -979,6 +984,8 @@ pub struct DungeonBeatSeed {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct DungeonSeed {
     pub name: String,
+    #[serde(default)]
+    pub location: String, // the single bounded place all five beats sit inside
     pub premise: String,
     pub beats: Vec<DungeonBeatSeed>,
 }
@@ -988,6 +995,7 @@ impl DungeonSeed {
     /// assigned later in `into_beats`, not here, so the skeleton stays ours.
     fn normalize(&mut self) {
         self.name = self.name.trim().to_string();
+        self.location = normalize_unknown_text(&self.location);
         self.premise = normalize_unknown_text(&self.premise);
         for beat in self.beats.iter_mut() {
             beat.content_type = normalize_unknown_text(&beat.content_type).to_ascii_lowercase();
