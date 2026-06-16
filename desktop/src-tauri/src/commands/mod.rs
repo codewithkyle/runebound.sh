@@ -6,6 +6,7 @@ pub mod npc_commands;
 pub mod location_commands;
 pub mod faction_commands;
 pub mod item_commands;
+pub mod event_commands;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
@@ -75,6 +76,7 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(location_handler_entry());
     registry.register(faction_handler_entry());
     registry.register(item_handler_entry());
+    registry.register(event_handler_entry());
     registry.register(load_handler_entry());
     registry.register(show_handler_entry());
     registry.register(preview_handler_entry());
@@ -252,6 +254,14 @@ pub fn item_handler_entry() -> HandlerEntry<DesktopHandler> {
     )
 }
 
+pub fn event_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "event",
+        metadata_for("event"),
+        DesktopHandler::new(|invocation| Box::pin(async move { event_commands::handle_event(invocation).await })),
+    )
+}
+
 pub fn publish_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "publish",
@@ -372,6 +382,8 @@ fn render_history_output(history: &[String], limit: usize) -> String {
 }
 
 pub use crate::entities::domains::{
+    event_event_from_draft,
+    event_summary_text,
     faction_event_from_draft,
     faction_summary_text,
     item_event_from_draft,

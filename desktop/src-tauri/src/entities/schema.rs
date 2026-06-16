@@ -522,12 +522,22 @@ pub static ITEM_SCHEMA: EntitySchema = EntitySchema {
     fields: &ITEM_FIELDS,
 };
 
+// Events are pure narrative (a title + a prose body) with no settable or
+// rerollable attributes, so their schema is intentionally empty. The empty
+// field list keeps `settable_fields`/`rerollable_fields` returning nothing and
+// makes `set`/per-field `reroll` resolve to "no such field" for events.
+pub static EVENT_SCHEMA: EntitySchema = EntitySchema {
+    kind: EntityKind::Event,
+    fields: &[],
+};
+
 pub fn schema_for_kind(kind: EntityKind) -> &'static EntitySchema {
     match kind {
         EntityKind::Npc => &NPC_SCHEMA,
         EntityKind::Location => &LOCATION_SCHEMA,
         EntityKind::Faction => &FACTION_SCHEMA,
         EntityKind::Item => &ITEM_SCHEMA,
+        EntityKind::Event => &EVENT_SCHEMA,
     }
 }
 
@@ -758,6 +768,8 @@ mod tests {
             (EntityKind::Location, 10),
             (EntityKind::Faction, 17),
             (EntityKind::Item, 11),
+            // Events are narrative-only: no settable or rerollable fields.
+            (EntityKind::Event, 0),
         ];
         for (kind, count) in expected {
             assert_eq!(
@@ -778,6 +790,12 @@ mod tests {
     #[test]
     fn valid_field_lists_are_non_empty_for_both_accesses() {
         for kind in ALL_ENTITY_KINDS {
+            // Events are narrative-only and intentionally have no editable
+            // fields, so an empty field list is correct for them.
+            if kind == EntityKind::Event {
+                assert!(format_valid_field_list(kind, FieldAccess::Set).is_empty());
+                continue;
+            }
             assert!(!format_valid_field_list(kind, FieldAccess::Set).is_empty());
             assert!(!format_valid_field_list(kind, FieldAccess::Reroll).is_empty());
         }

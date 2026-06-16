@@ -175,6 +175,7 @@ pub fn command_availability(name: &str) -> CommandAvailability {
         "location" => CommandAvailability::EntityScoped("location"),
         "faction" => CommandAvailability::EntityScoped("faction"),
         "item" => CommandAvailability::EntityScoped("item"),
+        "event" => CommandAvailability::EntityScoped("event"),
         "reroll" => CommandAvailability::EntityEditorOnly,
         "save" | "cancel" => CommandAvailability::AnyEditor,
         "publish" => CommandAvailability::DefaultOrEntityEditor,
@@ -240,6 +241,7 @@ pub fn command_manifest() -> CommandManifest {
                     "create location a swamp trade post controlled by smugglers".to_string(),
                     "create faction a secretive maritime trade cartel".to_string(),
                     "create item a cursed blade woven from stormglass".to_string(),
+                    "create event the night the old bridge burned".to_string(),
                     "create help".to_string(),
                 ],
                 subcommands: vec![
@@ -266,6 +268,12 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Start guided item creation".to_string(),
                         options: Vec::new(),
                         examples: vec!["create item".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "event".to_string(),
+                        summary: "Start guided event creation".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["create event".to_string()],
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
@@ -669,6 +677,57 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "event".to_string(),
+                summary: "Edit active event draft".to_string(),
+                examples: vec![
+                    "event show".to_string(),
+                    "event reroll".to_string(),
+                    "event reroll focus on the betrayal".to_string(),
+                    "event save".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "show".to_string(),
+                        summary: "Show active event draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["event show".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "reroll".to_string(),
+                        summary: "Regenerate the whole event narrative with an optional prompt"
+                            .to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "event reroll".to_string(),
+                            "event reroll focus on the betrayal".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "save".to_string(),
+                        summary: "Save active event draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["event save".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "cancel".to_string(),
+                        summary: "Discard active event draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["event cancel".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show event editor command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["event help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("event help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "save".to_string(),
                 summary: "Save active guided flow context".to_string(),
                 examples: vec!["save".to_string()],
@@ -1052,7 +1111,7 @@ mod tests {
     #[test]
     fn entity_roots_are_scoped_to_their_own_editor() {
         // Regression guard: these must NOT silently fall through to `Default`.
-        for root in ["npc", "location", "faction", "item"] {
+        for root in ["npc", "location", "faction", "item", "event"] {
             assert_eq!(
                 command_availability(root),
                 CommandAvailability::EntityScoped(root),
@@ -1184,8 +1243,8 @@ mod tests {
     #[test]
     fn menu_style_roots_require_a_subcommand() {
         for root in [
-            "create", "config", "npc", "location", "faction", "item", "setup", "calendar", "date",
-            "start",
+            "create", "config", "npc", "location", "faction", "item", "event", "setup", "calendar",
+            "date", "start",
         ] {
             assert!(
                 requires_subcommand_for(root),

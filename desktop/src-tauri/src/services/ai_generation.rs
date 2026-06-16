@@ -505,6 +505,107 @@ impl AiGenerationService {
 
         Err("failed to generate valid structured item output from ollama".to_string())
     }
+
+    pub async fn generate_event_seed(
+        &self,
+        prompt: Option<String>,
+        workspace_root: &PathBuf,
+        database: &Database,
+        generation_repo: &dyn GenerationRepository,
+    ) -> Result<SeedGeneration<EventSeed>, String> {
+        let (config, model) = load_generation_config(workspace_root)?;
+
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("Write a short piece of lore about a notable event in a D&D campaign.");
+
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+
+        let recent_payloads = generation_repo
+            .recent_prompts(database, "event_seed", 20)
+            .await?;
+        let recent_seeds = parse_recent_event_seeds(recent_payloads);
+        let recent_titles = recent_event_title_set(&recent_seeds);
+        let recent_context = describe_recent_event_seeds(&recent_seeds);
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&reference_context.system_context)
+            + estimate_tokens(&recent_context)
+            + estimate_tokens(user_prompt);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["title", "body"],
+            "properties": {
+                "title": { "type": "string", "minLength": 1 },
+                "body": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        });
+
+        let (client, url) = build_chat_client(&config)?;
+
+        let mut seen_attempt_titles = HashSet::new();
+
+        for attempt in 0..5 {
+            let run_seed = attempt_seed(attempt);
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior titles."
+            };
+
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": { "temperature": 1.05, "top_p": 0.93, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
+                "messages": [{
+                    "role": "system",
+                    "content": format!(
+                        "You write evocative D&D campaign lore about an event — a battle, a betrayal, a founding, a disaster, a discovery. Return only JSON with fields title and body. title is a short evocative name for the event. body is several paragraphs of narrative prose (separated by blank lines) telling the story of what happened, who was involved, and why it matters. Write it as flowing narrative lore, not as bullet points or labeled attributes. If referenced vault metadata is provided, treat it as authoritative setting context and weave in those established people, places, and organizations by their exact canonical names instead of inventing new ones. Avoid these recent event titles: {}.{}{}{}",
+                        recent_context, repair_note,
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
+                        detail_directive(config.generation.verbosity)
+                    )
+                }, { "role": "user", "content": user_prompt }]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+
+            let parsed: Result<EventSeed, _> = serde_json::from_str(&content);
+            let Ok(mut seed) = parsed else { continue };
+
+            seed.title = seed.title.trim().to_string();
+            seed.body = seed.body.trim().to_string();
+
+            if seed.title.is_empty() || seed.body.is_empty() {
+                continue;
+            }
+
+            let normalized_title = seed.title.to_ascii_lowercase();
+            if recent_titles.contains(&normalized_title)
+                || seen_attempt_titles.contains(&normalized_title)
+            {
+                continue;
+            }
+            seen_attempt_titles.insert(normalized_title);
+
+            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "event_seed", None, &serialized_seed)
+                .await?;
+
+            return Ok(SeedGeneration { seed, notice: notice.clone() });
+        }
+
+        Err("failed to generate valid structured event output from ollama".to_string())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -572,6 +673,12 @@ pub struct ItemSeed {
     pub location: String,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct EventSeed {
+    pub title: String,
+    pub body: String,
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PromptReferenceContext {
     pub system_context: String,
@@ -588,6 +695,19 @@ fn parse_recent_location_seeds(payloads: Vec<String>) -> Vec<LocationSeed> {
 
 fn parse_recent_faction_seeds(payloads: Vec<String>) -> Vec<FactionSeed> {
     payloads.into_iter().filter_map(|payload| serde_json::from_str::<FactionSeed>(&payload).ok()).collect()
+}
+
+fn parse_recent_event_seeds(payloads: Vec<String>) -> Vec<EventSeed> {
+    payloads.into_iter().filter_map(|payload| serde_json::from_str::<EventSeed>(&payload).ok()).collect()
+}
+
+fn recent_event_title_set(seeds: &[EventSeed]) -> std::collections::HashSet<String> {
+    seeds.iter().map(|seed| seed.title.trim().to_ascii_lowercase()).filter(|title| !title.is_empty()).collect()
+}
+
+fn describe_recent_event_seeds(seeds: &[EventSeed]) -> String {
+    if seeds.is_empty() { return "none".to_string(); }
+    seeds.iter().take(10).map(|seed| seed.title.clone()).collect::<Vec<_>>().join("; ")
 }
 
 fn recent_faction_name_set(seeds: &[FactionSeed]) -> std::collections::HashSet<String> {
@@ -713,6 +833,17 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
         for item in items {
             if let Ok(serialized) = toml::to_string_pretty(&item) {
                 map.insert(normalize_relative_path_for_storage(&item.vault_path), serialized);
+            }
+        }
+    }
+
+    if let Ok(events) = store.list_events() {
+        for event in events {
+            if let Ok(serialized) = toml::to_string_pretty(&event) {
+                map.insert(
+                    normalize_relative_path_for_storage(&event.vault_path),
+                    serialized,
+                );
             }
         }
     }

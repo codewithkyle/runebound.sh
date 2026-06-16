@@ -1,7 +1,7 @@
 use std::fmt::Write;
 
 use runebound_models::{
-    FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
+    EventFrontmatter, FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
 };
 
 use crate::utils::normalize_unknown_text;
@@ -124,6 +124,24 @@ pub fn render_item_markdown_with_links(
     out
 }
 
+pub fn render_event_markdown(frontmatter: &EventFrontmatter) -> String {
+    render_event_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+/// An event publishes as its narrative body run through the prose linker — no
+/// attribute lines or section headers, since the whole record is one story.
+pub fn render_event_markdown_with_links(
+    frontmatter: &EventFrontmatter,
+    linker: &EntityLinker,
+) -> String {
+    let mut out = String::new();
+    let body = frontmatter.body.trim();
+    if !body.is_empty() {
+        writeln!(&mut out, "{}", linker.link_prose(body)).ok();
+    }
+    out
+}
+
 /// The narrative prose of an NPC — the fields rendered as free-text sections.
 /// Used to feed Tier 2 mention extraction; mirrors the `write_section` calls in
 /// [`render_npc_markdown_with_links`].
@@ -164,6 +182,10 @@ pub fn item_prose(frontmatter: &ItemFrontmatter) -> String {
         &frontmatter.drawbacks,
         &frontmatter.history,
     ])
+}
+
+pub fn event_prose(frontmatter: &EventFrontmatter) -> String {
+    frontmatter.body.trim().to_string()
 }
 
 fn join_prose(fields: &[&str]) -> String {

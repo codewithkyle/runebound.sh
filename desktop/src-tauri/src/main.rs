@@ -24,10 +24,11 @@ use crate::commands::setup_commands::{self, FolderPick};
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
 use crate::repositories::{
-    DocumentRepository, FactionRepository, GenerationRepository, ItemRepository, LocationRepository,
-    NpcRepository, ProdDocumentRepository, ProdFactionRepository, ProdGenerationRepository,
-    ProdItemRepository, ProdLocationRepository, ProdNpcRepository, ProdSoftDeleteRepository,
-    ProdVaultRepository, SoftDeleteRepository, VaultRepository,
+    DocumentRepository, EventRepository, FactionRepository, GenerationRepository, ItemRepository,
+    LocationRepository, NpcRepository, ProdDocumentRepository, ProdEventRepository,
+    ProdFactionRepository, ProdGenerationRepository, ProdItemRepository, ProdLocationRepository,
+    ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository,
+    VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
 
@@ -150,6 +151,7 @@ fn main() {
     let location_repo: Arc<dyn LocationRepository> = Arc::new(ProdLocationRepository);
     let faction_repo: Arc<dyn FactionRepository> = Arc::new(ProdFactionRepository);
     let item_repo: Arc<dyn ItemRepository> = Arc::new(ProdItemRepository);
+    let event_repo: Arc<dyn EventRepository> = Arc::new(ProdEventRepository);
     let document_repo: Arc<dyn DocumentRepository> = Arc::new(ProdDocumentRepository);
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
@@ -168,6 +170,7 @@ fn main() {
         location_repo: location_repo.clone(),
         faction_repo: faction_repo.clone(),
         item_repo: item_repo.clone(),
+        event_repo: event_repo.clone(),
         document_repo: document_repo.clone(),
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),

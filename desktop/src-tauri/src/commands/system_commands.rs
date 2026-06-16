@@ -95,6 +95,7 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         Some(EntityKind::Location) => reroll_current_location(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::Item) => reroll_current_item(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Event) => reroll_current_event(invocation.state.clone(), reroll_prompt).await,
         None => command_message_response("no active draft to reroll."),
     }
 }
@@ -116,6 +117,16 @@ pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         }
         None => command_message_response("no active draft to cancel."),
     }
+}
+
+async fn reroll_current_event(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+    // Events regenerate as a whole, which is exactly what the domain's
+    // (field-agnostic) reroll does — route through it so the logic lives once.
+    let domain = state
+        .domains()
+        .domain(EntityKind::Event)
+        .expect("event domain not registered");
+    domain.reroll_field("", reroll_prompt, state.inner()).await
 }
 
 async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {

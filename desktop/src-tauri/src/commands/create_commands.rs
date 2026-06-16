@@ -1,8 +1,8 @@
 use crate::app_state::AppState;
 use crate::commands::{
-    DesktopHandlerInvocation, command_action_response, faction_event_from_draft,
-    faction_summary_text, item_event_from_draft, item_summary_text, location_event_from_draft,
-    location_summary_text, npc_event_from_draft, npc_summary_text,
+    DesktopHandlerInvocation, command_action_response, event_event_from_draft, event_summary_text,
+    faction_event_from_draft, faction_summary_text, item_event_from_draft, item_summary_text,
+    location_event_from_draft, location_summary_text, npc_event_from_draft, npc_summary_text,
 };
 use crate::entities::common::{
     command_message_response,
@@ -20,7 +20,9 @@ use crate::utils::{
 };
 use dnd_core::npc::UNKNOWN_LOCATION;
 
-use crate::app_state::{FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{
+    EventDraftSession, FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession,
+};
 
 pub async fn handle_create(
     invocation: DesktopHandlerInvocation<'_>,
@@ -43,6 +45,8 @@ pub async fn handle_create(
             "create faction <prompt text>",
             "create item",
             "create item <prompt text>",
+            "create event",
+            "create event <prompt text>",
         ].join("\n"));
     }
 
@@ -60,6 +64,10 @@ pub async fn handle_create(
 
     if lowered == "create item" || lowered.starts_with("create item ") {
         return create_item(trimmed, invocation.state.clone()).await;
+    }
+
+    if lowered == "create event" || lowered.starts_with("create event ") {
+        return create_event(trimmed, invocation.state.clone()).await;
     }
 
     Ok(Some(command_action_response(
@@ -319,6 +327,62 @@ async fn create_item(
     command_response_with_event(
         prepend_notice(notice, item_summary_text(&draft)),
         item_event_from_draft(&draft),
+    )
+}
+
+async fn create_event(
+    trimmed: &str,
+    state: tauri::State<'_, AppState>,
+) -> CommandResult {
+    use dnd_core::npc::slugify;
+
+    // "create event" is 12 chars; anything after it is a free-form guidance prompt.
+    let prompt = if trimmed.len() > 12 {
+        let value = trimmed[12..].trim();
+        if value.is_empty() {
+            None
+        } else {
+            Some(value.to_string())
+        }
+    } else {
+        None
+    };
+
+    let prompt = normalize_optional_prompt(prompt);
+
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let SeedGeneration { seed, notice } = ai
+        .generate_event_seed(
+            prompt.clone(),
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+
+    let title = seed.title.trim();
+    let draft = EventDraftSession {
+        id: make_entity_id("event"),
+        seed_prompt: prompt,
+        name: title.to_string(),
+        slug: slugify(title),
+        body: seed.body.trim().to_string(),
+    };
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_event(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+        editor.clear_kind(EntityKind::Faction);
+        editor.clear_kind(EntityKind::Item);
+    }
+
+    command_response_with_event(
+        prepend_notice(notice, event_summary_text(&draft)),
+        event_event_from_draft(&draft),
     )
 }
 

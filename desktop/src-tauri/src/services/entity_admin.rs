@@ -6,8 +6,9 @@ use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
-    faction_row_from_frontmatter, item_row_from_frontmatter, location_row_from_frontmatter,
-    move_vault_file, npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
+    event_row_from_frontmatter, faction_row_from_frontmatter, item_row_from_frontmatter,
+    location_row_from_frontmatter, move_vault_file, npc_row_from_frontmatter,
+    unique_markdown_path_for_name, unique_trash_path,
 };
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
@@ -203,6 +204,7 @@ impl EntityAdminService {
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
+        let event_repo = state.event_repo();
 
         if let Some(npc) = npc_repo
             .find_by_name_or_slug(database.as_ref(), trimmed)
@@ -256,6 +258,7 @@ impl EntityAdminService {
                 drawbacks: None,
                 history: None,
                 value: None,
+                body: None,
                 created_at: Some(npc.created_at),
             }));
         }
@@ -312,6 +315,7 @@ impl EntityAdminService {
                 drawbacks: None,
                 history: None,
                 value: None,
+                body: None,
                 created_at: Some(location.created_at),
             }));
         }
@@ -368,6 +372,7 @@ impl EntityAdminService {
                 drawbacks: None,
                 history: None,
                 value: None,
+                body: None,
                 created_at: Some(faction.created_at),
             }));
         }
@@ -424,7 +429,65 @@ impl EntityAdminService {
                 drawbacks: Some(item.drawbacks),
                 history: Some(item.history),
                 value: Some(item.value),
+                body: None,
                 created_at: Some(item.created_at),
+            }));
+        }
+
+        if let Some(event) = event_repo
+            .find_by_name_or_slug(database.as_ref(), trimmed)
+            .await?
+        {
+            return Ok(Some(EntityDetails {
+                id: event.id,
+                entity_type: EntityType::Event,
+                name: event.name,
+                slug: event.slug,
+                race: None,
+                occupation: None,
+                sex: None,
+                age: None,
+                height: None,
+                weight_lbs: None,
+                background: None,
+                want_need: None,
+                secret_obstacle: None,
+                carrying: None,
+                location: None,
+                vault_path: normalize_relative_path_for_storage(&event.vault_path),
+                kind_type: None,
+                kind_custom: None,
+                visual_description: None,
+                history_background: None,
+                exports: None,
+                tone: None,
+                authority: None,
+                danger_level: None,
+                current_tension: None,
+                public_description: None,
+                true_agenda: None,
+                methods: None,
+                leadership: None,
+                headquarters: None,
+                sphere_of_influence: None,
+                resources_assets: None,
+                allies: None,
+                rivals_enemies: None,
+                reputation: None,
+                goals_short_term: None,
+                goals_long_term: None,
+                symbol_description: None,
+                category: None,
+                rarity: None,
+                attunement: None,
+                materials: None,
+                appearance: None,
+                abilities: None,
+                drawbacks: None,
+                history: None,
+                value: None,
+                body: Some(event.body),
+                created_at: Some(event.created_at),
             }));
         }
 
@@ -457,6 +520,7 @@ impl EntityAdminService {
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
+        let event_repo = state.event_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
         let now = now_timestamp();
@@ -711,7 +775,61 @@ impl EntityAdminService {
             });
         }
 
-        Err(format!("no npc, location, faction, or item found for: {target}"))
+        if let Some(event) = event_repo
+            .find_by_name_or_slug(database.as_ref(), target)
+            .await?
+        {
+            let normalized_vault_path = normalize_relative_path_for_storage(&event.vault_path);
+            let trash_path = unique_trash_path(&vault, "events", &event.slug, &now)?;
+            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
+
+            event_repo
+                .delete_by_id(database.as_ref(), &event.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &event.vault_path)
+                .await?;
+
+            let payload = EventDeletePayload {
+                id: event.id.clone(),
+                slug: event.slug.clone(),
+                name: event.name.clone(),
+                vault_path: normalized_vault_path.clone(),
+                body: event.body,
+                created_at: event.created_at,
+                updated_at: event.updated_at,
+            };
+
+            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+            let soft_delete_row = db::SoftDeleteRow {
+                id: 0,
+                entity_type: "event".to_string(),
+                entity_id: event.id.clone(),
+                name: event.name.clone(),
+                slug: event.slug.clone(),
+                original_vault_path: normalized_vault_path,
+                trash_vault_path: trash_path.clone(),
+                payload_json,
+                created_at: now.clone(),
+                undone_at: None,
+                operation: "delete".to_string(),
+            };
+            soft_delete_repo
+                .insert(database.as_ref(), &soft_delete_row)
+                .await?;
+
+            return Ok(SoftDeleteEntityResult {
+                entity_type: EntityType::Event,
+                id: event.id,
+                name: event.name,
+                slug: event.slug,
+                trash_vault_path: trash_path,
+            });
+        }
+
+        Err(format!(
+            "no npc, location, faction, item, or event found for: {target}"
+        ))
     }
 
     pub async fn undo_last_soft_delete(
@@ -734,6 +852,7 @@ impl EntityAdminService {
         let location_repo = state.location_repo();
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
+        let event_repo = state.event_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
@@ -1015,6 +1134,60 @@ impl EntityAdminService {
             });
         }
 
+        if soft_delete.entity_type == "event" {
+            let payload: EventDeletePayload =
+                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+            let mut restored_slug = payload.slug.clone();
+            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let preferred_full = vault
+                .resolve_relative(&PathBuf::from(&restored_vault_path))
+                .map_err(|err| err.to_string())?;
+            if preferred_full.exists() {
+                restored_slug = unique_slug_for_dir(vault.root(), "events", &restored_slug);
+                restored_vault_path =
+                    unique_markdown_path_for_name(&vault, "events", &payload.name, None)?;
+            }
+
+            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
+
+            let event_row = db::EventRow {
+                id: payload.id.clone(),
+                slug: restored_slug.clone(),
+                name: payload.name.clone(),
+                vault_path: restored_vault_path.clone(),
+                body: payload.body,
+                created_at: payload.created_at,
+                updated_at: now.clone(),
+            };
+
+            event_repo.upsert(database.as_ref(), &event_row).await?;
+            document_repo
+                .upsert_index(
+                    database.as_ref(),
+                    "event",
+                    &event_row.slug,
+                    Some(&event_row.name),
+                    &event_row.vault_path,
+                    &event_row.created_at,
+                    &event_row.updated_at,
+                )
+                .await?;
+
+            soft_delete_repo
+                .mark_undone(database.as_ref(), soft_delete.id, &now)
+                .await?;
+
+            return Ok(UndoSoftDeleteResult {
+                entity_type: EntityType::Event,
+                id: payload.id,
+                name: payload.name,
+                slug: restored_slug,
+                vault_path: restored_vault_path,
+            });
+        }
+
         Err(format!(
             "unsupported soft delete entity type: {}",
             soft_delete.entity_type
@@ -1059,6 +1232,11 @@ impl EntityAdminService {
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
+            EntityType::Event => state
+                .event_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
         }) else {
             // Already gone from the DB (e.g. double publish) — nothing to retire.
             return Ok(());
@@ -1095,6 +1273,7 @@ impl EntityAdminService {
             EntityType::Location => state.location_repo().delete_by_id(database.as_ref(), &id).await?,
             EntityType::Faction => state.faction_repo().delete_by_id(database.as_ref(), &id).await?,
             EntityType::Item => state.item_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::Event => state.event_repo().delete_by_id(database.as_ref(), &id).await?,
         }
         document_repo
             .delete_by_vault_path(database.as_ref(), &normalized)
@@ -1167,6 +1346,18 @@ impl EntityAdminService {
                 soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
                 Ok(UndoSoftDeleteResult { entity_type: EntityType::Item, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
             }
+            "event" => {
+                let mut frontmatter = store.load_event(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_event(&frontmatter).map_err(|err| err.to_string())?;
+                let row = event_row_from_frontmatter(&frontmatter)?;
+                state.event_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "event", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::Event, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
             other => Err(format!("cannot undo publish for unknown entity type: {other}")),
         }
     }
@@ -1216,6 +1407,7 @@ pub enum EntityType {
     Location,
     Faction,
     Item,
+    Event,
 }
 
 impl EntityType {
@@ -1225,6 +1417,7 @@ impl EntityType {
             EntityType::Location => "location",
             EntityType::Faction => "faction",
             EntityType::Item => "item",
+            EntityType::Event => "event",
         }
     }
 }
@@ -1278,6 +1471,8 @@ pub struct EntityDetails {
     pub drawbacks: Option<String>,
     pub history: Option<String>,
     pub value: Option<String>,
+    /// The narrative body of an event; `None` for the structured entity kinds.
+    pub body: Option<String>,
     pub created_at: Option<String>,
 }
 
@@ -1373,6 +1568,17 @@ struct ItemDeletePayload {
     history: String,
     value: String,
     location: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct EventDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
+    body: String,
     created_at: String,
     updated_at: String,
 }

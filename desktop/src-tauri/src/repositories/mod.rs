@@ -4,7 +4,9 @@ use dnd_core::vault::Vault;
 use std::path::PathBuf;
 
 pub mod db {
-    pub use dnd_core::db::{Database, FactionRow, ItemRow, LocationRow, NpcRow, SoftDeleteRow};
+    pub use dnd_core::db::{
+        Database, EventRow, FactionRow, ItemRow, LocationRow, NpcRow, SoftDeleteRow,
+    };
 }
 
 pub use db::Database;
@@ -412,6 +414,83 @@ impl ItemRepository for ProdItemRepository {
 
     async fn list_all(&self, database: &Database) -> Result<Vec<db::ItemRow>, String> {
         core_db::list_items(&database.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[async_trait]
+pub trait EventRepository: Send + Sync {
+    async fn find_by_name_or_slug(
+        &self,
+        database: &Database,
+        name_or_slug: &str,
+    ) -> Result<Option<db::EventRow>, String>;
+    async fn find_by_id(
+        &self,
+        database: &Database,
+        id: &str,
+    ) -> Result<Option<db::EventRow>, String>;
+    async fn upsert(&self, database: &Database, row: &db::EventRow) -> Result<(), String>;
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::EventRow>, String>;
+    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::EventRow>, String>;
+}
+
+pub struct ProdEventRepository;
+
+#[async_trait]
+impl EventRepository for ProdEventRepository {
+    async fn find_by_name_or_slug(
+        &self,
+        database: &Database,
+        name_or_slug: &str,
+    ) -> Result<Option<db::EventRow>, String> {
+        core_db::find_event_by_name_or_slug(&database.pool, name_or_slug)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn find_by_id(
+        &self,
+        database: &Database,
+        id: &str,
+    ) -> Result<Option<db::EventRow>, String> {
+        core_db::find_event_by_id(&database.pool, id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn upsert(&self, database: &Database, row: &db::EventRow) -> Result<(), String> {
+        core_db::upsert_event(&database.pool, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::EventRow>, String> {
+        core_db::search_events_by_name(&database.pool, query, limit)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
+        core_db::delete_event_by_id(&database.pool, id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::EventRow>, String> {
+        core_db::list_events(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
