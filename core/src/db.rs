@@ -79,6 +79,17 @@ pub struct ItemRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct EventRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct NpcRow {
     pub id: String,
     pub slug: String,
@@ -723,6 +734,105 @@ pub async fn delete_item_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
     Ok(())
 }
 
+pub async fn search_events_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<EventRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, body, created_at, updated_at
+         FROM events
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search events by name")?;
+
+    rows.into_iter().map(row_to_event).collect()
+}
+
+pub async fn find_event_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<EventRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, body, created_at, updated_at
+         FROM events
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find event by name or slug")?;
+
+    row.map(row_to_event).transpose()
+}
+
+pub async fn find_event_by_id(pool: &SqlitePool, id: &str) -> Result<Option<EventRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, body, created_at, updated_at FROM events WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query event by id")?;
+
+    row.map(row_to_event).transpose()
+}
+
+pub async fn list_events(pool: &SqlitePool) -> Result<Vec<EventRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, body, created_at, updated_at
+         FROM events",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list events")?;
+
+    rows.into_iter().map(row_to_event).collect()
+}
+
+pub async fn upsert_event(pool: &SqlitePool, event: &EventRow) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO events (id, slug, name, vault_path, body, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+         ON CONFLICT(id) DO UPDATE SET
+            slug = excluded.slug,
+            name = excluded.name,
+            vault_path = excluded.vault_path,
+            body = excluded.body,
+            updated_at = excluded.updated_at",
+    )
+    .bind(&event.id)
+    .bind(&event.slug)
+    .bind(&event.name)
+    .bind(&event.vault_path)
+    .bind(&event.body)
+    .bind(&event.created_at)
+    .bind(&event.updated_at)
+    .execute(pool)
+    .await
+    .context("failed to upsert event")?;
+
+    Ok(())
+}
+
+pub async fn delete_event_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM events WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete event row")?;
+
+    Ok(())
+}
+
 pub async fn delete_document_by_vault_path(pool: &SqlitePool, vault_path: &str) -> Result<()> {
     sqlx::query("DELETE FROM documents WHERE vault_path = ?1")
         .bind(vault_path)
@@ -1038,6 +1148,26 @@ fn row_to_item(row: sqlx::sqlite::SqliteRow) -> Result<ItemRow> {
         updated_at: row
             .try_get("updated_at")
             .context("items.updated_at missing")?,
+    })
+}
+
+fn row_to_event(row: sqlx::sqlite::SqliteRow) -> Result<EventRow> {
+    Ok(EventRow {
+        id: row.try_get("id").context("events.id missing")?,
+        slug: row.try_get("slug").context("events.slug missing")?,
+        name: row.try_get("name").context("events.name missing")?,
+        vault_path: row
+            .try_get("vault_path")
+            .context("events.vault_path missing")?,
+        // The body is the whole record, so a missing column is a hard error
+        // rather than a defaulted placeholder.
+        body: row.try_get("body").context("events.body missing")?,
+        created_at: row
+            .try_get("created_at")
+            .context("events.created_at missing")?,
+        updated_at: row
+            .try_get("updated_at")
+            .context("events.updated_at missing")?,
     })
 }
 

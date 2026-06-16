@@ -157,6 +157,7 @@ impl SuggestionService {
                         EntityType::Location => SuggestionHelperText::Location,
                         EntityType::Faction => SuggestionHelperText::Faction,
                         EntityType::Item => SuggestionHelperText::Item,
+                        EntityType::Event => SuggestionHelperText::Event,
                     }),
                 });
             }
@@ -225,6 +226,7 @@ pub enum SuggestionHelperText {
     Location,
     Faction,
     Item,
+    Event,
     Reference,
 }
 
@@ -258,6 +260,7 @@ async fn search_entities(
     let location_repo = state.location_repo();
     let faction_repo = state.faction_repo();
     let item_repo = state.item_repo();
+    let event_repo = state.event_repo();
 
     let npcs = npc_repo
         .search_by_name(database.as_ref(), trimmed, limit)
@@ -269,6 +272,9 @@ async fn search_entities(
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
     let items = item_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
+    let events = event_repo
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
 
@@ -293,6 +299,11 @@ async fn search_entities(
             entity_type: EntityType::Item,
             name: item.name,
             slug: item.slug,
+        }))
+        .chain(events.into_iter().map(|event| EntitySuggestion {
+            entity_type: EntityType::Event,
+            name: event.name,
+            slug: event.slug,
         }))
         .collect();
 

@@ -2,8 +2,9 @@ use std::path::Path;
 
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
-    FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION,
-    normalize_markdown_file_stem, now_timestamp, slugify, unique_slug_for_dir_with_ext,
+    EventFrontmatter, FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
+    UNKNOWN_LOCATION, normalize_markdown_file_stem, now_timestamp, slugify,
+    unique_slug_for_dir_with_ext,
 };
 use dnd_core::serialization::{
     carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
@@ -654,6 +655,124 @@ impl EntityPersistenceService {
             updated_at: item_row.updated_at,
         })
     }
+
+    pub async fn save_event_draft(
+        &self,
+        input: SaveEventDraftInput,
+        state: &AppState,
+    ) -> Result<SaveEventDraftResult, String> {
+        if input.id.trim().is_empty() {
+            return Err("event id cannot be empty".to_string());
+        }
+
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err("event name cannot be empty".to_string());
+        }
+
+        // Events are narrative-only: the body is stored verbatim (just trimmed),
+        // with none of the field normalization the structured entities apply.
+        let body = input.body.trim().to_string();
+        if body.is_empty() {
+            return Err("event body cannot be empty".to_string());
+        }
+
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let database = state.database();
+        let event_repo = state.event_repo();
+        let document_repo = state.document_repo();
+        let now = now_timestamp();
+        let existing = event_repo
+            .find_by_id(database.as_ref(), input.id.trim())
+            .await?;
+
+        let slug = resolve_slug(
+            store.root(),
+            "events",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            name,
+        );
+
+        let created_at = existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "events",
+            name,
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            None,
+        )
+        .await?;
+
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_event(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
+        let frontmatter = EventFrontmatter {
+            doc_type: "event".to_string(),
+            id: input.id.trim().to_string(),
+            slug: slug.clone(),
+            name: name.to_string(),
+            vault_path: vault_path.clone(),
+            body: body.clone(),
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+            published_at,
+        };
+
+        store
+            .save_event(&frontmatter)
+            .map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_event(&current.slug)
+                    .map_err(|err| err.to_string())?;
+            }
+        }
+
+        let event_row = db::EventRow {
+            id: input.id.trim().to_string(),
+            slug,
+            name: name.to_string(),
+            vault_path: vault_path.clone(),
+            body,
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+        };
+
+        event_repo.upsert(database.as_ref(), &event_row).await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "event",
+                &event_row.slug,
+                Some(&event_row.name),
+                &event_row.vault_path,
+                &event_row.created_at,
+                &event_row.updated_at,
+            )
+            .await?;
+
+        Ok(SaveEventDraftResult {
+            id: event_row.id,
+            slug: event_row.slug,
+            vault_path: event_row.vault_path,
+            created_at: event_row.created_at,
+            updated_at: event_row.updated_at,
+        })
+    }
 }
 
 /// A reference to the existing DB row for an entity being re-saved, normalized to
@@ -844,6 +963,22 @@ pub struct SaveItemDraftInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SaveItemDraftResult {
+    pub id: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveEventDraftInput {
+    pub id: String,
+    pub name: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SaveEventDraftResult {
     pub id: String,
     pub slug: String,
     pub vault_path: String,

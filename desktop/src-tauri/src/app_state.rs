@@ -4,18 +4,19 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use runebound_models::{FactionDraft, ItemDraft, LocationDraft, NpcDraft};
+use runebound_models::{EventDraft, FactionDraft, ItemDraft, LocationDraft, NpcDraft};
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
 use crate::repositories::{
-    Database, DocumentRepository, FactionRepository, GenerationRepository, ItemRepository,
-    LocationRepository, NpcRepository, SoftDeleteRepository, VaultRepository,
+    Database, DocumentRepository, EventRepository, FactionRepository, GenerationRepository,
+    ItemRepository, LocationRepository, NpcRepository, SoftDeleteRepository, VaultRepository,
 };
 
 pub type NpcDraftSession = NpcDraft;
 pub type LocationDraftSession = LocationDraft;
 pub type FactionDraftSession = FactionDraft;
 pub type ItemDraftSession = ItemDraft;
+pub type EventDraftSession = EventDraft;
 
 #[derive(Debug, Clone)]
 pub(crate) enum DraftEnvelope {
@@ -23,6 +24,7 @@ pub(crate) enum DraftEnvelope {
     Location(LocationDraftSession),
     Faction(FactionDraftSession),
     Item(ItemDraftSession),
+    Event(EventDraftSession),
 }
 
 impl DraftEnvelope {
@@ -32,6 +34,7 @@ impl DraftEnvelope {
             DraftEnvelope::Location(_) => EntityKind::Location,
             DraftEnvelope::Faction(_) => EntityKind::Faction,
             DraftEnvelope::Item(_) => EntityKind::Item,
+            DraftEnvelope::Event(_) => EntityKind::Event,
         }
     }
 
@@ -98,6 +101,22 @@ impl DraftEnvelope {
             None
         }
     }
+
+    pub(crate) fn as_event(&self) -> Option<&EventDraftSession> {
+        if let DraftEnvelope::Event(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn as_event_mut(&mut self) -> Option<&mut EventDraftSession> {
+        if let DraftEnvelope::Event(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 impl From<NpcDraftSession> for DraftEnvelope {
@@ -121,6 +140,12 @@ impl From<FactionDraftSession> for DraftEnvelope {
 impl From<ItemDraftSession> for DraftEnvelope {
     fn from(draft: ItemDraftSession) -> Self {
         DraftEnvelope::Item(draft)
+    }
+}
+
+impl From<EventDraftSession> for DraftEnvelope {
+    fn from(draft: EventDraftSession) -> Self {
+        DraftEnvelope::Event(draft)
     }
 }
 
@@ -254,12 +279,61 @@ impl EditorSession {
             })
     }
 
+    pub(crate) fn get_event(&self) -> Option<&EventDraftSession> {
+        self.draft(EntityKind::Event)
+            .and_then(DraftEnvelope::as_event)
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn get_event_mut(&mut self) -> Option<&mut EventDraftSession> {
+        self.draft_mut(EntityKind::Event)
+            .and_then(DraftEnvelope::as_event_mut)
+    }
+
+    pub(crate) fn set_event(&mut self, draft: EventDraftSession) {
+        self.set_active_draft(DraftEnvelope::Event(draft));
+    }
+
+    pub(crate) fn take_event(&mut self) -> Option<EventDraftSession> {
+        self.clear_kind(EntityKind::Event)
+            .and_then(|envelope| match envelope {
+                DraftEnvelope::Event(draft) => Some(draft),
+                _ => None,
+            })
+    }
+
     fn next_active_after(&self, cleared: EntityKind) -> Option<EntityKind> {
         let search_order: &[EntityKind] = match cleared {
-            EntityKind::Npc => &[EntityKind::Location, EntityKind::Faction, EntityKind::Item],
-            EntityKind::Location => &[EntityKind::Npc, EntityKind::Faction, EntityKind::Item],
-            EntityKind::Faction => &[EntityKind::Npc, EntityKind::Location, EntityKind::Item],
-            EntityKind::Item => &[EntityKind::Npc, EntityKind::Location, EntityKind::Faction],
+            EntityKind::Npc => &[
+                EntityKind::Location,
+                EntityKind::Faction,
+                EntityKind::Item,
+                EntityKind::Event,
+            ],
+            EntityKind::Location => &[
+                EntityKind::Npc,
+                EntityKind::Faction,
+                EntityKind::Item,
+                EntityKind::Event,
+            ],
+            EntityKind::Faction => &[
+                EntityKind::Npc,
+                EntityKind::Location,
+                EntityKind::Item,
+                EntityKind::Event,
+            ],
+            EntityKind::Item => &[
+                EntityKind::Npc,
+                EntityKind::Location,
+                EntityKind::Faction,
+                EntityKind::Event,
+            ],
+            EntityKind::Event => &[
+                EntityKind::Npc,
+                EntityKind::Location,
+                EntityKind::Faction,
+                EntityKind::Item,
+            ],
         };
 
         search_order
@@ -279,6 +353,7 @@ pub(crate) struct AppState {
     pub(crate) location_repo: Arc<dyn LocationRepository>,
     pub(crate) faction_repo: Arc<dyn FactionRepository>,
     pub(crate) item_repo: Arc<dyn ItemRepository>,
+    pub(crate) event_repo: Arc<dyn EventRepository>,
     pub(crate) document_repo: Arc<dyn DocumentRepository>,
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
@@ -311,6 +386,10 @@ impl AppState {
 
     pub(crate) fn item_repo(&self) -> Arc<dyn ItemRepository> {
         self.item_repo.clone()
+    }
+
+    pub(crate) fn event_repo(&self) -> Arc<dyn EventRepository> {
+        self.event_repo.clone()
     }
 
     pub(crate) fn document_repo(&self) -> Arc<dyn DocumentRepository> {

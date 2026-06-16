@@ -8,13 +8,16 @@ use crate::services::entity_admin::{
 };
 use crate::entities::EntityKind;
 use crate::entities::domains::{
+    event_event_from_draft,
     faction_event_from_draft,
     item_event_from_draft,
     location_event_from_draft,
     npc_event_from_draft,
 };
 use crate::utils::path_for_display;
-use crate::app_state::{FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{
+    EventDraftSession, FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession,
+};
 
 pub async fn handle_load(
     invocation: DesktopHandlerInvocation<'_>,
@@ -264,6 +267,24 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             }
             (build_entity_card_text(&entity), Some(item_event_from_draft(&draft)))
         }
+        EntityType::Event => {
+            let draft = EventDraftSession {
+                id: entity.id.clone(),
+                seed_prompt: None,
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                body: entity.body.clone().unwrap_or_default(),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.set_event(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
+                editor.clear_kind(EntityKind::Faction);
+                editor.clear_kind(EntityKind::Item);
+            }
+            (build_entity_card_text(&entity), Some(event_event_from_draft(&draft)))
+        }
     }
 }
 
@@ -346,6 +367,11 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             rows.push(entity_row("location", entity.location.clone().unwrap_or_else(|| "Unknown".to_string())));
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc { blocks: vec![entity_card("Item", rows)] }
+        }
+        EntityType::Event => {
+            rows.push(entity_row("body", entity.body.clone().unwrap_or_default()));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+            OutputDoc { blocks: vec![entity_card("Event", rows)] }
         }
     }
 }
@@ -431,6 +457,15 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 entity.value.clone().unwrap_or_else(|| "Unknown".to_string()),
                 entity.location.clone().unwrap_or_else(|| "Unknown".to_string()),
                 path_for_display(&entity.vault_path)
+            )
+        }
+        EntityType::Event => {
+            format!(
+                "## Event\nname: {}\nslug: {}\npath: {}\n\n{}",
+                entity.name,
+                entity.slug,
+                path_for_display(&entity.vault_path),
+                entity.body.clone().unwrap_or_default(),
             )
         }
     }

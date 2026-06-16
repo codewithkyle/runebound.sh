@@ -96,6 +96,17 @@ pub struct ItemDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventDraft {
+    pub id: String,
+    #[serde(default)]
+    pub seed_prompt: Option<String>,
+    pub name: String,
+    #[serde(default)]
+    pub slug: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcFrontmatter {
     #[serde(rename = "type")]
     pub doc_type: String,
@@ -199,8 +210,24 @@ pub struct ItemFrontmatter {
     pub published_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EventFrontmatter {
+    #[serde(rename = "type")]
+    pub doc_type: String,
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
 use super::output::{
-    OutputDoc, command_ref, doc, entity_card, entity_row, paragraph_with_inlines, text_node,
+    OutputDoc, command_ref, doc, entity_card, entity_row, paragraph_text, paragraph_with_inlines,
+    text_node,
 };
 use super::utils::{normalize_unknown_list, normalize_unknown_text};
 
@@ -386,4 +413,25 @@ pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
         ]))
+}
+
+pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
+    let rows = vec![entity_row("Slug:", normalize_unknown_text(&draft.slug))];
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    // The body is narrative prose, not an attribute. Render each paragraph
+    // (split on blank lines) as its own block so the story reads naturally.
+    for para in draft.body.split("\n\n") {
+        let trimmed = para.trim();
+        if !trimmed.is_empty() {
+            output.push(paragraph_text(trimmed.to_string()));
+        }
+    }
+    output.push(paragraph_with_inlines(vec![
+        text_node("Use "),
+        command_ref("save", "save"),
+        text_node(" to persist this event, or "),
+        command_ref("reroll", "reroll"),
+        text_node(" to regenerate the narrative."),
+    ]));
+    output
 }

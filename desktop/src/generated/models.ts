@@ -78,6 +78,14 @@ export type ItemDraft = {
   location: string;
 };
 
+export type EventDraft = {
+  id: string;
+  seed_prompt?: string | null;
+  name: string;
+  slug: string;
+  body: string;
+};
+
 export type NpcFrontmatter = {
   type: string;
   id: string;
@@ -210,6 +218,7 @@ export type CommandClientEvent =
   | { kind: "load_location_draft_with_card"; draft: LocationDraft; entity_card: OutputDoc }
   | { kind: "load_faction_draft_with_card"; draft: FactionDraft; entity_card: OutputDoc }
   | { kind: "load_item_draft_with_card"; draft: ItemDraft; entity_card: OutputDoc }
+  | { kind: "load_event_draft_with_card"; draft: EventDraft; entity_card: OutputDoc }
   | { kind: "clear_drafts" }
   | { kind: "clear_terminal"; clear_history: boolean }
   | { kind: "exit_requested" };
