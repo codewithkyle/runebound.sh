@@ -1070,7 +1070,7 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
 // completing answer is a bare digit, so we recognize the prompt rather than the
 // input to show the "generating dungeon" spinner on the next submit.
 function detectDungeonTopologyPrompt(text: string): boolean {
-  return text.includes("Step E of 5 — Topology");
+  return text.includes("Step 5 of 5 — Topology");
 }
 
 function commandSpinnerLabel(

@@ -180,7 +180,10 @@ pub fn render_dungeon_markdown_with_links(
 
     for (i, beat) in frontmatter.beats.iter().enumerate() {
         let content_type = normalize_unknown_text(&beat.content_type);
-        writeln!(&mut out, "## {}. {} — [{}]", i + 1, beat.function, content_type).ok();
+        writeln!(&mut out, "## {}. {}", i + 1, beat.function).ok();
+        if content_type != "Unknown" {
+            writeln!(&mut out, "**Type:** {content_type}").ok();
+        }
         let idea = normalize_unknown_text(&beat.idea);
         if idea != "Unknown" {
             writeln!(&mut out, "**Idea:** {}", linker.link_prose(&idea)).ok();
@@ -882,8 +885,12 @@ mod tests {
         let markdown = render_dungeon_markdown(&frontmatter);
         assert!(markdown.contains("*A drowned forge that still burns.*"));
         assert!(markdown.contains("**Topology:** The Moose"));
-        assert!(markdown.contains("## 1. Entrance — [puzzle]"));
-        assert!(markdown.contains("## 2. Resolution — [cache]"));
+        assert!(markdown.contains("## 1. Entrance"));
+        assert!(markdown.contains("## 2. Resolution"));
+        assert!(markdown.contains("**Type:** puzzle"));
+        assert!(markdown.contains("**Type:** cache"));
+        // Type is a detail line, not bracketed in the heading (Obsidian-safe).
+        assert!(!markdown.contains("— [puzzle]"));
         assert!(markdown.contains("**Loot:** A still-warm blade"));
         // The Entrance has no loot line — conditional loot omitted, not blank.
         let entrance = markdown.split("## 2.").next().unwrap_or("");

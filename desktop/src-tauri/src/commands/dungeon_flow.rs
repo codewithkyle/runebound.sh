@@ -21,7 +21,7 @@ use crate::utils::{normalize_unknown_text, prepend_notice};
 /// Marker line in the Step E prompt. The frontend spinner heuristic
 /// (`detectDungeonTopologyPrompt`) keys off this so the completing answer shows a
 /// "generating dungeon" spinner.
-pub const STEP_E_MARKER: &str = "Step E of 5 — Topology";
+pub const STEP_E_MARKER: &str = "Step 5 of 5 — Topology";
 
 /// Entry point: `create dungeon` activates the flow and returns the Step A prompt.
 pub async fn start_dungeon_flow(state: &AppState) -> CommandResult {
@@ -85,14 +85,14 @@ pub async fn reset_dungeon_flow(state: &AppState) {
 
 fn step_a_doc() -> OutputDoc {
     doc()
-        .with_block(heading(2, "Create Dungeon — Step A of 5 — Premise"))
+        .with_block(heading(2, "Create Dungeon — Step 1 of 5 — Premise"))
         .with_block(paragraph_text(
             "Enter a one-line premise, or type `generate` to have the oracle invent one.",
         ))
 }
 
 fn step_a_text_plain() -> String {
-    "Step A of 5 — Premise: enter a one-line premise, or type `generate`.".to_string()
+    "Step 1 of 5 — Premise: enter a one-line premise, or type `generate`.".to_string()
 }
 
 async fn handle_step_a(trimmed: &str, state: &AppState) -> CommandResult {
@@ -117,14 +117,14 @@ async fn handle_step_a(trimmed: &str, state: &AppState) -> CommandResult {
 
 fn step_b_doc() -> OutputDoc {
     menu_doc(
-        "Create Dungeon — Step B of 5 — Tone",
+        "Create Dungeon — Step 2 of 5 — Tone",
         "Choose the overall emotional polarity:",
         &["1: Tragedy", "2: Comedy"],
     )
 }
 
 fn step_b_text_plain() -> String {
-    "Step B of 5 — Tone: 1: Tragedy   2: Comedy".to_string()
+    "Step 2 of 5 — Tone: 1: Tragedy   2: Comedy".to_string()
 }
 
 async fn handle_step_b(trimmed: &str, state: &AppState) -> CommandResult {
@@ -148,14 +148,14 @@ async fn handle_step_b(trimmed: &str, state: &AppState) -> CommandResult {
 
 fn step_c_doc() -> OutputDoc {
     menu_doc(
-        "Create Dungeon — Step C of 5 — Twist",
+        "Create Dungeon — Step 3 of 5 — Twist",
         "Choose the shape of the middle beats:",
         &["1: False victory", "2: False defeat", "3: Neither"],
     )
 }
 
 fn step_c_text_plain() -> String {
-    "Step C of 5 — Twist: 1: False victory   2: False defeat   3: Neither".to_string()
+    "Step 3 of 5 — Twist: 1: False victory   2: False defeat   3: Neither".to_string()
 }
 
 async fn handle_step_c(trimmed: &str, state: &AppState) -> CommandResult {
@@ -180,14 +180,14 @@ async fn handle_step_c(trimmed: &str, state: &AppState) -> CommandResult {
 
 fn step_d_doc() -> OutputDoc {
     doc()
-        .with_block(heading(2, "Create Dungeon — Step D of 5 — Context"))
+        .with_block(heading(2, "Create Dungeon — Step 4 of 5 — Context"))
         .with_block(paragraph_text(
             "Add references/constraints to seed the oracle (or type `skip`). You may include @references to vault documents.",
         ))
 }
 
 fn step_d_text_plain() -> String {
-    "Step D of 5 — Context: add references/constraints, or `skip`.".to_string()
+    "Step 4 of 5 — Context: add references/constraints, or `skip`.".to_string()
 }
 
 async fn handle_step_d(trimmed: &str, state: &AppState) -> CommandResult {
