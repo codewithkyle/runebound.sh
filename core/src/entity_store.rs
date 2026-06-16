@@ -3,7 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use runebound_models::{
-    EventFrontmatter, FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
+    EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter,
+    NpcFrontmatter,
 };
 
 use crate::config::config_paths;
@@ -13,6 +14,7 @@ const LOCATION_DIR: &str = "locations";
 const FACTION_DIR: &str = "factions";
 const ITEM_DIR: &str = "items";
 const EVENT_DIR: &str = "events";
+const GOD_DIR: &str = "gods";
 
 pub struct EntityStore {
     root: PathBuf,
@@ -60,6 +62,12 @@ impl EntityStore {
             format!(
                 "failed to create event directory at {}",
                 self.root.join(EVENT_DIR).display()
+            )
+        })?;
+        fs::create_dir_all(self.root.join(GOD_DIR)).with_context(|| {
+            format!(
+                "failed to create god directory at {}",
+                self.root.join(GOD_DIR).display()
             )
         })?;
         Ok(())
@@ -213,5 +221,21 @@ impl EntityStore {
 
     pub fn list_events(&self) -> Result<Vec<EventFrontmatter>> {
         self.list_entities(EVENT_DIR)
+    }
+
+    pub fn save_god(&self, data: &GodFrontmatter) -> Result<PathBuf> {
+        self.save_entity(GOD_DIR, &data.slug, data)
+    }
+
+    pub fn load_god(&self, slug: &str) -> Result<Option<GodFrontmatter>> {
+        self.load_entity(GOD_DIR, slug)
+    }
+
+    pub fn delete_god(&self, slug: &str) -> Result<()> {
+        self.delete_entity(GOD_DIR, slug)
+    }
+
+    pub fn list_gods(&self) -> Result<Vec<GodFrontmatter>> {
+        self.list_entities(GOD_DIR)
     }
 }

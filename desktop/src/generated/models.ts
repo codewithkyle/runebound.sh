@@ -86,6 +86,27 @@ export type EventDraft = {
   body: string;
 };
 
+export type GodDraft = {
+  id: string;
+  seed_prompt?: string | null;
+  name: string;
+  slug: string;
+  vault_path: string;
+  epithet: string;
+  rank: string;
+  rank_custom?: string | null;
+  alignment: string;
+  domains: string[];
+  symbol: string;
+  appearance: string;
+  dogma: string;
+  realm: string;
+  worshippers: string;
+  clergy: string;
+  allies: string[];
+  rivals: string[];
+};
+
 export type NpcFrontmatter = {
   type: string;
   id: string;
@@ -176,6 +197,30 @@ export type ItemFrontmatter = {
   published_at?: string | null;
 };
 
+export type GodFrontmatter = {
+  type: string;
+  id: string;
+  slug: string;
+  name: string;
+  vault_path: string;
+  epithet: string;
+  rank: string;
+  rank_custom?: string | null;
+  alignment: string;
+  domains: string[];
+  symbol: string;
+  appearance: string;
+  dogma: string;
+  realm: string;
+  worshippers: string;
+  clergy: string;
+  allies: string[];
+  rivals: string[];
+  created_at: string;
+  updated_at: string;
+  published_at?: string | null;
+};
+
 export type EntityCardRow = {
   label: string;
   value: string;
@@ -219,6 +264,7 @@ export type CommandClientEvent =
   | { kind: "load_faction_draft_with_card"; draft: FactionDraft; entity_card: OutputDoc }
   | { kind: "load_item_draft_with_card"; draft: ItemDraft; entity_card: OutputDoc }
   | { kind: "load_event_draft_with_card"; draft: EventDraft; entity_card: OutputDoc }
+  | { kind: "load_god_draft_with_card"; draft: GodDraft; entity_card: OutputDoc }
   | { kind: "clear_drafts" }
   | { kind: "clear_terminal"; clear_history: boolean }
   | { kind: "exit_requested" };

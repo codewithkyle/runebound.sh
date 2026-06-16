@@ -2,8 +2,8 @@ use std::path::Path;
 
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
-    EventFrontmatter, FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
-    UNKNOWN_LOCATION, normalize_markdown_file_stem, now_timestamp, slugify,
+    EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter,
+    NpcFrontmatter, UNKNOWN_LOCATION, normalize_markdown_file_stem, now_timestamp, slugify,
     unique_slug_for_dir_with_ext,
 };
 use dnd_core::serialization::{
@@ -15,9 +15,10 @@ use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::ai_generation::LocationSeed;
 use crate::utils::{
-    normalize_exports, normalize_faction_kind_type, normalize_item_category, normalize_item_rarity,
-    normalize_location_danger_level, normalize_location_kind_type, normalize_relative_path_for_storage,
-    normalize_sex, normalize_unknown_list, normalize_unknown_text, validate_location_details,
+    normalize_exports, normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
+    normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
+    normalize_location_kind_type, normalize_relative_path_for_storage, normalize_sex,
+    normalize_unknown_list, normalize_unknown_text, validate_location_details,
 };
 
 pub struct EntityPersistenceService;
@@ -513,6 +514,166 @@ impl EntityPersistenceService {
         })
     }
 
+    pub async fn save_god_draft(
+        &self,
+        input: SaveGodDraftInput,
+        state: &AppState,
+    ) -> Result<SaveGodDraftResult, String> {
+        if input.id.trim().is_empty() {
+            return Err("god id cannot be empty".to_string());
+        }
+        if input.name.trim().is_empty() {
+            return Err("god name cannot be empty".to_string());
+        }
+
+        let rank = normalize_god_rank(&input.rank)?;
+        let rank_custom = if rank == "other" {
+            let value = input
+                .rank_custom
+                .as_ref()
+                .map(|value| value.trim())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| "rank_custom is required when rank is other".to_string())?;
+            Some(value.to_string())
+        } else {
+            None
+        };
+        let alignment = normalize_god_alignment(&input.alignment)?;
+
+        let epithet = normalize_unknown_text(&input.epithet);
+        let domains = normalize_unknown_list(input.domains);
+        let symbol = normalize_unknown_text(&input.symbol);
+        let appearance = normalize_unknown_text(&input.appearance);
+        let dogma = normalize_unknown_text(&input.dogma);
+        let realm = normalize_unknown_text(&input.realm);
+        let worshippers = normalize_unknown_text(&input.worshippers);
+        let clergy = normalize_unknown_text(&input.clergy);
+        let allies = normalize_unknown_list(input.allies);
+        let rivals = normalize_unknown_list(input.rivals);
+
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let database = state.database();
+        let god_repo = state.god_repo();
+        let document_repo = state.document_repo();
+        let now = now_timestamp();
+        let existing = god_repo
+            .find_by_id(database.as_ref(), input.id.trim())
+            .await?;
+        let created_at = existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+
+        let slug = resolve_slug(
+            store.root(),
+            "gods",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            input.name.trim(),
+        );
+
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "gods",
+            input.name.trim(),
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            Some(input.vault_path.as_str()),
+        )
+        .await?;
+
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_god(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
+        let frontmatter = GodFrontmatter {
+            doc_type: "god".to_string(),
+            id: input.id.trim().to_string(),
+            slug: slug.clone(),
+            name: input.name.trim().to_string(),
+            vault_path: vault_path.clone(),
+            epithet: epithet.clone(),
+            rank: rank.clone(),
+            rank_custom: rank_custom.clone(),
+            alignment: alignment.clone(),
+            domains: domains.clone(),
+            symbol: symbol.clone(),
+            appearance: appearance.clone(),
+            dogma: dogma.clone(),
+            realm: realm.clone(),
+            worshippers: worshippers.clone(),
+            clergy: clergy.clone(),
+            allies: allies.clone(),
+            rivals: rivals.clone(),
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+            published_at,
+        };
+
+        store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_god(&current.slug)
+                    .map_err(|err| err.to_string())?;
+            }
+        }
+
+        let domains_db = faction_list_to_db_text(&domains)?;
+        let allies_db = faction_list_to_db_text(&allies)?;
+        let rivals_db = faction_list_to_db_text(&rivals)?;
+
+        let god_row = db::GodRow {
+            id: input.id.trim().to_string(),
+            slug,
+            name: input.name.trim().to_string(),
+            vault_path: vault_path.clone(),
+            epithet,
+            rank,
+            rank_custom,
+            alignment,
+            domains: domains_db,
+            symbol,
+            appearance,
+            dogma,
+            realm,
+            worshippers,
+            clergy,
+            allies: allies_db,
+            rivals: rivals_db,
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+        };
+
+        god_repo.upsert(database.as_ref(), &god_row).await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "god",
+                &god_row.slug,
+                Some(&god_row.name),
+                &god_row.vault_path,
+                &god_row.created_at,
+                &god_row.updated_at,
+            )
+            .await?;
+
+        Ok(SaveGodDraftResult {
+            id: god_row.id,
+            slug: god_row.slug,
+            vault_path: god_row.vault_path,
+            created_at: god_row.created_at,
+            updated_at: god_row.updated_at,
+        })
+    }
+
     pub async fn save_item_draft(
         &self,
         input: SaveItemDraftInput,
@@ -938,6 +1099,35 @@ pub struct SaveFactionDraftInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SaveFactionDraftResult {
+    pub id: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveGodDraftInput {
+    pub id: String,
+    pub name: String,
+    pub vault_path: String,
+    pub epithet: String,
+    pub rank: String,
+    pub rank_custom: Option<String>,
+    pub alignment: String,
+    pub domains: Vec<String>,
+    pub symbol: String,
+    pub appearance: String,
+    pub dogma: String,
+    pub realm: String,
+    pub worshippers: String,
+    pub clergy: String,
+    pub allies: Vec<String>,
+    pub rivals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SaveGodDraftResult {
     pub id: String,
     pub slug: String,
     pub vault_path: String,

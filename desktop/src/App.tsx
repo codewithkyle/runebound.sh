@@ -13,6 +13,7 @@ import type {
   FactionDraft,
   ItemDraft,
   EventDraft,
+  GodDraft,
 } from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
@@ -37,7 +38,7 @@ type CommandSpecMeta = {
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "reference";
+  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "reference";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -88,12 +89,13 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event">("none");
+  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
   const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
   const [itemDraft, setItemDraft] = createSignal<ItemDraft | null>(null);
   const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
+  const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
@@ -524,6 +526,7 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setEventDraft(null);
+        setGodDraft(null);
         setEditorMode("npc");
         return;
       case "load_location_draft_with_card":
@@ -532,6 +535,7 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setEventDraft(null);
+        setGodDraft(null);
         setEditorMode("location");
         return;
       case "load_faction_draft_with_card":
@@ -540,6 +544,7 @@ export default function App() {
         setLocationDraft(null);
         setItemDraft(null);
         setEventDraft(null);
+        setGodDraft(null);
         setEditorMode("faction");
         return;
       case "load_item_draft_with_card":
@@ -548,6 +553,7 @@ export default function App() {
         setLocationDraft(null);
         setFactionDraft(null);
         setEventDraft(null);
+        setGodDraft(null);
         setEditorMode("item");
         return;
       case "load_event_draft_with_card":
@@ -556,7 +562,17 @@ export default function App() {
         setLocationDraft(null);
         setFactionDraft(null);
         setItemDraft(null);
+        setGodDraft(null);
         setEditorMode("event");
+        return;
+      case "load_god_draft_with_card":
+        setGodDraft(event.draft);
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setItemDraft(null);
+        setEventDraft(null);
+        setEditorMode("god");
         return;
       case "clear_drafts":
         setNpcDraft(null);
@@ -564,6 +580,7 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setEventDraft(null);
+        setGodDraft(null);
         setEditorMode("none");
         return;
       case "clear_terminal":
@@ -594,6 +611,7 @@ export default function App() {
       case "load_faction_draft_with_card":
       case "load_item_draft_with_card":
       case "load_event_draft_with_card":
+      case "load_god_draft_with_card":
         return event.entity_card;
       case "clear_drafts":
       case "clear_terminal":
@@ -1060,6 +1078,9 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "create event" || lowered.startsWith("create event ")) {
     return "generating event";
   }
+  if (lowered === "create god" || lowered.startsWith("create god ")) {
+    return "generating god";
+  }
   if (lowered === "reroll" || lowered.startsWith("reroll ")) {
     return "rerolling draft";
   }
@@ -1078,11 +1099,15 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "event reroll" || lowered.startsWith("event reroll ")) {
     return "rerolling event";
   }
+  if (lowered === "god reroll" || lowered.startsWith("god reroll ")) {
+    return "rerolling god";
+  }
   if (
     lowered.startsWith("npc save") ||
     lowered.startsWith("location save") ||
     lowered.startsWith("item save") ||
     lowered.startsWith("event save") ||
+    lowered.startsWith("god save") ||
     lowered === "save"
   ) {
     return "saving draft";

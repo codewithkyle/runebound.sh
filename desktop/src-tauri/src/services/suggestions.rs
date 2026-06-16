@@ -158,6 +158,7 @@ impl SuggestionService {
                         EntityType::Faction => SuggestionHelperText::Faction,
                         EntityType::Item => SuggestionHelperText::Item,
                         EntityType::Event => SuggestionHelperText::Event,
+                        EntityType::God => SuggestionHelperText::God,
                     }),
                 });
             }
@@ -227,6 +228,7 @@ pub enum SuggestionHelperText {
     Faction,
     Item,
     Event,
+    God,
     Reference,
 }
 
@@ -261,6 +263,7 @@ async fn search_entities(
     let faction_repo = state.faction_repo();
     let item_repo = state.item_repo();
     let event_repo = state.event_repo();
+    let god_repo = state.god_repo();
 
     let npcs = npc_repo
         .search_by_name(database.as_ref(), trimmed, limit)
@@ -275,6 +278,9 @@ async fn search_entities(
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
     let events = event_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
+    let gods = god_repo
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
 
@@ -304,6 +310,11 @@ async fn search_entities(
             entity_type: EntityType::Event,
             name: event.name,
             slug: event.slug,
+        }))
+        .chain(gods.into_iter().map(|god| EntitySuggestion {
+            entity_type: EntityType::God,
+            name: god.name,
+            slug: god.slug,
         }))
         .collect();
 
@@ -570,6 +581,7 @@ fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
         "location" => Some(EntityKind::Location),
         "faction" => Some(EntityKind::Faction),
         "item" => Some(EntityKind::Item),
+        "god" => Some(EntityKind::God),
         _ => None,
     }
 }
@@ -1118,6 +1130,55 @@ mod tests {
                 .iter()
                 .any(|suggestion| suggestion.completion == "item reroll materials "),
             "missing materials suggestion"
+        );
+    }
+
+    #[test]
+    fn entity_kind_for_god_root_maps_to_god_kind() {
+        assert_eq!(entity_kind_for_root("god"), Some(EntityKind::God));
+    }
+
+    #[test]
+    fn god_set_field_suggestions_include_alignment() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "god").expect("missing god command");
+        let parsed = command_parse::parse_command_input("god set a");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::God,
+            command,
+            Some("set"),
+            &parsed,
+            "god set a",
+        )
+        .expect("expected suggestions");
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "god set alignment "),
+            "missing alignment suggestion"
+        );
+    }
+
+    #[test]
+    fn god_reroll_field_suggestions_include_domains() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "god").expect("missing god command");
+        let parsed = command_parse::parse_command_input("god reroll d");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::God,
+            command,
+            Some("reroll"),
+            &parsed,
+            "god reroll d",
+        )
+        .expect("expected suggestions");
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "god reroll domains "),
+            "missing domains suggestion"
         );
     }
 }

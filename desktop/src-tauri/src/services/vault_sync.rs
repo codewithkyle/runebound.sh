@@ -5,14 +5,14 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use dnd_core::config::load_effective;
 use dnd_core::entity_store::EntityStore;
-use dnd_core::npc::{EventFrontmatter, FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
+use dnd_core::npc::{EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
 use dnd_core::serialization::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 use dnd_core::vault::Vault;
 
 use crate::app_state::AppState;
 use crate::repositories::{
-    db, DocumentRepository, EventRepository, FactionRepository, ItemRepository, LocationRepository,
-    NpcRepository,
+    db, DocumentRepository, EventRepository, FactionRepository, GodRepository, ItemRepository,
+    LocationRepository, NpcRepository,
 };
 use crate::utils::normalize_relative_path_for_storage;
 
@@ -39,6 +39,7 @@ impl VaultSyncService {
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
+        let god_repo = state.god_repo();
         let document_repo = state.document_repo();
 
         // Any publish that survived to a restart is permanent: finalize its pending
@@ -55,6 +56,7 @@ impl VaultSyncService {
         sync_entities(&FactionSync(faction_repo.as_ref()), &store, database, document_repo).await?;
         sync_entities(&ItemSync(item_repo.as_ref()), &store, database, document_repo).await?;
         sync_entities(&EventSync(event_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(&GodSync(god_repo.as_ref()), &store, database, document_repo).await?;
 
         Ok(())
     }
@@ -392,6 +394,52 @@ impl SyncRepository for EventSync<'_> {
     }
 }
 
+struct GodSync<'a>(&'a dyn GodRepository);
+
+#[async_trait]
+impl SyncRepository for GodSync<'_> {
+    type Frontmatter = GodFrontmatter;
+    type Row = db::GodRow;
+    const KIND: &'static str = "god";
+
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String> {
+        store.list_gods().map_err(|err| err.to_string())
+    }
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String> {
+        store.delete_god(slug).map_err(|err| err.to_string())
+    }
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String> {
+        god_row_from_frontmatter(frontmatter)
+    }
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_> {
+        StoreView {
+            id: &frontmatter.id,
+            slug: &frontmatter.slug,
+            vault_path: &frontmatter.vault_path,
+            published: frontmatter.published_at.is_some(),
+        }
+    }
+    fn row_view(row: &Self::Row) -> RowView<'_> {
+        RowView {
+            id: &row.id,
+            slug: &row.slug,
+            name: &row.name,
+            vault_path: &row.vault_path,
+            created_at: &row.created_at,
+            updated_at: &row.updated_at,
+        }
+    }
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert(database, row).await
+    }
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
+        self.0.list_all(database).await
+    }
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
+        self.0.delete_by_id(database, id).await
+    }
+}
+
 pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {
     Ok(db::NpcRow {
         id: frontmatter.id.clone(),
@@ -500,6 +548,30 @@ pub(crate) fn event_row_from_frontmatter(
         name: frontmatter.name.clone(),
         vault_path: frontmatter.vault_path.clone(),
         body: frontmatter.body.clone(),
+        created_at: frontmatter.created_at.clone(),
+        updated_at: frontmatter.updated_at.clone(),
+    })
+}
+
+pub(crate) fn god_row_from_frontmatter(frontmatter: &GodFrontmatter) -> Result<db::GodRow, String> {
+    Ok(db::GodRow {
+        id: frontmatter.id.clone(),
+        slug: frontmatter.slug.clone(),
+        name: frontmatter.name.clone(),
+        vault_path: frontmatter.vault_path.clone(),
+        epithet: frontmatter.epithet.clone(),
+        rank: frontmatter.rank.clone(),
+        rank_custom: frontmatter.rank_custom.clone(),
+        alignment: frontmatter.alignment.clone(),
+        domains: faction_list_to_db_text(&frontmatter.domains).map_err(|err| err.to_string())?,
+        symbol: frontmatter.symbol.clone(),
+        appearance: frontmatter.appearance.clone(),
+        dogma: frontmatter.dogma.clone(),
+        realm: frontmatter.realm.clone(),
+        worshippers: frontmatter.worshippers.clone(),
+        clergy: frontmatter.clergy.clone(),
+        allies: faction_list_to_db_text(&frontmatter.allies).map_err(|err| err.to_string())?,
+        rivals: faction_list_to_db_text(&frontmatter.rivals).map_err(|err| err.to_string())?,
         created_at: frontmatter.created_at.clone(),
         updated_at: frontmatter.updated_at.clone(),
     })

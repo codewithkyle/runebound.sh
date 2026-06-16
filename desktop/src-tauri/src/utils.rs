@@ -1,11 +1,12 @@
 use std::path::MAIN_SEPARATOR;
 
-use crate::services::ai_generation::{FactionSeed, LocationSeed};
+use crate::services::ai_generation::{FactionSeed, GodSeed, LocationSeed};
 
 pub use runebound_models::utils::{
-    normalize_exports, normalize_faction_kind_type, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_item_category, normalize_item_rarity, normalize_sex,
-    normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+    normalize_exports, normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
+    normalize_location_danger_level, normalize_location_kind_type, normalize_item_category,
+    normalize_item_rarity, normalize_sex, normalize_unknown_list, normalize_unknown_text,
+    parse_list_csv,
 };
 
 pub fn parse_carrying_csv(value: &str) -> Vec<String> {
@@ -172,6 +173,44 @@ pub fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
     }
     if seed.symbol_description != "Unknown" {
         validate_sentence_range(&seed.symbol_description, 1, 1, "symbol_description")?;
+    }
+    Ok(())
+}
+
+pub fn normalize_god_seed(mut seed: GodSeed) -> Result<GodSeed, String> {
+    seed.name = seed.name.trim().to_string();
+    seed.rank = normalize_god_rank(&seed.rank)?;
+    seed.rank_custom = seed.rank_custom.map(|value| value.trim().to_string());
+    if seed.rank == "other" {
+        if seed.rank_custom.as_ref().is_none_or(|value| value.trim().is_empty()) {
+            return Err("rank_custom is required when rank is other".to_string());
+        }
+    } else {
+        seed.rank_custom = None;
+    }
+    seed.alignment = normalize_god_alignment(&seed.alignment)?;
+    seed.epithet = normalize_unknown_text(&seed.epithet);
+    seed.domains = normalize_unknown_list(seed.domains);
+    seed.symbol = normalize_unknown_text(&seed.symbol);
+    seed.appearance = normalize_unknown_text(&seed.appearance);
+    seed.dogma = normalize_unknown_text(&seed.dogma);
+    seed.realm = normalize_unknown_text(&seed.realm);
+    seed.worshippers = normalize_unknown_text(&seed.worshippers);
+    seed.clergy = normalize_unknown_text(&seed.clergy);
+    seed.allies = normalize_unknown_list(seed.allies);
+    seed.rivals = normalize_unknown_list(seed.rivals);
+    Ok(seed)
+}
+
+pub fn validate_god_details(seed: &GodSeed) -> Result<(), String> {
+    if seed.name.trim().is_empty() {
+        return Err("god name cannot be empty".to_string());
+    }
+    if seed.symbol != "Unknown" {
+        validate_sentence_range(&seed.symbol, 1, 1, "symbol")?;
+    }
+    if seed.dogma != "Unknown" {
+        validate_sentence_range(&seed.dogma, 1, 3, "dogma")?;
     }
     Ok(())
 }

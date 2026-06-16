@@ -107,6 +107,33 @@ pub struct EventDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GodDraft {
+    pub id: String,
+    #[serde(default)]
+    pub seed_prompt: Option<String>,
+    pub name: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub epithet: String,
+    pub rank: String,
+    #[serde(default)]
+    pub rank_custom: Option<String>,
+    pub alignment: String,
+    #[serde(default)]
+    pub domains: Vec<String>,
+    pub symbol: String,
+    pub appearance: String,
+    pub dogma: String,
+    pub realm: String,
+    pub worshippers: String,
+    pub clergy: String,
+    #[serde(default)]
+    pub allies: Vec<String>,
+    #[serde(default)]
+    pub rivals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcFrontmatter {
     #[serde(rename = "type")]
     pub doc_type: String,
@@ -219,6 +246,34 @@ pub struct EventFrontmatter {
     pub name: String,
     pub vault_path: String,
     pub body: String,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GodFrontmatter {
+    #[serde(rename = "type")]
+    pub doc_type: String,
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub epithet: String,
+    pub rank: String,
+    #[serde(default)]
+    pub rank_custom: Option<String>,
+    pub alignment: String,
+    pub domains: Vec<String>,
+    pub symbol: String,
+    pub appearance: String,
+    pub dogma: String,
+    pub realm: String,
+    pub worshippers: String,
+    pub clergy: String,
+    pub allies: Vec<String>,
+    pub rivals: Vec<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
@@ -381,6 +436,58 @@ pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this faction, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to regenerate it."),
+        ]))
+}
+
+pub fn god_entity_card(draft: &GodDraft) -> OutputDoc {
+    let rank_custom_display = draft
+        .rank_custom
+        .as_deref()
+        .map(|value| {
+            let normalized = normalize_unknown_text(value);
+            if normalized == "Unknown" {
+                "(none)".to_string()
+            } else {
+                normalized
+            }
+        })
+        .unwrap_or_else(|| "(none)".to_string());
+
+    let rows = vec![
+        entity_row("Name:", normalize_unknown_text(&draft.name)),
+        entity_row("Slug:", normalize_unknown_text(&draft.slug)),
+        entity_row("Epithet:", normalize_unknown_text(&draft.epithet)),
+        entity_row("Rank:", normalize_unknown_text(&draft.rank)),
+        entity_row("Custom Rank:", rank_custom_display),
+        entity_row("Alignment:", normalize_unknown_text(&draft.alignment)),
+        entity_row(
+            "Domains:",
+            normalize_unknown_list(draft.domains.clone()).join(", "),
+        ),
+        entity_row("Symbol:", normalize_unknown_text(&draft.symbol)),
+        entity_row("Appearance:", normalize_unknown_text(&draft.appearance)),
+        entity_row("Dogma:", normalize_unknown_text(&draft.dogma)),
+        entity_row("Realm:", normalize_unknown_text(&draft.realm)),
+        entity_row("Worshippers:", normalize_unknown_text(&draft.worshippers)),
+        entity_row("Clergy:", normalize_unknown_text(&draft.clergy)),
+        entity_row(
+            "Allies:",
+            normalize_unknown_list(draft.allies.clone()).join(", "),
+        ),
+        entity_row(
+            "Rivals:",
+            normalize_unknown_list(draft.rivals.clone()).join(", "),
+        ),
+        entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
+    ];
+    doc()
+        .with_block(entity_card(&draft.name, rows))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this god, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
         ]))

@@ -7,13 +7,13 @@ use dnd_core::npc::now_timestamp;
 use dnd_core::vault::Vault;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
-use crate::app_state::{AppState, EventDraftSession, FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{AppState, EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
 use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
 use crate::entities::EntityKind;
 use crate::services::entity_admin::{EntityAdminService, EntityDetails, EntityType};
 use crate::services::entity_persistence::{
-    EntityPersistenceService, SaveEventDraftInput, SaveFactionDraftInput, SaveItemDraftInput,
-    SaveLocationDraftInput, SaveNpcDraftInput,
+    EntityPersistenceService, SaveEventDraftInput, SaveFactionDraftInput, SaveGodDraftInput,
+    SaveItemDraftInput, SaveLocationDraftInput, SaveNpcDraftInput,
 };
 use std::collections::HashSet;
 use std::path::Path;
@@ -22,10 +22,10 @@ use crate::utils::normalize_relative_path_for_storage;
 use crate::services::mention_extraction::extract_unknown_mentions;
 use crate::services::vault_ref::load_vault_reference_entries;
 use crate::services::publish::{
-    EntityLinker, event_prose, faction_prose, item_prose, location_prose, npc_prose,
+    EntityLinker, event_prose, faction_prose, god_prose, item_prose, location_prose, npc_prose,
     render_event_markdown_with_links, render_faction_markdown_with_links,
-    render_item_markdown_with_links, render_location_markdown_with_links,
-    render_npc_markdown_with_links,
+    render_god_markdown_with_links, render_item_markdown_with_links,
+    render_location_markdown_with_links, render_npc_markdown_with_links,
 };
 use runebound_models::{CommandClientEvent, CommandResponse};
 use runebound_models::output::{
@@ -241,6 +241,32 @@ pub async fn handle_publish(
                 ),
             )
         }
+        EntityType::God => {
+            let frontmatter = match store
+                .load_god(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
+                Some(data) => data,
+                None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
+            };
+            let linker = build_linker(
+                &state.workspace_root,
+                &candidate_names,
+                &known_lower,
+                ollama_ok,
+                &god_prose(&frontmatter),
+                &frontmatter.name,
+            )
+            .await;
+            (
+                render_god_markdown_with_links(&frontmatter, &linker),
+                resolved_publish_path(
+                    EntityType::God,
+                    &frontmatter.slug,
+                    &frontmatter.vault_path,
+                ),
+            )
+        }
     };
 
     let relative = PathBuf::from(&vault_path);
@@ -318,6 +344,13 @@ pub async fn handle_publish(
                 store.save_event(&frontmatter).map_err(|err| err.to_string())?;
             }
         }
+        EntityType::God => {
+            if let Some(mut frontmatter) = store.load_god(&target.slug).map_err(|err| err.to_string())? {
+                frontmatter.vault_path = vault_path.clone();
+                frontmatter.published_at = Some(now);
+                store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+            }
+        }
     }
 
     // Publishing is a one-way street: retire the entity from the app (it now lives
@@ -339,6 +372,7 @@ pub async fn handle_publish(
             EntityType::Faction => editor.get_faction().is_some_and(|draft| draft.slug == target.slug),
             EntityType::Item => editor.get_item().is_some_and(|draft| draft.slug == target.slug),
             EntityType::Event => editor.get_event().is_some_and(|draft| draft.slug == target.slug),
+            EntityType::God => editor.get_god().is_some_and(|draft| draft.slug == target.slug),
         };
         if open {
             let kind = match target.entity_type {
@@ -347,6 +381,7 @@ pub async fn handle_publish(
                 EntityType::Faction => EntityKind::Faction,
                 EntityType::Item => EntityKind::Item,
                 EntityType::Event => EntityKind::Event,
+                EntityType::God => EntityKind::God,
             };
             editor.clear_kind(kind);
             closed_editor = true;
@@ -405,6 +440,9 @@ fn collect_known_entity_names(store: &EntityStore, vault: &Vault) -> Result<Vec<
         names.push(fm.name);
     }
     for fm in store.list_events().map_err(|err| err.to_string())? {
+        names.push(fm.name);
+    }
+    for fm in store.list_gods().map_err(|err| err.to_string())? {
         names.push(fm.name);
     }
 
@@ -483,6 +521,7 @@ fn command_root_for(entity_type: &EntityType) -> &'static str {
         EntityType::Faction => "faction",
         EntityType::Item => "item",
         EntityType::Event => "event",
+        EntityType::God => "god",
     }
 }
 
@@ -512,6 +551,7 @@ fn entity_directory(entity_type: &EntityType) -> &'static str {
         EntityType::Faction => "factions",
         EntityType::Item => "items",
         EntityType::Event => "events",
+        EntityType::God => "gods",
     }
 }
 
@@ -575,6 +615,7 @@ enum ActiveDraft {
     Faction(FactionDraftSession),
     Item(ItemDraftSession),
     Event(EventDraftSession),
+    God(GodDraftSession),
 }
 
 async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTargetInfo>, String> {
@@ -589,6 +630,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
             EntityKind::Faction => editor.get_faction().cloned().map(ActiveDraft::Faction),
             EntityKind::Item => editor.get_item().cloned().map(ActiveDraft::Item),
             EntityKind::Event => editor.get_event().cloned().map(ActiveDraft::Event),
+            EntityKind::God => editor.get_god().cloned().map(ActiveDraft::God),
         };
         match draft {
             Some(draft) => (kind, draft),
@@ -728,6 +770,37 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
 
             PublishTargetInfo {
                 entity_type: EntityType::Event,
+                slug: result.slug,
+                name: draft.name,
+            }
+        }
+        (EntityKind::God, ActiveDraft::God(draft)) => {
+            let result = persistence
+                .save_god_draft(
+                    SaveGodDraftInput {
+                        id: draft.id.clone(),
+                        name: draft.name.clone(),
+                        vault_path: draft.vault_path.clone(),
+                        epithet: draft.epithet.clone(),
+                        rank: draft.rank.clone(),
+                        rank_custom: draft.rank_custom.clone(),
+                        alignment: draft.alignment.clone(),
+                        domains: draft.domains.clone(),
+                        symbol: draft.symbol.clone(),
+                        appearance: draft.appearance.clone(),
+                        dogma: draft.dogma.clone(),
+                        realm: draft.realm.clone(),
+                        worshippers: draft.worshippers.clone(),
+                        clergy: draft.clergy.clone(),
+                        allies: draft.allies.clone(),
+                        rivals: draft.rivals.clone(),
+                    },
+                    state,
+                )
+                .await?;
+
+            PublishTargetInfo {
+                entity_type: EntityType::God,
                 slug: result.slug,
                 name: draft.name,
             }

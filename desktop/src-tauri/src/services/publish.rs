@@ -1,7 +1,8 @@
 use std::fmt::Write;
 
 use runebound_models::{
-    EventFrontmatter, FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter,
+    EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter,
+    NpcFrontmatter,
 };
 
 use crate::utils::normalize_unknown_text;
@@ -124,6 +125,33 @@ pub fn render_item_markdown_with_links(
     out
 }
 
+pub fn render_god_markdown(frontmatter: &GodFrontmatter) -> String {
+    render_god_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+pub fn render_god_markdown_with_links(
+    frontmatter: &GodFrontmatter,
+    linker: &EntityLinker,
+) -> String {
+    let mut out = String::new();
+    write_attr_line(&mut out, "Epithet", &frontmatter.epithet);
+    write_attr_line(&mut out, "Rank", &rank_display(frontmatter));
+    write_attr_line(&mut out, "Alignment", &frontmatter.alignment);
+    writeln!(&mut out).ok();
+
+    write_list_section(&mut out, "Domains", &frontmatter.domains);
+    write_section(&mut out, "Symbol", &frontmatter.symbol, linker);
+    write_section(&mut out, "Appearance", &frontmatter.appearance, linker);
+    write_section(&mut out, "Dogma", &frontmatter.dogma, linker);
+    write_section(&mut out, "Realm", &frontmatter.realm, linker);
+    write_section(&mut out, "Worshippers", &frontmatter.worshippers, linker);
+    write_section(&mut out, "Clergy", &frontmatter.clergy, linker);
+    write_linked_list_section(&mut out, "Allies", &frontmatter.allies);
+    write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals);
+
+    out
+}
+
 pub fn render_event_markdown(frontmatter: &EventFrontmatter) -> String {
     render_event_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -181,6 +209,17 @@ pub fn item_prose(frontmatter: &ItemFrontmatter) -> String {
         &frontmatter.abilities,
         &frontmatter.drawbacks,
         &frontmatter.history,
+    ])
+}
+
+pub fn god_prose(frontmatter: &GodFrontmatter) -> String {
+    join_prose(&[
+        &frontmatter.symbol,
+        &frontmatter.appearance,
+        &frontmatter.dogma,
+        &frontmatter.realm,
+        &frontmatter.worshippers,
+        &frontmatter.clergy,
     ])
 }
 
@@ -445,6 +484,21 @@ fn kind_display(frontmatter: &LocationFrontmatter) -> String {
     }
     match frontmatter
         .kind_custom
+        .as_ref()
+        .map(|value| normalize_unknown_text(value))
+    {
+        Some(custom) if custom != "Unknown" => format!("Other ({custom})"),
+        _ => "Other".to_string(),
+    }
+}
+
+fn rank_display(frontmatter: &GodFrontmatter) -> String {
+    let rank = normalize_unknown_text(&frontmatter.rank);
+    if rank.to_ascii_lowercase() != "other" {
+        return rank;
+    }
+    match frontmatter
+        .rank_custom
         .as_ref()
         .map(|value| normalize_unknown_text(value))
     {

@@ -96,6 +96,7 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::Item) => reroll_current_item(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::Event) => reroll_current_event(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::God) => reroll_current_god(invocation.state.clone(), reroll_prompt).await,
         None => command_message_response("no active draft to reroll."),
     }
 }
@@ -274,6 +275,58 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt
     entity_response_with_event(
         prepend_notice(notice, faction_summary_text(&draft)),
         faction_event_from_draft(&draft),
+    )
+}
+
+async fn reroll_current_god(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+    use crate::commands::{god_event_from_draft, god_summary_text};
+
+    let draft = {
+        let editor = state.editor_session.lock().await;
+        editor.get_god().cloned()
+    };
+    let Some(mut draft) = draft else {
+        return entity_message_response("no active god draft.");
+    };
+
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let SeedGeneration { seed, notice } = ai
+        .generate_god_seed(
+            merged_prompt,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+    draft.slug = slugify(&seed.name);
+    draft.name = seed.name;
+    draft.epithet = seed.epithet;
+    draft.rank = seed.rank;
+    draft.rank_custom = seed.rank_custom;
+    draft.alignment = seed.alignment;
+    draft.domains = seed.domains;
+    draft.symbol = seed.symbol;
+    draft.appearance = seed.appearance;
+    draft.dogma = seed.dogma;
+    draft.realm = seed.realm;
+    draft.worshippers = seed.worshippers;
+    draft.clergy = seed.clergy;
+    draft.allies = seed.allies;
+    draft.rivals = seed.rivals;
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_god(draft.clone());
+        editor.clear_kind(EntityKind::Npc);
+        editor.clear_kind(EntityKind::Location);
+    }
+
+    entity_response_with_event(
+        prepend_notice(notice, god_summary_text(&draft)),
+        god_event_from_draft(&draft),
     )
 }
 

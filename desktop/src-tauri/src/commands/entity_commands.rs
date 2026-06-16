@@ -10,13 +10,15 @@ use crate::entities::EntityKind;
 use crate::entities::domains::{
     event_event_from_draft,
     faction_event_from_draft,
+    god_event_from_draft,
     item_event_from_draft,
     location_event_from_draft,
     npc_event_from_draft,
 };
 use crate::utils::path_for_display;
 use crate::app_state::{
-    EventDraftSession, FactionDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession,
+    EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession, LocationDraftSession,
+    NpcDraftSession,
 };
 
 pub async fn handle_load(
@@ -130,6 +132,9 @@ pub async fn handle_delete(
                 .is_some_and(|draft| draft.id == result.id)
             || editor
                 .get_faction()
+                .is_some_and(|draft| draft.id == result.id)
+            || editor
+                .get_god()
                 .is_some_and(|draft| draft.id == result.id)
     };
 
@@ -285,6 +290,38 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             }
             (build_entity_card_text(&entity), Some(event_event_from_draft(&draft)))
         }
+        EntityType::God => {
+            let draft = GodDraftSession {
+                id: entity.id.clone(),
+                seed_prompt: None,
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                vault_path: path_for_display(&entity.vault_path),
+                epithet: entity.epithet.clone().unwrap_or_else(|| "Unknown".to_string()),
+                rank: entity.rank.clone().unwrap_or_else(|| "other".to_string()),
+                rank_custom: entity.rank_custom.clone(),
+                alignment: entity.alignment.clone().unwrap_or_else(|| "TN".to_string()),
+                domains: entity.domains.clone().unwrap_or_else(|| vec!["Unknown".to_string()]),
+                symbol: entity.symbol.clone().unwrap_or_else(|| "Unknown".to_string()),
+                appearance: entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                dogma: entity.dogma.clone().unwrap_or_else(|| "Unknown".to_string()),
+                realm: entity.realm.clone().unwrap_or_else(|| "Unknown".to_string()),
+                worshippers: entity.worshippers.clone().unwrap_or_else(|| "Unknown".to_string()),
+                clergy: entity.clergy.clone().unwrap_or_else(|| "Unknown".to_string()),
+                allies: entity.allies.clone().unwrap_or_else(|| vec!["Unknown".to_string()]),
+                rivals: entity.rivals.clone().unwrap_or_else(|| vec!["Unknown".to_string()]),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.set_god(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
+                editor.clear_kind(EntityKind::Faction);
+                editor.clear_kind(EntityKind::Item);
+                editor.clear_kind(EntityKind::Event);
+            }
+            (build_entity_card_text(&entity), Some(god_event_from_draft(&draft)))
+        }
     }
 }
 
@@ -372,6 +409,23 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             rows.push(entity_row("body", entity.body.clone().unwrap_or_default()));
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc { blocks: vec![entity_card("Event", rows)] }
+        }
+        EntityType::God => {
+            rows.push(entity_row("epithet", entity.epithet.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("rank", entity.rank.clone().unwrap_or_else(|| "other".to_string())));
+            rows.push(entity_row("rank_custom", entity.rank_custom.clone().unwrap_or_else(|| "(none)".to_string())));
+            rows.push(entity_row("alignment", entity.alignment.clone().unwrap_or_else(|| "TN".to_string())));
+            rows.push(entity_row("domains", entity.domains.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", ")));
+            rows.push(entity_row("symbol", entity.symbol.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("appearance", entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("dogma", entity.dogma.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("realm", entity.realm.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("worshippers", entity.worshippers.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("clergy", entity.clergy.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("allies", entity.allies.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", ")));
+            rows.push(entity_row("rivals", entity.rivals.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", ")));
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+            OutputDoc { blocks: vec![entity_card("God", rows)] }
         }
     }
 }
@@ -466,6 +520,26 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 entity.slug,
                 path_for_display(&entity.vault_path),
                 entity.body.clone().unwrap_or_default(),
+            )
+        }
+        EntityType::God => {
+            format!(
+                "## God\nname: {}\nslug: {}\nepithet: {}\nrank: {}\nrank_custom: {}\nalignment: {}\ndomains: {}\nsymbol: {}\nappearance: {}\ndogma: {}\nrealm: {}\nworshippers: {}\nclergy: {}\nallies: {}\nrivals: {}\npath: {}",
+                entity.name, entity.slug,
+                entity.epithet.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.rank.clone().unwrap_or_else(|| "other".to_string()),
+                entity.rank_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+                entity.alignment.clone().unwrap_or_else(|| "TN".to_string()),
+                entity.domains.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
+                entity.symbol.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.appearance.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.dogma.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.realm.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.worshippers.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.clergy.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.allies.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
+                entity.rivals.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
+                path_for_display(&entity.vault_path)
             )
         }
     }

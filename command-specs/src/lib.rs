@@ -176,6 +176,7 @@ pub fn command_availability(name: &str) -> CommandAvailability {
         "faction" => CommandAvailability::EntityScoped("faction"),
         "item" => CommandAvailability::EntityScoped("item"),
         "event" => CommandAvailability::EntityScoped("event"),
+        "god" => CommandAvailability::EntityScoped("god"),
         "reroll" => CommandAvailability::EntityEditorOnly,
         "save" | "cancel" => CommandAvailability::AnyEditor,
         "publish" => CommandAvailability::DefaultOrEntityEditor,
@@ -242,6 +243,7 @@ pub fn command_manifest() -> CommandManifest {
                     "create faction a secretive maritime trade cartel".to_string(),
                     "create item a cursed blade woven from stormglass".to_string(),
                     "create event the night the old bridge burned".to_string(),
+                    "create god a storm deity of broken oaths".to_string(),
                     "create help".to_string(),
                 ],
                 subcommands: vec![
@@ -274,6 +276,12 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Start guided event creation".to_string(),
                         options: Vec::new(),
                         examples: vec!["create event".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "god".to_string(),
+                        summary: "Start guided god creation".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["create god".to_string()],
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
@@ -728,6 +736,77 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "god".to_string(),
+                summary: "Edit active god draft".to_string(),
+                examples: vec![
+                    "god show".to_string(),
+                    "god rename Varr the Stormcaller".to_string(),
+                    "god set rank greater".to_string(),
+                    "god set alignment LG".to_string(),
+                    "god reroll dogma".to_string(),
+                    "god save".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "show".to_string(),
+                        summary: "Show active god draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["god show".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "rename".to_string(),
+                        summary: "Update god name".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["god rename Varr the Stormcaller".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "set".to_string(),
+                        summary: "Update god fields".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "god set rank greater".to_string(),
+                            "god set alignment LG".to_string(),
+                            "god set domains storm, vengeance, oaths".to_string(),
+                            "god set dogma Keep every oath; break the oathbreaker.".to_string(),
+                            "god set symbol A shattered iron ring wreathed in lightning.".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "reroll".to_string(),
+                        summary: "Reroll one god field with optional prompt".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "god reroll dogma".to_string(),
+                            "god reroll domains lean into vengeance".to_string(),
+                            "god reroll appearance a towering figure of storm and iron".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "save".to_string(),
+                        summary: "Save active god draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["god save".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "cancel".to_string(),
+                        summary: "Discard active god draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["god cancel".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show god editor command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["god help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("god help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "save".to_string(),
                 summary: "Save active guided flow context".to_string(),
                 examples: vec!["save".to_string()],
@@ -1111,7 +1190,7 @@ mod tests {
     #[test]
     fn entity_roots_are_scoped_to_their_own_editor() {
         // Regression guard: these must NOT silently fall through to `Default`.
-        for root in ["npc", "location", "faction", "item", "event"] {
+        for root in ["npc", "location", "faction", "item", "event", "god"] {
             assert_eq!(
                 command_availability(root),
                 CommandAvailability::EntityScoped(root),
@@ -1243,8 +1322,8 @@ mod tests {
     #[test]
     fn menu_style_roots_require_a_subcommand() {
         for root in [
-            "create", "config", "npc", "location", "faction", "item", "event", "setup", "calendar",
-            "date", "start",
+            "create", "config", "npc", "location", "faction", "item", "event", "god", "setup",
+            "calendar", "date", "start",
         ] {
             assert!(
                 requires_subcommand_for(root),

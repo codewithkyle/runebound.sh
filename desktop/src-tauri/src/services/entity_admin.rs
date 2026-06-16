@@ -6,9 +6,9 @@ use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
-    event_row_from_frontmatter, faction_row_from_frontmatter, item_row_from_frontmatter,
-    location_row_from_frontmatter, move_vault_file, npc_row_from_frontmatter,
-    unique_markdown_path_for_name, unique_trash_path,
+    event_row_from_frontmatter, faction_row_from_frontmatter, god_row_from_frontmatter,
+    item_row_from_frontmatter, location_row_from_frontmatter, move_vault_file,
+    npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
 };
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
@@ -205,6 +205,7 @@ impl EntityAdminService {
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
+        let god_repo = state.god_repo();
 
         if let Some(npc) = npc_repo
             .find_by_name_or_slug(database.as_ref(), trimmed)
@@ -259,6 +260,17 @@ impl EntityAdminService {
                 history: None,
                 value: None,
                 body: None,
+                epithet: None,
+                rank: None,
+                rank_custom: None,
+                alignment: None,
+                domains: None,
+                symbol: None,
+                dogma: None,
+                realm: None,
+                worshippers: None,
+                clergy: None,
+                rivals: None,
                 created_at: Some(npc.created_at),
             }));
         }
@@ -316,6 +328,17 @@ impl EntityAdminService {
                 history: None,
                 value: None,
                 body: None,
+                epithet: None,
+                rank: None,
+                rank_custom: None,
+                alignment: None,
+                domains: None,
+                symbol: None,
+                dogma: None,
+                realm: None,
+                worshippers: None,
+                clergy: None,
+                rivals: None,
                 created_at: Some(location.created_at),
             }));
         }
@@ -373,6 +396,17 @@ impl EntityAdminService {
                 history: None,
                 value: None,
                 body: None,
+                epithet: None,
+                rank: None,
+                rank_custom: None,
+                alignment: None,
+                domains: None,
+                symbol: None,
+                dogma: None,
+                realm: None,
+                worshippers: None,
+                clergy: None,
+                rivals: None,
                 created_at: Some(faction.created_at),
             }));
         }
@@ -430,6 +464,17 @@ impl EntityAdminService {
                 history: Some(item.history),
                 value: Some(item.value),
                 body: None,
+                epithet: None,
+                rank: None,
+                rank_custom: None,
+                alignment: None,
+                domains: None,
+                symbol: None,
+                dogma: None,
+                realm: None,
+                worshippers: None,
+                clergy: None,
+                rivals: None,
                 created_at: Some(item.created_at),
             }));
         }
@@ -487,7 +532,86 @@ impl EntityAdminService {
                 history: None,
                 value: None,
                 body: Some(event.body),
+                epithet: None,
+                rank: None,
+                rank_custom: None,
+                alignment: None,
+                domains: None,
+                symbol: None,
+                dogma: None,
+                realm: None,
+                worshippers: None,
+                clergy: None,
+                rivals: None,
                 created_at: Some(event.created_at),
+            }));
+        }
+
+        if let Some(god) = god_repo
+            .find_by_name_or_slug(database.as_ref(), trimmed)
+            .await?
+        {
+            return Ok(Some(EntityDetails {
+                id: god.id,
+                entity_type: EntityType::God,
+                name: god.name,
+                slug: god.slug,
+                race: None,
+                occupation: None,
+                sex: None,
+                age: None,
+                height: None,
+                weight_lbs: None,
+                background: None,
+                want_need: None,
+                secret_obstacle: None,
+                carrying: None,
+                location: None,
+                vault_path: normalize_relative_path_for_storage(&god.vault_path),
+                kind_type: None,
+                kind_custom: None,
+                visual_description: None,
+                history_background: None,
+                exports: None,
+                tone: None,
+                authority: None,
+                danger_level: None,
+                current_tension: None,
+                public_description: None,
+                true_agenda: None,
+                methods: None,
+                leadership: None,
+                headquarters: None,
+                sphere_of_influence: None,
+                resources_assets: None,
+                allies: Some(faction_list_from_db_text(&god.allies)),
+                rivals_enemies: None,
+                reputation: None,
+                goals_short_term: None,
+                goals_long_term: None,
+                symbol_description: None,
+                category: None,
+                rarity: None,
+                attunement: None,
+                materials: None,
+                appearance: Some(god.appearance),
+                abilities: None,
+                drawbacks: None,
+                history: None,
+                value: None,
+                body: None,
+                epithet: Some(god.epithet),
+                rank: Some(god.rank),
+                rank_custom: god.rank_custom,
+                alignment: Some(god.alignment),
+                domains: Some(faction_list_from_db_text(&god.domains)),
+                symbol: Some(god.symbol),
+                dogma: Some(god.dogma),
+                realm: Some(god.realm),
+                worshippers: Some(god.worshippers),
+                clergy: Some(god.clergy),
+                rivals: Some(faction_list_from_db_text(&god.rivals)),
+                created_at: Some(god.created_at),
             }));
         }
 
@@ -521,6 +645,7 @@ impl EntityAdminService {
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
+        let god_repo = state.god_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
         let now = now_timestamp();
@@ -827,8 +952,72 @@ impl EntityAdminService {
             });
         }
 
+        if let Some(god) = god_repo
+            .find_by_name_or_slug(database.as_ref(), target)
+            .await?
+        {
+            let normalized_vault_path = normalize_relative_path_for_storage(&god.vault_path);
+            let trash_path = unique_trash_path(&vault, "gods", &god.slug, &now)?;
+            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
+
+            god_repo
+                .delete_by_id(database.as_ref(), &god.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &god.vault_path)
+                .await?;
+
+            let payload = GodDeletePayload {
+                id: god.id.clone(),
+                slug: god.slug.clone(),
+                name: god.name.clone(),
+                vault_path: normalized_vault_path.clone(),
+                epithet: god.epithet,
+                rank: god.rank,
+                rank_custom: god.rank_custom,
+                alignment: god.alignment,
+                domains: god.domains,
+                symbol: god.symbol,
+                appearance: god.appearance,
+                dogma: god.dogma,
+                realm: god.realm,
+                worshippers: god.worshippers,
+                clergy: god.clergy,
+                allies: god.allies,
+                rivals: god.rivals,
+                created_at: god.created_at,
+                updated_at: god.updated_at,
+            };
+
+            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+            let soft_delete_row = db::SoftDeleteRow {
+                id: 0,
+                entity_type: "god".to_string(),
+                entity_id: god.id.clone(),
+                name: god.name.clone(),
+                slug: god.slug.clone(),
+                original_vault_path: normalized_vault_path,
+                trash_vault_path: trash_path.clone(),
+                payload_json,
+                created_at: now.clone(),
+                undone_at: None,
+                operation: "delete".to_string(),
+            };
+            soft_delete_repo
+                .insert(database.as_ref(), &soft_delete_row)
+                .await?;
+
+            return Ok(SoftDeleteEntityResult {
+                entity_type: EntityType::God,
+                id: god.id,
+                name: god.name,
+                slug: god.slug,
+                trash_vault_path: trash_path,
+            });
+        }
+
         Err(format!(
-            "no npc, location, faction, item, or event found for: {target}"
+            "no npc, location, faction, item, event, or god found for: {target}"
         ))
     }
 
@@ -853,6 +1042,7 @@ impl EntityAdminService {
         let faction_repo = state.faction_repo();
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
+        let god_repo = state.god_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
@@ -1188,6 +1378,72 @@ impl EntityAdminService {
             });
         }
 
+        if soft_delete.entity_type == "god" {
+            let payload: GodDeletePayload =
+                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+            let mut restored_slug = payload.slug.clone();
+            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let preferred_full = vault
+                .resolve_relative(&PathBuf::from(&restored_vault_path))
+                .map_err(|err| err.to_string())?;
+            if preferred_full.exists() {
+                restored_slug = unique_slug_for_dir(vault.root(), "gods", &restored_slug);
+                restored_vault_path =
+                    unique_markdown_path_for_name(&vault, "gods", &payload.name, None)?;
+            }
+
+            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
+
+            let god_row = db::GodRow {
+                id: payload.id.clone(),
+                slug: restored_slug.clone(),
+                name: payload.name.clone(),
+                vault_path: restored_vault_path.clone(),
+                epithet: payload.epithet,
+                rank: payload.rank,
+                rank_custom: payload.rank_custom,
+                alignment: payload.alignment,
+                domains: payload.domains,
+                symbol: payload.symbol,
+                appearance: payload.appearance,
+                dogma: payload.dogma,
+                realm: payload.realm,
+                worshippers: payload.worshippers,
+                clergy: payload.clergy,
+                allies: payload.allies,
+                rivals: payload.rivals,
+                created_at: payload.created_at,
+                updated_at: now.clone(),
+            };
+
+            god_repo.upsert(database.as_ref(), &god_row).await?;
+            document_repo
+                .upsert_index(
+                    database.as_ref(),
+                    "god",
+                    &god_row.slug,
+                    Some(&god_row.name),
+                    &god_row.vault_path,
+                    &god_row.created_at,
+                    &god_row.updated_at,
+                )
+                .await?;
+
+            soft_delete_repo
+                .mark_undone(database.as_ref(), soft_delete.id, &now)
+                .await?;
+
+            return Ok(UndoSoftDeleteResult {
+                entity_type: EntityType::God,
+                id: payload.id,
+                name: payload.name,
+                slug: restored_slug,
+                vault_path: restored_vault_path,
+            });
+        }
+
         Err(format!(
             "unsupported soft delete entity type: {}",
             soft_delete.entity_type
@@ -1237,6 +1493,11 @@ impl EntityAdminService {
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
+            EntityType::God => state
+                .god_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
         }) else {
             // Already gone from the DB (e.g. double publish) — nothing to retire.
             return Ok(());
@@ -1274,6 +1535,7 @@ impl EntityAdminService {
             EntityType::Faction => state.faction_repo().delete_by_id(database.as_ref(), &id).await?,
             EntityType::Item => state.item_repo().delete_by_id(database.as_ref(), &id).await?,
             EntityType::Event => state.event_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::God => state.god_repo().delete_by_id(database.as_ref(), &id).await?,
         }
         document_repo
             .delete_by_vault_path(database.as_ref(), &normalized)
@@ -1358,6 +1620,18 @@ impl EntityAdminService {
                 soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
                 Ok(UndoSoftDeleteResult { entity_type: EntityType::Event, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
             }
+            "god" => {
+                let mut frontmatter = store.load_god(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+                let row = god_row_from_frontmatter(&frontmatter)?;
+                state.god_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "god", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::God, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
             other => Err(format!("cannot undo publish for unknown entity type: {other}")),
         }
     }
@@ -1408,6 +1682,7 @@ pub enum EntityType {
     Faction,
     Item,
     Event,
+    God,
 }
 
 impl EntityType {
@@ -1418,6 +1693,7 @@ impl EntityType {
             EntityType::Faction => "faction",
             EntityType::Item => "item",
             EntityType::Event => "event",
+            EntityType::God => "god",
         }
     }
 }
@@ -1473,6 +1749,18 @@ pub struct EntityDetails {
     pub value: Option<String>,
     /// The narrative body of an event; `None` for the structured entity kinds.
     pub body: Option<String>,
+    // God-specific fields (`appearance` and `allies` above are reused for gods).
+    pub epithet: Option<String>,
+    pub rank: Option<String>,
+    pub rank_custom: Option<String>,
+    pub alignment: Option<String>,
+    pub domains: Option<Vec<String>>,
+    pub symbol: Option<String>,
+    pub dogma: Option<String>,
+    pub realm: Option<String>,
+    pub worshippers: Option<String>,
+    pub clergy: Option<String>,
+    pub rivals: Option<Vec<String>>,
     pub created_at: Option<String>,
 }
 
@@ -1579,6 +1867,29 @@ struct EventDeletePayload {
     name: String,
     vault_path: String,
     body: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct GodDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
+    epithet: String,
+    rank: String,
+    rank_custom: Option<String>,
+    alignment: String,
+    domains: String,
+    symbol: String,
+    appearance: String,
+    dogma: String,
+    realm: String,
+    worshippers: String,
+    clergy: String,
+    allies: String,
+    rivals: String,
     created_at: String,
     updated_at: String,
 }

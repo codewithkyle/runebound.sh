@@ -502,6 +502,135 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
     },
 ];
 
+const GOD_FIELDS: [EntityFieldSpec; 14] = [
+    EntityFieldSpec {
+        canonical: "name",
+        display_name: "name",
+        aliases: &["name"],
+        description: "Name of the deity.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "epithet",
+        display_name: "epithet",
+        aliases: &["epithet", "title"],
+        description: "By-name or honorific, e.g. \"The Stormcaller\".",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "rank",
+        display_name: "rank",
+        aliases: &["rank", "status"],
+        description: "Divine rank (greater, intermediate, lesser, demigod, dead, other).",
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "rank_custom",
+        display_name: "rank_custom",
+        aliases: &["rank_custom"],
+        description: "Custom rank label when rank is 'other'.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "alignment",
+        display_name: "alignment",
+        aliases: &["alignment", "align"],
+        description: "Moral alignment (LG, NG, CG, LN, TN, CN, LE, NE, CE).",
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "domains",
+        display_name: "domains",
+        aliases: &["domains", "portfolio"],
+        description: "Spheres the deity governs (list).",
+        value_kind: ValueKind::List,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "symbol",
+        display_name: "symbol",
+        aliases: &["symbol", "sigil", "holy_symbol"],
+        description: "Holy symbol or sigil.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "appearance",
+        display_name: "appearance",
+        aliases: &["appearance", "avatar"],
+        description: "How the deity manifests.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "dogma",
+        display_name: "dogma",
+        aliases: &["dogma", "tenets", "creed"],
+        description: "Core teachings and commandments.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "realm",
+        display_name: "realm",
+        aliases: &["realm", "plane"],
+        description: "Home plane or divine realm.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "worshippers",
+        display_name: "worshippers",
+        aliases: &["worshippers", "followers"],
+        description: "Who venerates the deity.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "clergy",
+        display_name: "clergy",
+        aliases: &["clergy", "priesthood", "church"],
+        description: "How the priesthood is organized.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "allies",
+        display_name: "allies",
+        aliases: &["allies"],
+        description: "Allied deities or powers (list).",
+        value_kind: ValueKind::List,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "rivals",
+        display_name: "rivals",
+        aliases: &["rivals", "enemies"],
+        description: "Divine rivals and enemies (list).",
+        value_kind: ValueKind::List,
+        settable: true,
+        rerollable: true,
+    },
+];
+
 pub static NPC_SCHEMA: EntitySchema = EntitySchema {
     kind: EntityKind::Npc,
     fields: &NPC_FIELDS,
@@ -531,6 +660,11 @@ pub static EVENT_SCHEMA: EntitySchema = EntitySchema {
     fields: &[],
 };
 
+pub static GOD_SCHEMA: EntitySchema = EntitySchema {
+    kind: EntityKind::God,
+    fields: &GOD_FIELDS,
+};
+
 pub fn schema_for_kind(kind: EntityKind) -> &'static EntitySchema {
     match kind {
         EntityKind::Npc => &NPC_SCHEMA,
@@ -538,6 +672,7 @@ pub fn schema_for_kind(kind: EntityKind) -> &'static EntitySchema {
         EntityKind::Faction => &FACTION_SCHEMA,
         EntityKind::Item => &ITEM_SCHEMA,
         EntityKind::Event => &EVENT_SCHEMA,
+        EntityKind::God => &GOD_SCHEMA,
     }
 }
 
@@ -770,6 +905,7 @@ mod tests {
             (EntityKind::Item, 11),
             // Events are narrative-only: no settable or rerollable fields.
             (EntityKind::Event, 0),
+            (EntityKind::God, 14),
         ];
         for (kind, count) in expected {
             assert_eq!(

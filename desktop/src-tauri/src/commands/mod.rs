@@ -7,6 +7,7 @@ pub mod location_commands;
 pub mod faction_commands;
 pub mod item_commands;
 pub mod event_commands;
+pub mod god_commands;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
@@ -77,6 +78,7 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(faction_handler_entry());
     registry.register(item_handler_entry());
     registry.register(event_handler_entry());
+    registry.register(god_handler_entry());
     registry.register(load_handler_entry());
     registry.register(show_handler_entry());
     registry.register(preview_handler_entry());
@@ -262,6 +264,14 @@ pub fn event_handler_entry() -> HandlerEntry<DesktopHandler> {
     )
 }
 
+pub fn god_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "god",
+        metadata_for("god"),
+        DesktopHandler::new(|invocation| Box::pin(async move { god_commands::handle_god(invocation).await })),
+    )
+}
+
 pub fn publish_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "publish",
@@ -386,6 +396,8 @@ pub use crate::entities::domains::{
     event_summary_text,
     faction_event_from_draft,
     faction_summary_text,
+    god_event_from_draft,
+    god_summary_text,
     item_event_from_draft,
     item_summary_text,
     location_event_from_draft,

@@ -59,6 +59,29 @@ pub struct FactionRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct GodRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub epithet: String,
+    pub rank: String,
+    pub rank_custom: Option<String>,
+    pub alignment: String,
+    pub domains: String,
+    pub symbol: String,
+    pub appearance: String,
+    pub dogma: String,
+    pub realm: String,
+    pub worshippers: String,
+    pub clergy: String,
+    pub allies: String,
+    pub rivals: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ItemRow {
     pub id: String,
     pub slug: String,
@@ -337,6 +360,141 @@ pub async fn list_items(pool: &SqlitePool) -> Result<Vec<ItemRow>> {
     .context("failed to list items")?;
 
     rows.into_iter().map(row_to_item).collect()
+}
+
+pub async fn search_gods_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<GodRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at
+         FROM gods
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search gods by name")?;
+
+    rows.into_iter().map(row_to_god).collect()
+}
+
+pub async fn find_god_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<GodRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at
+         FROM gods
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find god by name or slug")?;
+
+    row.map(row_to_god).transpose()
+}
+
+pub async fn find_god_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<GodRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at FROM gods WHERE slug = ?1",
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query god by slug")?;
+
+    row.map(row_to_god).transpose()
+}
+
+pub async fn find_god_by_id(pool: &SqlitePool, id: &str) -> Result<Option<GodRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at FROM gods WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query god by id")?;
+
+    row.map(row_to_god).transpose()
+}
+
+pub async fn list_gods(pool: &SqlitePool) -> Result<Vec<GodRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at
+         FROM gods",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list gods")?;
+
+    rows.into_iter().map(row_to_god).collect()
+}
+
+pub async fn upsert_god(pool: &SqlitePool, god: &GodRow) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO gods (id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
+         ON CONFLICT(id) DO UPDATE SET
+            slug = excluded.slug,
+            name = excluded.name,
+            vault_path = excluded.vault_path,
+            epithet = excluded.epithet,
+            rank = excluded.rank,
+            rank_custom = excluded.rank_custom,
+            alignment = excluded.alignment,
+            domains = excluded.domains,
+            symbol = excluded.symbol,
+            appearance = excluded.appearance,
+            dogma = excluded.dogma,
+            realm = excluded.realm,
+            worshippers = excluded.worshippers,
+            clergy = excluded.clergy,
+            allies = excluded.allies,
+            rivals = excluded.rivals,
+            updated_at = excluded.updated_at",
+    )
+    .bind(&god.id)
+    .bind(&god.slug)
+    .bind(&god.name)
+    .bind(&god.vault_path)
+    .bind(&god.epithet)
+    .bind(&god.rank)
+    .bind(&god.rank_custom)
+    .bind(&god.alignment)
+    .bind(&god.domains)
+    .bind(&god.symbol)
+    .bind(&god.appearance)
+    .bind(&god.dogma)
+    .bind(&god.realm)
+    .bind(&god.worshippers)
+    .bind(&god.clergy)
+    .bind(&god.allies)
+    .bind(&god.rivals)
+    .bind(&god.created_at)
+    .bind(&god.updated_at)
+    .execute(pool)
+    .await
+    .context("failed to upsert god")?;
+
+    Ok(())
+}
+
+pub async fn delete_god_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM gods WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete god row")?;
+
+    Ok(())
 }
 
 pub async fn init_database() -> Result<Database> {
@@ -1059,6 +1217,58 @@ fn row_to_faction(row: sqlx::sqlite::SqliteRow) -> Result<FactionRow> {
         updated_at: row
             .try_get("updated_at")
             .context("factions.updated_at missing")?,
+    })
+}
+
+fn row_to_god(row: sqlx::sqlite::SqliteRow) -> Result<GodRow> {
+    Ok(GodRow {
+        id: row.try_get("id").context("gods.id missing")?,
+        slug: row.try_get("slug").context("gods.slug missing")?,
+        name: row.try_get("name").context("gods.name missing")?,
+        vault_path: row
+            .try_get("vault_path")
+            .context("gods.vault_path missing")?,
+        epithet: row
+            .try_get("epithet")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        rank: row.try_get("rank").unwrap_or_else(|_| "other".to_string()),
+        rank_custom: row.try_get("rank_custom").ok(),
+        alignment: row
+            .try_get("alignment")
+            .unwrap_or_else(|_| "TN".to_string()),
+        domains: row
+            .try_get("domains")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        symbol: row
+            .try_get("symbol")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        appearance: row
+            .try_get("appearance")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        dogma: row
+            .try_get("dogma")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        realm: row
+            .try_get("realm")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        worshippers: row
+            .try_get("worshippers")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        clergy: row
+            .try_get("clergy")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        allies: row
+            .try_get("allies")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        rivals: row
+            .try_get("rivals")
+            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
+        created_at: row
+            .try_get("created_at")
+            .context("gods.created_at missing")?,
+        updated_at: row
+            .try_get("updated_at")
+            .context("gods.updated_at missing")?,
     })
 }
 

@@ -94,6 +94,27 @@ fn generate_typescript() -> String {
     out.push_str("  body: string;\n");
     out.push_str("};\n\n");
 
+    out.push_str("export type GodDraft = {\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  seed_prompt?: string | null;\n");
+    out.push_str("  name: string;\n");
+    out.push_str("  slug: string;\n");
+    out.push_str("  vault_path: string;\n");
+    out.push_str("  epithet: string;\n");
+    out.push_str("  rank: string;\n");
+    out.push_str("  rank_custom?: string | null;\n");
+    out.push_str("  alignment: string;\n");
+    out.push_str("  domains: string[];\n");
+    out.push_str("  symbol: string;\n");
+    out.push_str("  appearance: string;\n");
+    out.push_str("  dogma: string;\n");
+    out.push_str("  realm: string;\n");
+    out.push_str("  worshippers: string;\n");
+    out.push_str("  clergy: string;\n");
+    out.push_str("  allies: string[];\n");
+    out.push_str("  rivals: string[];\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type NpcFrontmatter = {\n");
     out.push_str("  type: string;\n");
     out.push_str("  id: string;\n");
@@ -184,6 +205,30 @@ fn generate_typescript() -> String {
     out.push_str("  published_at?: string | null;\n");
     out.push_str("};\n\n");
 
+    out.push_str("export type GodFrontmatter = {\n");
+    out.push_str("  type: string;\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  slug: string;\n");
+    out.push_str("  name: string;\n");
+    out.push_str("  vault_path: string;\n");
+    out.push_str("  epithet: string;\n");
+    out.push_str("  rank: string;\n");
+    out.push_str("  rank_custom?: string | null;\n");
+    out.push_str("  alignment: string;\n");
+    out.push_str("  domains: string[];\n");
+    out.push_str("  symbol: string;\n");
+    out.push_str("  appearance: string;\n");
+    out.push_str("  dogma: string;\n");
+    out.push_str("  realm: string;\n");
+    out.push_str("  worshippers: string;\n");
+    out.push_str("  clergy: string;\n");
+    out.push_str("  allies: string[];\n");
+    out.push_str("  rivals: string[];\n");
+    out.push_str("  created_at: string;\n");
+    out.push_str("  updated_at: string;\n");
+    out.push_str("  published_at?: string | null;\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type EntityCardRow = {\n");
     out.push_str("  label: string;\n");
     out.push_str("  value: string;\n");
@@ -232,6 +277,9 @@ fn generate_typescript() -> String {
     );
     out.push_str(
         "  | { kind: \"load_event_draft_with_card\"; draft: EventDraft; entity_card: OutputDoc }\n",
+    );
+    out.push_str(
+        "  | { kind: \"load_god_draft_with_card\"; draft: GodDraft; entity_card: OutputDoc }\n",
     );
     out.push_str("  | { kind: \"clear_drafts\" }\n");
     out.push_str("  | { kind: \"clear_terminal\"; clear_history: boolean }\n");

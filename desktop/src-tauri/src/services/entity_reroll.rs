@@ -12,6 +12,8 @@ use crate::services::ollama_chat::{
 use crate::utils::{
     normalize_exports,
     normalize_faction_kind_type,
+    normalize_god_alignment,
+    normalize_god_rank,
     normalize_item_category,
     normalize_item_rarity,
     normalize_location_danger_level,
@@ -20,6 +22,7 @@ use crate::utils::{
     normalize_unknown_list,
     normalize_unknown_text,
 };
+use runebound_models::utils::{GOD_ALIGNMENTS, GOD_RANKS};
 use dnd_core::config::AppConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -616,6 +619,186 @@ impl EntityRerollService {
         Err(format!("failed to reroll faction field: {}", field))
     }
 
+    pub async fn reroll_god_field(
+        &self,
+        input: RerollGodFieldInput,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<RerollGodFieldResult, String> {
+        let field = canonical_god_reroll_field(&input.field)?;
+        let (config, model) = load_generation_config(workspace_root)?;
+
+        let extra_prompt = input
+            .prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+
+        let context_summary = god_context_summary(&input.god);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let rank_instruction = format!("Generate one rank enum value from: {}.", GOD_RANKS.join(", "));
+        let alignment_instruction = format!("Generate one alignment enum value from: {}.", GOD_ALIGNMENTS.join(", "));
+        let field_instructions: &str = match field {
+            "name" => "Generate a concise fantasy deity name.",
+            "epithet" => "Generate a short by-name or honorific (e.g. The Stormcaller).",
+            "rank" => &rank_instruction,
+            "rank_custom" => "Generate a concise custom divine rank label.",
+            "alignment" => &alignment_instruction,
+            "domains" => "Generate 1-5 divine domain strings (e.g. war, death, harvest).",
+            "symbol" => "Generate exactly 1 sentence describing the holy symbol/sigil/iconography.",
+            "appearance" => "Generate 1-3 sentences describing how the deity manifests.",
+            "dogma" => "Generate core teachings/commandments in 1-3 sentences.",
+            "realm" => "Generate a concise home plane or divine realm.",
+            "worshippers" => "Generate a concise description of who venerates the deity.",
+            "clergy" => "Generate a concise description of how the priesthood is organized.",
+            "allies" => "Generate 1-5 allied deity or power strings.",
+            "rivals" => "Generate 1-5 rival or enemy strings.",
+            _ => "Generate a concise field value.",
+        };
+
+        let schema = if ["domains", "allies", "rivals"].contains(&field) {
+            serde_json::json!({
+                "type": "object",
+                "required": ["list"],
+                "properties": {
+                    "list": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 5,
+                        "items": { "type": "string", "minLength": 1 }
+                    }
+                },
+                "additionalProperties": false
+            })
+        } else {
+            serde_json::json!({
+                "type": "object",
+                "required": ["value"],
+                "properties": {
+                    "value": { "type": "string", "minLength": 1 }
+                },
+                "additionalProperties": false
+            })
+        };
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..4 {
+            let run_seed = attempt_seed(attempt);
+
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": {
+                    "temperature": 1.03,
+                    "top_p": 0.92,
+                    "repeat_penalty": 1.1,
+                    "seed": run_seed
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": format!(
+                            "You update one deity field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
+                            reference_suffix,
+                            detail_directive(config.generation.verbosity)
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": format!(
+                            "God context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
+                            context_summary,
+                            field,
+                            field_instructions,
+                            if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                        )
+                    }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+
+            if ["domains", "allies", "rivals"].contains(&field) {
+                let Some(items) = parsed.get("list").and_then(|item| item.as_array()) else {
+                    continue;
+                };
+                let next = normalize_unknown_list(
+                    items
+                        .iter()
+                        .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                        .collect(),
+                );
+                let current = match field {
+                    "domains" => input.god.domains.clone(),
+                    "allies" => input.god.allies.clone(),
+                    "rivals" => input.god.rivals.clone(),
+                    _ => Vec::new(),
+                };
+                if attempt < 3 && next == normalize_unknown_list(current) {
+                    continue;
+                }
+                return Ok(RerollGodFieldResult {
+                    field: field.to_string(),
+                    value: None,
+                    list_value: Some(next),
+                });
+            }
+
+            let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
+                continue;
+            };
+            let normalized = match field {
+                "rank" => match normalize_god_rank(raw_value) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                },
+                "alignment" => match normalize_god_alignment(raw_value) {
+                    Ok(value) => value,
+                    Err(_) => continue,
+                },
+                _ => normalize_unknown_text(raw_value),
+            };
+
+            let current = match field {
+                "name" => input.god.name.clone(),
+                "epithet" => input.god.epithet.clone(),
+                "rank" => input.god.rank.clone(),
+                "rank_custom" => input.god.rank_custom.clone().unwrap_or_default(),
+                "alignment" => input.god.alignment.clone(),
+                "symbol" => input.god.symbol.clone(),
+                "appearance" => input.god.appearance.clone(),
+                "dogma" => input.god.dogma.clone(),
+                "realm" => input.god.realm.clone(),
+                "worshippers" => input.god.worshippers.clone(),
+                "clergy" => input.god.clergy.clone(),
+                _ => String::new(),
+            };
+
+            if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
+                continue;
+            }
+
+            return Ok(RerollGodFieldResult {
+                field: field.to_string(),
+                value: Some(normalized),
+                list_value: None,
+            });
+        }
+
+        Err(format!("failed to reroll god field: {}", field))
+    }
+
     pub async fn reroll_item_field(
         &self,
         input: RerollItemFieldInput,
@@ -873,6 +1056,38 @@ pub struct RerollFactionFieldResult {
     pub list_value: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct GodRerollContext {
+    pub name: String,
+    pub epithet: String,
+    pub rank: String,
+    pub rank_custom: Option<String>,
+    pub alignment: String,
+    pub domains: Vec<String>,
+    pub symbol: String,
+    pub appearance: String,
+    pub dogma: String,
+    pub realm: String,
+    pub worshippers: String,
+    pub clergy: String,
+    pub allies: Vec<String>,
+    pub rivals: Vec<String>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollGodFieldInput {
+    pub field: String,
+    pub prompt: Option<String>,
+    pub god: GodRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollGodFieldResult {
+    pub field: String,
+    pub value: Option<String>,
+    pub list_value: Option<Vec<String>>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RerollItemFieldInput {
     pub field: String,
@@ -1038,6 +1253,54 @@ fn faction_context_summary(context: &FactionRerollContext) -> String {
         context.goals_short_term.join(", "),
         context.goals_long_term.join(", "),
         context.symbol_description,
+    )
+}
+
+fn canonical_god_reroll_field(raw: &str) -> Result<&'static str, String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    let field = match normalized.as_str() {
+        "name" => "name",
+        "epithet" | "title" => "epithet",
+        "rank" | "status" => "rank",
+        "rank_custom" => "rank_custom",
+        "alignment" | "align" => "alignment",
+        "domains" | "portfolio" => "domains",
+        "symbol" | "sigil" | "holy_symbol" => "symbol",
+        "appearance" | "avatar" => "appearance",
+        "dogma" | "tenets" | "creed" => "dogma",
+        "realm" | "plane" => "realm",
+        "worshippers" | "followers" => "worshippers",
+        "clergy" | "priesthood" | "church" => "clergy",
+        "allies" => "allies",
+        "rivals" | "enemies" => "rivals",
+        _ => {
+            return Err(format!(
+                "unknown god reroll field: {}. valid fields: name, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals",
+                raw
+            ))
+        }
+    };
+
+    Ok(field)
+}
+
+fn god_context_summary(context: &GodRerollContext) -> String {
+    format!(
+        "name={}, epithet={}, rank={}, rank_custom={}, alignment={}, domains={}, symbol={}, appearance={}, dogma={}, realm={}, worshippers={}, clergy={}, allies={}, rivals={}",
+        context.name,
+        context.epithet,
+        context.rank,
+        context.rank_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+        context.alignment,
+        context.domains.join(", "),
+        context.symbol,
+        context.appearance,
+        context.dogma,
+        context.realm,
+        context.worshippers,
+        context.clergy,
+        context.allies.join(", "),
+        context.rivals.join(", "),
     )
 }
 

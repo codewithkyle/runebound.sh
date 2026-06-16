@@ -116,6 +116,19 @@ pub const ITEM_RARITIES: [&str; 7] = [
     "artifact",
 ];
 
+pub const GOD_RANKS: [&str; 6] = [
+    "greater",
+    "intermediate",
+    "lesser",
+    "demigod",
+    "dead",
+    "other",
+];
+
+pub const GOD_ALIGNMENTS: [&str; 9] = [
+    "LG", "NG", "CG", "LN", "TN", "CN", "LE", "NE", "CE",
+];
+
 pub fn now_timestamp() -> String {
     Utc::now().to_rfc3339()
 }
@@ -414,6 +427,27 @@ pub fn normalize_item_rarity(value: &str) -> Result<String, String> {
         Err(format!(
             "rarity must be one of: {}",
             ITEM_RARITIES.join(", ")
+        ))
+    }
+}
+
+pub fn normalize_god_rank(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    if GOD_RANKS.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!("rank must be one of: {}", GOD_RANKS.join(", ")))
+    }
+}
+
+pub fn normalize_god_alignment(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_uppercase();
+    if GOD_ALIGNMENTS.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "alignment must be one of: {}",
+            GOD_ALIGNMENTS.join(", ")
         ))
     }
 }
