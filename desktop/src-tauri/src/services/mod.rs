@@ -7,3 +7,4 @@ pub mod suggestions;
 pub mod publish;
 pub mod vault_ref;
 pub mod ollama_chat;
+pub mod mention_extraction;

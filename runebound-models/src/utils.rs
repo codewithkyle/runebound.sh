@@ -252,13 +252,74 @@ fn title_case_word(word: &str) -> String {
     result
 }
 
+/// Strip leaked `@reference` directory paths (e.g. `@locations/`, `@events/`)
+/// from text, keeping only the referenced file name.
+///
+/// `@some/path/to/Name` is an **input-only** convention: a user types it in a
+/// generation prompt to point the LLM at a vault document. The model sometimes
+/// echoes that syntax back into generated prose, leaving junk like
+/// `@locations/Elyria` in stored fields. We drop the `@` and the directory path
+/// (through the final slash) and keep the referenced name (`@events/Harvest
+/// Moon` → `Harvest Moon`) — which the publish linker can then turn into a
+/// `[[Harvest Moon]]` wikilink. Any directory works, so new Obsidian folders
+/// created on the fly need no configuration here.
+///
+/// Only an `@` at a word boundary followed by a slash-bearing path token is
+/// touched, so ordinary text, bare `@handles`, and emails (`gm@example.com`)
+/// are left alone.
+pub fn strip_reference_syntax(text: &str) -> String {
+    let bytes = text.as_bytes();
+    let mut result = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < text.len() {
+        if bytes[i] == b'@'
+            && reference_start_boundary(text, i)
+            && let Some(consumed) = reference_path_prefix_len(&text[i..])
+        {
+            i += consumed;
+            continue;
+        }
+
+        let ch = text[i..].chars().next().expect("char at boundary");
+        let len = ch.len_utf8();
+        result.push_str(&text[i..i + len]);
+        i += len;
+    }
+
+    result
+}
+
+/// An `@` can begin a reference only at the start of the text or after
+/// whitespace / an opening bracket or quote — never mid-word (e.g. an email).
+fn reference_start_boundary(text: &str, at: usize) -> bool {
+    text[..at]
+        .chars()
+        .next_back()
+        .is_none_or(|c| c.is_whitespace() || matches!(c, '(' | '[' | '{' | '"' | '\''))
+}
+
+/// Given `s` starting with `@`, return the byte length of the `@<path>/` prefix
+/// to drop — everything from the `@` through the final slash of the reference
+/// token. Returns `None` when the `@` token has no slash (a bare `@handle`,
+/// not a path reference), so it is left untouched.
+fn reference_path_prefix_len(s: &str) -> Option<usize> {
+    // The reference token runs from `@` to the first whitespace; the file name
+    // may contain spaces, but those fall *after* the final directory slash.
+    let token_end = s.find(char::is_whitespace).unwrap_or(s.len());
+    let last_slash = s[..token_end].rfind('/')?;
+    Some(last_slash + 1)
+}
+
 pub fn normalize_unknown_text(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return "Unknown".to_string();
     }
 
-    let sanitized = trimmed
+    let stripped = strip_reference_syntax(trimmed);
+    let sanitized = stripped
+        .trim()
         .trim_matches(|ch: char| matches!(ch, ',' | ';'))
         .trim();
 
@@ -272,7 +333,7 @@ pub fn normalize_unknown_text(value: &str) -> String {
 pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
-        .map(|value| value.trim().to_string())
+        .map(|value| strip_reference_syntax(value.trim()).trim().to_string())
         .filter(|value| !value.is_empty())
         .collect();
 
@@ -426,5 +487,68 @@ mod tests {
         assert_eq!(normalize_unknown_text(",133"), "133");
         assert_eq!(normalize_unknown_text("243,"), "243");
         assert_eq!(normalize_unknown_text(",523,"), "523");
+    }
+
+    #[test]
+    fn strip_reference_syntax_removes_dir_prefix_keeping_name() {
+        assert_eq!(
+            strip_reference_syntax("@locations/Elyria Guard Station"),
+            "Elyria Guard Station"
+        );
+        assert_eq!(strip_reference_syntax("@npcs/Lirael Drake"), "Lirael Drake");
+    }
+
+    #[test]
+    fn strip_reference_syntax_works_for_any_directory_not_just_known_ones() {
+        // Folders created on the fly in Obsidian need no configuration.
+        assert_eq!(
+            strip_reference_syntax("@events/Harvest Moon Festival"),
+            "Harvest Moon Festival"
+        );
+        assert_eq!(strip_reference_syntax("@quests/The Lost Crown"), "The Lost Crown");
+    }
+
+    #[test]
+    fn strip_reference_syntax_collapses_nested_paths_to_the_file_name() {
+        assert_eq!(
+            strip_reference_syntax("@events/festivals/Harvest Moon"),
+            "Harvest Moon"
+        );
+        assert_eq!(strip_reference_syntax("@some/path/to/Klarg"), "Klarg");
+    }
+
+    #[test]
+    fn strip_reference_syntax_handles_mentions_mid_sentence() {
+        assert_eq!(
+            strip_reference_syntax("The festival at @events/Harvest Moon draws crowds."),
+            "The festival at Harvest Moon draws crowds."
+        );
+    }
+
+    #[test]
+    fn strip_reference_syntax_leaves_emails_and_bare_tokens_alone() {
+        // `@` mid-word (email) is not a reference boundary.
+        assert_eq!(strip_reference_syntax("reach gm@example.com"), "reach gm@example.com");
+        // A bare `@token` with no path is not a directory reference.
+        assert_eq!(strip_reference_syntax("warn @everyone now"), "warn @everyone now");
+    }
+
+    #[test]
+    fn normalize_unknown_text_strips_leaked_reference_prefix() {
+        // The reported bug: a generated field carrying the input `@reference`
+        // syntax is cleaned to the bare name (which the linker then wikilinks).
+        assert_eq!(normalize_unknown_text("@locations/Elyria"), "Elyria");
+        assert_eq!(normalize_unknown_text("@events/Harvest Moon"), "Harvest Moon");
+    }
+
+    #[test]
+    fn normalize_unknown_list_strips_leaked_reference_prefixes() {
+        assert_eq!(
+            normalize_unknown_list(vec![
+                "@npcs/Liam Vesper".to_string(),
+                "smoked eel".to_string(),
+            ]),
+            vec!["Liam Vesper".to_string(), "smoked eel".to_string()]
+        );
     }
 }
