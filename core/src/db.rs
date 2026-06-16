@@ -1138,4 +1138,203 @@ mod tests {
         assert_eq!(latest.operation, "delete");
         assert_eq!(latest.entity_id, "npc_1");
     }
+
+    fn sample_npc(id: &str, name: &str, slug: &str) -> NpcRow {
+        NpcRow {
+            id: id.to_string(),
+            slug: slug.to_string(),
+            name: name.to_string(),
+            race: "Human".to_string(),
+            occupation: "Town Guard".to_string(),
+            sex: "female".to_string(),
+            age: "42".to_string(),
+            height: "5'11\"".to_string(),
+            weight_lbs: "185".to_string(),
+            background: "Former caravan guard.".to_string(),
+            want_need: "Coin to leave town.".to_string(),
+            secret_obstacle: "Owes a smuggler a blood debt.".to_string(),
+            carrying: "keys, ledger, hidden dagger".to_string(),
+            location: "Waterdeep".to_string(),
+            vault_path: format!("npcs/{name}.md"),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        }
+    }
+
+    fn sample_location(id: &str, name: &str, slug: &str) -> LocationRow {
+        LocationRow {
+            id: id.to_string(),
+            slug: slug.to_string(),
+            name: name.to_string(),
+            vault_path: format!("locations/{name}.md"),
+            kind_type: "city".to_string(),
+            kind_custom: None,
+            visual_description: "Lantern-lit markets line flooded alleys.".to_string(),
+            history_background: "Built on drowned ruins.".to_string(),
+            exports: "smoked eel, river pearls".to_string(),
+            tone: "damp suspicious".to_string(),
+            authority: "Merchants' Compact".to_string(),
+            danger_level: "risky".to_string(),
+            current_tension: "Guild war brews.".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        }
+    }
+
+    #[tokio::test]
+    async fn npc_upsert_round_trips_every_field() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let npc = sample_npc("npc_1", "Lirael Drake", "lirael-drake");
+
+        upsert_npc(pool, &npc).await.expect("upsert npc");
+        let found = find_npc_by_id(pool, "npc_1")
+            .await
+            .expect("query")
+            .expect("npc present");
+
+        assert_eq!(found.name, "Lirael Drake");
+        assert_eq!(found.slug, "lirael-drake");
+        assert_eq!(found.occupation, "Town Guard");
+        // The carrying list is stored as a single column; confirm it survives intact.
+        assert_eq!(found.carrying, "keys, ledger, hidden dagger");
+        assert_eq!(found.vault_path, "npcs/Lirael Drake.md");
+    }
+
+    #[tokio::test]
+    async fn npc_find_by_name_or_slug_matches_both_and_is_case_insensitive() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        upsert_npc(pool, &sample_npc("npc_1", "Lirael Drake", "lirael-drake"))
+            .await
+            .expect("upsert");
+
+        // Name match, ignoring case.
+        assert_eq!(
+            find_npc_by_name_or_slug(pool, "LIRAEL DRAKE")
+                .await
+                .expect("query")
+                .map(|n| n.id),
+            Some("npc_1".to_string()),
+        );
+        // Slug match.
+        assert_eq!(
+            find_npc_by_name_or_slug(pool, "lirael-drake")
+                .await
+                .expect("query")
+                .map(|n| n.id),
+            Some("npc_1".to_string()),
+        );
+        // Unknown input resolves to nothing.
+        assert!(
+            find_npc_by_name_or_slug(pool, "nobody")
+                .await
+                .expect("query")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn npc_upsert_updates_existing_row_on_id_conflict() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+
+        upsert_npc(pool, &sample_npc("npc_1", "Lirael Drake", "lirael-drake"))
+            .await
+            .expect("insert");
+
+        // Re-upsert the same id with a new name + later timestamp.
+        let mut renamed = sample_npc("npc_1", "Lirael the Bold", "lirael-the-bold");
+        renamed.created_at = "2099-01-01T00:00:00Z".to_string(); // should be ignored on conflict
+        renamed.updated_at = "2026-06-16T00:00:00Z".to_string();
+        upsert_npc(pool, &renamed).await.expect("update");
+
+        // Still a single row — the conflict updated rather than duplicated.
+        let all = list_npcs(pool).await.expect("list");
+        assert_eq!(all.len(), 1);
+
+        let found = find_npc_by_id(pool, "npc_1")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.name, "Lirael the Bold");
+        assert_eq!(found.updated_at, "2026-06-16T00:00:00Z");
+        // ON CONFLICT does not touch created_at, so the original is preserved.
+        assert_eq!(found.created_at, "2026-06-15T00:00:00Z");
+    }
+
+    #[tokio::test]
+    async fn search_npcs_by_name_is_substring_case_insensitive_and_sorted() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        upsert_npc(pool, &sample_npc("npc_1", "Bram Stoneford", "bram-stoneford"))
+            .await
+            .expect("upsert");
+        upsert_npc(pool, &sample_npc("npc_2", "Aldric Vane", "aldric-vane"))
+            .await
+            .expect("upsert");
+        upsert_npc(pool, &sample_npc("npc_3", "Branwen Ash", "branwen-ash"))
+            .await
+            .expect("upsert");
+
+        // Mixed-case substring "BR" matches Bram + Branwen, returned name-sorted.
+        let results = search_npcs_by_name(pool, "BR", 10).await.expect("search");
+        let names: Vec<String> = results.into_iter().map(|n| n.name).collect();
+        assert_eq!(names, vec!["Bram Stoneford", "Branwen Ash"]);
+    }
+
+    #[tokio::test]
+    async fn search_npcs_by_name_respects_limit() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        for i in 0..5 {
+            upsert_npc(
+                pool,
+                &sample_npc(&format!("npc_{i}"), &format!("Guard {i}"), &format!("guard-{i}")),
+            )
+            .await
+            .expect("upsert");
+        }
+
+        let results = search_npcs_by_name(pool, "guard", 3).await.expect("search");
+        assert_eq!(results.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn delete_npc_by_id_removes_only_the_targeted_row() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        upsert_npc(pool, &sample_npc("npc_1", "Keeper", "keeper"))
+            .await
+            .expect("upsert");
+        upsert_npc(pool, &sample_npc("npc_2", "Stayer", "stayer"))
+            .await
+            .expect("upsert");
+
+        delete_npc_by_id(pool, "npc_1").await.expect("delete");
+
+        assert!(find_npc_by_id(pool, "npc_1").await.expect("query").is_none());
+        assert!(find_npc_by_id(pool, "npc_2").await.expect("query").is_some());
+        assert_eq!(list_npcs(pool).await.expect("list").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn location_find_by_slug_round_trips() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        upsert_location(pool, &sample_location("loc_1", "Neverwinter Harbor", "neverwinter-harbor"))
+            .await
+            .expect("upsert location");
+
+        let found = find_location_by_slug(pool, "neverwinter-harbor")
+            .await
+            .expect("query")
+            .expect("location present");
+        assert_eq!(found.id, "loc_1");
+        assert_eq!(found.name, "Neverwinter Harbor");
+        assert_eq!(found.exports, "smoked eel, river pearls");
+
+        // A non-matching slug returns nothing.
+        assert!(find_location_by_slug(pool, "missing").await.expect("query").is_none());
+    }
 }
