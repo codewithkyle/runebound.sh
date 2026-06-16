@@ -7,6 +7,13 @@ use runebound_models::{
 use crate::utils::normalize_unknown_text;
 
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
+    render_npc_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+pub fn render_npc_markdown_with_links(
+    frontmatter: &NpcFrontmatter,
+    linker: &EntityLinker,
+) -> String {
     let mut out = String::new();
     write_attr_line(&mut out, "Race", &frontmatter.race);
     write_attr_line(&mut out, "Occupation", &frontmatter.occupation);
@@ -17,15 +24,22 @@ pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
     write_attr_line_linked(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
-    write_section(&mut out, "Background", &frontmatter.background);
-    write_section(&mut out, "Goals", &frontmatter.want_need);
-    write_section(&mut out, "Secret", &frontmatter.secret_obstacle);
+    write_section(&mut out, "Background", &frontmatter.background, linker);
+    write_section(&mut out, "Goals", &frontmatter.want_need, linker);
+    write_section(&mut out, "Secret", &frontmatter.secret_obstacle, linker);
     write_list_section(&mut out, "Carrying", &frontmatter.carrying);
 
     out
 }
 
 pub fn render_location_markdown(frontmatter: &LocationFrontmatter) -> String {
+    render_location_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+pub fn render_location_markdown_with_links(
+    frontmatter: &LocationFrontmatter,
+    linker: &EntityLinker,
+) -> String {
     let mut out = String::new();
     write_attr_line(&mut out, "Kind", &kind_display(frontmatter));
     write_attr_line(&mut out, "Tone", &frontmatter.tone);
@@ -37,23 +51,23 @@ pub fn render_location_markdown(frontmatter: &LocationFrontmatter) -> String {
         &mut out,
         "Visual Description",
         &frontmatter.visual_description,
+        linker,
     );
-    write_section(
-        &mut out,
-        "History",
-        &frontmatter.history_background,
-    );
+    write_section(&mut out, "History", &frontmatter.history_background, linker);
     write_list_section(&mut out, "Exports", &frontmatter.exports);
-    write_section(
-        &mut out,
-        "Current Tension",
-        &frontmatter.current_tension,
-    );
+    write_section(&mut out, "Current Tension", &frontmatter.current_tension, linker);
 
     out
 }
 
 pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
+    render_faction_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+pub fn render_faction_markdown_with_links(
+    frontmatter: &FactionFrontmatter,
+    linker: &EntityLinker,
+) -> String {
     let mut out = String::new();
     write_attr_line(&mut out, "Kind", &frontmatter.kind_type);
     if let Some(custom) = &frontmatter.kind_custom {
@@ -62,29 +76,37 @@ pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
         }
     }
     writeln!(&mut out).ok();
-    write_section(&mut out, "Headquarters", &frontmatter.headquarters);
+    write_section(&mut out, "Headquarters", &frontmatter.headquarters, linker);
     write_section(
         &mut out,
         "Sphere of Influence",
         &frontmatter.sphere_of_influence,
+        linker,
     );
-    write_section(&mut out, "Reputation", &frontmatter.reputation);
-    write_section(&mut out, "Public Description", &frontmatter.public_description);
-    write_section(&mut out, "True Agenda", &frontmatter.true_agenda);
-    write_section(&mut out, "Methods", &frontmatter.methods);
-    write_section(&mut out, "Leadership", &frontmatter.leadership);
+    write_section(&mut out, "Reputation", &frontmatter.reputation, linker);
+    write_section(&mut out, "Public Description", &frontmatter.public_description, linker);
+    write_section(&mut out, "True Agenda", &frontmatter.true_agenda, linker);
+    write_section(&mut out, "Methods", &frontmatter.methods, linker);
+    write_section(&mut out, "Leadership", &frontmatter.leadership, linker);
     write_text_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
     write_linked_list_section(&mut out, "Allies", &frontmatter.allies);
     write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
-    write_section(&mut out, "Current Tension", &frontmatter.current_tension);
+    write_section(&mut out, "Current Tension", &frontmatter.current_tension, linker);
     write_list_section(&mut out, "Short-Term Goals", &frontmatter.goals_short_term);
     write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
-    write_section(&mut out, "Symbol", &frontmatter.symbol_description);
+    write_section(&mut out, "Symbol", &frontmatter.symbol_description, linker);
 
     out
 }
 
 pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
+    render_item_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+pub fn render_item_markdown_with_links(
+    frontmatter: &ItemFrontmatter,
+    linker: &EntityLinker,
+) -> String {
     let mut out = String::new();
     write_attr_line(&mut out, "Category", &frontmatter.category);
     write_attr_line(&mut out, "Rarity", &frontmatter.rarity);
@@ -93,10 +115,10 @@ pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     write_attr_line_linked(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
-    write_section(&mut out, "Appearance", &frontmatter.appearance);
-    write_section(&mut out, "Abilities", &frontmatter.abilities);
-    write_section(&mut out, "Drawbacks", &frontmatter.drawbacks);
-    write_section(&mut out, "History", &frontmatter.history);
+    write_section(&mut out, "Appearance", &frontmatter.appearance, linker);
+    write_section(&mut out, "Abilities", &frontmatter.abilities, linker);
+    write_section(&mut out, "Drawbacks", &frontmatter.drawbacks, linker);
+    write_section(&mut out, "History", &frontmatter.history, linker);
     write_list_section(&mut out, "Materials", &frontmatter.materials);
 
     out
@@ -129,6 +151,118 @@ fn wikilink(value: &str) -> String {
     format!("[[{trimmed}]]")
 }
 
+/// Tier 1 prose linker: wraps mentions of *known* entities found inside
+/// narrative text with `[[wikilinks]]`, using the entity's canonical casing.
+///
+/// Built once per publish from the set of entity names in the index, minus the
+/// entity being rendered (so a page never links to itself). Matching is
+/// case-insensitive, whole-word, and longest-name-first, and it never links
+/// inside an existing `[[...]]` span.
+pub struct EntityLinker {
+    /// Canonical display names, de-duplicated and sorted longest-first so that
+    /// "Crimson Lantern Syndicate" is matched before "Crimson Lantern".
+    names: Vec<String>,
+}
+
+impl EntityLinker {
+    pub fn new<I>(candidate_names: I, self_name: &str) -> Self
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let self_lower = self_name.trim().to_ascii_lowercase();
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut names: Vec<String> = candidate_names
+            .into_iter()
+            .map(|name| name.trim().to_string())
+            .filter(|name| !name.is_empty())
+            // Never link a page to itself.
+            .filter(|name| name.to_ascii_lowercase() != self_lower)
+            // A name with link-unsafe characters can't form a clean target.
+            .filter(|name| !name.contains(WIKILINK_UNSAFE))
+            // De-duplicate case-insensitively, keeping the first casing seen.
+            .filter(|name| seen.insert(name.to_ascii_lowercase()))
+            .collect();
+        names.sort_by(|a, b| b.len().cmp(&a.len()));
+        Self { names }
+    }
+
+    /// An linker that links nothing — used where no cross-entity index is
+    /// available (e.g. auto-creating a stub location) and by Tier 0 tests.
+    pub fn empty() -> Self {
+        Self { names: Vec::new() }
+    }
+
+    /// Wrap every whole-word mention of a known entity in `text` with a
+    /// `[[wikilink]]`. Spans already inside `[[...]]` are copied through
+    /// untouched so we never double-link.
+    fn link_prose(&self, text: &str) -> String {
+        if self.names.is_empty() {
+            return text.to_string();
+        }
+
+        // `to_ascii_lowercase` is byte-length preserving, so byte offsets into
+        // `lowered` line up with `text` and we can slice the original to recover
+        // canonical casing.
+        let lowered = text.to_ascii_lowercase();
+        let mut result = String::with_capacity(text.len());
+        let mut i = 0;
+
+        while i < text.len() {
+            // Copy through an existing wikilink span verbatim.
+            if text[i..].starts_with("[[") {
+                if let Some(rel_end) = text[i..].find("]]") {
+                    let end = i + rel_end + 2;
+                    result.push_str(&text[i..end]);
+                    i = end;
+                    continue;
+                }
+            }
+
+            if boundary_before(text, i) {
+                let mut matched: Option<(&str, usize)> = None;
+                for name in &self.names {
+                    let needle = name.to_ascii_lowercase();
+                    if lowered[i..].starts_with(&needle) {
+                        let end = i + needle.len();
+                        if boundary_after(text, end) {
+                            matched = Some((name, end));
+                            break;
+                        }
+                    }
+                }
+                if let Some((name, end)) = matched {
+                    result.push_str("[[");
+                    result.push_str(name);
+                    result.push_str("]]");
+                    i = end;
+                    continue;
+                }
+            }
+
+            // Copy a single char, respecting UTF-8 boundaries.
+            let ch = text[i..].chars().next().expect("char at boundary");
+            let ch_len = ch.len_utf8();
+            result.push_str(&text[i..i + ch_len]);
+            i += ch_len;
+        }
+
+        result
+    }
+}
+
+/// A left word boundary exists at byte `i` when the preceding char is absent or
+/// not alphanumeric (so we match whole words, not substrings inside a word).
+fn boundary_before(text: &str, i: usize) -> bool {
+    text[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric())
+}
+
+/// A right word boundary exists at byte `end` when the following char is absent
+/// or not alphanumeric. This keeps possessives working: matching "Waterdeep" in
+/// "Waterdeep's" ends before the apostrophe, yielding `[[Waterdeep]]'s`.
+fn boundary_after(text: &str, end: usize) -> bool {
+    text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric())
+}
+
 fn write_attr_line(out: &mut String, label: &str, value: &str) {
     let normalized = normalize_unknown_text(value);
     if normalized != "Unknown" {
@@ -145,13 +279,13 @@ fn write_attr_line_linked(out: &mut String, label: &str, value: &str) {
     }
 }
 
-fn write_section(out: &mut String, title: &str, value: &str) {
+fn write_section(out: &mut String, title: &str, value: &str, linker: &EntityLinker) {
     let normalized = normalize_unknown_text(value);
     if normalized == "Unknown" {
         return;
     }
     writeln!(out, "## {title}").ok();
-    writeln!(out, "{}", normalized).ok();
+    writeln!(out, "{}", linker.link_prose(&normalized)).ok();
     writeln!(out).ok();
 }
 
@@ -513,5 +647,113 @@ mod tests {
         // Short-term goals are descriptive sentences elsewhere — confirm we did
         // not start linking non-relational list sections.
         assert!(!markdown.contains("[[Hidden vaults]]"));
+    }
+
+    // ----------------------------------------------------------------------
+    // Tier 1: deterministic prose linking of *known* entity mentions.
+    // ----------------------------------------------------------------------
+
+    fn make_linker(names: &[&str], self_name: &str) -> EntityLinker {
+        EntityLinker::new(names.iter().map(|n| n.to_string()), self_name)
+    }
+
+    #[test]
+    fn links_a_known_entity_mentioned_in_prose() {
+        let linker = make_linker(&["Waterdeep"], "Lirael Drake");
+        assert_eq!(
+            linker.link_prose("She fled to Waterdeep at dawn."),
+            "She fled to [[Waterdeep]] at dawn."
+        );
+    }
+
+    #[test]
+    fn prose_link_matches_case_insensitively_but_uses_canonical_casing() {
+        let linker = make_linker(&["Waterdeep"], "Lirael Drake");
+        assert_eq!(
+            linker.link_prose("rumors from waterdeep"),
+            "rumors from [[Waterdeep]]"
+        );
+    }
+
+    #[test]
+    fn prose_link_respects_word_boundaries() {
+        // "Ash" must not match inside "ashes"; only the standalone word links.
+        let linker = make_linker(&["Ash"], "Branwen");
+        assert_eq!(
+            linker.link_prose("ashes and Ash"),
+            "ashes and [[Ash]]"
+        );
+    }
+
+    #[test]
+    fn prose_link_prefers_the_longest_matching_name() {
+        let linker = make_linker(&["Crimson Lantern", "Crimson Lantern Syndicate"], "x");
+        assert_eq!(
+            linker.link_prose("The Crimson Lantern Syndicate rules the docks."),
+            "The [[Crimson Lantern Syndicate]] rules the docks."
+        );
+    }
+
+    #[test]
+    fn prose_link_keeps_possessives_outside_the_link() {
+        let linker = make_linker(&["Waterdeep"], "x");
+        assert_eq!(
+            linker.link_prose("Waterdeep's docks burned."),
+            "[[Waterdeep]]'s docks burned."
+        );
+    }
+
+    #[test]
+    fn linker_never_links_a_page_to_itself() {
+        let linker = make_linker(&["Lirael Drake", "Waterdeep"], "Lirael Drake");
+        let linked = linker.link_prose("Lirael Drake walked to Waterdeep.");
+        assert!(!linked.contains("[[Lirael Drake]]"));
+        assert!(linked.contains("[[Waterdeep]]"));
+    }
+
+    #[test]
+    fn prose_link_does_not_double_link_existing_wikilinks() {
+        let linker = make_linker(&["Waterdeep"], "x");
+        assert_eq!(
+            linker.link_prose("Visit [[Waterdeep]] today."),
+            "Visit [[Waterdeep]] today."
+        );
+    }
+
+    #[test]
+    fn empty_linker_leaves_prose_untouched() {
+        let linker = EntityLinker::empty();
+        assert_eq!(linker.link_prose("Nothing to link here."), "Nothing to link here.");
+    }
+
+    #[test]
+    fn links_a_full_multi_word_name_mentioned_mid_sentence() {
+        // Regression for the reported case: a previously-published NPC with a
+        // three-word name, referenced inside another NPC's generated background
+        // (set off by commas). The sister being rendered has a different name,
+        // so the self-exclusion doesn't interfere.
+        let linker = make_linker(&["Liam Vesper Thistlewaite"], "Mara Thistlewaite");
+        let background =
+            "Her younger brother, Liam Vesper Thistlewaite, was dragged into banditry.";
+        assert_eq!(
+            linker.link_prose(background),
+            "Her younger brother, [[Liam Vesper Thistlewaite]], was dragged into banditry."
+        );
+    }
+
+    #[test]
+    fn render_with_links_links_known_mentions_in_narrative_sections() {
+        let mut frontmatter = sample_npc_frontmatter();
+        frontmatter.background = "Trained as a scribe in Silversong before the war.".to_string();
+        let linker = make_linker(&["Silversong"], &frontmatter.name);
+
+        let markdown = render_npc_markdown_with_links(&frontmatter, &linker);
+        // Prose mention is linked...
+        assert!(
+            markdown.contains("Trained as a scribe in [[Silversong]] before the war."),
+            "expected linked prose mention, got:\n{markdown}"
+        );
+        // ...and the Tier 0 relational Location link still works alongside it.
+        assert!(markdown.contains("**Location:** [[Silversong]]"));
     }
 }

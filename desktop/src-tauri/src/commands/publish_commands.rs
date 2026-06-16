@@ -16,8 +16,10 @@ use crate::services::entity_persistence::{
     SaveNpcDraftInput,
 };
 use crate::utils::normalize_relative_path_for_storage;
+use crate::services::vault_ref::load_vault_reference_entries;
 use crate::services::publish::{
-    render_faction_markdown, render_item_markdown, render_location_markdown, render_npc_markdown,
+    EntityLinker, render_faction_markdown_with_links, render_item_markdown_with_links,
+    render_location_markdown_with_links, render_npc_markdown_with_links,
 };
 use runebound_models::{CommandClientEvent, CommandResponse};
 use runebound_models::output::{
@@ -75,6 +77,22 @@ pub async fn handle_publish(
     };
 
     let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+
+    let effective = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    validate_for_runtime(&effective.effective).map_err(|err| err.to_string())?;
+    let vault_root = effective
+        .effective
+        .vault
+        .path
+        .clone()
+        .ok_or_else(|| "vault.path is not configured; run start setup".to_string())?;
+    let vault = Vault::new(vault_root);
+    state.vault_repo().ensure_structure(&vault)?;
+
+    // Tier 1 cross-links: every other known entity's name — from the canonical
+    // store *and* hand-authored vault notes — becomes a `[[wikilink]]` candidate
+    // inside this entity's prose sections.
+    let candidate_names = collect_known_entity_names(&store, &vault)?;
     let (markdown, vault_path) = match target.entity_type {
         EntityType::Npc => {
             let frontmatter = match store
@@ -84,8 +102,9 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
+            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
             (
-                render_npc_markdown(&frontmatter),
+                render_npc_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(EntityType::Npc, &frontmatter.slug, &frontmatter.vault_path),
             )
         }
@@ -97,8 +116,9 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
+            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
             (
-                render_location_markdown(&frontmatter),
+                render_location_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
                     EntityType::Location,
                     &frontmatter.slug,
@@ -114,8 +134,9 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
+            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
             (
-                render_faction_markdown(&frontmatter),
+                render_faction_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
                     EntityType::Faction,
                     &frontmatter.slug,
@@ -131,8 +152,9 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
+            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
             (
-                render_item_markdown(&frontmatter),
+                render_item_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
                     EntityType::Item,
                     &frontmatter.slug,
@@ -141,17 +163,6 @@ pub async fn handle_publish(
             )
         }
     };
-
-    let effective = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-    validate_for_runtime(&effective.effective).map_err(|err| err.to_string())?;
-    let vault_root = effective
-        .effective
-        .vault
-        .path
-        .clone()
-        .ok_or_else(|| "vault.path is not configured; run start setup".to_string())?;
-    let vault = Vault::new(vault_root);
-    state.vault_repo().ensure_structure(&vault)?;
 
     let relative = PathBuf::from(&vault_path);
     let full_path = vault
@@ -276,6 +287,54 @@ pub async fn handle_publish(
             text_node(" to bring it back."),
         ]));
     Ok(Some(ok_response_with_doc(message, Some(document), event)))
+}
+
+/// Gather the display names of every known entity used as `[[wikilink]]`
+/// candidates for Tier 1 prose linking, from two sources:
+///
+/// 1. The canonical TOML [`EntityStore`] — the source of truth for app-managed
+///    entities. Always current in-session and a strict superset of the SQLite
+///    index: it includes entities saved but not yet published, so deferred
+///    references still link, and can never miss a published entity (publishing
+///    reads the entity *from* this same store).
+/// 2. The Obsidian vault itself — every markdown note's title — so references to
+///    **hand-authored** notes the app never created also link.
+///
+/// Duplicates between the two (a published entity is both a store record and a
+/// vault file) are collapsed later by [`EntityLinker`].
+fn collect_known_entity_names(store: &EntityStore, vault: &Vault) -> Result<Vec<String>, String> {
+    let mut names = Vec::new();
+    for fm in store.list_npcs().map_err(|err| err.to_string())? {
+        names.push(fm.name);
+    }
+    for fm in store.list_locations().map_err(|err| err.to_string())? {
+        names.push(fm.name);
+    }
+    for fm in store.list_factions().map_err(|err| err.to_string())? {
+        names.push(fm.name);
+    }
+    for fm in store.list_items().map_err(|err| err.to_string())? {
+        names.push(fm.name);
+    }
+
+    // Best-effort: a vault that can't be read must never block a publish, so we
+    // ignore errors here and fall back to the store-only candidate set. Each
+    // markdown note contributes its title (the last path component of its
+    // reference key), which is what an `[[wikilink]]` resolves to.
+    if let Ok(entries) = load_vault_reference_entries(vault) {
+        for entry in entries {
+            if entry.markdown_path.is_none() {
+                continue; // directories are not link targets
+            }
+            if let Some(title) = entry.key.rsplit('/').next() {
+                if !title.is_empty() {
+                    names.push(title.to_string());
+                }
+            }
+        }
+    }
+
+    Ok(names)
 }
 
 fn publish_help() -> CommandResult {
