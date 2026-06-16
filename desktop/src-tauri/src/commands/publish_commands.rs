@@ -15,10 +15,15 @@ use crate::services::entity_persistence::{
     EntityPersistenceService, SaveFactionDraftInput, SaveItemDraftInput, SaveLocationDraftInput,
     SaveNpcDraftInput,
 };
+use std::collections::HashSet;
+use std::path::Path;
+
 use crate::utils::normalize_relative_path_for_storage;
+use crate::services::mention_extraction::extract_unknown_mentions;
 use crate::services::vault_ref::load_vault_reference_entries;
 use crate::services::publish::{
-    EntityLinker, render_faction_markdown_with_links, render_item_markdown_with_links,
+    EntityLinker, faction_prose, item_prose, location_prose, npc_prose,
+    render_faction_markdown_with_links, render_item_markdown_with_links,
     render_location_markdown_with_links, render_npc_markdown_with_links,
 };
 use runebound_models::{CommandClientEvent, CommandResponse};
@@ -93,6 +98,21 @@ pub async fn handle_publish(
     // store *and* hand-authored vault notes — becomes a `[[wikilink]]` candidate
     // inside this entity's prose sections.
     let candidate_names = collect_known_entity_names(&store, &vault)?;
+    let known_lower: HashSet<String> = candidate_names
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect();
+    // Tier 2: only attempt LLM mention recognition when the boot probe found a
+    // reachable server with the configured model, so a down/unconfigured Ollama
+    // adds no latency to publishing.
+    let ollama_ok = state
+        .boot_ollama_health
+        .lock()
+        .await
+        .as_ref()
+        .map(|health| health.reachable && health.model_available)
+        .unwrap_or(false);
+
     let (markdown, vault_path) = match target.entity_type {
         EntityType::Npc => {
             let frontmatter = match store
@@ -102,7 +122,15 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
+            let linker = build_linker(
+                &state.workspace_root,
+                &candidate_names,
+                &known_lower,
+                ollama_ok,
+                &npc_prose(&frontmatter),
+                &frontmatter.name,
+            )
+            .await;
             (
                 render_npc_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(EntityType::Npc, &frontmatter.slug, &frontmatter.vault_path),
@@ -116,7 +144,15 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
+            let linker = build_linker(
+                &state.workspace_root,
+                &candidate_names,
+                &known_lower,
+                ollama_ok,
+                &location_prose(&frontmatter),
+                &frontmatter.name,
+            )
+            .await;
             (
                 render_location_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
@@ -134,7 +170,15 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
+            let linker = build_linker(
+                &state.workspace_root,
+                &candidate_names,
+                &known_lower,
+                ollama_ok,
+                &faction_prose(&frontmatter),
+                &frontmatter.name,
+            )
+            .await;
             (
                 render_faction_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
@@ -152,7 +196,15 @@ pub async fn handle_publish(
                 Some(data) => data,
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
-            let linker = EntityLinker::new(candidate_names, &frontmatter.name);
+            let linker = build_linker(
+                &state.workspace_root,
+                &candidate_names,
+                &known_lower,
+                ollama_ok,
+                &item_prose(&frontmatter),
+                &frontmatter.name,
+            )
+            .await;
             (
                 render_item_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
@@ -335,6 +387,25 @@ fn collect_known_entity_names(store: &EntityStore, vault: &Vault) -> Result<Vec<
     }
 
     Ok(names)
+}
+
+/// Build the prose linker for one entity: start from the known candidate set
+/// (canonical store ∪ vault), then — when Ollama is reachable — augment it with
+/// Tier 2 LLM-recognized names found in this entity's `prose` that aren't
+/// already known. `EntityLinker` excludes `self_name` and de-duplicates.
+async fn build_linker(
+    workspace_root: &Path,
+    base_names: &[String],
+    known_lower: &HashSet<String>,
+    ollama_ok: bool,
+    prose: &str,
+    self_name: &str,
+) -> EntityLinker {
+    let mut names = base_names.to_vec();
+    if ollama_ok {
+        names.extend(extract_unknown_mentions(workspace_root, prose, known_lower).await);
+    }
+    EntityLinker::new(names, self_name)
 }
 
 fn publish_help() -> CommandResult {

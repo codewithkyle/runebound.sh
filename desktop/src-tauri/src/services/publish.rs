@@ -124,6 +124,57 @@ pub fn render_item_markdown_with_links(
     out
 }
 
+/// The narrative prose of an NPC — the fields rendered as free-text sections.
+/// Used to feed Tier 2 mention extraction; mirrors the `write_section` calls in
+/// [`render_npc_markdown_with_links`].
+pub fn npc_prose(frontmatter: &NpcFrontmatter) -> String {
+    join_prose(&[
+        &frontmatter.background,
+        &frontmatter.want_need,
+        &frontmatter.secret_obstacle,
+    ])
+}
+
+pub fn location_prose(frontmatter: &LocationFrontmatter) -> String {
+    join_prose(&[
+        &frontmatter.visual_description,
+        &frontmatter.history_background,
+        &frontmatter.current_tension,
+    ])
+}
+
+pub fn faction_prose(frontmatter: &FactionFrontmatter) -> String {
+    join_prose(&[
+        &frontmatter.headquarters,
+        &frontmatter.sphere_of_influence,
+        &frontmatter.reputation,
+        &frontmatter.public_description,
+        &frontmatter.true_agenda,
+        &frontmatter.methods,
+        &frontmatter.leadership,
+        &frontmatter.current_tension,
+        &frontmatter.symbol_description,
+    ])
+}
+
+pub fn item_prose(frontmatter: &ItemFrontmatter) -> String {
+    join_prose(&[
+        &frontmatter.appearance,
+        &frontmatter.abilities,
+        &frontmatter.drawbacks,
+        &frontmatter.history,
+    ])
+}
+
+fn join_prose(fields: &[&str]) -> String {
+    fields
+        .iter()
+        .map(|field| field.trim())
+        .filter(|field| !field.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Characters with special meaning inside an Obsidian `[[wikilink]]` target
 /// (`|` alias, `#` heading, `^` block, and the brackets themselves). If a value
 /// contains any of them we leave it unlinked rather than emit a broken link.
