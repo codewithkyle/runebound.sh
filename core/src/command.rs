@@ -1684,9 +1684,35 @@ mod tests {
     use std::path::Path;
 
     use super::{
-        execute_line_result, execute_line_with_session, ollama_menu_text, vault_menu_text,
+        build_core_handler_registry, execute_line_result, execute_line_with_session,
+        ollama_menu_text, vault_menu_text,
     };
     use crate::session::{OllamaStepState, OnboardingFlow, SessionState, VaultStepState};
+    use command_specs::{CommandExecution, command_manifest};
+
+    /// `model` is marked `Core` in the manifest but dispatched via onboarding
+    /// interception (before registry lookup), so it has no core registry entry.
+    /// See docs/command-contexts.md §4.
+    const ONBOARDING_INTERCEPTED_CORE: &[&str] = &["model"];
+
+    #[test]
+    fn every_core_command_has_a_registered_handler() {
+        let registry = build_core_handler_registry();
+        for command in command_manifest().commands {
+            if !matches!(command.execution, CommandExecution::Core) {
+                continue;
+            }
+            if ONBOARDING_INTERCEPTED_CORE.contains(&command.name.as_str()) {
+                continue;
+            }
+            assert!(
+                registry.get(&command.name).is_some(),
+                "manifest declares core command `{}` but no handler is registered in \
+                 build_core_handler_registry()",
+                command.name,
+            );
+        }
+    }
 
     // A unique, writable directory per test. The shared temp dir cannot be used
     // because `is_path_writable` writes a fixed-name probe file, which races

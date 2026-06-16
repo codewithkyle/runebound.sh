@@ -622,3 +622,189 @@ pub fn format_field_help(kind: EntityKind, access: FieldAccess) -> String {
     }
     lines.join("\n")
 }
+
+#[cfg(test)]
+mod tests {
+    use super::super::kind::ALL_ENTITY_KINDS;
+    use super::*;
+    use std::collections::HashMap;
+
+    // The entity schemas drive `set`/`reroll` field resolution, autocomplete
+    // field lists, and help text. A field removed, an alias collision, or a
+    // flipped settable/rerollable flag silently breaks those surfaces — these
+    // tests lock the schema as a contract.
+
+    #[test]
+    fn every_alias_resolves_to_its_own_canonical_field() {
+        for kind in ALL_ENTITY_KINDS {
+            for spec in schema_for_kind(kind).fields {
+                // The canonical name always resolves to itself.
+                assert_eq!(
+                    canonical_field_name(kind, spec.canonical, FieldAccess::Set),
+                    Some(spec.canonical),
+                    "{:?} canonical {} did not resolve",
+                    kind,
+                    spec.canonical,
+                );
+                // Every declared alias resolves back to the same canonical name.
+                for alias in spec.aliases {
+                    assert_eq!(
+                        canonical_field_name(kind, alias, FieldAccess::Set),
+                        Some(spec.canonical),
+                        "{:?} alias {alias} should resolve to {}",
+                        kind,
+                        spec.canonical,
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn alias_resolution_is_case_insensitive_and_trimmed() {
+        // canonical_field_spec lowercases + trims; confirm a messy input still
+        // resolves so `npc set NAME ...` / ` race ` keep working.
+        assert_eq!(
+            canonical_field_name(EntityKind::Npc, "  NAME  ", FieldAccess::Set),
+            Some("name"),
+        );
+        assert_eq!(
+            canonical_field_name(EntityKind::Faction, "HQ", FieldAccess::Set),
+            Some("headquarters"),
+        );
+    }
+
+    #[test]
+    fn aliases_are_unique_within_each_entity() {
+        // A single alias must never map to two different canonical fields, or
+        // `set`/`reroll` resolution becomes ambiguous.
+        for kind in ALL_ENTITY_KINDS {
+            let mut seen: HashMap<&str, &str> = HashMap::new();
+            for spec in schema_for_kind(kind).fields {
+                for alias in spec.aliases {
+                    if let Some(previous) = seen.insert(alias, spec.canonical) {
+                        panic!(
+                            "{:?} alias {alias} maps to both {previous} and {}",
+                            kind, spec.canonical
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn display_names_are_unique_within_each_entity() {
+        // Help/autocomplete list fields by display_name; collisions would hide a field.
+        for kind in ALL_ENTITY_KINDS {
+            let mut seen: HashMap<&str, &str> = HashMap::new();
+            for spec in schema_for_kind(kind).fields {
+                if let Some(previous) = seen.insert(spec.display_name, spec.canonical) {
+                    panic!(
+                        "{:?} display_name {} shared by {previous} and {}",
+                        kind, spec.display_name, spec.canonical
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_and_empty_fields_do_not_resolve() {
+        for kind in ALL_ENTITY_KINDS {
+            assert_eq!(canonical_field_name(kind, "", FieldAccess::Set), None);
+            assert_eq!(canonical_field_name(kind, "   ", FieldAccess::Set), None);
+            assert_eq!(
+                canonical_field_name(kind, "definitely_not_a_field", FieldAccess::Set),
+                None,
+            );
+        }
+    }
+
+    #[test]
+    fn field_access_gates_resolution() {
+        // canonical_field_spec only resolves a field when the requested access
+        // is allowed. Locks the invariant: a non-settable field must not be
+        // reachable via FieldAccess::Set (and likewise for reroll). All fields
+        // are currently both settable and rerollable — assert that contract too.
+        for kind in ALL_ENTITY_KINDS {
+            for spec in schema_for_kind(kind).fields {
+                assert!(
+                    spec.settable && spec.rerollable,
+                    "{:?} field {} is expected to be both settable and rerollable",
+                    kind,
+                    spec.canonical,
+                );
+                if spec.settable {
+                    assert!(
+                        canonical_field_spec(kind, spec.canonical, FieldAccess::Set).is_some()
+                    );
+                }
+                if spec.rerollable {
+                    assert!(
+                        canonical_field_spec(kind, spec.canonical, FieldAccess::Reroll).is_some()
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn settable_and_rerollable_field_counts_are_locked() {
+        // Snapshot the editable surface per entity. Adding/removing a field is
+        // a deliberate change that should update this assertion.
+        let expected = [
+            (EntityKind::Npc, 11usize),
+            (EntityKind::Location, 10),
+            (EntityKind::Faction, 17),
+            (EntityKind::Item, 11),
+        ];
+        for (kind, count) in expected {
+            assert_eq!(
+                settable_fields(kind).count(),
+                count,
+                "{:?} settable field count changed",
+                kind
+            );
+            assert_eq!(
+                rerollable_fields(kind).count(),
+                count,
+                "{:?} rerollable field count changed",
+                kind
+            );
+        }
+    }
+
+    #[test]
+    fn valid_field_lists_are_non_empty_for_both_accesses() {
+        for kind in ALL_ENTITY_KINDS {
+            assert!(!format_valid_field_list(kind, FieldAccess::Set).is_empty());
+            assert!(!format_valid_field_list(kind, FieldAccess::Reroll).is_empty());
+        }
+    }
+
+    #[test]
+    fn known_aliases_resolve_to_expected_canonicals() {
+        // Spot-check the renamed-canonical aliases that callers and docs rely
+        // on; these are the easy ones to break in a refactor.
+        let cases = [
+            (EntityKind::Npc, "weight", "weight_lbs"),
+            (EntityKind::Npc, "want", "want_need"),
+            (EntityKind::Npc, "secret", "secret_obstacle"),
+            (EntityKind::Location, "kind", "kind_type"),
+            (EntityKind::Location, "danger", "danger_level"),
+            (EntityKind::Faction, "agenda", "true_agenda"),
+            (EntityKind::Faction, "symbol", "symbol_description"),
+            (EntityKind::Faction, "goals_short", "goals_short_term"),
+            (EntityKind::Item, "type", "category"),
+        ];
+        for (kind, alias, canonical) in cases {
+            assert_eq!(
+                canonical_field_name(kind, alias, FieldAccess::Set),
+                Some(canonical),
+                "{:?} alias {alias} should resolve to {canonical}",
+                kind,
+            );
+        }
+    }
+}

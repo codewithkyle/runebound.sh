@@ -381,3 +381,58 @@ pub use crate::entities::domains::{
     npc_event_from_draft,
     npc_summary_text,
 };
+
+#[cfg(test)]
+mod tests {
+    use super::build_desktop_handler_registry;
+    use command_specs::{CommandExecution, command_manifest, handler_metadata_for};
+
+    /// Commands dispatched outside the registries via onboarding interception
+    /// (handled in `try_execute_onboarding` *before* registry lookup). They are
+    /// marked `Desktop`/`Core` in the manifest but have no registry handler.
+    /// See docs/command-contexts.md §4.
+    const ONBOARDING_INTERCEPTED: &[&str] = &["start", "model"];
+
+    #[test]
+    fn every_desktop_command_has_a_registered_handler() {
+        let registry = build_desktop_handler_registry();
+        for command in command_manifest().commands {
+            if !matches!(command.execution, CommandExecution::Desktop) {
+                continue;
+            }
+            if ONBOARDING_INTERCEPTED.contains(&command.name.as_str()) {
+                continue;
+            }
+            assert!(
+                registry.get(&command.name).is_some(),
+                "manifest declares desktop command `{}` but no handler is registered in \
+                 build_desktop_handler_registry()",
+                command.name,
+            );
+        }
+    }
+
+    #[test]
+    fn every_registered_handler_maps_to_a_manifest_command() {
+        // Catches an orphaned handler registered under a name that no longer
+        // exists in the manifest (e.g. after a root rename).
+        let registry = build_desktop_handler_registry();
+        for entry in registry.iter() {
+            assert!(
+                handler_metadata_for(entry.name).is_some(),
+                "handler `{}` is registered but has no manifest entry",
+                entry.name,
+            );
+        }
+    }
+
+    #[test]
+    fn desktop_registry_includes_the_core_overrides() {
+        // `help` and `exit` are registered in the desktop registry to override
+        // their core handlers with desktop-state-aware versions. Losing these
+        // would silently fall back to the core behavior.
+        let registry = build_desktop_handler_registry();
+        assert!(registry.get("help").is_some(), "missing desktop help override");
+        assert!(registry.get("exit").is_some(), "missing desktop exit override");
+    }
+}

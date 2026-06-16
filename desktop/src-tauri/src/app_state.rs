@@ -329,3 +329,196 @@ impl AppState {
         self.domains.clone()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // EditorSession is the state machine behind `system save/reroll/cancel`:
+    // `active_kind` decides which draft those commands act on. A regression
+    // here silently routes a save to the wrong entity or loses a draft, so
+    // these lock the transition rules.
+
+    fn npc_draft(name: &str) -> NpcDraftSession {
+        NpcDraft {
+            id: format!("npc-{name}"),
+            seed_prompt: None,
+            name: name.to_string(),
+            slug: name.to_ascii_lowercase(),
+            race: String::new(),
+            occupation: String::new(),
+            sex: String::new(),
+            age: String::new(),
+            height: String::new(),
+            weight_lbs: String::new(),
+            background: String::new(),
+            want_need: String::new(),
+            secret_obstacle: String::new(),
+            carrying: Vec::new(),
+            location: String::new(),
+        }
+    }
+
+    fn location_draft(name: &str) -> LocationDraftSession {
+        LocationDraft {
+            id: format!("loc-{name}"),
+            seed_prompt: None,
+            name: name.to_string(),
+            slug: name.to_ascii_lowercase(),
+            vault_path: String::new(),
+            kind_type: String::new(),
+            kind_custom: None,
+            visual_description: String::new(),
+            history_background: String::new(),
+            exports: Vec::new(),
+            tone: String::new(),
+            authority: String::new(),
+            danger_level: String::new(),
+            current_tension: String::new(),
+        }
+    }
+
+    fn faction_draft(name: &str) -> FactionDraftSession {
+        FactionDraft {
+            id: format!("fac-{name}"),
+            seed_prompt: None,
+            name: name.to_string(),
+            slug: name.to_ascii_lowercase(),
+            vault_path: String::new(),
+            kind_type: String::new(),
+            kind_custom: None,
+            public_description: String::new(),
+            true_agenda: String::new(),
+            methods: String::new(),
+            leadership: String::new(),
+            headquarters: String::new(),
+            sphere_of_influence: String::new(),
+            resources_assets: String::new(),
+            allies: Vec::new(),
+            rivals_enemies: Vec::new(),
+            reputation: String::new(),
+            current_tension: String::new(),
+            goals_short_term: Vec::new(),
+            goals_long_term: Vec::new(),
+            symbol_description: String::new(),
+        }
+    }
+
+    #[test]
+    fn new_session_is_empty() {
+        let session = EditorSession::default();
+        assert_eq!(session.active_kind(), None);
+        assert!(session.draft(EntityKind::Npc).is_none());
+        assert!(session.get_npc().is_none());
+    }
+
+    #[test]
+    fn setting_a_draft_activates_its_kind() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
+        assert_eq!(session.get_npc().map(|d| d.name.as_str()), Some("Lirael"));
+    }
+
+    #[test]
+    fn draft_envelope_reports_its_kind() {
+        assert_eq!(DraftEnvelope::Npc(npc_draft("x")).kind(), EntityKind::Npc);
+        assert_eq!(
+            DraftEnvelope::Location(location_draft("y")).kind(),
+            EntityKind::Location
+        );
+        assert_eq!(
+            DraftEnvelope::Faction(faction_draft("z")).kind(),
+            EntityKind::Faction
+        );
+    }
+
+    #[test]
+    fn opening_a_second_draft_switches_active_but_keeps_both() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        session.set_location(location_draft("Harbor"));
+        // Newest draft is active...
+        assert_eq!(session.active_kind(), Some(EntityKind::Location));
+        // ...but the npc draft is still retained, not clobbered.
+        assert!(session.get_npc().is_some());
+        assert!(session.get_location().is_some());
+    }
+
+    #[test]
+    fn querying_a_kind_without_a_draft_returns_none() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        // An NPC is open, but no faction draft exists.
+        assert!(session.get_faction().is_none());
+        assert!(session.draft(EntityKind::Faction).is_none());
+    }
+
+    #[test]
+    fn activate_only_switches_to_a_kind_with_an_open_draft() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        session.set_location(location_draft("Harbor"));
+        session.activate(EntityKind::Npc);
+        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
+        // No faction draft is open, so activate is a no-op.
+        session.activate(EntityKind::Faction);
+        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
+    }
+
+    #[test]
+    fn clearing_the_active_draft_falls_back_to_another_open_draft() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        session.set_location(location_draft("Harbor"));
+        assert_eq!(session.active_kind(), Some(EntityKind::Location));
+        // Clearing the active (location) draft should not leave active_kind
+        // dangling — it falls back to the still-open npc draft.
+        let removed = session.clear_kind(EntityKind::Location);
+        assert!(removed.is_some());
+        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
+        assert!(session.get_location().is_none());
+    }
+
+    #[test]
+    fn clearing_a_non_active_draft_leaves_active_kind_unchanged() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        session.set_location(location_draft("Harbor"));
+        // Location is active; clear the background npc draft.
+        session.clear_kind(EntityKind::Npc);
+        assert_eq!(session.active_kind(), Some(EntityKind::Location));
+        assert!(session.get_npc().is_none());
+    }
+
+    #[test]
+    fn clearing_the_last_draft_deactivates_the_editor() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        session.clear_kind(EntityKind::Npc);
+        assert_eq!(session.active_kind(), None);
+    }
+
+    #[test]
+    fn take_returns_and_removes_the_draft() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        let taken = session.take_npc();
+        assert_eq!(taken.map(|d| d.name), Some("Lirael".to_string()));
+        assert!(session.get_npc().is_none());
+        assert_eq!(session.active_kind(), None);
+    }
+
+    #[test]
+    fn clear_all_empties_the_session() {
+        let mut session = EditorSession::default();
+        session.set_npc(npc_draft("Lirael"));
+        session.set_location(location_draft("Harbor"));
+        session.set_faction(faction_draft("Syndicate"));
+        session.clear_all();
+        assert_eq!(session.active_kind(), None);
+        assert!(session.get_npc().is_none());
+        assert!(session.get_location().is_none());
+        assert!(session.get_faction().is_none());
+    }
+}

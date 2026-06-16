@@ -973,7 +973,18 @@ pub fn command_manifest() -> CommandManifest {
 
 #[cfg(test)]
 mod tests {
-    use super::{CommandExecution, command_manifest};
+    use super::{
+        CommandAvailability, CommandExecution, InputContext, command_availability, command_manifest,
+    };
+    use std::collections::HashSet;
+
+    fn manifest_roots() -> Vec<String> {
+        command_manifest()
+            .commands
+            .into_iter()
+            .map(|command| command.name)
+            .collect()
+    }
 
     #[test]
     fn core_commands_include_expected_roots() {
@@ -1011,5 +1022,251 @@ mod tests {
                 assert!(help.ends_with(" help") || help == "help");
             }
         }
+    }
+
+    // ----------------------------------------------------------------------
+    // command_availability / is_visible_in — the single source of truth for
+    // context-gated help + autocomplete. docs/command-contexts.md blames a
+    // wrong/missing arm here for several 0.4.0 regressions (undo dropped from
+    // help, publish behaving inconsistently). These lock the contract.
+    // ----------------------------------------------------------------------
+
+    fn npc_editor() -> InputContext {
+        InputContext::EntityEditor("npc".to_string())
+    }
+
+    fn location_editor() -> InputContext {
+        InputContext::EntityEditor("location".to_string())
+    }
+
+    #[test]
+    fn entity_roots_are_scoped_to_their_own_editor() {
+        // Regression guard: these must NOT silently fall through to `Default`.
+        for root in ["npc", "location", "faction", "item"] {
+            assert_eq!(
+                command_availability(root),
+                CommandAvailability::EntityScoped(root),
+                "{root} should be EntityScoped to its own editor",
+            );
+        }
+
+        // npc is visible only in the npc editor, nowhere else.
+        assert!(command_availability("npc").is_visible_in(&npc_editor()));
+        assert!(!command_availability("npc").is_visible_in(&location_editor()));
+        assert!(!command_availability("npc").is_visible_in(&InputContext::Default));
+        assert!(!command_availability("npc").is_visible_in(&InputContext::ConfigEditor));
+    }
+
+    #[test]
+    fn reroll_is_visible_only_inside_an_entity_editor() {
+        assert_eq!(
+            command_availability("reroll"),
+            CommandAvailability::EntityEditorOnly
+        );
+        assert!(command_availability("reroll").is_visible_in(&npc_editor()));
+        assert!(command_availability("reroll").is_visible_in(&location_editor()));
+        assert!(!command_availability("reroll").is_visible_in(&InputContext::Default));
+        assert!(!command_availability("reroll").is_visible_in(&InputContext::ConfigEditor));
+    }
+
+    #[test]
+    fn save_and_cancel_are_visible_in_any_editor_but_not_default() {
+        for root in ["save", "cancel"] {
+            assert_eq!(command_availability(root), CommandAvailability::AnyEditor);
+            assert!(command_availability(root).is_visible_in(&npc_editor()));
+            assert!(command_availability(root).is_visible_in(&InputContext::ConfigEditor));
+            assert!(!command_availability(root).is_visible_in(&InputContext::Default));
+        }
+    }
+
+    #[test]
+    fn publish_is_visible_on_default_surface_and_entity_editors() {
+        assert_eq!(
+            command_availability("publish"),
+            CommandAvailability::DefaultOrEntityEditor
+        );
+        assert!(command_availability("publish").is_visible_in(&InputContext::Default));
+        assert!(command_availability("publish").is_visible_in(&npc_editor()));
+        // Not the setup wizard.
+        assert!(!command_availability("publish").is_visible_in(&InputContext::ConfigEditor));
+    }
+
+    #[test]
+    fn help_and_clear_are_always_visible() {
+        for root in ["help", "clear"] {
+            assert_eq!(command_availability(root), CommandAvailability::Always);
+            for context in [
+                InputContext::Default,
+                InputContext::ConfigEditor,
+                npc_editor(),
+            ] {
+                assert!(command_availability(root).is_visible_in(&context));
+            }
+        }
+    }
+
+    #[test]
+    fn entity_scoped_visibility_does_not_leak_across_editors() {
+        // A footgun if EntityScoped matched any editor: npc commands must stay
+        // hidden while a location draft is open, and vice versa.
+        assert!(!command_availability("location").is_visible_in(&npc_editor()));
+        assert!(!command_availability("npc").is_visible_in(&location_editor()));
+    }
+
+    /// Sentinel: the exact set of commands that resolve to the `Default`
+    /// availability. The `_ => Default` fallthrough in `command_availability`
+    /// is a documented footgun — a new command added without an explicit arm
+    /// silently lands here and becomes invisible in every editor context.
+    ///
+    /// If this test fails because you added a command, do not just add it to
+    /// this list: first decide whether `Default`-only is actually correct, and
+    /// if not, add an explicit `command_availability` arm.
+    #[test]
+    fn default_surface_commands_are_an_explicit_known_set() {
+        let expected_default: HashSet<&str> = [
+            "status", "create", "config", "start", "load", "show", "preview", "delete", "undo",
+            "setup", "calendar", "date", "history", "+", "-", "moon", "exit", "model", "ping",
+        ]
+        .into_iter()
+        .collect();
+
+        let actual_default: HashSet<String> = manifest_roots()
+            .into_iter()
+            .filter(|name| command_availability(name) == CommandAvailability::Default)
+            .collect();
+
+        let actual_ref: HashSet<&str> = actual_default.iter().map(String::as_str).collect();
+        assert_eq!(
+            actual_ref, expected_default,
+            "the set of Default-only commands changed; categorize new commands \
+             with an explicit command_availability arm (see docs/command-contexts.md)",
+        );
+    }
+
+    // ----------------------------------------------------------------------
+    // requires_subcommand — argument-vs-subcommand parser decision. Setting
+    // this wrong on a free-form-argument command was the `publish The
+    // Brotherhood` regression (docs/command-contexts.md §3).
+    // ----------------------------------------------------------------------
+
+    fn requires_subcommand_for(root: &str) -> bool {
+        command_manifest()
+            .commands
+            .into_iter()
+            .find(|command| command.name == root)
+            .unwrap_or_else(|| panic!("command {root} missing from manifest"))
+            .requires_subcommand
+    }
+
+    #[test]
+    fn free_form_argument_roots_do_not_require_a_subcommand() {
+        // Each of these accepts a free-form name/value as its second token; if
+        // requires_subcommand were true the argument would be rejected as an
+        // unknown subcommand.
+        for root in ["load", "show", "preview", "delete", "history", "publish"] {
+            assert!(
+                !requires_subcommand_for(root),
+                "{root} takes a free-form argument and must be requires_subcommand: false",
+            );
+        }
+    }
+
+    #[test]
+    fn menu_style_roots_require_a_subcommand() {
+        for root in [
+            "create", "config", "npc", "location", "faction", "item", "setup", "calendar", "date",
+            "start",
+        ] {
+            assert!(
+                requires_subcommand_for(root),
+                "{root} is a menu-style root and must be requires_subcommand: true",
+            );
+        }
+    }
+
+    // ----------------------------------------------------------------------
+    // Manifest structural integrity.
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn command_roots_are_unique() {
+        let roots = manifest_roots();
+        let unique: HashSet<&String> = roots.iter().collect();
+        assert_eq!(unique.len(), roots.len(), "duplicate command root in manifest");
+    }
+
+    #[test]
+    fn commands_have_name_summary_and_examples() {
+        for command in command_manifest().commands {
+            assert!(!command.name.is_empty(), "command has empty name");
+            assert!(
+                !command.summary.is_empty(),
+                "{} has empty summary",
+                command.name
+            );
+            assert!(
+                !command.examples.is_empty(),
+                "{} has no examples",
+                command.name
+            );
+        }
+    }
+
+    #[test]
+    fn canonical_help_command_targets_its_own_root() {
+        for command in command_manifest().commands {
+            if let Some(help) = &command.canonical_help_command {
+                let first = help.split_whitespace().next().unwrap_or_default();
+                assert_eq!(
+                    first, command.name,
+                    "{}'s canonical_help_command should start with its own root",
+                    command.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn menu_style_roots_declare_subcommands() {
+        for command in command_manifest().commands {
+            if command.requires_subcommand {
+                assert!(
+                    !command.subcommands.is_empty(),
+                    "{} requires a subcommand but declares none",
+                    command.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn alias_targets_resolve_to_real_roots() {
+        let roots: HashSet<String> = manifest_roots().into_iter().collect();
+        for alias in command_manifest().aliases {
+            let target = alias
+                .to
+                .first()
+                .expect("alias must have a target")
+                .clone();
+            assert!(
+                roots.contains(&target),
+                "alias {:?} targets unknown root {target}",
+                alias.from
+            );
+        }
+    }
+
+    /// Only the hidden delta roots (`+`, `-`) are excluded from autocomplete.
+    /// A new command accidentally hidden would silently vanish from typeahead.
+    #[test]
+    fn only_delta_roots_are_hidden_from_autocomplete() {
+        let hidden: HashSet<String> = command_manifest()
+            .commands
+            .into_iter()
+            .filter(|command| !command.show_in_autocomplete)
+            .map(|command| command.name)
+            .collect();
+        let expected: HashSet<String> = ["+", "-"].into_iter().map(String::from).collect();
+        assert_eq!(hidden, expected, "unexpected change to autocomplete-hidden roots");
     }
 }
