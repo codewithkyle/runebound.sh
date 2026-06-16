@@ -2,7 +2,7 @@ use dnd_core::calendar::{self, format_date_conversational, CalendarDelta, Stored
 
 use crate::commands::{DesktopHandlerInvocation, command_action_response, ok_response};
 
-use super::date_commands::CommandResult;
+use super::date_commands::{CommandResult, date_response};
 
 const DELTA_USAGE_HINT: &str = "Units: m=minutes, h=hours, d=days, w=weeks, y=years";
 
@@ -52,7 +52,7 @@ pub async fn handle_time_delta(invocation: DesktopHandlerInvocation<'_>) -> Comm
 
     let formatted = format_date_conversational(&stored);
 
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn usage_message(sign_char: char) -> String {

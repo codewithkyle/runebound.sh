@@ -758,15 +758,32 @@ async fn try_execute_onboarding(
             format!("vault ready: {}", vault.root().display()),
             format!("database ready: {}", db.path.display()),
         ];
+        let mut document = doc()
+            .with_block(heading(2, "Onboarding complete"))
+            .with_block(list(vec![
+                vec![text_node(format!("config saved: {}", config_path.display()))],
+                vec![text_node(format!("vault ready: {}", vault.root().display()))],
+                vec![text_node(format!("database ready: {}", db.path.display()))],
+            ]));
         if missing_model {
             lines.push("ollama model not set; run `start setup` later to choose a model if you plan to use AI generation.".to_string());
+            document = document.with_block(paragraph_with_inlines(vec![
+                text_node("ollama model not set; run "),
+                command_ref("start setup", "start setup"),
+                text_node(" later to choose a model if you plan to use AI generation."),
+            ]));
         }
         if !warnings.is_empty() {
             lines.push("setup warnings:".to_string());
             lines.extend(warnings.iter().map(|warning| format!("- {warning}")));
+            document = document
+                .with_block(heading(3, "Setup warnings"))
+                .with_block(list(
+                    warnings.iter().map(|warning| vec![text_node(warning.clone())]).collect(),
+                ));
         }
 
-        return Ok(Some(CommandOutput::text(lines.join("\n"))));
+        return Ok(Some(CommandOutput::with_doc(lines.join("\n"), document)));
     }
 
     Ok(Some(CommandOutput::text(
@@ -924,15 +941,36 @@ async fn save_llm_section(
         format!("config saved: {}", config_path.display()),
         format!("ollama: {}", config.ollama.base_url),
     ];
+    let mut rows = vec![
+        vec![text_node(format!("config saved: {}", config_path.display()))],
+        vec![text_node(format!("ollama: {}", config.ollama.base_url))],
+    ];
+    let mut model_note = None;
     if missing_model {
         lines.push("model not set; run `setup llm` later to choose one.".to_string());
+        model_note = Some(paragraph_with_inlines(vec![
+            text_node("model not set; run "),
+            command_ref("setup llm", "setup llm"),
+            text_node(" later to choose one."),
+        ]));
     } else {
         lines.push(format!("model: {}", session.onboarding.selected_model));
+        rows.push(vec![text_node(format!(
+            "model: {}",
+            session.onboarding.selected_model
+        ))]);
     }
 
     reset_onboarding(&mut session.onboarding);
 
-    Ok(CommandOutput::text(lines.join("\n")))
+    let mut document = doc()
+        .with_block(heading(2, "LLM updated"))
+        .with_block(list(rows));
+    if let Some(note) = model_note {
+        document = document.with_block(note);
+    }
+
+    Ok(CommandOutput::with_doc(lines.join("\n"), document))
 }
 
 /// Persist the chosen model at the end of the model step, picking the right

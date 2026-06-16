@@ -1,9 +1,19 @@
 use dnd_core::calendar::{self, format_date_conversational, StoredCalendar};
 use runebound_models::CommandResponse;
+use runebound_models::output::{StatusTone, doc, status};
 
-use crate::commands::{DesktopHandlerInvocation, command_action_response, ok_response};
+use crate::commands::{
+    DesktopHandlerInvocation, command_action_response, ok_response, ok_response_with_doc,
+};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
+
+/// Echo the current calendar date as a structured status line, with the plain
+/// conversational sentence as the fallback `output`.
+pub(crate) fn date_response(formatted: String) -> CommandResult {
+    let document = doc().with_block(status(StatusTone::Info, formatted.clone()));
+    Ok(Some(ok_response_with_doc(formatted, Some(document), None)))
+}
 
 pub async fn handle_date(
     invocation: DesktopHandlerInvocation<'_>,
@@ -49,7 +59,7 @@ async fn date_show(_invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     };
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_help() -> CommandResult {
@@ -183,7 +193,7 @@ fn date_set_year(mut stored: StoredCalendar, value: &str) -> CommandResult {
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
@@ -221,7 +231,7 @@ fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_set_day(mut stored: StoredCalendar, value: &str) -> CommandResult {
@@ -250,7 +260,7 @@ fn date_set_day(mut stored: StoredCalendar, value: &str) -> CommandResult {
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_set_time(mut stored: StoredCalendar, time_value: &str, suffix: Option<&str>) -> CommandResult {
@@ -276,7 +286,7 @@ fn date_set_time(mut stored: StoredCalendar, time_value: &str, suffix: Option<&s
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn parse_time_input(value: &str, suffix: Option<&str>) -> Result<(u8, u8), String> {
