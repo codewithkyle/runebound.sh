@@ -95,8 +95,9 @@ Example entity classes: `item`, `dungeon`, `quest`.
 1. Extend events/types in `runebound-models/src/events.rs` if needed
 2. Regenerate TS models (`cargo build -p runebound-models`)
 3. Handle new event/draft pathways in `desktop/src/App.tsx`
-4. Verify card rendering through existing `OutputRenderer` path
-5. Confirm client events (draft load, clear, etc.) trigger the desired UI flows
+4. Add spinner labels in `commandSpinnerLabel()` (`desktop/src/App.tsx`) for the new kind's LLM-backed commands — `create <kind>`, `<kind> reroll`, and `<kind> save` (see §7). The generation/reroll commands call the LLM and MUST show a spinner.
+5. Verify card rendering through existing `OutputRenderer` path
+6. Confirm client events (draft load, clear, etc.) trigger the desired UI flows
 
 ---
 
@@ -141,6 +142,15 @@ Example entity classes: `item`, `dungeon`, `quest`.
 - Keep usage/help copy concise and stable
 - Reject `-h` and `--help`; phrase help only
 - Keep keyboard UX stable (`Enter`, `Tab`, arrows, `Ctrl+C`)
+- **Any command that calls the LLM MUST show a spinner.** LLM/Ollama round-trips
+  (entity generation, per-field and whole-draft reroll, seed generation, model
+  probes) are slow enough that a command with no feedback reads as a hang. The
+  spinner is frontend-driven: add a pattern for the command in
+  `commandSpinnerLabel()` in `desktop/src/App.tsx` (the single source of truth —
+  e.g. `"generating <kind>"`, `"rerolling <kind>"`). If you add a new
+  LLM-backed command or entity kind and skip this, the call will appear to do
+  nothing until it returns. This is the gap the "missing events spinner" fix
+  closed; treat a spinner as part of the feature, not a follow-up.
 
 ---
 
@@ -164,6 +174,7 @@ Use this for every feature PR:
 - [ ] help + autocomplete verified in every relevant context (default / entity editor / setup)
 - [ ] repository + service paths updated where persistence/workflows changed
 - [ ] output uses `output_doc` and explicit `command_ref` for actions
+- [ ] every LLM-backed command has a spinner via `commandSpinnerLabel()` (`desktop/src/App.tsx`)
 - [ ] shared models updated in `runebound-models` and TS regenerated
 - [ ] frontend integration updated (`App.tsx`, renderer/theme/css if needed)
 - [ ] autocomplete and mode filtering validated (`cargo test suggestions`)
