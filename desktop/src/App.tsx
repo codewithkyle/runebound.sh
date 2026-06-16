@@ -1115,5 +1115,14 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered.startsWith("faction save")) {
     return "saving draft";
   }
+  // `publish` writes to the vault and runs LLM-assisted entity linking, which
+  // can take a few seconds. `publish help` is just text, so exclude it.
+  if (
+    (lowered === "publish" || lowered.startsWith("publish ")) &&
+    lowered !== "publish help" &&
+    !lowered.startsWith("publish help ")
+  ) {
+    return "publishing document";
+  }
   return null;
 }
