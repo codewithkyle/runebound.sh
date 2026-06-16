@@ -130,14 +130,14 @@ dependencies = [
 
 [[package]]
 name = "command-handler"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "once_cell",
 ]
 
 [[package]]
 name = "command-specs"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "command-handler",
  "serde",
@@ -270,7 +270,7 @@ dependencies = [
 
 [[package]]
 name = "dnd-core"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -1292,7 +1292,7 @@ dependencies = [
 
 [[package]]
 name = "runebound-models"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "serde",
