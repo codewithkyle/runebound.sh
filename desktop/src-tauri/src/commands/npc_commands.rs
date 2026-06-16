@@ -1,11 +1,15 @@
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::commands::DesktopHandlerInvocation;
+use crate::commands::{DesktopHandlerInvocation, command_action_response};
 use crate::entities::common::{
     command_message_response,
+    command_message_response_with_doc,
     command_no_active_draft,
     command_response_with_event,
+    entity_help_doc,
+    entity_reroll_field_help,
+    entity_set_field_help,
     parse_reroll_field_and_prompt,
 };
 use crate::entities::domains::{npc_event_from_draft, npc_summary_text};
@@ -28,7 +32,9 @@ pub async fn handle_npc(
         if !has_draft {
             return command_no_active_draft(EntityKind::Npc);
         }
-        return command_message_response(domain.help_text());
+        let prose = domain.help_text();
+        let help_doc = entity_help_doc(EntityKind::Npc, &prose);
+        return command_message_response_with_doc(prose, help_doc);
     }
 
     if lowered == "npc show" {
@@ -42,6 +48,10 @@ pub async fn handle_npc(
     if lowered.starts_with("npc rename ") {
         let name = trimmed[10..].trim();
         return domain.rename(name, state_ref).await;
+    }
+
+    if lowered == "npc set help" {
+        return entity_set_field_help(EntityKind::Npc);
     }
 
     if lowered.starts_with("npc set ") {
@@ -61,11 +71,19 @@ pub async fn handle_npc(
         return domain.save(state_ref).await;
     }
 
+    if lowered == "npc reroll help" {
+        return entity_reroll_field_help(EntityKind::Npc);
+    }
+
     if lowered == "npc reroll" || lowered.starts_with("npc reroll ") {
         return handle_npc_reroll(trimmed, state_ref, &domain).await;
     }
 
-    command_message_response("unknown npc command. use `npc help`")
+    Ok(Some(command_action_response(
+        "unknown npc command. use ",
+        "npc help",
+        "",
+    )))
 }
 
 async fn handle_npc_reroll(

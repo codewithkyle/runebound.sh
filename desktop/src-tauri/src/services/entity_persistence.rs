@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
     FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION,
@@ -64,51 +66,29 @@ impl EntityPersistenceService {
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
 
-        let base_slug = slugify(name);
-        let slug = if let Some(current) = existing.as_ref() {
-            if current.slug == base_slug {
-                current.slug.clone()
-            } else {
-                unique_slug_for_dir_with_ext(store.root(), "npcs", &base_slug, "toml")
-            }
-        } else {
-            unique_slug_for_dir_with_ext(store.root(), "npcs", &base_slug, "toml")
-        };
+        let slug = resolve_slug(
+            store.root(),
+            "npcs",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            name,
+        );
 
         let created_at = existing
             .as_ref()
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
-        let vault_path = if let Some(current) = existing.as_ref() {
-            let readable = self
-                .unique_readable_vault_path(
-                    document_repo.as_ref(),
-                    database.as_ref(),
-                    "npcs",
-                    name,
-                    Some(&current.slug),
-                )
-                .await?;
-            if normalize_relative_path_for_storage(&current.vault_path)
-                == normalize_relative_path_for_storage(&readable)
-            {
-                current.vault_path.clone()
-            } else {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &current.vault_path)
-                    .await?;
-                readable
-            }
-        } else {
-            self.unique_readable_vault_path(
-                document_repo.as_ref(),
-                database.as_ref(),
-                "npcs",
-                name,
-                None,
-            )
-            .await?
-        };
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "npcs",
+            name,
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            None,
+        )
+        .await?;
 
         let published_at = match existing.as_ref() {
             Some(current) => store
@@ -252,54 +232,29 @@ impl EntityPersistenceService {
         let existing = location_repo
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
-        let base_slug = slugify(name);
-        let slug = if let Some(current) = existing.as_ref() {
-            if current.slug == base_slug {
-                current.slug.clone()
-            } else {
-                unique_slug_for_dir_with_ext(store.root(), "locations", &base_slug, "toml")
-            }
-        } else {
-            unique_slug_for_dir_with_ext(store.root(), "locations", &base_slug, "toml")
-        };
+        let slug = resolve_slug(
+            store.root(),
+            "locations",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            name,
+        );
 
         let created_at = existing
             .as_ref()
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
-        let requested_path = normalize_relative_path_for_storage(input.vault_path.trim());
-        let vault_path = if !requested_path.is_empty() {
-            requested_path
-        } else if let Some(current) = existing.as_ref() {
-            let readable = self
-                .unique_readable_vault_path(
-                    document_repo.as_ref(),
-                    database.as_ref(),
-                    "locations",
-                    name,
-                    Some(&current.slug),
-                )
-                .await?;
-            if normalize_relative_path_for_storage(&current.vault_path)
-                == normalize_relative_path_for_storage(&readable)
-            {
-                current.vault_path.clone()
-            } else {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &current.vault_path)
-                    .await?;
-                readable
-            }
-        } else {
-            self.unique_readable_vault_path(
-                document_repo.as_ref(),
-                database.as_ref(),
-                "locations",
-                name,
-                None,
-            )
-            .await?
-        };
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "locations",
+            name,
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            Some(input.vault_path.as_str()),
+        )
+        .await?;
 
         let published_at = match existing.as_ref() {
             Some(current) => store
@@ -436,50 +391,25 @@ impl EntityPersistenceService {
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
 
-        let desired_base_slug = slugify(&input.name);
-        let slug = if let Some(row) = existing.as_ref() {
-            if row.slug == desired_base_slug {
-                row.slug.clone()
-            } else {
-                unique_slug_for_dir_with_ext(store.root(), "factions", &desired_base_slug, "toml")
-            }
-        } else {
-            unique_slug_for_dir_with_ext(store.root(), "factions", &desired_base_slug, "toml")
-        };
+        let slug = resolve_slug(
+            store.root(),
+            "factions",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            input.name.trim(),
+        );
 
-        let requested_path = normalize_relative_path_for_storage(input.vault_path.trim());
-        let vault_path = if !requested_path.is_empty() {
-            requested_path
-        } else if let Some(row) = existing.as_ref() {
-            let readable = self
-                .unique_readable_vault_path(
-                    document_repo.as_ref(),
-                    database.as_ref(),
-                    "factions",
-                    input.name.trim(),
-                    Some(&row.slug),
-                )
-                .await?;
-            if normalize_relative_path_for_storage(&row.vault_path)
-                == normalize_relative_path_for_storage(&readable)
-            {
-                row.vault_path.clone()
-            } else {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &row.vault_path)
-                    .await?;
-                readable
-            }
-        } else {
-            self.unique_readable_vault_path(
-                document_repo.as_ref(),
-                database.as_ref(),
-                "factions",
-                input.name.trim(),
-                None,
-            )
-            .await?
-        };
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "factions",
+            input.name.trim(),
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            Some(input.vault_path.as_str()),
+        )
+        .await?;
 
         let published_at = match existing.as_ref() {
             Some(current) => store
@@ -582,30 +512,6 @@ impl EntityPersistenceService {
         })
     }
 
-    async fn unique_readable_vault_path(
-        &self,
-        document_repo: &dyn crate::repositories::DocumentRepository,
-        database: &db::Database,
-        relative_dir: &str,
-        display_name: &str,
-        current_slug: Option<&str>,
-    ) -> Result<String, String> {
-        let base = normalize_markdown_file_stem(display_name);
-        let mut candidate = format!("{relative_dir}/{base}.md");
-        let mut idx = 2;
-        while let Some(found_slug) = document_repo
-            .find_by_vault_path(database, &candidate)
-            .await?
-        {
-            if current_slug == Some(found_slug.as_str()) {
-                return Ok(candidate);
-            }
-            candidate = format!("{relative_dir}/{base} {idx}.md");
-            idx += 1;
-        }
-        Ok(candidate)
-    }
-
     pub async fn save_item_draft(
         &self,
         input: SaveItemDraftInput,
@@ -641,51 +547,29 @@ impl EntityPersistenceService {
             .find_by_id(database.as_ref(), input.id.trim())
             .await?;
 
-        let desired_base_slug = slugify(name);
-        let slug = if let Some(current) = existing.as_ref() {
-            if current.slug == desired_base_slug {
-                current.slug.clone()
-            } else {
-                unique_slug_for_dir_with_ext(store.root(), "items", &desired_base_slug, "toml")
-            }
-        } else {
-            unique_slug_for_dir_with_ext(store.root(), "items", &desired_base_slug, "toml")
-        };
+        let slug = resolve_slug(
+            store.root(),
+            "items",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            name,
+        );
 
         let created_at = existing
             .as_ref()
             .map(|row| row.created_at.clone())
             .unwrap_or_else(|| now.clone());
-        let vault_path = if let Some(current) = existing.as_ref() {
-            let readable = self
-                .unique_readable_vault_path(
-                    document_repo.as_ref(),
-                    database.as_ref(),
-                    "items",
-                    name,
-                    Some(&current.slug),
-                )
-                .await?;
-            if normalize_relative_path_for_storage(&current.vault_path)
-                == normalize_relative_path_for_storage(&readable)
-            {
-                current.vault_path.clone()
-            } else {
-                document_repo
-                    .delete_by_vault_path(database.as_ref(), &current.vault_path)
-                    .await?;
-                readable
-            }
-        } else {
-            self.unique_readable_vault_path(
-                document_repo.as_ref(),
-                database.as_ref(),
-                "items",
-                name,
-                None,
-            )
-            .await?
-        };
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "items",
+            name,
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            None,
+        )
+        .await?;
 
         let published_at = match existing.as_ref() {
             Some(current) => store
@@ -770,6 +654,93 @@ impl EntityPersistenceService {
             updated_at: item_row.updated_at,
         })
     }
+}
+
+/// A reference to the existing DB row for an entity being re-saved, normalized to
+/// the fields the shared save helpers need.
+struct ExistingRef<'a> {
+    slug: &'a str,
+    vault_path: &'a str,
+}
+
+/// Resolve the canonical slug for a save: keep the current slug when the name
+/// hasn't changed, otherwise mint a fresh unique slug under `dir`.
+fn resolve_slug(root: &Path, dir: &str, existing_slug: Option<&str>, name: &str) -> String {
+    let base_slug = slugify(name);
+    match existing_slug {
+        Some(slug) if slug == base_slug => slug.to_string(),
+        _ => unique_slug_for_dir_with_ext(root, dir, &base_slug, "toml"),
+    }
+}
+
+/// Resolve the readable vault (markdown) path for a save.
+///
+/// Precedence: an explicit `requested` path wins; otherwise reuse the existing
+/// path when it already matches the readable name, else compute a fresh unique
+/// readable path (retiring the old document-index entry on a rename).
+async fn resolve_vault_path(
+    document_repo: &dyn crate::repositories::DocumentRepository,
+    database: &db::Database,
+    dir: &str,
+    name: &str,
+    existing: Option<ExistingRef<'_>>,
+    requested: Option<&str>,
+) -> Result<String, String> {
+    if let Some(requested) = requested {
+        let normalized = normalize_relative_path_for_storage(requested.trim());
+        if !normalized.is_empty() {
+            return Ok(normalized);
+        }
+    }
+
+    match existing {
+        Some(current) => {
+            let readable = unique_readable_vault_path(
+                document_repo,
+                database,
+                dir,
+                name,
+                Some(current.slug),
+            )
+            .await?;
+            if normalize_relative_path_for_storage(current.vault_path)
+                == normalize_relative_path_for_storage(&readable)
+            {
+                Ok(current.vault_path.to_string())
+            } else {
+                document_repo
+                    .delete_by_vault_path(database, current.vault_path)
+                    .await?;
+                Ok(readable)
+            }
+        }
+        None => unique_readable_vault_path(document_repo, database, dir, name, None).await,
+    }
+}
+
+/// Compute a unique `dir/Name.md` path, disambiguating collisions with a numeric
+/// suffix unless the colliding entry is the entity we're saving (`current_slug`).
+async fn unique_readable_vault_path(
+    document_repo: &dyn crate::repositories::DocumentRepository,
+    database: &db::Database,
+    relative_dir: &str,
+    display_name: &str,
+    current_slug: Option<&str>,
+) -> Result<String, String> {
+    let base = normalize_markdown_file_stem(display_name);
+    let mut candidate = format!("{relative_dir}/{base}.md");
+    let mut idx = 2;
+    while let Some(found_slug) = document_repo
+        .find_by_vault_path(database, &candidate)
+        .await?
+    {
+        if current_slug == Some(found_slug.as_str()) {
+            return Ok(candidate);
+        }
+        candidate = format!("{relative_dir}/{base} {idx}.md");
+        idx += 1;
+    }
+    Ok(candidate)
 }
 
 #[derive(Debug, Clone, Deserialize)]

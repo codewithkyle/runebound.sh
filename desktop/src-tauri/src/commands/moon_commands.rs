@@ -1,7 +1,9 @@
 use dnd_core::calendar::{self, moon_phase_info, MoonPhaseKind, StoredCalendar};
 use runebound_models::{doc, entity_card, entity_row};
 
-use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
+use crate::commands::{
+    DesktopHandlerInvocation, command_action_response, ok_response, ok_response_with_doc,
+};
 
 use super::date_commands::CommandResult;
 
@@ -16,18 +18,20 @@ pub async fn handle_moon(
     }
 
     if lowered != "moon" {
-        return Ok(Some(ok_response(
-            "unknown moon command. use `moon help`".to_string(),
-            None,
+        return Ok(Some(command_action_response(
+            "unknown moon command. use ",
+            "moon help",
+            "",
         )));
     }
 
     let stored = match load_calendar_state()? {
         Some(calendar) => calendar,
         None => {
-            return Ok(Some(ok_response(
-                "No calendar loaded. Use `calendar import` to import a calendar.".to_string(),
-                None,
+            return Ok(Some(command_action_response(
+                "No calendar loaded. Use ",
+                "calendar import",
+                " to import a calendar.",
             )));
         }
     };

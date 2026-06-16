@@ -6,7 +6,9 @@ use runebound_models::{
 };
 use tauri_plugin_dialog::DialogExt;
 
-use crate::commands::{ok_response, ok_response_with_doc, DesktopHandlerInvocation};
+use crate::commands::{
+    DesktopHandlerInvocation, command_action_response, ok_response, ok_response_with_doc,
+};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
@@ -24,9 +26,10 @@ pub async fn handle_calendar(
         return calendar_import(trimmed, invocation).await;
     }
 
-    Ok(Some(ok_response(
-        "unknown calendar command. use `calendar help`".to_string(),
-        None,
+    Ok(Some(command_action_response(
+        "unknown calendar command. use ",
+        "calendar help",
+        "",
     )))
 }
 

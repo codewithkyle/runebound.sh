@@ -1,11 +1,17 @@
 use crate::repositories::{Database, GenerationRepository};
+use crate::services::ollama_chat::{
+    attempt_seed, build_chat_client, load_generation_config, post_chat_for_content,
+};
+use crate::services::vault_ref::{
+    VaultReferenceEntry, extract_prompt_reference_keys, load_vault_reference_entries,
+};
 use crate::utils::{
     estimate_tokens, normalize_faction_seed, normalize_item_category, normalize_item_rarity,
     normalize_location_seed, normalize_relative_path_for_storage, normalize_sex,
     normalize_unknown_list, normalize_unknown_text, validate_faction_details,
     validate_location_details,
 };
-use dnd_core::config::{load_effective, validate_for_runtime};
+use dnd_core::config::AppConfig;
 use dnd_core::entity_store::EntityStore;
 use dnd_core::vault::Vault;
 use runebound_models::utils::{
@@ -14,7 +20,6 @@ use runebound_models::utils::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 /// Tokens reserved within the context window for the model's own output, so the
 /// capacity warning fires before the prompt crowds out room to respond.
@@ -43,6 +48,31 @@ fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
     }
 }
 
+/// Assemble the `@reference` prompt context from the configured vault, tolerating a
+/// missing or unreadable vault by returning empty context. Shared by seed
+/// generation and field reroll so a custom prompt's `@references` resolve the same
+/// way in both flows.
+pub(crate) fn build_reference_context(
+    config: &AppConfig,
+    user_prompt: &str,
+    workspace_root: &Path,
+) -> PromptReferenceContext {
+    let Some(vault_path) = config.vault.path.clone() else {
+        return PromptReferenceContext::default();
+    };
+    let vault = Vault::new(vault_path);
+    if vault.ensure_root_exists().is_err() {
+        return PromptReferenceContext::default();
+    }
+    match load_vault_reference_entries(&vault) {
+        Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault, workspace_root),
+        Err(err) => {
+            eprintln!("reference context warning: {err}");
+            PromptReferenceContext::default()
+        }
+    }
+}
+
 pub struct AiGenerationService;
 
 impl AiGenerationService {
@@ -53,32 +83,12 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<NpcSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config.ollama.model.clone().ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "npc_seed", 20)
@@ -115,18 +125,13 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build().map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_names = HashSet::new();
         let mut seen_attempt_occupation_anchors = HashSet::new();
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64).unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations." };
 
             let payload = serde_json::json!({
@@ -144,15 +149,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client.post(&url).json(&payload).send().await.map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
 
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value.get("message").and_then(|msg| msg.get("content")).and_then(|content| content.as_str()) else { continue };
-
-            let parsed: Result<NpcSeed, _> = serde_json::from_str(content);
+            let parsed: Result<NpcSeed, _> = serde_json::from_str(&content);
             let Ok(mut seed) = parsed else { continue };
 
             seed.name = seed.name.trim().to_string();
@@ -194,32 +195,12 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<LocationSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config.ollama.model.clone().ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "location_seed", 20)
@@ -252,17 +233,12 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build().map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_names = HashSet::new();
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64).unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
 
             let payload = serde_json::json!({
@@ -280,15 +256,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client.post(&url).json(&payload).send().await.map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
 
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value.get("message").and_then(|msg| msg.get("content")).and_then(|content| content.as_str()) else { continue };
-
-            let parsed: Result<LocationSeed, _> = serde_json::from_str(content);
+            let parsed: Result<LocationSeed, _> = serde_json::from_str(&content);
             let Ok(seed) = parsed else { continue };
 
             let seed = match normalize_location_seed(seed) {
@@ -319,32 +291,12 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<FactionSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config.ollama.model.clone().ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "faction_seed", 20)
@@ -385,17 +337,12 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build().map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_names = HashSet::new();
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64).unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
 
             let payload = serde_json::json!({
@@ -413,15 +360,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client.post(&url).json(&payload).send().await.map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
 
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value.get("message").and_then(|msg| msg.get("content")).and_then(|content| content.as_str()) else { continue };
-
-            let parsed: Result<FactionSeed, _> = serde_json::from_str(content);
+            let parsed: Result<FactionSeed, _> = serde_json::from_str(&content);
             let Ok(seed) = parsed else { continue };
 
             let seed = match normalize_faction_seed(seed) {
@@ -452,14 +395,7 @@ impl AiGenerationService {
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<ItemSeed>, String> {
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let user_prompt = prompt
             .as_ref()
@@ -467,24 +403,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one magical or legendary item.");
 
-        let reference_context = if let Some(vault_path) = config.vault.path.clone() {
-            let vault = Vault::new(vault_path);
-            if vault.ensure_root_exists().is_ok() {
-                match load_vault_reference_entries(&vault) {
-                    Ok(entries) => build_prompt_reference_context(
-                        user_prompt,
-                        &entries,
-                        &vault,
-                        workspace_root,
-                    ),
-                    Err(err) => { eprintln!("reference context warning: {err}"); PromptReferenceContext::default() }
-                }
-            } else {
-                PromptReferenceContext::default()
-            }
-        } else {
-            PromptReferenceContext::default()
-        };
+        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
             + estimate_tokens(&reference_context.system_context)
@@ -522,18 +441,10 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..5 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
             let repair_note = if attempt == 0 {
                 ""
             } else {
@@ -557,26 +468,11 @@ impl AiGenerationService {
                 }, { "role": "user", "content": user_prompt }]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: Result<ItemSeed, _> = serde_json::from_str(content);
+            let parsed: Result<ItemSeed, _> = serde_json::from_str(&content);
             let Ok(mut seed) = parsed else { continue };
 
             seed.name = seed.name.trim().to_string();
@@ -672,14 +568,6 @@ pub struct ItemSeed {
     pub location: String,
 }
 
-#[derive(Debug, Clone)]
-pub struct VaultReferenceEntry {
-    pub key: String,
-    pub key_lower: String,
-    pub markdown_path: Option<String>,
-    pub is_dir: bool,
-}
-
 #[derive(Debug, Clone, Default)]
 pub struct PromptReferenceContext {
     pub system_context: String,
@@ -747,100 +635,6 @@ pub(crate) fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> Strin
     anchors.join(", ")
 }
 
-
-fn is_reference_boundary_char(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"')
-}
-
-fn can_start_reference_at(input: &str, at_index: usize) -> bool {
-    if at_index == 0 { return true; }
-    let before = input[..at_index].chars().next_back();
-    before.is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '\''))
-}
-
-fn should_ignore_reference_component(component: &str) -> bool {
-    component.split('/').any(|part| part.starts_with('.') || part.eq_ignore_ascii_case("target"))
-}
-
-fn markdown_reference_key(relative_path: &str) -> Option<String> {
-    let normalized = relative_path.replace('\\', "/");
-    let path = std::path::Path::new(&normalized);
-    let ext = path.extension().and_then(|value| value.to_str())?;
-    if !ext.eq_ignore_ascii_case("md") { return None; }
-    let stem = path.file_stem().and_then(|value| value.to_str()).map(str::trim).filter(|value| !value.is_empty())?;
-    let parent = path.parent().and_then(|value| value.to_str()).unwrap_or("");
-    if parent.is_empty() { Some(stem.to_string()) } else { Some(format!("{parent}/{stem}")) }
-}
-
-fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry>, String> {
-    use std::fs;
-    vault.ensure_root_exists().map_err(|err| err.to_string())?;
-    let mut entries: HashMap<String, VaultReferenceEntry> = HashMap::new();
-    let mut stack = vec![PathBuf::new()];
-
-    while let Some(relative_dir) = stack.pop() {
-        let full_dir = vault.resolve_relative(&relative_dir).map_err(|err| err.to_string())?;
-        let dir_entries = fs::read_dir(&full_dir).map_err(|err| format!("failed to read directory {}: {}", full_dir.display(), err))?;
-
-        for dir_entry in dir_entries {
-            let dir_entry = match dir_entry { Ok(value) => value, Err(err) => { eprintln!("reference index warning: failed to read directory entry: {err}"); continue; } };
-            let entry_path = dir_entry.path();
-            let relative = match entry_path.strip_prefix(vault.root()) { Ok(value) => value.to_string_lossy().to_string().replace('\\', "/"), Err(_) => continue };
-            if should_ignore_reference_component(&relative) { continue; }
-
-            if entry_path.is_dir() {
-                let mut key = relative.trim_matches('/').to_string();
-                if key.is_empty() { continue; }
-                key.push('/');
-                entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry { key: key.clone(), key_lower: key.to_lowercase(), markdown_path: None, is_dir: true });
-                stack.push(PathBuf::from(relative));
-                continue;
-            }
-
-            let Some(key) = markdown_reference_key(&relative) else { continue };
-            entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry { key: key.clone(), key_lower: key.to_lowercase(), markdown_path: Some(relative), is_dir: false });
-        }
-    }
-
-    let mut out: Vec<VaultReferenceEntry> = entries.into_values().collect();
-    out.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
-    Ok(out)
-}
-
-fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) -> Vec<String> {
-    let mut candidates: Vec<&VaultReferenceEntry> = entries.iter().filter(|entry| !entry.is_dir && entry.markdown_path.is_some()).collect();
-    candidates.sort_by(|left, right| right.key_lower.len().cmp(&left.key_lower.len()));
-
-    let prompt_lower = prompt.to_lowercase();
-    let mut cursor = 0;
-    let mut matched = Vec::new();
-
-    while cursor < prompt.len() {
-        let next_at = match prompt[cursor..].find('@') { Some(offset) => cursor + offset, None => break };
-        if !can_start_reference_at(prompt, next_at) { cursor = next_at + 1; continue; }
-
-        let tail_start = next_at + 1;
-        let tail = &prompt_lower[tail_start..];
-        let mut best: Option<&VaultReferenceEntry> = None;
-
-        for candidate in &candidates {
-            if !tail.starts_with(&candidate.key_lower) { continue; }
-            let boundary_index = tail_start + candidate.key.len();
-            let boundary_ok = prompt[boundary_index..].chars().next().is_none_or(is_reference_boundary_char);
-            if !boundary_ok { continue; }
-            best = Some(*candidate);
-            break;
-        }
-
-        if let Some(candidate) = best { matched.push(candidate.key.clone()); cursor = tail_start + candidate.key.len(); continue; }
-        cursor = next_at + 1;
-    }
-
-    let mut unique = Vec::new();
-    let mut seen = std::collections::HashSet::new();
-    for key in matched { let lowered = key.to_lowercase(); if seen.insert(lowered) { unique.push(key); } }
-    unique
-}
 
 fn build_prompt_reference_context(
     prompt: &str,

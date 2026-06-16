@@ -12,7 +12,7 @@ mod utils;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use dnd_core::command::{CommandClientEvent, CommandResponse};
+use dnd_core::command::{CommandClientEvent, CommandResponse, reject_help_flags};
 use dnd_core::command_manifest::CommandManifest;
 use dnd_core::command_parse::{normalize_command_input, parse_command_input};
 use dnd_core::db;
@@ -90,6 +90,12 @@ async fn run_command(
         };
         let mut service = state.command_service.lock().await;
         return Ok(service.execute_line(&line).await);
+    }
+
+    // Reject `-h`/`--help` uniformly for desktop dispatch and the core fallthrough,
+    // mirroring core's own guard (onboarding above forwards to the guarded `execute_line`).
+    if let Some(message) = reject_help_flags(&parsed.normalized_tokens) {
+        return Err(message);
     }
 
     if let Some(response) =

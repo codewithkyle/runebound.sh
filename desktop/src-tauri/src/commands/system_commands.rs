@@ -8,12 +8,46 @@ use crate::entities::common::{
     entity_response_with_event,
     merge_seed_and_reroll_prompt,
 };
+use crate::commands::ok_response_with_doc;
 use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text, prepend_notice};
+use dnd_core::command::render_help_overview;
+use dnd_core::command_manifest::InputContext;
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
 
+
+pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
+    // Resolve the current input context so the help index lists the commands
+    // actually runnable here — an open entity editor takes precedence over an
+    // in-progress setup wizard. Mirrors the suggestion service's context logic.
+    let active_kind = {
+        let editor = invocation.state.editor_session.lock().await;
+        editor.active_kind()
+    };
+    let context = match active_kind {
+        Some(kind) => InputContext::EntityEditor(kind.as_str().to_string()),
+        None => {
+            let onboarding_active = {
+                let service = invocation.state.command_service.lock().await;
+                service.session().onboarding.active
+            };
+            if onboarding_active {
+                InputContext::ConfigEditor
+            } else {
+                InputContext::Default
+            }
+        }
+    };
+
+    let overview = render_help_overview(&context);
+    Ok(Some(ok_response_with_doc(
+        overview.output,
+        overview.output_doc,
+        None,
+    )))
+}
 
 pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
     let active_kind = {

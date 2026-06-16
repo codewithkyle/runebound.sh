@@ -21,6 +21,94 @@ pub struct OllamaHealth {
     pub detail: String,
 }
 
+/// Raw outcome of probing an Ollama server's `/api/tags` endpoint.
+///
+/// This is the single shared transport used by the boot, status, ping, and setup
+/// flows. Higher-level helpers (`check_ollama_health`, `check_ollama_reachability`,
+/// and the setup model probe) format their own presentation from this result.
+#[derive(Debug, Clone)]
+pub struct OllamaProbe {
+    /// The server answered `/api/tags` with `200 OK`.
+    pub reachable: bool,
+    /// Model names advertised by the server (empty when unreachable/unreadable).
+    pub models: Vec<String>,
+    /// Failure reason when the probe did not cleanly return a model list.
+    /// `None` only when the server returned a readable list.
+    pub error: Option<String>,
+}
+
+/// Probe an Ollama server for its advertised model list.
+///
+/// Performs the `/api/tags` GET shared by boot, status, ping, and setup. Never
+/// panics: transport, HTTP-status, and body-parse failures are reported via
+/// `error`. A `200` with an unreadable body yields `reachable = true` but an
+/// `error`, matching the prior boot/ping semantics.
+pub async fn probe_ollama(base_url: &str, timeout_seconds: u64) -> OllamaProbe {
+    let base = base_url.trim_end_matches('/');
+    let client = match reqwest::Client::builder()
+        .timeout(Duration::from_secs(timeout_seconds))
+        .build()
+    {
+        Ok(client) => client,
+        Err(err) => {
+            return OllamaProbe {
+                reachable: false,
+                models: Vec::new(),
+                error: Some(format!("failed to create HTTP client: {err}")),
+            };
+        }
+    };
+
+    let response = match client.get(format!("{base}/api/tags")).send().await {
+        Ok(response) => response,
+        Err(_) => {
+            return OllamaProbe {
+                reachable: false,
+                models: Vec::new(),
+                error: Some(format!("could not reach the Ollama server at {base_url}")),
+            };
+        }
+    };
+
+    if response.status() != StatusCode::OK {
+        return OllamaProbe {
+            reachable: false,
+            models: Vec::new(),
+            error: Some(format!("the Ollama server returned {}", response.status())),
+        };
+    }
+
+    let value = match response.json::<serde_json::Value>().await {
+        Ok(value) => value,
+        Err(_) => {
+            return OllamaProbe {
+                reachable: true,
+                models: Vec::new(),
+                error: Some("the Ollama server response could not be read".to_string()),
+            };
+        }
+    };
+
+    let models = value
+        .get("models")
+        .and_then(|models| models.as_array())
+        .map(|models| {
+            models
+                .iter()
+                .filter_map(|model| {
+                    model.get("name").and_then(|name| name.as_str()).map(String::from)
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+
+    OllamaProbe {
+        reachable: true,
+        models,
+        error: None,
+    }
+}
+
 /// Probe the configured Ollama server and verify the configured model exists.
 ///
 /// Uses a short timeout so a dead server does not stall the boot sequence.
@@ -41,65 +129,28 @@ pub async fn check_ollama_health(config: &AppConfig, timeout_seconds: u64) -> Ol
         };
     }
 
-    let client = match reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
-        .build()
-    {
-        Ok(client) => client,
-        Err(err) => {
-            return OllamaHealth {
-                reachable: false,
-                model_available: false,
-                detail: format!("failed to create HTTP client: {err}"),
-            };
-        }
-    };
-
-    let url = format!("{}/api/tags", base.trim_end_matches('/'));
-    let response = match client.get(url).send().await {
-        Ok(response) => response,
-        Err(_) => {
-            return OllamaHealth {
-                reachable: false,
-                model_available: false,
-                detail: format!("could not reach the Ollama server at {base}"),
-            };
-        }
-    };
-
-    if response.status() != StatusCode::OK {
+    let probe = probe_ollama(base, timeout_seconds).await;
+    if !probe.reachable {
         return OllamaHealth {
             reachable: false,
             model_available: false,
-            detail: format!("the Ollama server returned {}", response.status()),
+            detail: probe
+                .error
+                .unwrap_or_else(|| format!("could not reach the Ollama server at {base}")),
+        };
+    }
+    if let Some(error) = probe.error {
+        // Server answered but the model list could not be read.
+        return OllamaHealth {
+            reachable: true,
+            model_available: false,
+            detail: error,
         };
     }
 
-    let models = match response.json::<serde_json::Value>().await {
-        Ok(value) => value
-            .get("models")
-            .and_then(|models| models.as_array())
-            .map(|models| {
-                models
-                    .iter()
-                    .filter_map(|model| {
-                        model.get("name").and_then(|name| name.as_str()).map(String::from)
-                    })
-                    .collect::<Vec<_>>()
-            })
-            .unwrap_or_default(),
-        Err(_) => {
-            return OllamaHealth {
-                reachable: true,
-                model_available: false,
-                detail: "the Ollama server response could not be read".to_string(),
-            };
-        }
-    };
-
     match config.ollama.model.as_deref() {
         Some(model) if !model.trim().is_empty() => {
-            if models.iter().any(|candidate| candidate == model) {
+            if probe.models.iter().any(|candidate| candidate == model) {
                 OllamaHealth {
                     reachable: true,
                     model_available: true,
@@ -245,40 +296,21 @@ fn check_ollama_config(config: &AppConfig) -> CheckItem {
 }
 
 async fn check_ollama_reachability(config: &AppConfig) -> CheckItem {
-    let url = format!("{}/api/tags", config.ollama.base_url.trim_end_matches('/'));
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-        .build();
-
-    let Ok(client) = client else {
-        return CheckItem {
+    // The explicit diagnostic honors the configured timeout (the user asked to
+    // test the connection thoroughly), unlike the fast boot/setup probes.
+    let probe = probe_ollama(&config.ollama.base_url, config.ollama.timeout_seconds).await;
+    if probe.reachable {
+        CheckItem {
             name: "ollama connection".to_string(),
-            ok: false,
-            detail: "failed to create HTTP client".to_string(),
-        };
-    };
-
-    match client.get(url).send().await {
-        Ok(response) => {
-            if response.status() == StatusCode::OK {
-                CheckItem {
-                    name: "ollama connection".to_string(),
-                    ok: true,
-                    detail: "reachable".to_string(),
-                }
-            } else {
-                CheckItem {
-                    name: "ollama connection".to_string(),
-                    ok: false,
-                    detail: format!("unexpected HTTP status: {}", response.status()),
-                }
-            }
+            ok: true,
+            detail: "reachable".to_string(),
         }
-        Err(err) => CheckItem {
+    } else {
+        CheckItem {
             name: "ollama connection".to_string(),
             ok: false,
-            detail: err.to_string(),
-        },
+            detail: probe.error.unwrap_or_else(|| "unreachable".to_string()),
+        }
     }
 }
 

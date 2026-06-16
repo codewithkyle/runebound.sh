@@ -1,9 +1,13 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
+    build_reference_context,
     describe_recent_npc_occupation_anchors,
     occupation_anchor,
     parse_recent_npc_seeds,
     recent_occupation_anchor_set,
+};
+use crate::services::ollama_chat::{
+    attempt_seed, build_chat_client, load_generation_config, post_chat_for_content,
 };
 use crate::utils::{
     normalize_exports,
@@ -16,10 +20,28 @@ use crate::utils::{
     normalize_unknown_list,
     normalize_unknown_text,
 };
-use dnd_core::config::{load_effective, validate_for_runtime};
+use dnd_core::config::AppConfig;
 use std::collections::HashSet;
-use std::path::PathBuf;
-use std::time::Duration;
+use std::path::{Path, PathBuf};
+
+/// Resolve any `@references` in a custom reroll prompt into an authoritative
+/// setting-context block appended to the system message. Returns an empty string
+/// when the prompt is blank or references nothing, so a plain reroll is unchanged.
+fn resolve_reference_suffix(
+    config: &AppConfig,
+    extra_prompt: &str,
+    workspace_root: &Path,
+) -> String {
+    if extra_prompt.is_empty() {
+        return String::new();
+    }
+    let context = build_reference_context(config, extra_prompt, workspace_root);
+    if context.system_context.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", context.system_context)
+    }
+}
 
 pub struct EntityRerollService;
 
@@ -32,14 +54,7 @@ impl EntityRerollService {
         generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollNpcFieldResult, String> {
         let field = canonical_npc_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -49,6 +64,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = npc_context_summary(&input.npc);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let (recent_occupation_anchors, recent_occupation_context) = if field == "occupation" {
             let recent_payloads = generation_repo
                 .recent_prompts(database, "npc_seed", 20)
@@ -110,20 +126,12 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         let mut seen_attempt_occupation_anchors = HashSet::new();
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -139,12 +147,13 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
                             if field == "occupation" {
                                 " For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one."
                             } else {
                                 ""
-                            }
+                            },
+                            reference_suffix
                         )
                     },
                     {
@@ -161,26 +170,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(_) => continue,
             };
@@ -264,14 +258,7 @@ impl EntityRerollService {
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollLocationFieldResult, String> {
         let field = canonical_location_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -281,6 +268,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = location_context_summary(&input.location);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise, fitting fantasy location name.",
             "kind_type" => "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other.",
@@ -320,18 +308,10 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -346,7 +326,10 @@ impl EntityRerollService {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                        "content": format!(
+                            "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                            reference_suffix
+                        )
                     },
                     {
                         "role": "user",
@@ -361,26 +344,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(_) => continue,
             };
@@ -459,14 +427,7 @@ impl EntityRerollService {
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollFactionFieldResult, String> {
         let field = canonical_faction_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -476,6 +437,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = faction_context_summary(&input.faction);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise fantasy faction name.",
             "kind_type" => "Generate one kind_type enum value from: guild, cult, military_order, noble_house, criminal_syndicate, mercantile_league, religious_order, arcane_circle, revolutionary_cell, other.",
@@ -529,18 +491,10 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -555,7 +509,10 @@ impl EntityRerollService {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context."
+                        "content": format!(
+                            "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                            reference_suffix
+                        )
                     },
                     {
                         "role": "user",
@@ -570,26 +527,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(parsed) => parsed,
                 Err(_) => continue,
             };
@@ -679,14 +621,7 @@ impl EntityRerollService {
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollItemFieldResult, String> {
         let field = canonical_item_reroll_field(&input.field)?;
-        let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let config = loaded.effective;
-        let model = config
-            .ollama
-            .model
-            .clone()
-            .ok_or_else(|| "ollama.model is not configured; run start setup".to_string())?;
+        let (config, model) = load_generation_config(workspace_root)?;
 
         let extra_prompt = input
             .prompt
@@ -696,6 +631,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = item_context_summary(&input.item);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise, evocative item name.",
             "category" => "Generate one category from: weapon, armor, consumable, wondrous, arcane_focus, tool, trinket, other.",
@@ -736,18 +672,10 @@ impl EntityRerollService {
             })
         };
 
-        let url = format!("{}/api/chat", config.ollama.base_url.trim_end_matches('/'));
-        let client = reqwest::Client::builder()
-            .timeout(Duration::from_secs(config.ollama.timeout_seconds))
-            .build()
-            .map_err(|err| err.to_string())?;
+        let (client, url) = build_chat_client(&config)?;
 
         for attempt in 0..4 {
-            let base_seed = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map(|duration| duration.as_micros() as i64)
-                .unwrap_or(0);
-            let run_seed = (base_seed + i64::from(attempt)) as i32;
+            let run_seed = attempt_seed(attempt);
 
             let payload = serde_json::json!({
                 "model": model,
@@ -762,7 +690,10 @@ impl EntityRerollService {
                 "messages": [
                     {
                         "role": "system",
-                        "content": "You update one RPG item field. Return only valid JSON matching the schema."
+                        "content": format!(
+                            "You update one RPG item field. Return only valid JSON matching the schema.{}",
+                            reference_suffix
+                        )
                     },
                     {
                         "role": "user",
@@ -777,26 +708,11 @@ impl EntityRerollService {
                 ]
             });
 
-            let response = client
-                .post(&url)
-                .json(&payload)
-                .send()
-                .await
-                .map_err(|err| err.to_string())?;
-            if !response.status().is_success() {
-                return Err(format!("ollama chat failed with status {}", response.status()));
-            }
-
-            let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
-            let Some(content) = value
-                .get("message")
-                .and_then(|msg| msg.get("content"))
-                .and_then(|content| content.as_str())
-            else {
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
                 continue;
             };
 
-            let parsed: serde_json::Value = match serde_json::from_str(content) {
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
                 Ok(value) => value,
                 Err(_) => continue,
             };

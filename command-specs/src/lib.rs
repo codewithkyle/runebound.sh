@@ -105,6 +105,84 @@ pub struct CommandAlias {
     pub summary: String,
 }
 
+/// Runtime input context that gates which commands are offered in autocomplete.
+///
+/// Derived from editor state: an open entity draft, the setup/config wizard, or
+/// neither (the default command surface).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum InputContext {
+    Default,
+    ConfigEditor,
+    /// An entity draft is open; the tag is the entity's command root ("npc", ...).
+    EntityEditor(String),
+}
+
+/// Declarative visibility of a command across input contexts.
+///
+/// This is the single source of truth for context-gated autocomplete: the runtime
+/// asks [`command_availability`] for a command and never hard-codes per-command
+/// visibility rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CommandAvailability {
+    /// Default surface only (no editor open): create, calendar, undo, ...
+    Default,
+    /// Every context (help, clear).
+    Always,
+    /// Only while the setup/config editor is active.
+    ConfigEditor,
+    /// Any active editor — config or entity (save, cancel).
+    AnyEditor,
+    /// Default surface plus any open entity draft (publish).
+    DefaultOrEntityEditor,
+    /// Only while some entity draft is open (reroll).
+    EntityEditorOnly,
+    /// Only while the matching entity kind's editor is active (npc, location, ...).
+    EntityScoped(&'static str),
+}
+
+impl CommandAvailability {
+    pub fn is_visible_in(self, context: &InputContext) -> bool {
+        match self {
+            CommandAvailability::Always => true,
+            CommandAvailability::Default => matches!(context, InputContext::Default),
+            CommandAvailability::ConfigEditor => matches!(context, InputContext::ConfigEditor),
+            CommandAvailability::AnyEditor => matches!(
+                context,
+                InputContext::ConfigEditor | InputContext::EntityEditor(_)
+            ),
+            CommandAvailability::DefaultOrEntityEditor => matches!(
+                context,
+                InputContext::Default | InputContext::EntityEditor(_)
+            ),
+            CommandAvailability::EntityEditorOnly => {
+                matches!(context, InputContext::EntityEditor(_))
+            }
+            CommandAvailability::EntityScoped(tag) => {
+                matches!(context, InputContext::EntityEditor(active) if active == tag)
+            }
+        }
+    }
+}
+
+/// Single source of truth for which input context(s) each command is offered in.
+///
+/// Adding a new entity kind is data-only: add an `EntityScoped` arm here and a
+/// schema entry; the suggestion filter itself never changes. Commands not listed
+/// default to the default surface.
+pub fn command_availability(name: &str) -> CommandAvailability {
+    match name {
+        "npc" => CommandAvailability::EntityScoped("npc"),
+        "location" => CommandAvailability::EntityScoped("location"),
+        "faction" => CommandAvailability::EntityScoped("faction"),
+        "item" => CommandAvailability::EntityScoped("item"),
+        "reroll" => CommandAvailability::EntityEditorOnly,
+        "save" | "cancel" => CommandAvailability::AnyEditor,
+        "publish" => CommandAvailability::DefaultOrEntityEditor,
+        "help" | "clear" => CommandAvailability::Always,
+        _ => CommandAvailability::Default,
+    }
+}
+
 pub fn handler_metadata_for(root: &str) -> Option<HandlerMetadataDescriptor> {
     let manifest = command_manifest();
     let command = manifest
@@ -792,7 +870,9 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                show_in_autocomplete: true,
+                // Hidden from prefix-based autocomplete: users type a delta (e.g. `+15m`),
+                // never `+` as a standalone prefix, so it would never surface usefully.
+                show_in_autocomplete: false,
             },
             CommandSpec {
                 name: "-".to_string(),
@@ -803,7 +883,9 @@ pub fn command_manifest() -> CommandManifest {
                 requires_subcommand: false,
                 canonical_help_command: None,
                 execution: CommandExecution::Desktop,
-                show_in_autocomplete: true,
+                // Hidden from prefix-based autocomplete: users type a delta (e.g. `-3d`),
+                // never `-` as a standalone prefix, so it would never surface usefully.
+                show_in_autocomplete: false,
             },
             CommandSpec {
                 name: "moon".to_string(),
@@ -823,7 +905,12 @@ pub fn command_manifest() -> CommandManifest {
                     "publish Lirael".to_string(),
                     "publish obsidian-gate".to_string(),
                 ],
-                subcommands: Vec::new(),
+                subcommands: vec![SubcommandSpec {
+                    name: "help".to_string(),
+                    summary: "Show publish command help".to_string(),
+                    options: Vec::new(),
+                    examples: vec!["publish help".to_string()],
+                }],
                 options: Vec::new(),
                 requires_subcommand: false,
                 canonical_help_command: Some("publish help".to_string()),
@@ -879,45 +966,6 @@ pub fn command_manifest() -> CommandManifest {
                 from: vec!["setup".to_string(), "start".to_string()],
                 to: vec!["start".to_string(), "setup".to_string()],
                 summary: "setup start alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["show".to_string(), "setup".to_string()],
-                to: vec!["setup".to_string(), "show".to_string()],
-                summary: "setup show alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["cancel".to_string(), "setup".to_string()],
-                to: vec!["setup".to_string(), "cancel".to_string()],
-                summary: "setup cancel alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["set".to_string(), "vault".to_string()],
-                to: vec!["setup".to_string(), "set".to_string(), "vault".to_string()],
-                summary: "setup set vault alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["set".to_string(), "ollama".to_string()],
-                to: vec!["setup".to_string(), "set".to_string(), "ollama".to_string()],
-                summary: "setup set ollama alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["test".to_string(), "ollama".to_string()],
-                to: vec![
-                    "setup".to_string(),
-                    "test".to_string(),
-                    "ollama".to_string(),
-                ],
-                summary: "setup test ollama alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["use".to_string(), "model".to_string()],
-                to: vec!["setup".to_string(), "use".to_string(), "model".to_string()],
-                summary: "setup use model alias".to_string(),
-            },
-            CommandAlias {
-                from: vec!["set".to_string(), "model".to_string()],
-                to: vec!["setup".to_string(), "set".to_string(), "model".to_string()],
-                summary: "setup set model alias".to_string(),
             },
         ],
     }

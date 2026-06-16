@@ -1,9 +1,19 @@
 use dnd_core::calendar::{self, format_date_conversational, StoredCalendar};
 use runebound_models::CommandResponse;
+use runebound_models::output::{StatusTone, doc, status};
 
-use crate::commands::{ok_response, DesktopHandlerInvocation};
+use crate::commands::{
+    DesktopHandlerInvocation, command_action_response, ok_response, ok_response_with_doc,
+};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
+
+/// Echo the current calendar date as a structured status line, with the plain
+/// conversational sentence as the fallback `output`.
+pub(crate) fn date_response(formatted: String) -> CommandResult {
+    let document = doc().with_block(status(StatusTone::Info, formatted.clone()));
+    Ok(Some(ok_response_with_doc(formatted, Some(document), None)))
+}
 
 pub async fn handle_date(
     invocation: DesktopHandlerInvocation<'_>,
@@ -16,16 +26,17 @@ pub async fn handle_date(
     }
 
     if lowered.starts_with("date set") {
-        return date_set(trimmed).await;
+        return date_set(invocation.tokens).await;
     }
 
     if lowered == "date" {
         return date_show(invocation).await;
     }
 
-    Ok(Some(ok_response(
-        "unknown date command. use `date help`".to_string(),
-        None,
+    Ok(Some(command_action_response(
+        "unknown date command. use ",
+        "date help",
+        "",
     )))
 }
 
@@ -33,9 +44,10 @@ async fn date_show(_invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let stored = match calendar::load_calendar() {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return Ok(Some(ok_response(
-                "No calendar loaded. Use `calendar import` to import a calendar.".to_string(),
-                None,
+            return Ok(Some(command_action_response(
+                "No calendar loaded. Use ",
+                "calendar import",
+                " to import a calendar.",
             )));
         }
         Err(e) => {
@@ -47,7 +59,7 @@ async fn date_show(_invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     };
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_help() -> CommandResult {
@@ -75,15 +87,14 @@ Examples:
     Ok(Some(ok_response(output.to_string(), None)))
 }
 
-async fn date_set(
-    trimmed: &str,
-) -> CommandResult {
+async fn date_set(tokens: &[String]) -> CommandResult {
     let stored = match calendar::load_calendar() {
         Ok(Some(c)) => c,
         Ok(None) => {
-            return Ok(Some(ok_response(
-                "No calendar loaded. Use `calendar import` to import a calendar.".to_string(),
-                None,
+            return Ok(Some(command_action_response(
+                "No calendar loaded. Use ",
+                "calendar import",
+                " to import a calendar.",
             )));
         }
         Err(e) => {
@@ -94,8 +105,8 @@ async fn date_set(
         }
     };
 
-    let remainder = trimmed["date set".len()..].trim();
-    let parts: Vec<&str> = remainder.split_whitespace().collect();
+    // Tokens are `["date", "set", <component>, <value>...]`; skip the command words.
+    let parts: Vec<&str> = tokens.iter().skip(2).map(String::as_str).collect();
 
     if parts.is_empty() {
         return Ok(Some(ok_response(
@@ -182,7 +193,7 @@ fn date_set_year(mut stored: StoredCalendar, value: &str) -> CommandResult {
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
@@ -204,15 +215,12 @@ fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
         }
     };
 
+    // `set_month_index` clamps the day into the new month's range for us.
     if let Err(e) = stored.state.set_month_index(month_index, &stored.definition) {
         return Ok(Some(ok_response(
             format!("invalid month: {}", e),
             None,
         )));
-    }
-
-    if stored.state.day > stored.definition.month_len.get(&stored.definition.months[month_index]).copied().unwrap_or(0) {
-        stored.state.day = stored.definition.month_len.get(&stored.definition.months[month_index]).copied().unwrap_or(1);
     }
 
     if let Err(e) = calendar::save_calendar(&stored) {
@@ -223,7 +231,7 @@ fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_set_day(mut stored: StoredCalendar, value: &str) -> CommandResult {
@@ -252,7 +260,7 @@ fn date_set_day(mut stored: StoredCalendar, value: &str) -> CommandResult {
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn date_set_time(mut stored: StoredCalendar, time_value: &str, suffix: Option<&str>) -> CommandResult {
@@ -278,7 +286,7 @@ fn date_set_time(mut stored: StoredCalendar, time_value: &str, suffix: Option<&s
     }
 
     let formatted = format_date_conversational(&stored);
-    Ok(Some(ok_response(formatted, None)))
+    date_response(formatted)
 }
 
 fn parse_time_input(value: &str, suffix: Option<&str>) -> Result<(u8, u8), String> {

@@ -2,21 +2,22 @@ use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
-use std::time::Duration;
 
 use anyhow::{Result, anyhow, bail};
 use command_handler::{
     CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry,
 };
-use reqwest::StatusCode;
 
-use crate::command_manifest::{CommandManifest, CommandSpec, command_manifest};
+use crate::command_manifest::{
+    CommandManifest, CommandSpec, InputContext, command_availability, command_manifest,
+};
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
 use crate::config::{AppConfig, load_effective, required_issues, save_config, validate_for_runtime};
 use crate::db;
 use crate::health::{self, CheckReport, OllamaHealth};
 use crate::output::{
-    command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status, text_node,
+    code, command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status,
+    text_node,
 };
 use crate::session::{
     OllamaStepState, OnboardingFlow, OnboardingSession, SessionState, VaultStepState,
@@ -119,8 +120,9 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_status(invocation.workspace_root).await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "status"),
+                        command_help_doc(invocation.manifest, "status", None),
                     )),
                     _ => bail!("unknown status command. use `status help`"),
                 }
@@ -144,9 +146,39 @@ fn help_handler_entry() -> HandlerEntry<CoreHandler> {
         "help",
         metadata_for("help"),
         CoreHandler::new(|invocation| {
-            Box::pin(async move { Ok(CommandOutput::text(render_root_help(invocation.manifest))) })
+            Box::pin(async move {
+                // Core only knows about the setup wizard; the desktop layer
+                // overrides this handler when an entity editor is open.
+                let context = if invocation.session.onboarding.active {
+                    InputContext::ConfigEditor
+                } else {
+                    InputContext::Default
+                };
+                Ok(help_overview(invocation.manifest, &context))
+            })
         }),
     )
+}
+
+/// Render the root help index for `context`, listing every command runnable
+/// there. Shared by the core handler and the desktop's context-aware override.
+pub fn render_help_overview(context: &InputContext) -> CommandOutput {
+    help_overview(&command_manifest(), context)
+}
+
+fn help_overview(manifest: &CommandManifest, context: &InputContext) -> CommandOutput {
+    CommandOutput::with_doc(
+        render_root_help(manifest, context),
+        root_help_doc(manifest, context),
+    )
+}
+
+/// Whether a command should appear in `context`'s help index. The default
+/// surface's commands are always listed (they remain runnable everywhere); an
+/// editor context additionally lists its own context-specific commands.
+fn help_lists_command(name: &str, context: &InputContext) -> bool {
+    let availability = command_availability(name);
+    availability.is_visible_in(context) || availability.is_visible_in(&InputContext::Default)
 }
 
 fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
@@ -157,8 +189,9 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "exit"),
+                        command_help_doc(invocation.manifest, "exit", None),
                     )),
                     _ => bail!("unknown exit command. use `exit help`"),
                 }
@@ -175,8 +208,9 @@ fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_ping(invocation.workspace_root).await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::text(
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "ping"),
+                        command_help_doc(invocation.manifest, "ping", None),
                     )),
                     _ => bail!("unknown ping command. use `ping help`"),
                 }
@@ -317,9 +351,9 @@ async fn try_execute_onboarding(
         let current_vault = config_vault_path_string(&loaded.effective);
         session.onboarding.active = true;
         session.onboarding.flow = OnboardingFlow::Full;
-        if session.onboarding.ollama_base_url.trim().is_empty() {
-            session.onboarding.ollama_base_url = loaded.effective.ollama.base_url.clone();
-        }
+        // Seed the Ollama field from the saved config so the menu's "continue
+        // with <url>" reflects the configured server, not the built-in default.
+        session.onboarding.ollama_base_url = loaded.effective.ollama.base_url.clone();
 
         // Show the vault menu on first entry, or when re-entered while still at
         // the vault step (e.g. after the native picker was cancelled).
@@ -383,7 +417,7 @@ async fn try_execute_onboarding(
         let normalized = normalize_ollama_input(&base_url);
         health::validate_ollama_url(&normalized)?;
         // Probe the configured server for its model list (shows the spinner).
-        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
 
         session.onboarding.active = true;
         session.onboarding.flow = OnboardingFlow::Model;
@@ -473,7 +507,7 @@ async fn try_execute_onboarding(
         )));
     }
 
-    if lowered == ["cancel", "setup"] {
+    if lowered == ["cancel"] || lowered == ["cancel", "setup"] {
         reset_onboarding(&mut session.onboarding);
         return Ok(Some(CommandOutput::text(
             "setup cancelled. run start setup anytime to continue.".to_string(),
@@ -529,7 +563,7 @@ async fn try_execute_onboarding(
     if lowered == ["test", "ollama"] {
         let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
         health::validate_ollama_url(&normalized)?;
-        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
         session.onboarding.ollama_base_url = normalized;
         session.onboarding.ollama_models = models.clone();
         if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
@@ -637,7 +671,7 @@ async fn try_execute_onboarding(
             "2" | "continue" => {
                 let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
                 health::validate_ollama_url(&normalized)?;
-                let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+                let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
                 session.onboarding.ollama_base_url = normalized;
                 session.onboarding.ollama_models = models.clone();
                 if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
@@ -664,7 +698,7 @@ async fn try_execute_onboarding(
     if session.onboarding.ollama_substate == OllamaStepState::AwaitingUrl && !trimmed.is_empty() {
         let normalized = normalize_ollama_input(trimmed);
         health::validate_ollama_url(&normalized)?;
-        let (detail, models) = probe_ollama_models(&normalized, 15).await?;
+        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
 
         session.onboarding.ollama_base_url = normalized;
         session.onboarding.ollama_models = models.clone();
@@ -751,15 +785,32 @@ async fn try_execute_onboarding(
             format!("vault ready: {}", vault.root().display()),
             format!("database ready: {}", db.path.display()),
         ];
+        let mut document = doc()
+            .with_block(heading(2, "Onboarding complete"))
+            .with_block(list(vec![
+                vec![text_node(format!("config saved: {}", config_path.display()))],
+                vec![text_node(format!("vault ready: {}", vault.root().display()))],
+                vec![text_node(format!("database ready: {}", db.path.display()))],
+            ]));
         if missing_model {
             lines.push("ollama model not set; run `start setup` later to choose a model if you plan to use AI generation.".to_string());
+            document = document.with_block(paragraph_with_inlines(vec![
+                text_node("ollama model not set; run "),
+                command_ref("start setup", "start setup"),
+                text_node(" later to choose a model if you plan to use AI generation."),
+            ]));
         }
         if !warnings.is_empty() {
             lines.push("setup warnings:".to_string());
             lines.extend(warnings.iter().map(|warning| format!("- {warning}")));
+            document = document
+                .with_block(heading(3, "Setup warnings"))
+                .with_block(list(
+                    warnings.iter().map(|warning| vec![text_node(warning.clone())]).collect(),
+                ));
         }
 
-        return Ok(Some(CommandOutput::text(lines.join("\n"))));
+        return Ok(Some(CommandOutput::with_doc(lines.join("\n"), document)));
     }
 
     Ok(Some(CommandOutput::text(
@@ -917,15 +968,36 @@ async fn save_llm_section(
         format!("config saved: {}", config_path.display()),
         format!("ollama: {}", config.ollama.base_url),
     ];
+    let mut rows = vec![
+        vec![text_node(format!("config saved: {}", config_path.display()))],
+        vec![text_node(format!("ollama: {}", config.ollama.base_url))],
+    ];
+    let mut model_note = None;
     if missing_model {
         lines.push("model not set; run `setup llm` later to choose one.".to_string());
+        model_note = Some(paragraph_with_inlines(vec![
+            text_node("model not set; run "),
+            command_ref("setup llm", "setup llm"),
+            text_node(" later to choose one."),
+        ]));
     } else {
         lines.push(format!("model: {}", session.onboarding.selected_model));
+        rows.push(vec![text_node(format!(
+            "model: {}",
+            session.onboarding.selected_model
+        ))]);
     }
 
     reset_onboarding(&mut session.onboarding);
 
-    Ok(CommandOutput::text(lines.join("\n")))
+    let mut document = doc()
+        .with_block(heading(2, "LLM updated"))
+        .with_block(list(rows));
+    if let Some(note) = model_note {
+        document = document.with_block(note);
+    }
+
+    Ok(CommandOutput::with_doc(lines.join("\n"), document))
 }
 
 /// Persist the chosen model at the end of the model step, picking the right
@@ -1021,37 +1093,26 @@ fn normalize_ollama_input(value: &str) -> String {
     format!("http://{trimmed}")
 }
 
+/// Probe an Ollama server during setup and summarize the model list for display.
+///
+/// Delegates the `/api/tags` request to the shared [`health::probe_ollama`] and
+/// surfaces failures as errors so the setup spinner flips to an error state.
 async fn probe_ollama_models(
     base_url: &str,
     timeout_seconds: u64,
 ) -> Result<(String, Vec<String>)> {
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(timeout_seconds))
-        .build()?;
-    let url = format!("{}/api/tags", base_url.trim_end_matches('/'));
-    let response = client.get(url).send().await?;
-
-    if response.status() != StatusCode::OK {
-        bail!("ollama responded with {}", response.status());
+    let probe = health::probe_ollama(base_url, timeout_seconds).await;
+    if let Some(error) = probe.error {
+        bail!("{error}");
     }
 
-    let value: serde_json::Value = response.json().await?;
-    let mut models = Vec::new();
-    if let Some(items) = value.get("models").and_then(|item| item.as_array()) {
-        for item in items {
-            if let Some(name) = item.get("name").and_then(|name| name.as_str()) {
-                models.push(name.to_string());
-            }
-        }
-    }
-
-    let detail = if models.is_empty() {
+    let detail = if probe.models.is_empty() {
         "connected (no models returned)".to_string()
     } else {
-        format!("connected ({} model(s) found)", models.len())
+        format!("connected ({} model(s) found)", probe.models.len())
     };
 
-    Ok((detail, models))
+    Ok((detail, probe.models))
 }
 
 pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {
@@ -1113,6 +1174,27 @@ fn rewrite_onboarding_tokens(
     None
 }
 
+/// Reject `-h`/`--help` anywhere in a command, returning the phrase-help hint to
+/// surface instead. Shared by the core dispatch path and the desktop dispatch seam
+/// (`main.rs`) so the rejection is uniform across Core and Desktop commands.
+pub fn reject_help_flags(tokens: &[String]) -> Option<String> {
+    let has_help_flag = tokens
+        .iter()
+        .any(|token| token.eq_ignore_ascii_case("-h") || token.eq_ignore_ascii_case("--help"));
+    if !has_help_flag {
+        return None;
+    }
+
+    let hint = tokens
+        .first()
+        .map(|root| {
+            let root = root.to_ascii_lowercase();
+            format!("use `{root} help` or `help {root}`")
+        })
+        .unwrap_or_else(|| "use `help`".to_string());
+    Some(format!("`-h`/`--help` is not supported; {hint}"))
+}
+
 async fn execute_dispatched(
     workspace_root: &Path,
     tokens: &[String],
@@ -1120,21 +1202,14 @@ async fn execute_dispatched(
     session: &mut SessionState,
     raw_input: &str,
 ) -> Result<CommandOutput> {
+    if let Some(message) = reject_help_flags(tokens) {
+        bail!("{message}");
+    }
+
     let lowered: Vec<String> = tokens
         .iter()
         .map(|token| token.to_ascii_lowercase())
         .collect();
-
-    if lowered
-        .iter()
-        .any(|token| token == "-h" || token == "--help")
-    {
-        let hint = lowered
-            .first()
-            .map(|root| format!("use `{root} help` or `help {root}`"))
-            .unwrap_or_else(|| "use `help`".to_string());
-        bail!("`-h`/`--help` is not supported; {hint}");
-    }
 
     let registry = core_handler_registry();
     let handler_name = if lowered.is_empty() {
@@ -1167,15 +1242,17 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     let lowered = invocation.lowered;
     let manifest = invocation.manifest;
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
-        return Ok(CommandOutput::text(render_command_help(manifest, "config")));
+        return Ok(CommandOutput::with_doc(
+            render_command_help(manifest, "config"),
+            command_help_doc(manifest, "config", None),
+        ));
     }
 
     if lowered.len() == 3 && lowered[2] == "help" {
-        return Ok(CommandOutput::text(render_subcommand_help(
-            manifest,
-            "config",
-            &lowered[1],
-        )));
+        return Ok(CommandOutput::with_doc(
+            render_subcommand_help(manifest, "config", &lowered[1]),
+            command_help_doc(manifest, "config", Some(&lowered[1])),
+        ));
     }
 
     match lowered[1].as_str() {
@@ -1213,12 +1290,13 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     }
 }
 
-fn render_root_help(manifest: &CommandManifest) -> String {
+fn render_root_help(manifest: &CommandManifest, context: &InputContext) -> String {
     let mut lines = vec!["## Commands".to_string()];
     for command in manifest
         .commands
         .iter()
-        .filter(|command| command.execution == crate::command_manifest::CommandExecution::Core)
+        .filter(|command| command.show_in_autocomplete)
+        .filter(|command| help_lists_command(&command.name, context))
     {
         lines.push(format!("{} - {}", command.name, command.summary));
     }
@@ -1288,6 +1366,103 @@ fn find_manifest_command<'a>(manifest: &'a CommandManifest, root: &str) -> Optio
         .find(|command| command.name.eq_ignore_ascii_case(root))
 }
 
+fn examples_block(examples: &[String]) -> OutputBlock {
+    let items: Vec<Vec<InlineNode>> = examples
+        .iter()
+        .map(|example| vec![code(example.clone())])
+        .collect();
+    list(items)
+}
+
+/// Structured, clickable counterpart to [`render_root_help`].
+fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDoc {
+    let items: Vec<Vec<InlineNode>> = manifest
+        .commands
+        .iter()
+        .filter(|command| command.show_in_autocomplete)
+        .filter(|command| help_lists_command(&command.name, context))
+        .map(|command| {
+            vec![
+                command_ref(command.name.clone(), format!("{} help", command.name)),
+                text_node(format!(" — {}", command.summary)),
+            ]
+        })
+        .collect();
+    doc()
+        .with_block(heading(2, "Commands"))
+        .with_block(list(items))
+        .with_block(paragraph_text(
+            "Use `<command> help` or `help <command>` for details.",
+        ))
+}
+
+/// Structured, clickable help for a single command (`subcommand = None`) or one
+/// of its subcommands. Subcommands render as `command_ref`s and examples as
+/// code; the plain-text `render_*_help` functions remain the fallback string.
+fn command_help_doc(
+    manifest: &CommandManifest,
+    root: &str,
+    subcommand: Option<&str>,
+) -> OutputDoc {
+    let Some(command) = find_manifest_command(manifest, root) else {
+        return doc().with_block(paragraph_with_inlines(vec![
+            text_node(format!("unknown command: {root}. use ")),
+            command_ref("help", "help"),
+        ]));
+    };
+
+    if let Some(sub_name) = subcommand {
+        let Some(sub) = command
+            .subcommands
+            .iter()
+            .find(|entry| entry.name.eq_ignore_ascii_case(sub_name))
+        else {
+            return doc().with_block(paragraph_with_inlines(vec![
+                text_node(format!("unknown {root} command. use ")),
+                command_ref(format!("{root} help"), format!("{root} help")),
+            ]));
+        };
+
+        let mut document = doc()
+            .with_block(heading(2, format!("{} {}", command.name, sub.name)))
+            .with_block(paragraph_text(sub.summary.clone()));
+        if !sub.examples.is_empty() {
+            document = document
+                .with_block(heading(3, "Examples"))
+                .with_block(examples_block(&sub.examples));
+        }
+        return document;
+    }
+
+    let mut document = doc()
+        .with_block(heading(2, command.name.clone()))
+        .with_block(paragraph_text(command.summary.clone()));
+    if !command.subcommands.is_empty() {
+        let items: Vec<Vec<InlineNode>> = command
+            .subcommands
+            .iter()
+            .map(|sub| {
+                vec![
+                    command_ref(
+                        format!("{} {}", command.name, sub.name),
+                        format!("{} {} help", command.name, sub.name),
+                    ),
+                    text_node(format!(" — {}", sub.summary)),
+                ]
+            })
+            .collect();
+        document = document
+            .with_block(heading(3, "Subcommands"))
+            .with_block(list(items));
+    }
+    if !command.examples.is_empty() {
+        document = document
+            .with_block(heading(3, "Examples"))
+            .with_block(examples_block(&command.examples));
+    }
+    document
+}
+
 async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
     let loaded = load_effective(workspace_root)?;
     let global_config_path = loaded.paths.global.display().to_string();
@@ -1331,6 +1506,12 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
 
 /// Short timeout for boot/status probes so a dead server doesn't stall startup.
 pub const OLLAMA_BOOT_TIMEOUT_SECONDS: u64 = 5;
+
+/// Timeout for interactive setup probes. Longer than the boot budget (the user is
+/// actively waiting and may point at a remote server) but still bounded so a dead
+/// server can't hang setup. Distinct from `ollama.timeout_seconds`, which is the
+/// LLM generation budget and far too long for a connectivity check.
+const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
 
 /// Probe the configured Ollama server to confirm the LLM is running.
 ///

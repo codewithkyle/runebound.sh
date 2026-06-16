@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use crate::app_state::AppState;
-use crate::commands::DesktopHandlerInvocation;
+use crate::commands::{DesktopHandlerInvocation, command_action_response};
 use crate::entities::common::{
-    command_message_response,
+    command_message_response_with_doc,
     command_no_active_draft,
+    entity_help_doc,
+    entity_reroll_field_help,
+    entity_set_field_help,
     parse_reroll_field_and_prompt,
 };
 use crate::entities::{CommandResult, EntityDomain, EntityKind};
@@ -25,7 +28,9 @@ pub async fn handle_faction(
         if !has_draft {
             return command_no_active_draft(EntityKind::Faction);
         }
-        return command_message_response(domain.help_text());
+        let prose = domain.help_text();
+        let help_doc = entity_help_doc(EntityKind::Faction, &prose);
+        return command_message_response_with_doc(prose, help_doc);
     }
 
     if lowered == "faction show" {
@@ -41,6 +46,10 @@ pub async fn handle_faction(
         return domain.rename(name, state_ref).await;
     }
 
+    if lowered == "faction set help" {
+        return entity_set_field_help(EntityKind::Faction);
+    }
+
     if lowered.starts_with("faction set ") {
         let mut parts = trimmed.splitn(4, char::is_whitespace);
         let _ = parts.next();
@@ -54,11 +63,19 @@ pub async fn handle_faction(
         return domain.save(state_ref).await;
     }
 
+    if lowered == "faction reroll help" {
+        return entity_reroll_field_help(EntityKind::Faction);
+    }
+
     if lowered == "faction reroll" || lowered.starts_with("faction reroll ") {
         return handle_faction_reroll(trimmed, state_ref, &domain).await;
     }
 
-    command_message_response("unknown faction command. use `faction help`")
+    Ok(Some(command_action_response(
+        "unknown faction command. use ",
+        "faction help",
+        "",
+    )))
 }
 
 async fn handle_faction_reroll(

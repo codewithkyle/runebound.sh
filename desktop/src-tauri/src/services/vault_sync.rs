@@ -2,6 +2,7 @@ use std::collections::HashSet;
 use std::fs;
 use std::path::PathBuf;
 
+use async_trait::async_trait;
 use dnd_core::config::load_effective;
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{FactionFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
@@ -45,58 +46,112 @@ impl VaultSyncService {
             .finalize_pending_publishes(database.as_ref(), &now_timestamp())
             .await?;
 
-        sync_npcs(&store, database.as_ref(), npc_repo.as_ref(), document_repo.as_ref()).await?;
-        sync_locations(&store, database.as_ref(), location_repo.as_ref(), document_repo.as_ref()).await?;
-        sync_factions(&store, database.as_ref(), faction_repo.as_ref(), document_repo.as_ref()).await?;
-        sync_items(&store, database.as_ref(), item_repo.as_ref(), document_repo.as_ref()).await?;
+        let database = database.as_ref();
+        let document_repo = document_repo.as_ref();
+        sync_entities(&NpcSync(npc_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(&LocationSync(location_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(&FactionSync(faction_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(&ItemSync(item_repo.as_ref()), &store, database, document_repo).await?;
 
         Ok(())
     }
 }
 
-async fn sync_npcs(
+/// Frontmatter fields the generic reconcile loop reads, normalized across kinds.
+struct StoreView<'a> {
+    id: &'a str,
+    slug: &'a str,
+    vault_path: &'a str,
+    published: bool,
+}
+
+/// DB-row fields needed for the document index and stale-prune, normalized across kinds.
+struct RowView<'a> {
+    id: &'a str,
+    slug: &'a str,
+    name: &'a str,
+    vault_path: &'a str,
+    created_at: &'a str,
+    updated_at: &'a str,
+}
+
+/// Per-kind glue for [`sync_entities`]. Each impl wraps the kind's repository and
+/// exposes its typed store/DB operations through one uniform interface so the
+/// reconcile logic lives in exactly one place.
+#[async_trait]
+trait SyncRepository: Send + Sync {
+    type Frontmatter: Send;
+    type Row: Send + Sync;
+
+    /// Document-index kind string (e.g. `"npc"`).
+    const KIND: &'static str;
+
+    /// Canonical TOML records for this kind.
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String>;
+
+    /// Delete the backing TOML for a reaped (published) entity.
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String>;
+
+    /// Build the DB row from a frontmatter record.
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String>;
+
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_>;
+    fn row_view(row: &Self::Row) -> RowView<'_>;
+
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String>;
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String>;
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String>;
+}
+
+/// Reconcile one entity kind's canonical TOML store into the database + document
+/// index: reap published records, upsert the rest, then prune DB rows whose TOML
+/// no longer exists.
+async fn sync_entities<K: SyncRepository>(
+    plan: &K,
     store: &EntityStore,
     database: &db::Database,
-    npc_repo: &dyn NpcRepository,
     document_repo: &dyn DocumentRepository,
 ) -> Result<(), String> {
-    let frontmatters = store
-        .list_npcs()
-        .map_err(|err| err.to_string())?;
+    let frontmatters = plan.list_store(store)?;
     let mut synced_ids = HashSet::new();
 
-    for frontmatter in frontmatters {
+    for frontmatter in &frontmatters {
+        let view = K::frontmatter_view(frontmatter);
         // Published entities are reaped: their record lives in Obsidian now, so drop
         // the DB row, document index, and the backing TOML.
-        if frontmatter.published_at.is_some() {
-            npc_repo.delete_by_id(database, &frontmatter.id).await?;
-            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
-            store.delete_npc(&frontmatter.slug).map_err(|err| err.to_string())?;
+        if view.published {
+            plan.delete_by_id(database, view.id).await?;
+            document_repo
+                .delete_by_vault_path(database, view.vault_path)
+                .await?;
+            plan.delete_from_store(store, view.slug)?;
             continue;
         }
 
-        let row = npc_row_from_frontmatter(&frontmatter)?;
-        synced_ids.insert(row.id.clone());
-        npc_repo.upsert(database, &row).await?;
+        let row = K::row_from_frontmatter(frontmatter)?;
+        let row_view = K::row_view(&row);
+        synced_ids.insert(row_view.id.to_string());
+        plan.upsert(database, &row).await?;
         document_repo
             .upsert_index(
                 database,
-                "npc",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
+                K::KIND,
+                row_view.slug,
+                Some(row_view.name),
+                row_view.vault_path,
+                row_view.created_at,
+                row_view.updated_at,
             )
             .await?;
     }
 
-    let existing = npc_repo.list_all(database).await?;
-    for row in existing {
-        if !synced_ids.contains(&row.id) {
-            npc_repo.delete_by_id(database, &row.id).await?;
+    let existing = plan.list_all(database).await?;
+    for row in &existing {
+        let row_view = K::row_view(row);
+        if !synced_ids.contains(row_view.id) {
+            plan.delete_by_id(database, row_view.id).await?;
             document_repo
-                .delete_by_vault_path(database, &row.vault_path)
+                .delete_by_vault_path(database, row_view.vault_path)
                 .await?;
         }
     }
@@ -104,148 +159,188 @@ async fn sync_npcs(
     Ok(())
 }
 
-async fn sync_locations(
-    store: &EntityStore,
-    database: &db::Database,
-    location_repo: &dyn LocationRepository,
-    document_repo: &dyn DocumentRepository,
-) -> Result<(), String> {
-    let frontmatters = store
-        .list_locations()
-        .map_err(|err| err.to_string())?;
-    let mut synced_ids = HashSet::new();
+struct NpcSync<'a>(&'a dyn NpcRepository);
 
-    for frontmatter in frontmatters {
-        if frontmatter.published_at.is_some() {
-            location_repo.delete_by_id(database, &frontmatter.id).await?;
-            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
-            store.delete_location(&frontmatter.slug).map_err(|err| err.to_string())?;
-            continue;
-        }
+#[async_trait]
+impl SyncRepository for NpcSync<'_> {
+    type Frontmatter = NpcFrontmatter;
+    type Row = db::NpcRow;
+    const KIND: &'static str = "npc";
 
-        let row = location_row_from_frontmatter(&frontmatter)?;
-        synced_ids.insert(row.id.clone());
-        location_repo.upsert(database, &row).await?;
-        document_repo
-            .upsert_index(
-                database,
-                "location",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
-            )
-            .await?;
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String> {
+        store.list_npcs().map_err(|err| err.to_string())
     }
-
-    let existing = location_repo.list_all(database).await?;
-    for row in existing {
-        if !synced_ids.contains(&row.id) {
-            location_repo.delete_by_id(database, &row.id).await?;
-            document_repo
-                .delete_by_vault_path(database, &row.vault_path)
-                .await?;
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String> {
+        store.delete_npc(slug).map_err(|err| err.to_string())
+    }
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String> {
+        npc_row_from_frontmatter(frontmatter)
+    }
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_> {
+        StoreView {
+            id: &frontmatter.id,
+            slug: &frontmatter.slug,
+            vault_path: &frontmatter.vault_path,
+            published: frontmatter.published_at.is_some(),
         }
     }
-
-    Ok(())
+    fn row_view(row: &Self::Row) -> RowView<'_> {
+        RowView {
+            id: &row.id,
+            slug: &row.slug,
+            name: &row.name,
+            vault_path: &row.vault_path,
+            created_at: &row.created_at,
+            updated_at: &row.updated_at,
+        }
+    }
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert(database, row).await
+    }
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
+        self.0.list_all(database).await
+    }
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
+        self.0.delete_by_id(database, id).await
+    }
 }
 
-async fn sync_factions(
-    store: &EntityStore,
-    database: &db::Database,
-    faction_repo: &dyn FactionRepository,
-    document_repo: &dyn DocumentRepository,
-) -> Result<(), String> {
-    let frontmatters = store
-        .list_factions()
-        .map_err(|err| err.to_string())?;
-    let mut synced_ids = HashSet::new();
+struct LocationSync<'a>(&'a dyn LocationRepository);
 
-    for frontmatter in frontmatters {
-        if frontmatter.published_at.is_some() {
-            faction_repo.delete_by_id(database, &frontmatter.id).await?;
-            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
-            store.delete_faction(&frontmatter.slug).map_err(|err| err.to_string())?;
-            continue;
-        }
+#[async_trait]
+impl SyncRepository for LocationSync<'_> {
+    type Frontmatter = LocationFrontmatter;
+    type Row = db::LocationRow;
+    const KIND: &'static str = "location";
 
-        let row = faction_row_from_frontmatter(&frontmatter)?;
-        synced_ids.insert(row.id.clone());
-        faction_repo.upsert(database, &row).await?;
-        document_repo
-            .upsert_index(
-                database,
-                "faction",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
-            )
-            .await?;
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String> {
+        store.list_locations().map_err(|err| err.to_string())
     }
-
-    let existing = faction_repo.list_all(database).await?;
-    for row in existing {
-        if !synced_ids.contains(&row.id) {
-            faction_repo.delete_by_id(database, &row.id).await?;
-            document_repo
-                .delete_by_vault_path(database, &row.vault_path)
-                .await?;
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String> {
+        store.delete_location(slug).map_err(|err| err.to_string())
+    }
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String> {
+        location_row_from_frontmatter(frontmatter)
+    }
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_> {
+        StoreView {
+            id: &frontmatter.id,
+            slug: &frontmatter.slug,
+            vault_path: &frontmatter.vault_path,
+            published: frontmatter.published_at.is_some(),
         }
     }
-
-    Ok(())
+    fn row_view(row: &Self::Row) -> RowView<'_> {
+        RowView {
+            id: &row.id,
+            slug: &row.slug,
+            name: &row.name,
+            vault_path: &row.vault_path,
+            created_at: &row.created_at,
+            updated_at: &row.updated_at,
+        }
+    }
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert(database, row).await
+    }
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
+        self.0.list_all(database).await
+    }
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
+        self.0.delete_by_id(database, id).await
+    }
 }
 
-async fn sync_items(
-    store: &EntityStore,
-    database: &db::Database,
-    item_repo: &dyn ItemRepository,
-    document_repo: &dyn DocumentRepository,
-) -> Result<(), String> {
-    let frontmatters = store
-        .list_items()
-        .map_err(|err| err.to_string())?;
-    let mut synced_ids = HashSet::new();
+struct FactionSync<'a>(&'a dyn FactionRepository);
 
-    for frontmatter in frontmatters {
-        if frontmatter.published_at.is_some() {
-            item_repo.delete_by_id(database, &frontmatter.id).await?;
-            document_repo.delete_by_vault_path(database, &frontmatter.vault_path).await?;
-            store.delete_item(&frontmatter.slug).map_err(|err| err.to_string())?;
-            continue;
-        }
+#[async_trait]
+impl SyncRepository for FactionSync<'_> {
+    type Frontmatter = FactionFrontmatter;
+    type Row = db::FactionRow;
+    const KIND: &'static str = "faction";
 
-        let row = item_row_from_frontmatter(&frontmatter)?;
-        synced_ids.insert(row.id.clone());
-        item_repo.upsert(database, &row).await?;
-        document_repo
-            .upsert_index(
-                database,
-                "item",
-                &row.slug,
-                Some(&row.name),
-                &row.vault_path,
-                &row.created_at,
-                &row.updated_at,
-            )
-            .await?;
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String> {
+        store.list_factions().map_err(|err| err.to_string())
     }
-
-    let existing = item_repo.list_all(database).await?;
-    for row in existing {
-        if !synced_ids.contains(&row.id) {
-            item_repo.delete_by_id(database, &row.id).await?;
-            document_repo
-                .delete_by_vault_path(database, &row.vault_path)
-                .await?;
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String> {
+        store.delete_faction(slug).map_err(|err| err.to_string())
+    }
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String> {
+        faction_row_from_frontmatter(frontmatter)
+    }
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_> {
+        StoreView {
+            id: &frontmatter.id,
+            slug: &frontmatter.slug,
+            vault_path: &frontmatter.vault_path,
+            published: frontmatter.published_at.is_some(),
         }
     }
+    fn row_view(row: &Self::Row) -> RowView<'_> {
+        RowView {
+            id: &row.id,
+            slug: &row.slug,
+            name: &row.name,
+            vault_path: &row.vault_path,
+            created_at: &row.created_at,
+            updated_at: &row.updated_at,
+        }
+    }
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert(database, row).await
+    }
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
+        self.0.list_all(database).await
+    }
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
+        self.0.delete_by_id(database, id).await
+    }
+}
 
-    Ok(())
+struct ItemSync<'a>(&'a dyn ItemRepository);
+
+#[async_trait]
+impl SyncRepository for ItemSync<'_> {
+    type Frontmatter = ItemFrontmatter;
+    type Row = db::ItemRow;
+    const KIND: &'static str = "item";
+
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String> {
+        store.list_items().map_err(|err| err.to_string())
+    }
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String> {
+        store.delete_item(slug).map_err(|err| err.to_string())
+    }
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String> {
+        item_row_from_frontmatter(frontmatter)
+    }
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_> {
+        StoreView {
+            id: &frontmatter.id,
+            slug: &frontmatter.slug,
+            vault_path: &frontmatter.vault_path,
+            published: frontmatter.published_at.is_some(),
+        }
+    }
+    fn row_view(row: &Self::Row) -> RowView<'_> {
+        RowView {
+            id: &row.id,
+            slug: &row.slug,
+            name: &row.name,
+            vault_path: &row.vault_path,
+            created_at: &row.created_at,
+            updated_at: &row.updated_at,
+        }
+    }
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert(database, row).await
+    }
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
+        self.0.list_all(database).await
+    }
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
+        self.0.delete_by_id(database, id).await
+    }
 }
 
 pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {

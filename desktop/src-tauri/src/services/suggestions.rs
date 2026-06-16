@@ -1,6 +1,4 @@
-use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::collections::HashSet;
 
 use dnd_core::command_manifest::{self, CommandManifest, CommandSpec};
 use dnd_core::command_parse::{self, ParseResult, ParseStage};
@@ -12,6 +10,9 @@ use serde::Serialize;
 use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
 use crate::services::entity_admin::EntityType;
+use crate::services::vault_ref::{
+    VaultReferenceEntry, can_start_reference_at, load_vault_reference_entries,
+};
 use crate::utils::normalize_relative_path_for_storage;
 
 pub struct SuggestionService;
@@ -61,60 +62,40 @@ impl SuggestionService {
             editor.active_kind()
         };
         let is_npc = matches!(active_kind, Some(EntityKind::Npc));
-        let is_location = matches!(active_kind, Some(EntityKind::Location));
-        let is_faction = matches!(active_kind, Some(EntityKind::Faction));
-        let is_item = matches!(active_kind, Some(EntityKind::Item));
+
+        // Resolve the current input context (entity editor takes precedence over an
+        // in-progress setup wizard) and keep only commands the manifest declares
+        // visible there. This replaces the former hard-coded per-kind blacklist.
+        let context = match active_kind {
+            Some(kind) => command_manifest::InputContext::EntityEditor(kind.as_str().to_string()),
+            None => {
+                let onboarding_active = {
+                    let service = state.command_service.lock().await;
+                    service.session().onboarding.active
+                };
+                if onboarding_active {
+                    command_manifest::InputContext::ConfigEditor
+                } else {
+                    command_manifest::InputContext::Default
+                }
+            }
+        };
 
         suggestions.retain(|suggestion| {
-            let completion = suggestion.completion.trim().to_ascii_lowercase();
-            let label = suggestion.label.trim().to_ascii_lowercase();
-
-        if !is_npc {
-            if completion == "npc"
-                || completion.starts_with("npc ")
-                || label == "npc"
-                || label.starts_with("npc ")
-            {
-                return false;
+            let root = suggestion
+                .completion
+                .split_whitespace()
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            match find_command(&manifest, &root) {
+                // Known command roots are gated by their declared availability.
+                Some(command) => {
+                    command_manifest::command_availability(&command.name).is_visible_in(&context)
+                }
+                // Non-command suggestions (entity-name search, etc.) are left alone.
+                None => true,
             }
-        }
-
-        if active_kind.is_none() && (completion == "reroll" || label == "reroll") {
-            return false;
-        }
-
-            if !is_location
-                && (completion == "location"
-                    || completion.starts_with("location ")
-                    || label == "location"
-                    || label.starts_with("location "))
-            {
-                return false;
-            }
-
-            if !is_faction
-                && (completion == "faction"
-                    || completion.starts_with("faction ")
-                    || label == "faction"
-                    || label.starts_with("faction "))
-            {
-                return false;
-            }
-
-            if !is_item
-                && (completion == "item"
-                    || completion.starts_with("item ")
-                    || label == "item"
-                    || label.starts_with("item "))
-            {
-                return false;
-            }
-
-            if active_kind.is_none() && (completion == "cancel" || label == "cancel") {
-                return false;
-            }
-
-            true
         });
 
         let trimmed = input.trim();
@@ -260,14 +241,6 @@ struct ActiveReferenceQuery {
     query: String,
 }
 
-#[derive(Debug, Clone)]
-struct VaultReferenceEntry {
-    key: String,
-    key_lower: String,
-    #[allow(dead_code)]
-    markdown_path: Option<String>,
-    is_dir: bool,
-}
 
 async fn search_entities(
     state: &AppState,
@@ -757,33 +730,6 @@ fn extract_active_reference_query(input: &str) -> Option<ActiveReferenceQuery> {
     None
 }
 
-fn should_ignore_reference_component(component: &str) -> bool {
-    component
-        .split('/')
-        .any(|part| part.starts_with('.') || part.eq_ignore_ascii_case("target"))
-}
-
-fn markdown_reference_key(relative_path: &str) -> Option<String> {
-    let normalized = normalize_relative_path_for_storage(relative_path);
-    let path = Path::new(&normalized);
-    let ext = path.extension().and_then(|value| value.to_str())?;
-    if !ext.eq_ignore_ascii_case("md") {
-        return None;
-    }
-
-    let stem = path
-        .file_stem()
-        .and_then(|value| value.to_str())
-        .map(str::trim)
-        .filter(|value| !value.is_empty())?;
-    let parent = path.parent().and_then(|value| value.to_str()).unwrap_or("");
-    if parent.is_empty() {
-        Some(stem.to_string())
-    } else {
-        Some(format!("{parent}/{stem}"))
-    }
-}
-
 fn is_top_level_reference_key(key: &str, is_dir: bool) -> bool {
     if is_dir {
         let trimmed = key.trim_end_matches('/');
@@ -791,69 +737,6 @@ fn is_top_level_reference_key(key: &str, is_dir: bool) -> bool {
     } else {
         !key.contains('/')
     }
-}
-
-fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceEntry>, String> {
-    vault.ensure_root_exists().map_err(|err| err.to_string())?;
-
-    let mut entries: HashMap<String, VaultReferenceEntry> = HashMap::new();
-    let mut stack = vec![PathBuf::new()];
-
-    while let Some(relative_dir) = stack.pop() {
-        let full_dir = vault
-            .resolve_relative(&relative_dir)
-            .map_err(|err| err.to_string())?;
-        let dir_entries = fs::read_dir(&full_dir)
-            .map_err(|err| format!("failed to read directory {}: {}", full_dir.display(), err))?;
-
-        for dir_entry in dir_entries {
-            let dir_entry = match dir_entry {
-                Ok(value) => value,
-                Err(err) => {
-                    eprintln!("reference index warning: failed to read directory entry: {err}");
-                    continue;
-                }
-            };
-            let entry_path = dir_entry.path();
-            let relative = match entry_path.strip_prefix(vault.root()) {
-                Ok(value) => normalize_relative_path_for_storage(&value.to_string_lossy()),
-                Err(_) => continue,
-            };
-            if should_ignore_reference_component(&relative) {
-                continue;
-            }
-
-            if entry_path.is_dir() {
-                let mut key = relative.trim_matches('/').to_string();
-                if key.is_empty() {
-                    continue;
-                }
-                key.push('/');
-                entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
-                    key: key.clone(),
-                    key_lower: key.to_lowercase(),
-                    markdown_path: None,
-                    is_dir: true,
-                });
-                stack.push(PathBuf::from(relative));
-                continue;
-            }
-
-            let Some(key) = markdown_reference_key(&relative) else {
-                continue;
-            };
-            entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
-                key: key.clone(),
-                key_lower: key.to_lowercase(),
-                markdown_path: Some(relative),
-                is_dir: false,
-            });
-        }
-    }
-
-    let mut out: Vec<VaultReferenceEntry> = entries.into_values().collect();
-    out.sort_by(|left, right| left.key_lower.cmp(&right.key_lower));
-    Ok(out)
 }
 
 fn build_reference_suggestions_from_entries(
@@ -907,28 +790,15 @@ fn npc_travel_location_query(input: &str) -> Option<String> {
 }
 
 #[cfg(test)]
-fn is_reference_boundary_char(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"')
-}
-
-fn can_start_reference_at(input: &str, at_index: usize) -> bool {
-    if at_index == 0 {
-        return true;
-    }
-
-    let before = input[..at_index].chars().next_back();
-    before.is_some_and(|ch| ch.is_whitespace() || matches!(ch, '(' | '[' | '{' | '"' | '\''))
-}
-
 #[cfg(test)]
 mod tests {
     use super::{
         build_command_suggestions, build_entity_field_argument_suggestions,
         build_reference_suggestions_from_entries, entity_kind_for_root, extract_active_reference_query,
-        extract_prompt_reference_keys, find_command, npc_travel_location_query, ActiveReferenceQuery,
-        VaultReferenceEntry,
+        find_command, npc_travel_location_query, ActiveReferenceQuery, VaultReferenceEntry,
     };
     use crate::entities::EntityKind;
+    use crate::services::vault_ref::extract_prompt_reference_keys;
     use dnd_core::{command_manifest, command_parse};
 
     #[test]
@@ -1176,66 +1046,4 @@ mod tests {
             "missing materials suggestion"
         );
     }
-}
-
-#[cfg(test)]
-fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntry]) -> Vec<String> {
-    let mut candidates: Vec<&VaultReferenceEntry> = entries
-        .iter()
-        .filter(|entry| !entry.is_dir && entry.markdown_path.is_some())
-        .collect();
-    candidates.sort_by(|left, right| right.key_lower.len().cmp(&left.key_lower.len()));
-
-    let prompt_lower = prompt.to_lowercase();
-    let mut cursor = 0;
-    let mut matched = Vec::new();
-
-    while cursor < prompt.len() {
-        let next_at = match prompt[cursor..].find('@') {
-            Some(offset) => cursor + offset,
-            None => break,
-        };
-        if !can_start_reference_at(prompt, next_at) {
-            cursor = next_at + 1;
-            continue;
-        }
-
-        let tail_start = next_at + 1;
-        let tail = &prompt_lower[tail_start..];
-        let mut best: Option<&VaultReferenceEntry> = None;
-
-        for candidate in &candidates {
-            if !tail.starts_with(&candidate.key_lower) {
-                continue;
-            }
-            let boundary_index = tail_start + candidate.key.len();
-            let boundary_ok = prompt[boundary_index..]
-                .chars()
-                .next()
-                .is_none_or(is_reference_boundary_char);
-            if !boundary_ok {
-                continue;
-            }
-            best = Some(*candidate);
-            break;
-        }
-
-        if let Some(candidate) = best {
-            matched.push(candidate.key.clone());
-            cursor = tail_start + candidate.key.len();
-            continue;
-        }
-
-        cursor = next_at + 1;
-    }
-
-    let mut unique = Vec::new();
-    let mut seen = HashSet::new();
-    for key in matched {
-        let lowered = key.to_lowercase();
-        if seen.insert(lowered) {
-            unique.push(key);
-        }
-    }
-    unique
 }
