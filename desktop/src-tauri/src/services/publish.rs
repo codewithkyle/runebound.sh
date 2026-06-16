@@ -14,7 +14,7 @@ pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
     write_attr_line(&mut out, "Age", &frontmatter.age);
     write_attr_line(&mut out, "Height", &frontmatter.height);
     write_attr_line(&mut out, "Weight", &frontmatter.weight_lbs);
-    write_attr_line(&mut out, "Location", &frontmatter.location);
+    write_attr_line_linked(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Background", &frontmatter.background);
@@ -74,8 +74,8 @@ pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
     write_section(&mut out, "Methods", &frontmatter.methods);
     write_section(&mut out, "Leadership", &frontmatter.leadership);
     write_text_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
-    write_list_section(&mut out, "Allies", &frontmatter.allies);
-    write_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
+    write_linked_list_section(&mut out, "Allies", &frontmatter.allies);
+    write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
     write_section(&mut out, "Current Tension", &frontmatter.current_tension);
     write_list_section(&mut out, "Short-Term Goals", &frontmatter.goals_short_term);
     write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
@@ -90,7 +90,7 @@ pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     write_attr_line(&mut out, "Rarity", &frontmatter.rarity);
     write_attr_line(&mut out, "Attunement", &frontmatter.attunement);
     write_attr_line(&mut out, "Value", &frontmatter.value);
-    write_attr_line(&mut out, "Location", &frontmatter.location);
+    write_attr_line_linked(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Appearance", &frontmatter.appearance);
@@ -102,10 +102,46 @@ pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     out
 }
 
+/// Characters with special meaning inside an Obsidian `[[wikilink]]` target
+/// (`|` alias, `#` heading, `^` block, and the brackets themselves). If a value
+/// contains any of them we leave it unlinked rather than emit a broken link.
+const WIKILINK_UNSAFE: &[char] = &['[', ']', '|', '#', '^'];
+
+/// Wrap a single entity name in an Obsidian `[[wikilink]]`. This is what lets a
+/// relational reference resolve to — or stub out — another entity's page, even
+/// before that page exists.
+///
+/// Tier 0 only links fields that are entity references by schema design (a
+/// location name, an ally/rival group), so the whole value is one link target.
+/// Returns the value unchanged when it is empty, already a wikilink, or contains
+/// characters unsafe for a link target.
+fn wikilink(value: &str) -> String {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    if trimmed.starts_with("[[") && trimmed.ends_with("]]") {
+        return trimmed.to_string();
+    }
+    if trimmed.contains(WIKILINK_UNSAFE) {
+        return trimmed.to_string();
+    }
+    format!("[[{trimmed}]]")
+}
+
 fn write_attr_line(out: &mut String, label: &str, value: &str) {
     let normalized = normalize_unknown_text(value);
     if normalized != "Unknown" {
         writeln!(out, "**{label}:** {normalized}").ok();
+    }
+}
+
+/// Like [`write_attr_line`], but the value is an entity reference and is rendered
+/// as a `[[wikilink]]` (e.g. an NPC's `Location`).
+fn write_attr_line_linked(out: &mut String, label: &str, value: &str) {
+    let normalized = normalize_unknown_text(value);
+    if normalized != "Unknown" {
+        writeln!(out, "**{label}:** {}", wikilink(&normalized)).ok();
     }
 }
 
@@ -124,6 +160,25 @@ fn write_list_section(out: &mut String, title: &str, values: &[String]) {
         .iter()
         .map(|v| normalize_unknown_text(v))
         .filter(|v| v != "Unknown")
+        .collect();
+    if items.is_empty() {
+        return;
+    }
+    writeln!(out, "## {title}").ok();
+    for item in items {
+        writeln!(out, "- {}", item).ok();
+    }
+    writeln!(out).ok();
+}
+
+/// Like [`write_list_section`], but each list item is an entity reference and is
+/// rendered as a `[[wikilink]]` (e.g. a faction's allies / rivals).
+fn write_linked_list_section(out: &mut String, title: &str, values: &[String]) {
+    let items: Vec<String> = values
+        .iter()
+        .map(|v| normalize_unknown_text(v))
+        .filter(|v| v != "Unknown")
+        .map(|v| wikilink(&v))
         .collect();
     if items.is_empty() {
         return;
@@ -292,5 +347,171 @@ mod tests {
         let markdown = render_faction_markdown(&frontmatter);
         assert!(markdown.contains("- Hidden vaults"));
         assert!(markdown.contains("- Arcane scouts"));
+    }
+
+    // ----------------------------------------------------------------------
+    // Tier 0 wikilinks: relational fields that are entity references by schema
+    // design are rendered as Obsidian `[[wikilinks]]` so they resolve to (or
+    // stub out) the referenced entity's page.
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn wikilink_wraps_a_plain_name() {
+        assert_eq!(wikilink("Waterdeep"), "[[Waterdeep]]");
+    }
+
+    #[test]
+    fn wikilink_trims_surrounding_whitespace() {
+        assert_eq!(wikilink("  Neverwinter Harbor  "), "[[Neverwinter Harbor]]");
+    }
+
+    #[test]
+    fn wikilink_is_idempotent_for_already_linked_values() {
+        assert_eq!(wikilink("[[Waterdeep]]"), "[[Waterdeep]]");
+    }
+
+    #[test]
+    fn wikilink_leaves_empty_values_empty() {
+        assert_eq!(wikilink("   "), "");
+    }
+
+    #[test]
+    fn wikilink_skips_values_with_link_unsafe_characters() {
+        // A `|`, `#`, `^`, or stray bracket would produce a broken link target,
+        // so the value is left as-is rather than corrupted.
+        assert_eq!(wikilink("Waterdeep | Sword Coast"), "Waterdeep | Sword Coast");
+        assert_eq!(wikilink("Vault #3"), "Vault #3");
+        assert_eq!(wikilink("[redacted]"), "[redacted]");
+    }
+
+    fn sample_npc_frontmatter() -> NpcFrontmatter {
+        NpcFrontmatter {
+            doc_type: "npc".to_string(),
+            id: "npc_1".to_string(),
+            slug: "lirael".to_string(),
+            name: "Lirael Drake".to_string(),
+            vault_path: "npcs/Lirael Drake.md".to_string(),
+            race: "Elf".to_string(),
+            occupation: "Archivist".to_string(),
+            sex: "female".to_string(),
+            age: "133".to_string(),
+            height: "5'9\"".to_string(),
+            weight_lbs: "140".to_string(),
+            background: "Raised in the argent library.".to_string(),
+            want_need: "Safeguard forbidden scrolls.".to_string(),
+            secret_obstacle: "Cursed with prophetic dreams.".to_string(),
+            carrying: vec!["Silver quill".to_string()],
+            location: "Silversong".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T12:00:00Z".to_string(),
+            published_at: None,
+        }
+    }
+
+    #[test]
+    fn npc_location_is_rendered_as_a_wikilink() {
+        let markdown = render_npc_markdown(&sample_npc_frontmatter());
+        assert!(
+            markdown.contains("**Location:** [[Silversong]]"),
+            "expected linked location, got:\n{markdown}"
+        );
+    }
+
+    #[test]
+    fn npc_descriptive_sections_are_not_wikilinked() {
+        // Regression guard: Tier 0 must NOT auto-link narrative prose — only the
+        // relational fields. Background/Goals/Secret stay plain text.
+        let markdown = render_npc_markdown(&sample_npc_frontmatter());
+        assert!(markdown.contains("Raised in the argent library."));
+        assert!(
+            !markdown.contains("[[Raised"),
+            "background prose should not be wikilinked:\n{markdown}"
+        );
+        // The carrying list is generic items, not entity references — left plain.
+        assert!(markdown.contains("- Silver quill"));
+        assert!(!markdown.contains("[[Silver quill]]"));
+    }
+
+    #[test]
+    fn npc_unknown_location_is_omitted_entirely() {
+        let mut frontmatter = sample_npc_frontmatter();
+        frontmatter.location = String::new();
+        let markdown = render_npc_markdown(&frontmatter);
+        assert!(!markdown.contains("**Location:**"));
+        assert!(!markdown.contains("[["));
+    }
+
+    #[test]
+    fn item_location_is_rendered_as_a_wikilink() {
+        let frontmatter = ItemFrontmatter {
+            doc_type: "item".to_string(),
+            id: "item_1".to_string(),
+            slug: "everember-blade".to_string(),
+            name: "Everember Blade".to_string(),
+            vault_path: "items/Everember Blade.md".to_string(),
+            category: "weapon".to_string(),
+            rarity: "legendary".to_string(),
+            attunement: "Required".to_string(),
+            materials: vec!["stormglass".to_string()],
+            appearance: "A blade woven from stormglass.".to_string(),
+            abilities: "Channels stormlight.".to_string(),
+            drawbacks: "Hums in the rain.".to_string(),
+            history: "Forged in the old wars.".to_string(),
+            value: "1000gp".to_string(),
+            location: "Smolderkeep".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+            published_at: None,
+        };
+        let markdown = render_item_markdown(&frontmatter);
+        assert!(
+            markdown.contains("**Location:** [[Smolderkeep]]"),
+            "expected linked item location, got:\n{markdown}"
+        );
+        // Materials are substances, not entities — not linked.
+        assert!(markdown.contains("- stormglass"));
+        assert!(!markdown.contains("[[stormglass]]"));
+    }
+
+    #[test]
+    fn faction_allies_and_rivals_are_rendered_as_wikilinks() {
+        let frontmatter = FactionFrontmatter {
+            doc_type: "faction".to_string(),
+            id: "fac_1".to_string(),
+            slug: "ashen-circle".to_string(),
+            name: "Ashen Circle".to_string(),
+            vault_path: "factions/Ashen Circle.md".to_string(),
+            kind_type: "guild".to_string(),
+            kind_custom: None,
+            public_description: "A secretive guild.".to_string(),
+            true_agenda: "Protect forbidden lore.".to_string(),
+            methods: "Shadow operations.".to_string(),
+            leadership: "Triumvirate".to_string(),
+            headquarters: "Smolderkeep".to_string(),
+            sphere_of_influence: "Borderlands".to_string(),
+            resources_assets: "Hidden vaults".to_string(),
+            allies: vec!["Crimson Lantern Syndicate".to_string()],
+            rivals_enemies: vec!["Harbor Watch".to_string()],
+            reputation: "Feared".to_string(),
+            current_tension: "Hunters closing in.".to_string(),
+            goals_short_term: vec![],
+            goals_long_term: vec![],
+            symbol_description: "A burned coin.".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+            published_at: None,
+        };
+        let markdown = render_faction_markdown(&frontmatter);
+        assert!(
+            markdown.contains("- [[Crimson Lantern Syndicate]]"),
+            "expected linked ally, got:\n{markdown}"
+        );
+        assert!(
+            markdown.contains("- [[Harbor Watch]]"),
+            "expected linked rival, got:\n{markdown}"
+        );
+        // Short-term goals are descriptive sentences elsewhere — confirm we did
+        // not start linking non-relational list sections.
+        assert!(!markdown.contains("[[Hidden vaults]]"));
     }
 }
