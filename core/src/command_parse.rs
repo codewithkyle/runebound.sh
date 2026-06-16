@@ -229,7 +229,7 @@ pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest
         if is_known_subcommand {
             matched_subcommand = Some(subcommand_name);
             ParseStage::Argument
-        } else if normalized_tokens.len() == 2 && !ends_with_space {
+        } else if root.requires_subcommand {
             valid = false;
             diagnostics.push(ParseDiagnostic {
                 code: "unknown_subcommand".to_string(),
@@ -237,12 +237,9 @@ pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest
             });
             ParseStage::Subcommand
         } else {
-            valid = false;
-            diagnostics.push(ParseDiagnostic {
-                code: "unknown_subcommand".to_string(),
-                message: format!("unknown subcommand for {}: {}", root.name, subcommand_name),
-            });
-            ParseStage::Subcommand
+            // The root accepts free-form arguments (e.g. `publish <name>`), so an
+            // unrecognized second token is an argument, not an unknown subcommand.
+            ParseStage::Argument
         }
     };
 
@@ -340,7 +337,7 @@ fn is_quote_start_boundary(prev: Option<char>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_command_input, parse_command_input};
+    use super::{normalize_command_input, parse_command_input, ParseStage};
 
     #[test]
     fn parses_quoted_arguments() {
@@ -385,6 +382,27 @@ mod tests {
         let parsed = parse_command_input("config nope");
         assert!(!parsed.valid);
         assert_eq!(parsed.diagnostics[0].code, "unknown_subcommand");
+    }
+
+    #[test]
+    fn treats_free_form_argument_as_argument_not_subcommand() {
+        // `publish` declares a `help` subcommand but `requires_subcommand: false`,
+        // so an entity name must parse as an argument rather than erroring.
+        let parsed = parse_command_input("publish The Brotherhood");
+        assert!(
+            parsed.valid,
+            "expected publish <name> to be valid, diagnostics: {:?}",
+            parsed.diagnostics
+        );
+        assert!(matches!(parsed.completion.stage, ParseStage::Argument));
+        assert_eq!(parsed.completion.subcommand, None);
+    }
+
+    #[test]
+    fn still_matches_known_subcommand_for_free_form_command() {
+        let parsed = parse_command_input("publish help");
+        assert!(parsed.valid);
+        assert_eq!(parsed.completion.subcommand.as_deref(), Some("help"));
     }
 
     #[test]

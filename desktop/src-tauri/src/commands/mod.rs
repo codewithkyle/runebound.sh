@@ -67,6 +67,7 @@ pub fn desktop_handler_registry() -> &'static HandlerRegistry<DesktopHandler> {
 fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     let mut registry = HandlerRegistry::new();
     registry.register(exit_handler_entry());
+    registry.register(help_handler_entry());
     registry.register(clear_handler_entry());
     registry.register(history_handler_entry());
     registry.register(create_handler_entry());
@@ -147,6 +148,14 @@ pub fn exit_handler_entry() -> HandlerEntry<DesktopHandler> {
                 )))
             })
         }),
+    )
+}
+
+pub fn help_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "help",
+        metadata_for("help"),
+        DesktopHandler::new(|invocation| Box::pin(async move { system_commands::handle_help(invocation).await })),
     )
 }
 

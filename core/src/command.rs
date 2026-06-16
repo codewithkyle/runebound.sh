@@ -8,7 +8,9 @@ use command_handler::{
     CommandHandler, HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry,
 };
 
-use crate::command_manifest::{CommandManifest, CommandSpec, command_manifest};
+use crate::command_manifest::{
+    CommandManifest, CommandSpec, InputContext, command_availability, command_manifest,
+};
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
 use crate::config::{AppConfig, load_effective, required_issues, save_config, validate_for_runtime};
 use crate::db;
@@ -120,7 +122,7 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
                     0 | 1 => execute_status(invocation.workspace_root).await,
                     2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "status"),
-                        command_help_doc(invocation.manifest, Some("status"), None),
+                        command_help_doc(invocation.manifest, "status", None),
                     )),
                     _ => bail!("unknown status command. use `status help`"),
                 }
@@ -145,13 +147,38 @@ fn help_handler_entry() -> HandlerEntry<CoreHandler> {
         metadata_for("help"),
         CoreHandler::new(|invocation| {
             Box::pin(async move {
-                Ok(CommandOutput::with_doc(
-                    render_root_help(invocation.manifest),
-                    command_help_doc(invocation.manifest, None, None),
-                ))
+                // Core only knows about the setup wizard; the desktop layer
+                // overrides this handler when an entity editor is open.
+                let context = if invocation.session.onboarding.active {
+                    InputContext::ConfigEditor
+                } else {
+                    InputContext::Default
+                };
+                Ok(help_overview(invocation.manifest, &context))
             })
         }),
     )
+}
+
+/// Render the root help index for `context`, listing every command runnable
+/// there. Shared by the core handler and the desktop's context-aware override.
+pub fn render_help_overview(context: &InputContext) -> CommandOutput {
+    help_overview(&command_manifest(), context)
+}
+
+fn help_overview(manifest: &CommandManifest, context: &InputContext) -> CommandOutput {
+    CommandOutput::with_doc(
+        render_root_help(manifest, context),
+        root_help_doc(manifest, context),
+    )
+}
+
+/// Whether a command should appear in `context`'s help index. The default
+/// surface's commands are always listed (they remain runnable everywhere); an
+/// editor context additionally lists its own context-specific commands.
+fn help_lists_command(name: &str, context: &InputContext) -> bool {
+    let availability = command_availability(name);
+    availability.is_visible_in(context) || availability.is_visible_in(&InputContext::Default)
 }
 
 fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
@@ -164,7 +191,7 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
                     0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
                     2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "exit"),
-                        command_help_doc(invocation.manifest, Some("exit"), None),
+                        command_help_doc(invocation.manifest, "exit", None),
                     )),
                     _ => bail!("unknown exit command. use `exit help`"),
                 }
@@ -183,7 +210,7 @@ fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
                     0 | 1 => execute_ping(invocation.workspace_root).await,
                     2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "ping"),
-                        command_help_doc(invocation.manifest, Some("ping"), None),
+                        command_help_doc(invocation.manifest, "ping", None),
                     )),
                     _ => bail!("unknown ping command. use `ping help`"),
                 }
@@ -324,9 +351,9 @@ async fn try_execute_onboarding(
         let current_vault = config_vault_path_string(&loaded.effective);
         session.onboarding.active = true;
         session.onboarding.flow = OnboardingFlow::Full;
-        if session.onboarding.ollama_base_url.trim().is_empty() {
-            session.onboarding.ollama_base_url = loaded.effective.ollama.base_url.clone();
-        }
+        // Seed the Ollama field from the saved config so the menu's "continue
+        // with <url>" reflects the configured server, not the built-in default.
+        session.onboarding.ollama_base_url = loaded.effective.ollama.base_url.clone();
 
         // Show the vault menu on first entry, or when re-entered while still at
         // the vault step (e.g. after the native picker was cancelled).
@@ -480,7 +507,7 @@ async fn try_execute_onboarding(
         )));
     }
 
-    if lowered == ["cancel", "setup"] {
+    if lowered == ["cancel"] || lowered == ["cancel", "setup"] {
         reset_onboarding(&mut session.onboarding);
         return Ok(Some(CommandOutput::text(
             "setup cancelled. run start setup anytime to continue.".to_string(),
@@ -1217,14 +1244,14 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
         return Ok(CommandOutput::with_doc(
             render_command_help(manifest, "config"),
-            command_help_doc(manifest, Some("config"), None),
+            command_help_doc(manifest, "config", None),
         ));
     }
 
     if lowered.len() == 3 && lowered[2] == "help" {
         return Ok(CommandOutput::with_doc(
             render_subcommand_help(manifest, "config", &lowered[1]),
-            command_help_doc(manifest, Some("config"), Some(&lowered[1])),
+            command_help_doc(manifest, "config", Some(&lowered[1])),
         ));
     }
 
@@ -1263,12 +1290,13 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     }
 }
 
-fn render_root_help(manifest: &CommandManifest) -> String {
+fn render_root_help(manifest: &CommandManifest, context: &InputContext) -> String {
     let mut lines = vec!["## Commands".to_string()];
     for command in manifest
         .commands
         .iter()
-        .filter(|command| command.execution == crate::command_manifest::CommandExecution::Core)
+        .filter(|command| command.show_in_autocomplete)
+        .filter(|command| help_lists_command(&command.name, context))
     {
         lines.push(format!("{} - {}", command.name, command.summary));
     }
@@ -1346,39 +1374,36 @@ fn examples_block(examples: &[String]) -> OutputBlock {
     list(items)
 }
 
-/// Structured, clickable counterpart to the manifest help renderers.
-///
-/// `root = None` renders the command index; `Some(root)` renders one command;
-/// `Some(root) + Some(subcommand)` renders a subcommand. Subcommands render as
-/// `command_ref`s (clicking opens their help) and examples render as code. The
-/// plain-text `render_*_help` functions remain the fallback `output` string.
+/// Structured, clickable counterpart to [`render_root_help`].
+fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDoc {
+    let items: Vec<Vec<InlineNode>> = manifest
+        .commands
+        .iter()
+        .filter(|command| command.show_in_autocomplete)
+        .filter(|command| help_lists_command(&command.name, context))
+        .map(|command| {
+            vec![
+                command_ref(command.name.clone(), format!("{} help", command.name)),
+                text_node(format!(" — {}", command.summary)),
+            ]
+        })
+        .collect();
+    doc()
+        .with_block(heading(2, "Commands"))
+        .with_block(list(items))
+        .with_block(paragraph_text(
+            "Use `<command> help` or `help <command>` for details.",
+        ))
+}
+
+/// Structured, clickable help for a single command (`subcommand = None`) or one
+/// of its subcommands. Subcommands render as `command_ref`s and examples as
+/// code; the plain-text `render_*_help` functions remain the fallback string.
 fn command_help_doc(
     manifest: &CommandManifest,
-    root: Option<&str>,
+    root: &str,
     subcommand: Option<&str>,
 ) -> OutputDoc {
-    let Some(root) = root else {
-        let items: Vec<Vec<InlineNode>> = manifest
-            .commands
-            .iter()
-            .filter(|command| {
-                command.execution == crate::command_manifest::CommandExecution::Core
-            })
-            .map(|command| {
-                vec![
-                    command_ref(command.name.clone(), format!("{} help", command.name)),
-                    text_node(format!(" — {}", command.summary)),
-                ]
-            })
-            .collect();
-        return doc()
-            .with_block(heading(2, "Commands"))
-            .with_block(list(items))
-            .with_block(paragraph_text(
-                "Use `<command> help` or `help <command>` for details.",
-            ));
-    };
-
     let Some(command) = find_manifest_command(manifest, root) else {
         return doc().with_block(paragraph_with_inlines(vec![
             text_node(format!("unknown command: {root}. use ")),
