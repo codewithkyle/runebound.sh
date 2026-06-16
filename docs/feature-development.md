@@ -22,17 +22,20 @@ If your change crosses backend/frontend boundaries, model it in `runebound-model
 
 Example: add `quest`.
 
-1. Add command metadata in `command-specs/src/lib.rs`
-2. Create `desktop/src-tauri/src/commands/quest_commands.rs`
-3. Add `quest_handler_entry()` in `desktop/src-tauri/src/commands/mod.rs`
-4. Register it in `build_desktop_handler_registry()`
-5. Add structured response output and command refs
-6. Update suggestion behavior only if command has custom argument completions
+1. Add command metadata in `command-specs/src/lib.rs` (set `requires_subcommand` — `false` if it takes a free-form argument like a name/value)
+2. Add a `command_availability` arm in `command-specs/src/lib.rs` unless the command is genuinely default-surface-only (the `_ => Default` fallthrough hides it from every editor context)
+3. Create `desktop/src-tauri/src/commands/quest_commands.rs`
+4. Add `quest_handler_entry()` in `desktop/src-tauri/src/commands/mod.rs`
+5. Register it in `build_desktop_handler_registry()`
+6. Add structured response output and command refs
+7. Update suggestion behavior only if command has custom argument completions
+8. Verify `help` and autocomplete in every context the command should appear in (default / entity editor / setup)
 
 Notes:
 
 - do not add command logic in `router.rs`
 - no `main.rs` command branching
+- visibility is data, not code: it comes from `command_availability` (see `docs/command-contexts.md`), not hand-written filters
 
 ---
 
@@ -120,6 +123,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 1. Keep parser authority backend-first (`core/src/command_parse.rs`). Do not duplicate parse rules in the frontend.
 2. Update `desktop/src-tauri/src/services/suggestions.rs` in all relevant stages:
+   - **Context visibility:** gating is driven by `command_availability(name)` against the resolved `InputContext` — adjust the availability arm in `command-specs/src/lib.rs`, do not add a bespoke per-command filter here. The help index uses the same source, so both surfaces stay in sync (`docs/command-contexts.md`).
    - **Root stage:** ensure new roots have manifest coverage and appear unless intentionally hidden.
    - **Subcommand stage:** confirm `find_command()` + manifest data expose the subcommand.
    - **Argument stage:** update `build_entity_field_argument_suggestions()` (or a new helper) so field lists remain in sync with schemas. Always update `entity_kind_for_root()` when adding a new entity root.
@@ -155,8 +159,9 @@ Example entity classes: `item`, `dungeon`, `quest`.
 Use this for every feature PR:
 
 - [ ] architecture layer boundaries respected
-- [ ] manifest updated for all command surface changes
+- [ ] manifest updated for all command surface changes (including `requires_subcommand` and a `command_availability` arm)
 - [ ] handlers implemented and registered
+- [ ] help + autocomplete verified in every relevant context (default / entity editor / setup)
 - [ ] repository + service paths updated where persistence/workflows changed
 - [ ] output uses `output_doc` and explicit `command_ref` for actions
 - [ ] shared models updated in `runebound-models` and TS regenerated
@@ -187,6 +192,7 @@ Then manually test the affected command flows in desktop UI:
 
 - `docs/architecture.md`
 - `docs/cli.md`
+- `docs/command-contexts.md`
 - `docs/render.md`
 
 ---

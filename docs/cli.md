@@ -8,9 +8,10 @@
 
 - No global prefix. Users type direct commands (`status`, `config show`, `create npc`).
 - Structured output (`output_doc`) is preferred; plain text (`output`) is compatibility fallback.
-- Commands are split by execution target:
-  - Core: `status`, `config`, `help`, `exit`, `setup`
-  - Desktop: `calendar`, `create`, `npc`, `location`, `faction`, `item`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `clear`, `history`
+- Commands are split by execution target (the authoritative list is each `CommandSpec`'s `execution` field in `command-specs/src/lib.rs` — treat the lists below as a guide, not a source of truth):
+  - Core: `status`, `config`, `help`, `exit`, `setup`, `ping`
+  - Desktop: `create`, `npc`, `location`, `faction`, `item`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `publish`, `clear`, `history`, `calendar`, `date`, `moon`, `+`, `-`
+- `help` is registered in **both** registries: the desktop entry overrides core so the help index can reflect the open entity editor (see `docs/command-contexts.md`).
 - Router remains dispatch-only (`desktop/src-tauri/src/router.rs`).
 
 ---
@@ -53,12 +54,15 @@ If command shape changes without manifest changes, UX consistency breaks.
 - Markdown-wrapped command input is normalized.
 - Aliases resolve at parse time.
 - `-h` and `--help` are intentionally rejected in favor of phrase help.
+- `help <command>` is normalized to `<command> help` at parse time, so the bare `help` root only renders the context index.
+- **Second-token semantics depend on `requires_subcommand`:** for `requires_subcommand: false` roots, an unrecognized second token is a free-form argument (e.g. `publish The Brotherhood`), not an unknown-subcommand error — even when the command also declares a `help` subcommand. Set the flag `false` for any command that takes a name/value argument. Details in `docs/command-contexts.md §3`.
 
 ### Dispatch Rules
 
 - Core dispatch: `core/src/command.rs` registry.
-- Desktop dispatch: `desktop/src-tauri/src/commands/mod.rs` registry via `router.rs`.
+- Desktop dispatch: `desktop/src-tauri/src/commands/mod.rs` registry via `router.rs` (tried before the core registry; a root in both registries lets the desktop handler override core).
 - Unknown desktop roots may fall back to entity resolution for load/show/preview behavior.
+- **Setup wizard bypasses the registry:** while `onboarding.active`, input is intercepted by `try_execute_onboarding` before dispatch, so setup verbs (`continue`, menu numbers, `set vault`, `set ollama`, `cancel`) are handled there, not by desktop handlers. See `docs/command-contexts.md §4`.
 
 ---
 
@@ -75,7 +79,9 @@ Key behavior:
 
 - `Tab` completes current suggestion
 - suggestions stay live as user edits
-- suggestions are filtered by the active editor kind (`EntityKind` from `EditorSession`)
+- suggestions are filtered by **input context** (`InputContext`: `Default`, `ConfigEditor`, `EntityEditor(kind)`), resolved from `EditorSession::active_kind()` and `onboarding.active`
+- visibility comes only from `command_availability(name)` in `command-specs/src/lib.rs` — the single source of truth shared with the help index. Do not hard-code per-command filters here; add/adjust the availability arm instead
+- **Help mirrors autocomplete.** The `help` index uses the same context + `command_availability`, so a visibility change updates both. Verify both surfaces when you change availability (full model: `docs/command-contexts.md`)
 - Global system commands (`save`, `reroll`, `cancel`) must stay visible whenever any draft is active; only hide them when `active_kind` is `None`
 - `entity_kind_for_root()` in `services/suggestions.rs` must map every supported root to its `EntityKind` so field completions work
 - `build_entity_field_argument_suggestions()` pulls directly from `settable_fields`/`rerollable_fields`; add schema entries before exposing new fields
@@ -96,6 +102,7 @@ When adding a new entity, update `EntityKind`, schemas, command handlers, and su
 - Phrase help is required: `help <command>` and `<command> help`
 - Help comes from manifest metadata
 - Do not add `-h` or `--help`
+- **The bare `help` index is context-aware.** It lists exactly the commands runnable in the current context, using the same `command_availability` as autocomplete. In an entity editor it shows the default surface **plus** that editor's commands (`location`, `reroll`, `publish`, `save`, `cancel`). Resolving the entity-editor context needs desktop state, so the desktop `help` handler overrides the core one — keep them in sync via the shared `render_help_overview` renderer.
 
 ### Clickability
 
@@ -111,11 +118,13 @@ For any new command, ensure at least one explicit `command_ref` path exists in g
 
 ### Adding a Top-Level Command
 
-1. Add `CommandSpec` in `command-specs/src/lib.rs`
-2. Implement command domain handler module under `desktop/src-tauri/src/commands/`
-3. Register handler entry in `desktop/src-tauri/src/commands/mod.rs`
-4. Add structured output and command refs for usage/help
-5. Update suggestions only if command has special argument completion
+1. Add `CommandSpec` in `command-specs/src/lib.rs` (set `requires_subcommand` — `false` if it takes a free-form argument)
+2. Add a `command_availability` arm in `command-specs/src/lib.rs` unless `Default`-only is intended (the `_ => Default` fallthrough hides it in editors)
+3. Implement command domain handler module under `desktop/src-tauri/src/commands/`
+4. Register handler entry in `desktop/src-tauri/src/commands/mod.rs`
+5. Add structured output and command refs for usage/help
+6. Update suggestions only if command has special argument completion
+7. Verify help + autocomplete in every context the command should appear in
 
 ### Adding a Subcommand
 
@@ -158,7 +167,8 @@ Before merging any CLI or command behavior change:
 - [ ] Handler logic implemented in correct command domain module
 - [ ] Handler registered in desktop/core registry builder
 - [ ] `help <command>` and `<command> help` produce expected content
-- [ ] Autocomplete shows command/subcommands/fields correctly
+- [ ] Bare `help` lists the command in every context it should appear in (default / entity editor / setup)
+- [ ] Autocomplete shows command/subcommands/fields correctly in those same contexts
 - [ ] Actionable output uses clickable command refs
 - [ ] Active draft kind transitions still behave correctly (create/load/save/cancel/reroll)
 - [ ] Keyboard invariants still hold (`Enter`, `Tab`, arrows, `Ctrl+C`)
@@ -336,6 +346,7 @@ publish help
 
 ## 14. Related Docs
 
+- `docs/command-contexts.md` for input contexts, command availability, parser semantics, and setup-wizard dispatch
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts
 - `docs/feature-development.md` for end-to-end feature build playbooks
