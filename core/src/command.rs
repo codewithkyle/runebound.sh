@@ -12,7 +12,9 @@ use crate::command_manifest::{
     CommandManifest, CommandSpec, InputContext, command_availability, command_manifest,
 };
 use crate::command_parse::{normalize_alias_tokens, normalize_command_input};
-use crate::config::{AppConfig, load_effective, required_issues, save_config, validate_for_runtime};
+use crate::config::{
+    AppConfig, Verbosity, load_effective, required_issues, save_config, validate_for_runtime,
+};
 use crate::db;
 use crate::health::{self, CheckReport, OllamaHealth};
 use crate::output::{
@@ -440,6 +442,36 @@ async fn try_execute_onboarding(
         ))));
     }
 
+    if lowered.first().map(String::as_str) == Some("setup")
+        && lowered.get(1).map(String::as_str) == Some("verbosity")
+    {
+        // A direct config write (not a wizard flow): set generation verbosity,
+        // or, with no argument, report the current value. Accepts free text and
+        // validates against the known levels.
+        let loaded = load_effective(workspace_root)?;
+        match lowered.get(2) {
+            None => {
+                return Ok(Some(CommandOutput::text(format!(
+                    "generation verbosity is '{}'.\nUsage: setup verbosity <brief|medium|verbose>",
+                    loaded.effective.generation.verbosity.as_str(),
+                ))));
+            }
+            Some(raw) => {
+                let Some(level) = Verbosity::parse(raw) else {
+                    bail!("unknown verbosity '{raw}'. choose one of: brief, medium, verbose");
+                };
+                let mut config = loaded.effective;
+                config.generation.verbosity = level;
+                let path = save_config(workspace_root, &config)?;
+                return Ok(Some(CommandOutput::text(format!(
+                    "generation verbosity set to '{}' ({}).",
+                    level.as_str(),
+                    path.display()
+                ))));
+            }
+        }
+    }
+
     if lowered == ["setup", "help"] {
         if !session.onboarding.active {
             let loaded = load_effective(workspace_root)?;
@@ -456,6 +488,7 @@ async fn try_execute_onboarding(
                 "setup vault",
                 "setup llm",
                 "setup model",
+                "setup verbosity <brief|medium|verbose>",
                 "set vault <path>",
                 "set ollama <url>",
                 "test ollama",

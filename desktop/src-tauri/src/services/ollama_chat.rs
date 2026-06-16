@@ -9,7 +9,33 @@
 use std::path::Path;
 use std::time::Duration;
 
-use dnd_core::config::{AppConfig, load_effective, validate_for_runtime};
+use dnd_core::config::{AppConfig, Verbosity, load_effective, validate_for_runtime};
+
+/// The detail-level directive appended to every generation and reroll system
+/// prompt. It deliberately overrides the "concise" framing and the per-field
+/// sentence counts baked into those prompts, so a single config switch
+/// (`generation.verbosity`) controls how much prose the model writes for
+/// narrative/descriptive fields. Returned with a leading space so it appends
+/// cleanly to an existing prompt string.
+pub(crate) fn detail_directive(verbosity: Verbosity) -> &'static str {
+    match verbosity {
+        Verbosity::Brief => {
+            " DETAIL LEVEL: brief. Keep every narrative or descriptive field to 1-2 tight, \
+             high-signal sentences."
+        }
+        Verbosity::Medium => {
+            " DETAIL LEVEL: medium. Write each narrative or descriptive field as 3-4 substantive \
+             sentences that give a game master at least one concrete, usable hook. Prefer this \
+             over any shorter per-field sentence counts mentioned elsewhere in these instructions."
+        }
+        Verbosity::Verbose => {
+            " DETAIL LEVEL: verbose. Despite any instruction to be 'concise' or any shorter \
+             per-field sentence counts mentioned elsewhere, write each narrative or descriptive \
+             field as 5-7 vivid, specific sentences a game master can use directly. Add concrete \
+             names, details, and hooks rather than filler."
+        }
+    }
+}
 
 /// Load + validate the runtime config and extract the configured model. This is the
 /// common preamble for every generation/reroll call; errors mirror the prior inline
@@ -72,4 +98,30 @@ pub(crate) async fn post_chat_for_content(
         .and_then(|msg| msg.get("content"))
         .and_then(|content| content.as_str())
         .map(|content| content.to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detail_directive_differs_per_level_and_names_it() {
+        let brief = detail_directive(Verbosity::Brief);
+        let medium = detail_directive(Verbosity::Medium);
+        let verbose = detail_directive(Verbosity::Verbose);
+
+        assert!(brief.contains("brief"));
+        assert!(medium.contains("medium"));
+        assert!(verbose.contains("verbose"));
+
+        // The three levels must produce distinct guidance.
+        assert_ne!(brief, medium);
+        assert_ne!(medium, verbose);
+        assert_ne!(brief, verbose);
+
+        // Appended to a prompt, so each starts with a separating space.
+        for directive in [brief, medium, verbose] {
+            assert!(directive.starts_with(' '));
+        }
+    }
 }

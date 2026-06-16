@@ -7,7 +7,7 @@ use crate::services::ai_generation::{
     recent_occupation_anchor_set,
 };
 use crate::services::ollama_chat::{
-    attempt_seed, build_chat_client, load_generation_config, post_chat_for_content,
+    attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
 };
 use crate::utils::{
     normalize_exports,
@@ -147,13 +147,14 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
+                            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}{}",
                             if field == "occupation" {
                                 " For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one."
                             } else {
                                 ""
                             },
-                            reference_suffix
+                            reference_suffix,
+                            detail_directive(config.generation.verbosity)
                         )
                     },
                     {
@@ -327,8 +328,9 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
-                            reference_suffix
+                            "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
+                            reference_suffix,
+                            detail_directive(config.generation.verbosity)
                         )
                     },
                     {
@@ -510,8 +512,9 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
-                            reference_suffix
+                            "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
+                            reference_suffix,
+                            detail_directive(config.generation.verbosity)
                         )
                     },
                     {
@@ -691,8 +694,9 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You update one RPG item field. Return only valid JSON matching the schema.{}",
-                            reference_suffix
+                            "You update one RPG item field. Return only valid JSON matching the schema.{}{}",
+                            reference_suffix,
+                            detail_directive(config.generation.verbosity)
                         )
                     },
                     {

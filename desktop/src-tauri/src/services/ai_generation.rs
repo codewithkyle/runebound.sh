@@ -1,6 +1,6 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ollama_chat::{
-    attempt_seed, build_chat_client, load_generation_config, post_chat_for_content,
+    attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
 };
 use crate::services::vault_ref::{
     VaultReferenceEntry, extract_prompt_reference_keys, load_vault_reference_entries,
@@ -142,9 +142,10 @@ impl AiGenerationService {
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. Background must be 1-3 coherent sentences. carrying must be an array of item strings. Age must be numeric text with no commas, separators, or trailing punctuation (e.g., '133', not '1,133' or '133,'). Height should be imperial like 5'11\", weight_lbs should be lbs as text like 180 with no commas. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}",
+                        "You generate D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. carrying must be an array of item strings. Age must be numeric text with no commas, separators, or trailing punctuation (e.g., '133', not '1,133' or '133,'). Height should be imperial like 5'11\", weight_lbs should be lbs as text like 180 with no commas. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}{}",
                         recent_occupation_context, recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
+                        detail_directive(config.generation.verbosity)
                     )
                 }, { "role": "user", "content": user_prompt }]
             });
@@ -249,9 +250,10 @@ impl AiGenerationService {
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise, usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. visual_description must be 1-3 sentences. history_background must be 2-5 sentences. exports must have 1-3 short items. tone must be 2-5 words. current_tension must be 1-2 sentences. If kind_type is not other, kind_custom must be null. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {}.{}{}",
+                        "You generate usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. exports must have 1-3 short items. tone must be 2-5 words. If kind_type is not other, kind_custom must be null. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {}.{}{}{}",
                         recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
+                        detail_directive(config.generation.verbosity)
                     )
                 }, { "role": "user", "content": user_prompt }]
             });
@@ -353,9 +355,10 @@ impl AiGenerationService {
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise, usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. public_description, true_agenda, and methods should be 1-3 sentences. current_tension should be 1-2 sentences. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}",
+                        "You generate usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}{}",
                         recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
+                        detail_directive(config.generation.verbosity)
                     )
                 }, { "role": "user", "content": user_prompt }]
             });
@@ -459,11 +462,12 @@ impl AiGenerationService {
                 "messages": [{
                     "role": "system",
                     "content": format!(
-                        "You generate concise tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance (1-2 sentences), abilities (1-3 sentences), drawbacks (0-2 sentences, or 'None'), history (1-3 sentences), value in format like '1000gp' or '250sp' or '50cp', and location. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any person, place, or organization instead of inventing new ones.{}{}",
+                        "You generate tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance, abilities, drawbacks (or 'None'), history, value in format like '1000gp' or '250sp' or '50cp', and location. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any person, place, or organization instead of inventing new ones.{}{}{}",
                         ITEM_CATEGORIES.join(", "),
                         ITEM_RARITIES.join(", "),
                         repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) }
+                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
+                        detail_directive(config.generation.verbosity)
                     )
                 }, { "role": "user", "content": user_prompt }]
             });

@@ -67,6 +67,7 @@ Full dispatch and context model: `docs/command-contexts.md`.
 - `ollama.num_ctx`
 - `ui.confirm_soft_delete`
 - `ui.show_inline_help`
+- `generation.verbosity`
 
 ## Validation Rules
 
@@ -83,6 +84,11 @@ Full dispatch and context model: `docs/command-contexts.md`.
 - `ollama.num_ctx`:
   - Context window (tokens) sent to Ollama; defaults to 8192.
   - Must be at least 512. Raise it if you reference many/large documents and have the VRAM; lower it on constrained hardware.
+- `generation.verbosity`:
+  - How much prose the LLM writes for narrative/descriptive fields (background, history, descriptions, agendas, tensions, abilities, …).
+  - One of `"brief"` (1-2 sentences), `"medium"` (3-4 sentences, the default), or `"verbose"` (5-7 sentences).
+  - Applied as an authoritative detail directive appended to every generation and field-reroll prompt; it overrides the prompts' baseline per-field sentence counts. Structural fields (e.g. `tone`, `symbol_description`, `exports`) keep their fixed shape regardless.
+  - Takes effect on the next generation/reroll (config is re-read per call); no restart needed.
 
 ## Suggested TOML Schema
 
@@ -102,6 +108,9 @@ num_ctx = 8192
 [ui]
 confirm_soft_delete = true
 show_inline_help = true
+
+[generation]
+verbosity = "medium"  # "brief" | "medium" | "verbose"
 ```
 
 ## Output and Error Style

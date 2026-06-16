@@ -2,7 +2,7 @@ use std::collections::HashSet;
 
 use dnd_core::command_manifest::{self, CommandManifest, CommandSpec};
 use dnd_core::command_parse::{self, ParseResult, ParseStage};
-use dnd_core::config::load_effective;
+use dnd_core::config::{Verbosity, load_effective};
 use dnd_core::session::{OllamaStepState, OnboardingFlow, VaultStepState};
 use dnd_core::vault::Vault;
 use serde::Serialize;
@@ -455,6 +455,12 @@ fn build_argument_suggestions(
         }
     }
 
+    if command.name == "setup" {
+        if let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input) {
+            return suggestions;
+        }
+    }
+
     if let Some(kind) = entity_kind_for_root(command.name.as_str()) {
         if let Some(suggestions) = build_entity_field_argument_suggestions(
             kind,
@@ -628,6 +634,40 @@ fn build_date_argument_suggestions(
     }
 
     None
+}
+
+/// Typeahead for `setup verbosity <brief|medium|verbose>`. Suggests the three
+/// known levels (prefix-filtered) but the handler still accepts free text.
+fn build_setup_argument_suggestions(
+    subcommand: Option<&str>,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    if subcommand? != "verbosity" {
+        return None;
+    }
+
+    let mut base = replace_current_token(input, &parsed.completion.current_token);
+    if !base.ends_with(' ') {
+        base.push(' ');
+    }
+    let value_prefix = if parsed.completion.ends_with_space {
+        String::new()
+    } else {
+        parsed.completion.current_token.to_ascii_lowercase()
+    };
+
+    let suggestions = Verbosity::ALL
+        .iter()
+        .map(|level| level.as_str())
+        .filter(|value| value.starts_with(&value_prefix))
+        .map(|value| CommandSuggestion {
+            label: format!("setup verbosity {value}"),
+            completion: format!("{base}{value} "),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect();
+    Some(suggestions)
 }
 
 fn base_for_date_component_selection(input: &str, tokens_to_remove: usize) -> String {
@@ -972,6 +1012,29 @@ mod tests {
         let suggestions = build_command_suggestions(&manifest, &parsed, "date set y");
         assert_eq!(suggestions.len(), 1);
         assert_eq!(suggestions[0].completion, "date set year ");
+    }
+
+    #[test]
+    fn setup_verbosity_suggests_all_three_levels() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("setup verbosity ");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "setup verbosity ");
+        let completions: Vec<&str> = suggestions
+            .iter()
+            .map(|suggestion| suggestion.completion.as_str())
+            .collect();
+        assert!(completions.contains(&"setup verbosity brief "));
+        assert!(completions.contains(&"setup verbosity medium "));
+        assert!(completions.contains(&"setup verbosity verbose "));
+    }
+
+    #[test]
+    fn setup_verbosity_prefix_filters_results() {
+        let manifest = command_manifest::command_manifest();
+        let parsed = command_parse::parse_command_input("setup verbosity ver");
+        let suggestions = build_command_suggestions(&manifest, &parsed, "setup verbosity ver");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].completion, "setup verbosity verbose ");
     }
 
     #[test]

@@ -752,6 +752,16 @@ pub fn command_manifest() -> CommandManifest {
                         options: Vec::new(),
                         examples: vec!["setup model".to_string()],
                     },
+                    SubcommandSpec {
+                        name: "verbosity".to_string(),
+                        summary: "Set how much detail the LLM writes (brief|medium|verbose)"
+                            .to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "setup verbosity".to_string(),
+                            "setup verbosity verbose".to_string(),
+                        ],
+                    },
                 ],
                 options: Vec::new(),
                 requires_subcommand: true,

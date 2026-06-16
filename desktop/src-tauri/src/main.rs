@@ -135,6 +135,12 @@ fn exit_app(app: tauri::AppHandle) {
 fn main() {
     let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
 
+    // Backfill config sections added since the user's config was written (e.g.
+    // `[generation]`) so they are visible and editable on disk. Best-effort.
+    if let Err(err) = dnd_core::config::ensure_config_sections_persisted(&workspace_root) {
+        eprintln!("config migration warning: {err:#}");
+    }
+
     let database = tauri::async_runtime::block_on(db::init_database())
         .expect("failed to initialize sqlite database");
     let database = Arc::new(database);
