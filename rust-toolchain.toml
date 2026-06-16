@@ -1,0 +1,7 @@
+# Pin the Rust toolchain so local builds and CI (.github/workflows/release-windows.yml)
+# use the exact same compiler. This prevents "compiles locally, fails in CI" drift —
+# e.g. newer-than-CI stable features like `let` chains slipping in unnoticed.
+# When bumping, update the dtolnay/rust-toolchain ref in the workflow to match.
+[toolchain]
+channel = "1.95.0"
+components = ["rustfmt", "clippy"]
