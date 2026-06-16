@@ -887,7 +887,7 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep the output index-card tight and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 1-2 lines (for combat: tactics/behavior, never creature names). lever is one hook/question. read_aloud is 1-2 sentences of STATIC VISUAL only (shape, scale, materials, light, notable objects — no action). {loot_rule} Pick a content_type that fits this beat's function and ideally differs from its current one to keep variety.{reference_suffix}",
+                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field to 2-3 sentences and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 2-3 sentences (for combat: tactics/behavior, never creature names). lever is one hook/question in 1-2 sentences. read_aloud is 2-3 sentences of STATIC VISUAL only (shape, scale, materials, light, notable objects — no action). {loot_rule} Pick a content_type that fits this beat's function and ideally differs from its current one to keep variety.{reference_suffix}",
                             loot_rule = loot_rule,
                             reference_suffix = reference_suffix
                         )
