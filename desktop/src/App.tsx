@@ -14,6 +14,7 @@ import type {
   ItemDraft,
   EventDraft,
   GodDraft,
+  DungeonDraft,
 } from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
@@ -38,7 +39,7 @@ type CommandSpecMeta = {
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "reference";
+  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon" | "reference";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -89,13 +90,15 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god">("none");
+  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
   const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
   const [itemDraft, setItemDraft] = createSignal<ItemDraft | null>(null);
   const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
   const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
+  const [dungeonDraft, setDungeonDraft] = createSignal<DungeonDraft | null>(null);
+  const [dungeonTopologyPrompt, setDungeonTopologyPrompt] = createSignal(false);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
@@ -352,7 +355,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt());
+    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), dungeonTopologyPrompt());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -374,6 +377,10 @@ export default function App() {
         // shows the connection-test spinner. Only update on success; on error we
         // keep the prior context so a retry still shows the spinner.
         setOllamaPrompt(detectOllamaPrompt(rendered.text));
+        // Track the dungeon flow's Step E (topology) prompt so the next answer —
+        // a bare digit that completes the flow — shows a "generating dungeon"
+        // spinner. Cleared once the flow ends (any other rendered output).
+        setDungeonTopologyPrompt(detectDungeonTopologyPrompt(rendered.text));
         applyClientEvent(response.client_event);
         const outputDocOverride = outputDocFromClientEvent(response.client_event);
         const suppressOutput =
@@ -527,6 +534,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("npc");
         return;
       case "load_location_draft_with_card":
@@ -536,6 +544,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("location");
         return;
       case "load_faction_draft_with_card":
@@ -545,6 +554,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("faction");
         return;
       case "load_item_draft_with_card":
@@ -554,6 +564,7 @@ export default function App() {
         setFactionDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("item");
         return;
       case "load_event_draft_with_card":
@@ -563,6 +574,7 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("event");
         return;
       case "load_god_draft_with_card":
@@ -572,7 +584,18 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setEventDraft(null);
+        setDungeonDraft(null);
         setEditorMode("god");
+        return;
+      case "load_dungeon_draft_with_card":
+        setDungeonDraft(event.draft);
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setItemDraft(null);
+        setEventDraft(null);
+        setGodDraft(null);
+        setEditorMode("dungeon");
         return;
       case "clear_drafts":
         setNpcDraft(null);
@@ -581,6 +604,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("none");
         return;
       case "clear_terminal":
@@ -612,6 +636,7 @@ export default function App() {
       case "load_item_draft_with_card":
       case "load_event_draft_with_card":
       case "load_god_draft_with_card":
+      case "load_dungeon_draft_with_card":
         return event.entity_card;
       case "clear_drafts":
       case "clear_terminal":
@@ -1041,8 +1066,24 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
   return null;
 }
 
-function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): string | null {
+// The dungeon flow's Step E prompt marker (mirrors the Ollama heuristic): the
+// completing answer is a bare digit, so we recognize the prompt rather than the
+// input to show the "generating dungeon" spinner on the next submit.
+function detectDungeonTopologyPrompt(text: string): boolean {
+  return text.includes("Step E of 5 — Topology");
+}
+
+function commandSpinnerLabel(
+  raw: string,
+  ollamaPrompt: "menu" | "url" | null,
+  dungeonTopologyPrompt: boolean,
+): string | null {
   const lowered = raw.trim().toLowerCase();
+  // The dungeon flow completes on a bare topology digit (0–9); show the
+  // generation spinner when the previous prompt was Step E.
+  if (dungeonTopologyPrompt && /^[0-9]$/.test(lowered)) {
+    return "generating dungeon";
+  }
   // Commands that always probe the Ollama server.
   if (lowered === "test ollama") {
     return OLLAMA_TEST_LABEL;
@@ -1102,12 +1143,18 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "god reroll" || lowered.startsWith("god reroll ")) {
     return "rerolling god";
   }
+  // A per-beat reroll regenerates one beat. (Whole-dungeon `reroll` is covered by
+  // the generic "rerolling draft" branch above.)
+  if (lowered === "dungeon reroll" || lowered.startsWith("dungeon reroll ")) {
+    return "rerolling beat";
+  }
   if (
     lowered.startsWith("npc save") ||
     lowered.startsWith("location save") ||
     lowered.startsWith("item save") ||
     lowered.startsWith("event save") ||
     lowered.startsWith("god save") ||
+    lowered.startsWith("dungeon save") ||
     lowered === "save"
   ) {
     return "saving draft";

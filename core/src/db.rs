@@ -82,6 +82,21 @@ pub struct GodRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct DungeonRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub premise: String,
+    pub topology: String,
+    pub tone: String,
+    pub twist: String,
+    pub beats_json: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct ItemRow {
     pub id: String,
     pub slug: String,
@@ -493,6 +508,128 @@ pub async fn delete_god_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
         .execute(pool)
         .await
         .context("failed to delete god row")?;
+
+    Ok(())
+}
+
+pub async fn search_dungeons_by_name(
+    pool: &SqlitePool,
+    query: &str,
+    limit: i64,
+) -> Result<Vec<DungeonRow>> {
+    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, premise, topology, tone, twist, beats_json, created_at, updated_at
+         FROM dungeons
+         WHERE lower(name) LIKE ?1
+         ORDER BY name COLLATE NOCASE ASC
+         LIMIT ?2",
+    )
+    .bind(pattern)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search dungeons by name")?;
+
+    rows.into_iter().map(row_to_dungeon).collect()
+}
+
+pub async fn find_dungeon_by_name_or_slug(
+    pool: &SqlitePool,
+    input: &str,
+) -> Result<Option<DungeonRow>> {
+    let normalized = input.trim().to_ascii_lowercase();
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, premise, topology, tone, twist, beats_json, created_at, updated_at
+         FROM dungeons
+         WHERE lower(name) = ?1 OR lower(slug) = ?2
+         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
+         LIMIT 1",
+    )
+    .bind(&normalized)
+    .bind(&normalized)
+    .fetch_optional(pool)
+    .await
+    .context("failed to find dungeon by name or slug")?;
+
+    row.map(row_to_dungeon).transpose()
+}
+
+pub async fn find_dungeon_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<DungeonRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE slug = ?1",
+    )
+    .bind(slug)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query dungeon by slug")?;
+
+    row.map(row_to_dungeon).transpose()
+}
+
+pub async fn find_dungeon_by_id(pool: &SqlitePool, id: &str) -> Result<Option<DungeonRow>> {
+    let row = sqlx::query(
+        "SELECT id, slug, name, vault_path, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE id = ?1",
+    )
+    .bind(id)
+    .fetch_optional(pool)
+    .await
+    .context("failed to query dungeon by id")?;
+
+    row.map(row_to_dungeon).transpose()
+}
+
+pub async fn list_dungeons(pool: &SqlitePool) -> Result<Vec<DungeonRow>> {
+    let rows = sqlx::query(
+        "SELECT id, slug, name, vault_path, premise, topology, tone, twist, beats_json, created_at, updated_at
+         FROM dungeons",
+    )
+    .fetch_all(pool)
+    .await
+    .context("failed to list dungeons")?;
+
+    rows.into_iter().map(row_to_dungeon).collect()
+}
+
+pub async fn upsert_dungeon(pool: &SqlitePool, dungeon: &DungeonRow) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO dungeons (id, slug, name, vault_path, premise, topology, tone, twist, beats_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+         ON CONFLICT(id) DO UPDATE SET
+            slug = excluded.slug,
+            name = excluded.name,
+            vault_path = excluded.vault_path,
+            premise = excluded.premise,
+            topology = excluded.topology,
+            tone = excluded.tone,
+            twist = excluded.twist,
+            beats_json = excluded.beats_json,
+            updated_at = excluded.updated_at",
+    )
+    .bind(&dungeon.id)
+    .bind(&dungeon.slug)
+    .bind(&dungeon.name)
+    .bind(&dungeon.vault_path)
+    .bind(&dungeon.premise)
+    .bind(&dungeon.topology)
+    .bind(&dungeon.tone)
+    .bind(&dungeon.twist)
+    .bind(&dungeon.beats_json)
+    .bind(&dungeon.created_at)
+    .bind(&dungeon.updated_at)
+    .execute(pool)
+    .await
+    .context("failed to upsert dungeon")?;
+
+    Ok(())
+}
+
+pub async fn delete_dungeon_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+    sqlx::query("DELETE FROM dungeons WHERE id = ?1")
+        .bind(id)
+        .execute(pool)
+        .await
+        .context("failed to delete dungeon row")?;
 
     Ok(())
 }
@@ -1269,6 +1406,38 @@ fn row_to_god(row: sqlx::sqlite::SqliteRow) -> Result<GodRow> {
         updated_at: row
             .try_get("updated_at")
             .context("gods.updated_at missing")?,
+    })
+}
+
+fn row_to_dungeon(row: sqlx::sqlite::SqliteRow) -> Result<DungeonRow> {
+    Ok(DungeonRow {
+        id: row.try_get("id").context("dungeons.id missing")?,
+        slug: row.try_get("slug").context("dungeons.slug missing")?,
+        name: row.try_get("name").context("dungeons.name missing")?,
+        vault_path: row
+            .try_get("vault_path")
+            .context("dungeons.vault_path missing")?,
+        premise: row
+            .try_get("premise")
+            .unwrap_or_else(|_| "Unknown".to_string()),
+        topology: row
+            .try_get("topology")
+            .unwrap_or_else(|_| "none".to_string()),
+        tone: row
+            .try_get("tone")
+            .unwrap_or_else(|_| "tragedy".to_string()),
+        twist: row
+            .try_get("twist")
+            .unwrap_or_else(|_| "neither".to_string()),
+        beats_json: row
+            .try_get("beats_json")
+            .unwrap_or_else(|_| "[]".to_string()),
+        created_at: row
+            .try_get("created_at")
+            .context("dungeons.created_at missing")?,
+        updated_at: row
+            .try_get("updated_at")
+            .context("dungeons.updated_at missing")?,
     })
 }
 

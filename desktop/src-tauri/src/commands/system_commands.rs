@@ -97,8 +97,55 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         Some(EntityKind::Item) => reroll_current_item(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::Event) => reroll_current_event(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::God) => reroll_current_god(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Dungeon) => reroll_current_dungeon(invocation.state.clone(), reroll_prompt).await,
         None => command_message_response("no active draft to reroll."),
     }
+}
+
+async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+    use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
+
+    let draft = {
+        let editor = state.editor_session.lock().await;
+        editor.get_dungeon().cloned()
+    };
+    let Some(mut draft) = draft else {
+        return entity_message_response("no active dungeon draft.");
+    };
+
+    // Whole-dungeon regen re-runs generation from the stored seed + the dials,
+    // replacing all five beats while keeping tone/twist/topology authoritative.
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    let premise = merged_prompt.clone();
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let SeedGeneration { seed, notice } = ai
+        .generate_dungeon_seed(
+            premise,
+            "",
+            &draft.tone,
+            &draft.twist,
+            &draft.topology,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+    draft.slug = slugify(seed.name.trim());
+    draft.name = seed.name.trim().to_string();
+    draft.premise = normalize_unknown_text(&seed.premise);
+    draft.beats = seed.into_beats();
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_dungeon(draft.clone());
+    }
+
+    entity_response_with_event(
+        prepend_notice(notice, dungeon_summary_text(&draft)),
+        dungeon_event_from_draft(&draft),
+    )
 }
 
 pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {

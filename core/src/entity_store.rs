@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use runebound_models::{
-    EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter,
-    NpcFrontmatter,
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter,
 };
 
 use crate::config::config_paths;
@@ -15,6 +15,7 @@ const FACTION_DIR: &str = "factions";
 const ITEM_DIR: &str = "items";
 const EVENT_DIR: &str = "events";
 const GOD_DIR: &str = "gods";
+const DUNGEON_DIR: &str = "dungeons";
 
 pub struct EntityStore {
     root: PathBuf,
@@ -68,6 +69,12 @@ impl EntityStore {
             format!(
                 "failed to create god directory at {}",
                 self.root.join(GOD_DIR).display()
+            )
+        })?;
+        fs::create_dir_all(self.root.join(DUNGEON_DIR)).with_context(|| {
+            format!(
+                "failed to create dungeon directory at {}",
+                self.root.join(DUNGEON_DIR).display()
             )
         })?;
         Ok(())
@@ -237,5 +244,21 @@ impl EntityStore {
 
     pub fn list_gods(&self) -> Result<Vec<GodFrontmatter>> {
         self.list_entities(GOD_DIR)
+    }
+
+    pub fn save_dungeon(&self, data: &DungeonFrontmatter) -> Result<PathBuf> {
+        self.save_entity(DUNGEON_DIR, &data.slug, data)
+    }
+
+    pub fn load_dungeon(&self, slug: &str) -> Result<Option<DungeonFrontmatter>> {
+        self.load_entity(DUNGEON_DIR, slug)
+    }
+
+    pub fn delete_dungeon(&self, slug: &str) -> Result<()> {
+        self.delete_entity(DUNGEON_DIR, slug)
+    }
+
+    pub fn list_dungeons(&self) -> Result<Vec<DungeonFrontmatter>> {
+        self.list_entities(DUNGEON_DIR)
     }
 }

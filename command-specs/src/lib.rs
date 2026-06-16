@@ -177,6 +177,7 @@ pub fn command_availability(name: &str) -> CommandAvailability {
         "item" => CommandAvailability::EntityScoped("item"),
         "event" => CommandAvailability::EntityScoped("event"),
         "god" => CommandAvailability::EntityScoped("god"),
+        "dungeon" => CommandAvailability::EntityScoped("dungeon"),
         "reroll" => CommandAvailability::EntityEditorOnly,
         "save" | "cancel" => CommandAvailability::AnyEditor,
         "publish" => CommandAvailability::DefaultOrEntityEditor,
@@ -244,6 +245,7 @@ pub fn command_manifest() -> CommandManifest {
                     "create item a cursed blade woven from stormglass".to_string(),
                     "create event the night the old bridge burned".to_string(),
                     "create god a storm deity of broken oaths".to_string(),
+                    "create dungeon".to_string(),
                     "create help".to_string(),
                 ],
                 subcommands: vec![
@@ -282,6 +284,12 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Start guided god creation".to_string(),
                         options: Vec::new(),
                         examples: vec!["create god".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "dungeon".to_string(),
+                        summary: "Start the guided 5-room dungeon flow".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["create dungeon".to_string()],
                     },
                     SubcommandSpec {
                         name: "help".to_string(),
@@ -807,6 +815,77 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "dungeon".to_string(),
+                summary: "Edit active dungeon draft".to_string(),
+                examples: vec![
+                    "dungeon show".to_string(),
+                    "dungeon rename The Sunken Forge".to_string(),
+                    "dungeon set premise A drowned forge that still burns".to_string(),
+                    "dungeon set setback loot none".to_string(),
+                    "dungeon reroll setback".to_string(),
+                    "dungeon save".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "show".to_string(),
+                        summary: "Show active dungeon draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["dungeon show".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "rename".to_string(),
+                        summary: "Update dungeon name".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["dungeon rename The Sunken Forge".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "set".to_string(),
+                        summary: "Update dungeon-level fields or a beat field".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "dungeon set premise A drowned forge that still burns".to_string(),
+                            "dungeon set topology The Moose".to_string(),
+                            "dungeon set tone tragedy".to_string(),
+                            "dungeon set setback loot none".to_string(),
+                            "dungeon set climax idea The boss fights from a collapsing gantry".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "reroll".to_string(),
+                        summary: "Reroll a single beat (entrance|puzzle|setback|climax|resolution) or the premise".to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "dungeon reroll setback".to_string(),
+                            "dungeon reroll climax make the boss a former ally".to_string(),
+                            "dungeon reroll premise".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "save".to_string(),
+                        summary: "Save active dungeon draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["dungeon save".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "cancel".to_string(),
+                        summary: "Discard active dungeon draft".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["dungeon cancel".to_string()],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show dungeon editor command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["dungeon help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("dungeon help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "save".to_string(),
                 summary: "Save active guided flow context".to_string(),
                 examples: vec!["save".to_string()],
@@ -1190,7 +1269,7 @@ mod tests {
     #[test]
     fn entity_roots_are_scoped_to_their_own_editor() {
         // Regression guard: these must NOT silently fall through to `Default`.
-        for root in ["npc", "location", "faction", "item", "event", "god"] {
+        for root in ["npc", "location", "faction", "item", "event", "god", "dungeon"] {
             assert_eq!(
                 command_availability(root),
                 CommandAvailability::EntityScoped(root),
@@ -1322,8 +1401,8 @@ mod tests {
     #[test]
     fn menu_style_roots_require_a_subcommand() {
         for root in [
-            "create", "config", "npc", "location", "faction", "item", "event", "god", "setup",
-            "calendar", "date", "start",
+            "create", "config", "npc", "location", "faction", "item", "event", "god", "dungeon",
+            "setup", "calendar", "date", "start",
         ] {
             assert!(
                 requires_subcommand_for(root),

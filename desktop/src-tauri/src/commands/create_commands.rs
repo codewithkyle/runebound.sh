@@ -51,7 +51,14 @@ pub async fn handle_create(
             "create event <prompt text>",
             "create god",
             "create god <prompt text>",
+            "create dungeon",
         ].join("\n"));
+    }
+
+    if lowered == "create dungeon" || lowered.starts_with("create dungeon ") {
+        // Dungeon breaks from the single-command pattern: it starts a guided,
+        // multi-step flow (steps A–E) rather than generating in one shot.
+        return crate::commands::dungeon_flow::start_dungeon_flow(invocation.state.inner()).await;
     }
 
     if lowered == "create npc" || lowered.starts_with("create npc ") {

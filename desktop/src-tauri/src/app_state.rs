@@ -4,13 +4,15 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
-use runebound_models::{EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft, NpcDraft};
+use runebound_models::{
+    DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft, NpcDraft,
+};
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
 use crate::repositories::{
-    Database, DocumentRepository, EventRepository, FactionRepository, GenerationRepository,
-    GodRepository, ItemRepository, LocationRepository, NpcRepository, SoftDeleteRepository,
-    VaultRepository,
+    Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
+    GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
+    SoftDeleteRepository, VaultRepository,
 };
 
 pub type NpcDraftSession = NpcDraft;
@@ -19,6 +21,21 @@ pub type FactionDraftSession = FactionDraft;
 pub type ItemDraftSession = ItemDraft;
 pub type EventDraftSession = EventDraft;
 pub type GodDraftSession = GodDraft;
+pub type DungeonDraftSession = DungeonDraft;
+
+/// In-memory state machine for the guided `create dungeon` flow (steps A–E).
+/// Like `OnboardingSession`, nothing here persists mid-flow; it lives on
+/// `AppState` and is intercepted before registry dispatch in `main.rs`.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DungeonCreationFlow {
+    pub active: bool,
+    pub step: u8,                 // 1..=5 (A..E)
+    pub premise: Option<String>,  // None = "generate one"
+    pub tone: Option<String>,     // DUNGEON_TONES
+    pub twist: Option<String>,    // DUNGEON_TWISTS
+    pub context: String,          // step D free-text (references/constraints); "" = skipped
+    pub topology: Option<String>, // DUNGEON_TOPOLOGIES incl. "none"
+}
 
 #[derive(Debug, Clone)]
 pub(crate) enum DraftEnvelope {
@@ -28,6 +45,7 @@ pub(crate) enum DraftEnvelope {
     Item(ItemDraftSession),
     Event(EventDraftSession),
     God(GodDraftSession),
+    Dungeon(DungeonDraftSession),
 }
 
 impl DraftEnvelope {
@@ -39,6 +57,7 @@ impl DraftEnvelope {
             DraftEnvelope::Item(_) => EntityKind::Item,
             DraftEnvelope::Event(_) => EntityKind::Event,
             DraftEnvelope::God(_) => EntityKind::God,
+            DraftEnvelope::Dungeon(_) => EntityKind::Dungeon,
         }
     }
 
@@ -137,6 +156,22 @@ impl DraftEnvelope {
             None
         }
     }
+
+    pub(crate) fn as_dungeon(&self) -> Option<&DungeonDraftSession> {
+        if let DraftEnvelope::Dungeon(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    pub(crate) fn as_dungeon_mut(&mut self) -> Option<&mut DungeonDraftSession> {
+        if let DraftEnvelope::Dungeon(value) = self {
+            Some(value)
+        } else {
+            None
+        }
+    }
 }
 
 impl From<NpcDraftSession> for DraftEnvelope {
@@ -172,6 +207,12 @@ impl From<EventDraftSession> for DraftEnvelope {
 impl From<GodDraftSession> for DraftEnvelope {
     fn from(draft: GodDraftSession) -> Self {
         DraftEnvelope::God(draft)
+    }
+}
+
+impl From<DungeonDraftSession> for DraftEnvelope {
+    fn from(draft: DungeonDraftSession) -> Self {
+        DraftEnvelope::Dungeon(draft)
     }
 }
 
@@ -349,6 +390,28 @@ impl EditorSession {
             })
     }
 
+    pub(crate) fn get_dungeon(&self) -> Option<&DungeonDraftSession> {
+        self.draft(EntityKind::Dungeon)
+            .and_then(DraftEnvelope::as_dungeon)
+    }
+
+    pub(crate) fn get_dungeon_mut(&mut self) -> Option<&mut DungeonDraftSession> {
+        self.draft_mut(EntityKind::Dungeon)
+            .and_then(DraftEnvelope::as_dungeon_mut)
+    }
+
+    pub(crate) fn set_dungeon(&mut self, draft: DungeonDraftSession) {
+        self.set_active_draft(DraftEnvelope::Dungeon(draft));
+    }
+
+    pub(crate) fn take_dungeon(&mut self) -> Option<DungeonDraftSession> {
+        self.clear_kind(EntityKind::Dungeon)
+            .and_then(|envelope| match envelope {
+                DraftEnvelope::Dungeon(draft) => Some(draft),
+                _ => None,
+            })
+    }
+
     fn next_active_after(&self, cleared: EntityKind) -> Option<EntityKind> {
         let search_order: &[EntityKind] = match cleared {
             EntityKind::Npc => &[
@@ -357,6 +420,7 @@ impl EditorSession {
                 EntityKind::Item,
                 EntityKind::Event,
                 EntityKind::God,
+                EntityKind::Dungeon,
             ],
             EntityKind::Location => &[
                 EntityKind::Npc,
@@ -364,6 +428,7 @@ impl EditorSession {
                 EntityKind::Item,
                 EntityKind::Event,
                 EntityKind::God,
+                EntityKind::Dungeon,
             ],
             EntityKind::Faction => &[
                 EntityKind::Npc,
@@ -371,6 +436,7 @@ impl EditorSession {
                 EntityKind::Item,
                 EntityKind::Event,
                 EntityKind::God,
+                EntityKind::Dungeon,
             ],
             EntityKind::Item => &[
                 EntityKind::Npc,
@@ -378,6 +444,7 @@ impl EditorSession {
                 EntityKind::Faction,
                 EntityKind::Event,
                 EntityKind::God,
+                EntityKind::Dungeon,
             ],
             EntityKind::Event => &[
                 EntityKind::Npc,
@@ -385,6 +452,7 @@ impl EditorSession {
                 EntityKind::Faction,
                 EntityKind::Item,
                 EntityKind::God,
+                EntityKind::Dungeon,
             ],
             EntityKind::God => &[
                 EntityKind::Npc,
@@ -392,6 +460,15 @@ impl EditorSession {
                 EntityKind::Faction,
                 EntityKind::Item,
                 EntityKind::Event,
+                EntityKind::Dungeon,
+            ],
+            EntityKind::Dungeon => &[
+                EntityKind::Npc,
+                EntityKind::Location,
+                EntityKind::Faction,
+                EntityKind::Item,
+                EntityKind::Event,
+                EntityKind::God,
             ],
         };
 
@@ -414,10 +491,13 @@ pub(crate) struct AppState {
     pub(crate) item_repo: Arc<dyn ItemRepository>,
     pub(crate) event_repo: Arc<dyn EventRepository>,
     pub(crate) god_repo: Arc<dyn GodRepository>,
+    pub(crate) dungeon_repo: Arc<dyn DungeonRepository>,
     pub(crate) document_repo: Arc<dyn DocumentRepository>,
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
     pub(crate) domains: Arc<EntityDomainRegistry>,
+    /// In-memory state for the guided `create dungeon` flow (steps A–E).
+    pub(crate) dungeon_flow: Mutex<DungeonCreationFlow>,
     /// Cached result of the boot LLM health probe, reused to render the MOTD
     /// without re-probing the Ollama server.
     pub(crate) boot_ollama_health: Mutex<Option<dnd_core::health::OllamaHealth>>,
@@ -454,6 +534,10 @@ impl AppState {
 
     pub(crate) fn god_repo(&self) -> Arc<dyn GodRepository> {
         self.god_repo.clone()
+    }
+
+    pub(crate) fn dungeon_repo(&self) -> Arc<dyn DungeonRepository> {
+        self.dungeon_repo.clone()
     }
 
     pub(crate) fn document_repo(&self) -> Arc<dyn DocumentRepository> {

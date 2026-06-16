@@ -10,6 +10,7 @@ use crate::services::ollama_chat::{
     attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
 };
 use crate::utils::{
+    normalize_dungeon_content_type,
     normalize_exports,
     normalize_faction_kind_type,
     normalize_god_alignment,
@@ -22,7 +23,8 @@ use crate::utils::{
     normalize_unknown_list,
     normalize_unknown_text,
 };
-use runebound_models::utils::{GOD_ALIGNMENTS, GOD_RANKS};
+use runebound_models::DungeonBeat;
+use runebound_models::utils::{DUNGEON_CONTENT_TYPES, DUNGEON_FUNCTIONS, GOD_ALIGNMENTS, GOD_RANKS};
 use dnd_core::config::AppConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -799,6 +801,262 @@ impl EntityRerollService {
         Err(format!("failed to reroll god field: {}", field))
     }
 
+    /// Regenerate a single beat against the frozen rest of the dungeon. The other
+    /// four beats are sent verbatim as context; only `beats[beat_index]` is
+    /// rerolled, and its `function` stays fixed. Anti-stagnation rejects a reroll
+    /// whose `content_type` repeats the current beat's on early attempts so the
+    /// palette actually varies ("can't converge to goblins-trap-boss").
+    pub async fn reroll_dungeon_beat(
+        &self,
+        input: RerollDungeonBeatInput,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<RerollDungeonBeatResult, String> {
+        let beat_index = input.beat_index;
+        if beat_index >= DUNGEON_FUNCTIONS.len() {
+            return Err("beat index out of range".to_string());
+        }
+        let current = input
+            .dungeon
+            .beats
+            .get(beat_index)
+            .cloned()
+            .ok_or_else(|| "dungeon is missing the beat to reroll".to_string())?;
+        let function = DUNGEON_FUNCTIONS[beat_index];
+
+        let (config, model) = load_generation_config(workspace_root)?;
+        let extra_prompt = input
+            .prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+
+        let prev = if beat_index > 0 {
+            DUNGEON_FUNCTIONS[beat_index - 1]
+        } else {
+            "the dungeon opening"
+        };
+        let next = if beat_index + 1 < DUNGEON_FUNCTIONS.len() {
+            DUNGEON_FUNCTIONS[beat_index + 1]
+        } else {
+            "the payoff"
+        };
+
+        let frozen = dungeon_context_summary(&input.dungeon, Some(beat_index));
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["content_type", "idea", "lever", "read_aloud"],
+            "additionalProperties": false,
+            "properties": {
+                "content_type": { "type": "string", "enum": DUNGEON_CONTENT_TYPES },
+                "idea": { "type": "string", "minLength": 1 },
+                "lever": { "type": "string", "minLength": 1 },
+                "loot": { "type": ["string", "null"] },
+                "read_aloud": { "type": "string", "minLength": 1 }
+            }
+        });
+
+        let loot_rule = if function == "Resolution" || function == "Climax" {
+            "This beat may carry loot (the payoff/boss hoard)."
+        } else if function == "Setback" {
+            "Set loot to null — the Setback is where players pay, not collect."
+        } else {
+            "Set loot to null unless this beat is genuinely a reward cache."
+        };
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..4 {
+            let run_seed = attempt_seed(attempt);
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": {
+                    "temperature": 1.05,
+                    "top_p": 0.92,
+                    "repeat_penalty": 1.12,
+                    "seed": run_seed,
+                    "num_ctx": config.ollama.num_ctx
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": format!(
+                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep the output index-card tight and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 1-2 lines (for combat: tactics/behavior, never creature names). lever is one hook/question. read_aloud is 1-2 sentences of STATIC VISUAL only (shape, scale, materials, light, notable objects — no action). {loot_rule} Pick a content_type that fits this beat's function and ideally differs from its current one to keep variety.{reference_suffix}",
+                            loot_rule = loot_rule,
+                            reference_suffix = reference_suffix
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": format!(
+                            "Dungeon so far (the other four beats are frozen — stay coherent with them):\n{frozen}\n\nRegenerate ONLY beat {n} (function = {function}). It must follow the {prev} beat and feed the {next} beat. Optional shaping prompt: {shape}",
+                            frozen = frozen,
+                            n = beat_index + 1,
+                            function = function,
+                            prev = prev,
+                            next = next,
+                            shape = if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                        )
+                    }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            let Some(content_type_raw) = parsed.get("content_type").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let content_type = match normalize_dungeon_content_type(content_type_raw) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(idea) = parsed.get("idea").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(lever) = parsed.get("lever").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(read_aloud) = parsed.get("read_aloud").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let loot = parsed
+                .get("loot")
+                .and_then(|v| v.as_str())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"));
+
+            // Anti-stagnation: force palette variety on early attempts.
+            if attempt < 3 && content_type.eq_ignore_ascii_case(current.content_type.trim()) {
+                continue;
+            }
+
+            return Ok(RerollDungeonBeatResult {
+                beat: DungeonBeat {
+                    function: function.to_string(),
+                    content_type,
+                    idea: normalize_unknown_text(idea),
+                    lever: normalize_unknown_text(lever),
+                    loot,
+                    read_aloud: normalize_unknown_text(read_aloud),
+                },
+            });
+        }
+
+        Err(format!("failed to reroll dungeon beat {}", beat_index + 1))
+    }
+
+    /// Scalar reroll for the dungeon-level `premise` or `name` line, against the
+    /// frozen rest of the dungeon (mirrors the item/god scalar reroll).
+    pub async fn reroll_dungeon_field(
+        &self,
+        input: RerollDungeonFieldInput,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<RerollDungeonFieldResult, String> {
+        let field = match input.field.trim().to_ascii_lowercase().as_str() {
+            "premise" | "spine" => "premise",
+            "name" => "name",
+            other => {
+                return Err(format!(
+                    "unknown dungeon reroll field: {}. rerollable fields: name, premise (or a beat name)",
+                    other
+                ))
+            }
+        };
+
+        let (config, model) = load_generation_config(workspace_root)?;
+        let extra_prompt = input
+            .prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let frozen = dungeon_context_summary(&input.dungeon, None);
+
+        let instruction = match field {
+            "premise" => "Generate a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).",
+            _ => "Generate a concise, evocative name for the dungeon.",
+        };
+        let current = match field {
+            "premise" => input.dungeon.premise.clone(),
+            _ => input.dungeon.name.clone(),
+        };
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "additionalProperties": false,
+            "properties": { "value": { "type": "string", "minLength": 1 } }
+        });
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..4 {
+            let run_seed = attempt_seed(attempt);
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": format!(
+                            "You update one dungeon field for a game master. Return only JSON matching schema. Keep it coherent with the dungeon below.{reference_suffix}",
+                            reference_suffix = reference_suffix
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": format!(
+                            "Dungeon: {frozen}\nField to reroll: {field}\nInstruction: {instruction}\nOptional shaping prompt: {shape}",
+                            frozen = frozen,
+                            field = field,
+                            instruction = instruction,
+                            shape = if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                        )
+                    }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(raw_value) = parsed.get("value").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let normalized = normalize_unknown_text(raw_value);
+            if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
+                continue;
+            }
+            return Ok(RerollDungeonFieldResult {
+                field: field.to_string(),
+                value: Some(normalized),
+            });
+        }
+
+        Err(format!("failed to reroll dungeon field: {}", field))
+    }
+
     pub async fn reroll_item_field(
         &self,
         input: RerollItemFieldInput,
@@ -1088,6 +1346,54 @@ pub struct RerollGodFieldResult {
     pub list_value: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DungeonRerollContext {
+    pub name: String,
+    pub premise: String,
+    pub topology: String,
+    pub tone: String,
+    pub twist: String,
+    pub beats: Vec<DungeonBeat>,
+}
+
+impl DungeonRerollContext {
+    pub fn from_draft(draft: &runebound_models::DungeonDraft) -> Self {
+        Self {
+            name: draft.name.clone(),
+            premise: draft.premise.clone(),
+            topology: draft.topology.clone(),
+            tone: draft.tone.clone(),
+            twist: draft.twist.clone(),
+            beats: draft.beats.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollDungeonBeatInput {
+    pub beat_index: usize,
+    pub prompt: Option<String>,
+    pub dungeon: DungeonRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollDungeonBeatResult {
+    pub beat: DungeonBeat,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollDungeonFieldInput {
+    pub field: String,
+    pub prompt: Option<String>,
+    pub dungeon: DungeonRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollDungeonFieldResult {
+    pub field: String,
+    pub value: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RerollItemFieldInput {
     pub field: String,
@@ -1302,6 +1608,44 @@ fn god_context_summary(context: &GodRerollContext) -> String {
         context.allies.join(", "),
         context.rivals.join(", "),
     )
+}
+
+/// Serialize the spine, dials, topology, and the dungeon's beats for frozen
+/// reroll context. When `skip_index` is `Some(i)`, beat `i` is marked as the one
+/// being regenerated (its body is omitted) so the model rewrites only that beat
+/// while staying coherent with the others.
+fn dungeon_context_summary(
+    context: &DungeonRerollContext,
+    skip_index: Option<usize>,
+) -> String {
+    let mut lines = vec![
+        format!("premise (spine): {}", context.premise),
+        format!("tone: {}", context.tone),
+        format!("twist: {}", context.twist),
+        format!("topology: {}", context.topology),
+    ];
+    for (i, beat) in context.beats.iter().enumerate() {
+        let function = DUNGEON_FUNCTIONS.get(i).copied().unwrap_or("Beat");
+        if skip_index == Some(i) {
+            lines.push(format!(
+                "beat {} [{}] (THIS IS THE BEAT TO REGENERATE)",
+                i + 1,
+                function
+            ));
+        } else {
+            lines.push(format!(
+                "beat {} [{}] type={} | idea={} | lever={} | loot={} | read_aloud={}",
+                i + 1,
+                function,
+                beat.content_type,
+                beat.idea,
+                beat.lever,
+                beat.loot.as_deref().unwrap_or("none"),
+                beat.read_aloud,
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {

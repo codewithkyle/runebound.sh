@@ -2,9 +2,9 @@ use std::path::Path;
 
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
-    EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter,
-    NpcFrontmatter, UNKNOWN_LOCATION, normalize_markdown_file_stem, now_timestamp, slugify,
-    unique_slug_for_dir_with_ext,
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, normalize_markdown_file_stem,
+    now_timestamp, slugify, unique_slug_for_dir_with_ext,
 };
 use dnd_core::serialization::{
     carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
@@ -15,11 +15,13 @@ use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::ai_generation::LocationSeed;
 use crate::utils::{
-    normalize_exports, normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
+    normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist, normalize_exports,
+    normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
     normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
     normalize_location_kind_type, normalize_relative_path_for_storage, normalize_sex,
     normalize_unknown_list, normalize_unknown_text, validate_location_details,
 };
+use runebound_models::DungeonBeat;
 
 pub struct EntityPersistenceService;
 
@@ -674,6 +676,133 @@ impl EntityPersistenceService {
         })
     }
 
+    pub async fn save_dungeon_draft(
+        &self,
+        input: SaveDungeonDraftInput,
+        state: &AppState,
+    ) -> Result<SaveDungeonDraftResult, String> {
+        if input.id.trim().is_empty() {
+            return Err("dungeon id cannot be empty".to_string());
+        }
+        let name = input.name.trim();
+        if name.is_empty() {
+            return Err("dungeon name cannot be empty".to_string());
+        }
+
+        let premise = normalize_unknown_text(&input.premise);
+        let topology = normalize_dungeon_topology(&input.topology)?;
+        let tone = normalize_dungeon_tone(&input.tone)?;
+        let twist = normalize_dungeon_twist(&input.twist)?;
+        let beats = input.beats.clone();
+
+        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let database = state.database();
+        let dungeon_repo = state.dungeon_repo();
+        let document_repo = state.document_repo();
+        let now = now_timestamp();
+        let existing = dungeon_repo
+            .find_by_id(database.as_ref(), input.id.trim())
+            .await?;
+        let created_at = existing
+            .as_ref()
+            .map(|row| row.created_at.clone())
+            .unwrap_or_else(|| now.clone());
+
+        let slug = resolve_slug(
+            store.root(),
+            "dungeons",
+            existing.as_ref().map(|row| row.slug.as_str()),
+            name,
+        );
+
+        let vault_path = resolve_vault_path(
+            document_repo.as_ref(),
+            database.as_ref(),
+            "dungeons",
+            name,
+            existing.as_ref().map(|row| ExistingRef {
+                slug: &row.slug,
+                vault_path: &row.vault_path,
+            }),
+            Some(input.vault_path.as_str()),
+        )
+        .await?;
+
+        let published_at = match existing.as_ref() {
+            Some(current) => store
+                .load_dungeon(&current.slug)
+                .ok()
+                .flatten()
+                .and_then(|prior| prior.published_at),
+            None => None,
+        };
+
+        let frontmatter = DungeonFrontmatter {
+            doc_type: "dungeon".to_string(),
+            id: input.id.trim().to_string(),
+            slug: slug.clone(),
+            name: name.to_string(),
+            vault_path: vault_path.clone(),
+            premise: premise.clone(),
+            topology: topology.clone(),
+            tone: tone.clone(),
+            twist: twist.clone(),
+            beats: beats.clone(),
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+            published_at,
+        };
+
+        store
+            .save_dungeon(&frontmatter)
+            .map_err(|err| err.to_string())?;
+        if let Some(current) = existing.as_ref() {
+            if current.slug != slug {
+                store
+                    .delete_dungeon(&current.slug)
+                    .map_err(|err| err.to_string())?;
+            }
+        }
+
+        let beats_json = serde_json::to_string(&beats)
+            .map_err(|err| format!("failed to encode dungeon beats: {err}"))?;
+
+        let dungeon_row = db::DungeonRow {
+            id: input.id.trim().to_string(),
+            slug,
+            name: name.to_string(),
+            vault_path: vault_path.clone(),
+            premise,
+            topology,
+            tone,
+            twist,
+            beats_json,
+            created_at: created_at.clone(),
+            updated_at: now.clone(),
+        };
+
+        dungeon_repo.upsert(database.as_ref(), &dungeon_row).await?;
+        document_repo
+            .upsert_index(
+                database.as_ref(),
+                "dungeon",
+                &dungeon_row.slug,
+                Some(&dungeon_row.name),
+                &dungeon_row.vault_path,
+                &dungeon_row.created_at,
+                &dungeon_row.updated_at,
+            )
+            .await?;
+
+        Ok(SaveDungeonDraftResult {
+            id: dungeon_row.id,
+            slug: dungeon_row.slug,
+            vault_path: dungeon_row.vault_path,
+            created_at: dungeon_row.created_at,
+            updated_at: dungeon_row.updated_at,
+        })
+    }
+
     pub async fn save_item_draft(
         &self,
         input: SaveItemDraftInput,
@@ -1128,6 +1257,27 @@ pub struct SaveGodDraftInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SaveGodDraftResult {
+    pub id: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveDungeonDraftInput {
+    pub id: String,
+    pub name: String,
+    pub vault_path: String,
+    pub premise: String,
+    pub topology: String,
+    pub tone: String,
+    pub twist: String,
+    pub beats: Vec<DungeonBeat>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct SaveDungeonDraftResult {
     pub id: String,
     pub slug: String,
     pub vault_path: String,

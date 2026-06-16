@@ -1,8 +1,8 @@
 use std::fmt::Write;
 
 use runebound_models::{
-    EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter,
-    NpcFrontmatter,
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter,
 };
 
 use crate::utils::normalize_unknown_text;
@@ -150,6 +150,74 @@ pub fn render_god_markdown_with_links(
     write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals);
 
     out
+}
+
+pub fn render_dungeon_markdown(frontmatter: &DungeonFrontmatter) -> String {
+    render_dungeon_markdown_with_links(frontmatter, &EntityLinker::empty())
+}
+
+/// A dungeon publishes as: a premise intro line, a topology line, then one `##`
+/// section per beat (`## 1. Entrance — [combat]`) carrying Idea / Lever / Loot
+/// (omitted when absent) / Read-Aloud. The GM tweaks freely after publish.
+pub fn render_dungeon_markdown_with_links(
+    frontmatter: &DungeonFrontmatter,
+    linker: &EntityLinker,
+) -> String {
+    let mut out = String::new();
+    let premise = normalize_unknown_text(&frontmatter.premise);
+    if premise != "Unknown" {
+        writeln!(&mut out, "*{}*", linker.link_prose(&premise)).ok();
+        writeln!(&mut out).ok();
+    }
+    let topology = frontmatter.topology.trim();
+    if topology.is_empty() || topology.eq_ignore_ascii_case("none") {
+        writeln!(&mut out, "**Topology:** none (lay it out freely)").ok();
+    } else {
+        writeln!(&mut out, "**Topology:** {topology}").ok();
+    }
+    write_attr_line(&mut out, "Tone", &frontmatter.tone);
+    writeln!(&mut out).ok();
+
+    for (i, beat) in frontmatter.beats.iter().enumerate() {
+        let content_type = normalize_unknown_text(&beat.content_type);
+        writeln!(&mut out, "## {}. {} — [{}]", i + 1, beat.function, content_type).ok();
+        let idea = normalize_unknown_text(&beat.idea);
+        if idea != "Unknown" {
+            writeln!(&mut out, "**Idea:** {}", linker.link_prose(&idea)).ok();
+        }
+        let lever = normalize_unknown_text(&beat.lever);
+        if lever != "Unknown" {
+            writeln!(&mut out, "**Lever:** {}", linker.link_prose(&lever)).ok();
+        }
+        if let Some(loot) = &beat.loot {
+            let loot = loot.trim();
+            if !loot.is_empty() {
+                writeln!(&mut out, "**Loot:** {}", linker.link_prose(loot)).ok();
+            }
+        }
+        let read_aloud = normalize_unknown_text(&beat.read_aloud);
+        if read_aloud != "Unknown" {
+            writeln!(&mut out, "**Read-Aloud:** {}", linker.link_prose(&read_aloud)).ok();
+        }
+        writeln!(&mut out).ok();
+    }
+
+    out
+}
+
+/// The narrative prose of a dungeon — every beat's idea/lever/loot/read-aloud
+/// joined, for Tier 2 mention extraction.
+pub fn dungeon_prose(frontmatter: &DungeonFrontmatter) -> String {
+    let mut parts: Vec<&str> = Vec::new();
+    for beat in &frontmatter.beats {
+        parts.push(beat.idea.as_str());
+        parts.push(beat.lever.as_str());
+        if let Some(loot) = &beat.loot {
+            parts.push(loot.as_str());
+        }
+        parts.push(beat.read_aloud.as_str());
+    }
+    join_prose(&parts)
 }
 
 pub fn render_event_markdown(frontmatter: &EventFrontmatter) -> String {
@@ -774,6 +842,52 @@ mod tests {
         // Short-term goals are descriptive sentences elsewhere — confirm we did
         // not start linking non-relational list sections.
         assert!(!markdown.contains("[[Hidden vaults]]"));
+    }
+
+    #[test]
+    fn dungeon_markdown_renders_premise_topology_and_beats() {
+        use runebound_models::DungeonBeat;
+        let frontmatter = DungeonFrontmatter {
+            doc_type: "dungeon".to_string(),
+            id: "dungeon_1".to_string(),
+            slug: "the-sunken-forge".to_string(),
+            name: "The Sunken Forge".to_string(),
+            vault_path: "dungeons/The Sunken Forge.md".to_string(),
+            premise: "A drowned forge that still burns.".to_string(),
+            topology: "The Moose".to_string(),
+            tone: "tragedy".to_string(),
+            twist: "false_victory".to_string(),
+            beats: vec![
+                DungeonBeat {
+                    function: "Entrance".to_string(),
+                    content_type: "puzzle".to_string(),
+                    idea: "A sealed sluice gate bars the way.".to_string(),
+                    lever: "What keeps the water out?".to_string(),
+                    loot: None,
+                    read_aloud: "A rusted iron gate, chest-high water beyond.".to_string(),
+                },
+                DungeonBeat {
+                    function: "Resolution".to_string(),
+                    content_type: "cache".to_string(),
+                    idea: "The reignited forge yields its prize.".to_string(),
+                    lever: "Who else wants what was forged here?".to_string(),
+                    loot: Some("A still-warm blade".to_string()),
+                    read_aloud: "A cold anvil the size of a cart.".to_string(),
+                },
+            ],
+            created_at: "2026-06-16T00:00:00Z".to_string(),
+            updated_at: "2026-06-16T00:00:00Z".to_string(),
+            published_at: None,
+        };
+        let markdown = render_dungeon_markdown(&frontmatter);
+        assert!(markdown.contains("*A drowned forge that still burns.*"));
+        assert!(markdown.contains("**Topology:** The Moose"));
+        assert!(markdown.contains("## 1. Entrance — [puzzle]"));
+        assert!(markdown.contains("## 2. Resolution — [cache]"));
+        assert!(markdown.contains("**Loot:** A still-warm blade"));
+        // The Entrance has no loot line — conditional loot omitted, not blank.
+        let entrance = markdown.split("## 2.").next().unwrap_or("");
+        assert!(!entrance.contains("**Loot:**"));
     }
 
     // ----------------------------------------------------------------------

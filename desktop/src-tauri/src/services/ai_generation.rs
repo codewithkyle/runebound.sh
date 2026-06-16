@@ -14,9 +14,10 @@ use crate::utils::{
 use dnd_core::config::AppConfig;
 use dnd_core::entity_store::EntityStore;
 use dnd_core::vault::Vault;
+use runebound_models::DungeonBeat;
 use runebound_models::utils::{
-    FACTION_KIND_TYPES, GOD_ALIGNMENTS, GOD_RANKS, ITEM_CATEGORIES, ITEM_RARITIES,
-    LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
+    DUNGEON_CONTENT_TYPES, DUNGEON_FUNCTIONS, FACTION_KIND_TYPES, GOD_ALIGNMENTS, GOD_RANKS,
+    ITEM_CATEGORIES, ITEM_RARITIES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -709,6 +710,170 @@ impl AiGenerationService {
 
         Err("failed to generate valid structured event output from ollama".to_string())
     }
+
+    /// Generate a whole 5-beat dungeon oracle in one call. tone/twist/topology are
+    /// authoritative from the creation flow and passed as prompt constraints (not
+    /// part of the output schema); `function` is assigned by us after parse so the
+    /// fixed Entrance→Resolution skeleton holds regardless of model behavior.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn generate_dungeon_seed(
+        &self,
+        premise: Option<String>,
+        context: &str,
+        tone: &str,
+        twist: &str,
+        topology: &str,
+        workspace_root: &PathBuf,
+        database: &Database,
+        generation_repo: &dyn GenerationRepository,
+    ) -> Result<SeedGeneration<DungeonSeed>, String> {
+        let (config, model) = load_generation_config(workspace_root)?;
+
+        let premise = premise
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
+        let context = context.trim();
+
+        // The reference prompt scans premise + context for @references.
+        let reference_probe = format!("{} {}", premise.unwrap_or(""), context);
+        let reference_context =
+            build_reference_context(&config, reference_probe.trim(), workspace_root);
+
+        let recent_payloads = generation_repo
+            .recent_prompts(database, "dungeon_seed", 20)
+            .await?;
+        let recent_seeds = parse_recent_dungeon_seeds(recent_payloads);
+        let recent_context = describe_recent_dungeon_seeds(&recent_seeds);
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&reference_context.system_context)
+            + estimate_tokens(&recent_context)
+            + estimate_tokens(&reference_probe);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
+
+        let beat_schema = serde_json::json!({
+            "type": "object",
+            "required": ["content_type", "idea", "lever", "read_aloud"],
+            "additionalProperties": false,
+            "properties": {
+                "content_type": { "type": "string", "enum": DUNGEON_CONTENT_TYPES },
+                "idea": { "type": "string", "minLength": 1 },
+                "lever": { "type": "string", "minLength": 1 },
+                "loot": { "type": ["string", "null"] },
+                "read_aloud": { "type": "string", "minLength": 1 }
+            }
+        });
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["name", "premise", "beats"],
+            "additionalProperties": false,
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "premise": { "type": "string", "minLength": 1 },
+                "beats": {
+                    "type": "array",
+                    "minItems": 5,
+                    "maxItems": 5,
+                    "items": beat_schema
+                }
+            }
+        });
+
+        let premise_directive = match premise {
+            Some(value) => format!(
+                "The GM supplied this premise; treat it as authoritative and express it through the five beats: \"{}\".",
+                value
+            ),
+            None => "No premise was supplied; invent a small, self-contained dungeon that fills space without depending on outside content.".to_string(),
+        };
+        let topology_directive = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
+            "Topology: none — do not impose a spatial shape; the GM will lay it out.".to_string()
+        } else {
+            format!(
+                "Topology: {topology} — let this flow shape inform the beats, especially the Setback (a middle-entrance or looping form means a Setback that dumps players back toward the Entrance)."
+            )
+        };
+        let linkage_directive = if context.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "\n\nGM context (references/constraints): {context}. If this points the dungeon at outside content, concentrate those hooks in the Resolution and the connective content types (map/foreshadowing/oddity); keep the body self-contained and runnable."
+            )
+        };
+
+        let system_prompt = format!(
+            "You are a 5-room-dungeon ORACLE for a D&D game master. You emit a tight, index-card skeleton the GM will tweak — never finished boxed text. The north star is SPECIFIC BUT UNRESOLVED: each field throws a concrete spark but never states the answer; plant questions, not conclusions.\n\n\
+Return only JSON: name, premise (one-line spine summarizing the whole dungeon), and exactly five beats in order. The five beats are fixed dramatic FUNCTIONS — beat 1 Entrance (setup: what stops a random NPC from entering?), beat 2 Puzzle (the opposite of the entrance: roleplay, a locked-door→key chain, or a trap — avoid Simon-Says/logic puzzles), beat 3 Setback (the meat: a twist/trap/one-way exit that halts progress; this is where players PAY), beat 4 Climax (the boss: tactical and surprising), beat 5 Resolution (payoff: reward, plot twist, or humble pie). Do not output the function names; just order the beats correctly.\n\n\
+Each beat has: content_type (one of: {content_types}), idea (1-2 lines of what happens here; for combat carry tactics/behavior, NEVER creature names — GMs slot their own monsters), lever (ONE complication, question, or hook the GM can pull), loot (a conditional reward line OR null), and read_aloud (1-2 sentence STATIC VISUAL only — shape, scale, materials, light, one or two notable objects; no action, no NPC behavior; this doubles as a map-making seed and is the field most likely to balloon, so keep it the tightest). Favor one-object-triple-duty: the notable object in read_aloud is also the loot's hiding place and the lever's hook.\n\n\
+LOOT IS CONDITIONAL: weight it to the payoff. Put loot on the Resolution, sometimes the Climax (the boss's hoard) or a Cache offshoot. Set loot to null everywhere else, ESPECIALLY the Setback (that beat is the cost, not the collection).\n\n\
+Tone: {tone}. Twist (shape of the middle beats): {twist}. {premise_directive} {topology_directive}{linkage}\n\n\
+Keep every field brief and index-card tight; if a beat needs a paragraph you are over-generating. Avoid repeating these recent dungeons: {recent}.{reference}",
+            content_types = DUNGEON_CONTENT_TYPES.join(", "),
+            tone = tone,
+            twist = twist,
+            premise_directive = premise_directive,
+            topology_directive = topology_directive,
+            linkage = linkage_directive,
+            recent = recent_context,
+            reference = if reference_context.system_context.is_empty() {
+                String::new()
+            } else {
+                format!("\n\n{}", reference_context.system_context)
+            },
+        );
+
+        let user_prompt = match premise {
+            Some(value) => value.to_string(),
+            None => "Generate one self-contained 5-room dungeon.".to_string(),
+        };
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..5 {
+            let run_seed = attempt_seed(attempt);
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid. Return only valid JSON matching the schema with exactly five beats."
+            };
+
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
+                "messages": [
+                    { "role": "system", "content": format!("{system_prompt}{repair_note}") },
+                    { "role": "user", "content": user_prompt }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+
+            let parsed: Result<DungeonSeed, _> = serde_json::from_str(&content);
+            let Ok(mut seed) = parsed else { continue };
+
+            if seed.beats.len() != DUNGEON_FUNCTIONS.len() {
+                continue;
+            }
+            seed.normalize();
+
+            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "dungeon_seed", None, &serialized_seed)
+                .await?;
+
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
+        }
+
+        Err("failed to generate valid structured dungeon output from ollama".to_string())
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -799,6 +964,83 @@ pub struct ItemSeed {
 pub struct EventSeed {
     pub title: String,
     pub body: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DungeonBeatSeed {
+    pub content_type: String,
+    pub idea: String,
+    pub lever: String,
+    #[serde(default)]
+    pub loot: Option<String>,
+    pub read_aloud: String,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DungeonSeed {
+    pub name: String,
+    pub premise: String,
+    pub beats: Vec<DungeonBeatSeed>,
+}
+
+impl DungeonSeed {
+    /// Normalize narrative fields and the conditional loot line. `function` is
+    /// assigned later in `into_beats`, not here, so the skeleton stays ours.
+    fn normalize(&mut self) {
+        self.name = self.name.trim().to_string();
+        self.premise = normalize_unknown_text(&self.premise);
+        for beat in self.beats.iter_mut() {
+            beat.content_type = normalize_unknown_text(&beat.content_type).to_ascii_lowercase();
+            beat.idea = normalize_unknown_text(&beat.idea);
+            beat.lever = normalize_unknown_text(&beat.lever);
+            beat.read_aloud = normalize_unknown_text(&beat.read_aloud);
+            beat.loot = beat
+                .loot
+                .as_ref()
+                .map(|loot| loot.trim().to_string())
+                .filter(|loot| !loot.is_empty() && !loot.eq_ignore_ascii_case("none"));
+        }
+    }
+
+    /// Convert to persistable beats, assigning the fixed function skeleton by
+    /// position (beat 0 = Entrance … beat 4 = Resolution).
+    pub fn into_beats(&self) -> Vec<DungeonBeat> {
+        self.beats
+            .iter()
+            .enumerate()
+            .map(|(i, beat)| DungeonBeat {
+                function: DUNGEON_FUNCTIONS
+                    .get(i)
+                    .copied()
+                    .unwrap_or("Beat")
+                    .to_string(),
+                content_type: beat.content_type.clone(),
+                idea: beat.idea.clone(),
+                lever: beat.lever.clone(),
+                loot: beat.loot.clone(),
+                read_aloud: beat.read_aloud.clone(),
+            })
+            .collect()
+    }
+}
+
+fn parse_recent_dungeon_seeds(payloads: Vec<String>) -> Vec<DungeonSeed> {
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<DungeonSeed>(&payload).ok())
+        .collect()
+}
+
+fn describe_recent_dungeon_seeds(seeds: &[DungeonSeed]) -> String {
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {}", seed.name, seed.premise))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 #[derive(Debug, Clone, Default)]

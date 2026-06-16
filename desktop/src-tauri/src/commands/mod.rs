@@ -8,6 +8,8 @@ pub mod faction_commands;
 pub mod item_commands;
 pub mod event_commands;
 pub mod god_commands;
+pub mod dungeon_commands;
+pub mod dungeon_flow;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
@@ -79,6 +81,7 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(item_handler_entry());
     registry.register(event_handler_entry());
     registry.register(god_handler_entry());
+    registry.register(dungeon_handler_entry());
     registry.register(load_handler_entry());
     registry.register(show_handler_entry());
     registry.register(preview_handler_entry());
@@ -272,6 +275,14 @@ pub fn god_handler_entry() -> HandlerEntry<DesktopHandler> {
     )
 }
 
+pub fn dungeon_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "dungeon",
+        metadata_for("dungeon"),
+        DesktopHandler::new(|invocation| Box::pin(async move { dungeon_commands::handle_dungeon(invocation).await })),
+    )
+}
+
 pub fn publish_handler_entry() -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
         "publish",
@@ -392,6 +403,8 @@ fn render_history_output(history: &[String], limit: usize) -> String {
 }
 
 pub use crate::entities::domains::{
+    dungeon_event_from_draft,
+    dungeon_summary_text,
     event_event_from_draft,
     event_summary_text,
     faction_event_from_draft,

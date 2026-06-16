@@ -107,6 +107,28 @@ export type GodDraft = {
   rivals: string[];
 };
 
+export type DungeonBeat = {
+  function: string;
+  content_type: string;
+  idea: string;
+  lever: string;
+  loot?: string | null;
+  read_aloud: string;
+};
+
+export type DungeonDraft = {
+  id: string;
+  seed_prompt?: string | null;
+  name: string;
+  slug: string;
+  vault_path: string;
+  premise: string;
+  topology: string;
+  tone: string;
+  twist: string;
+  beats: DungeonBeat[];
+};
+
 export type NpcFrontmatter = {
   type: string;
   id: string;
@@ -221,6 +243,22 @@ export type GodFrontmatter = {
   published_at?: string | null;
 };
 
+export type DungeonFrontmatter = {
+  type: string;
+  id: string;
+  slug: string;
+  name: string;
+  vault_path: string;
+  premise: string;
+  topology: string;
+  tone: string;
+  twist: string;
+  beats: DungeonBeat[];
+  created_at: string;
+  updated_at: string;
+  published_at?: string | null;
+};
+
 export type EntityCardRow = {
   label: string;
   value: string;
@@ -265,6 +303,7 @@ export type CommandClientEvent =
   | { kind: "load_item_draft_with_card"; draft: ItemDraft; entity_card: OutputDoc }
   | { kind: "load_event_draft_with_card"; draft: EventDraft; entity_card: OutputDoc }
   | { kind: "load_god_draft_with_card"; draft: GodDraft; entity_card: OutputDoc }
+  | { kind: "load_dungeon_draft_with_card"; draft: DungeonDraft; entity_card: OutputDoc }
   | { kind: "clear_drafts" }
   | { kind: "clear_terminal"; clear_history: boolean }
   | { kind: "exit_requested" };

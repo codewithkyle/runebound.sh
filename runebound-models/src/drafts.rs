@@ -134,6 +134,33 @@ pub struct GodDraft {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DungeonBeat {
+    pub function: String, // fixed skeleton: Entrance|Puzzle|Setback|Climax|Resolution
+    pub content_type: String, // one of DUNGEON_CONTENT_TYPES (the 11)
+    pub idea: String,     // 1-2 lines: what happens here
+    pub lever: String,    // one complication/question/hook
+    #[serde(default)]
+    pub loot: Option<String>, // conditional — None where the beat doesn't earn it
+    pub read_aloud: String, // 1-2 sentence static visual description
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DungeonDraft {
+    pub id: String,
+    #[serde(default)]
+    pub seed_prompt: Option<String>, // premise+context bias, reused by reroll
+    pub name: String,
+    pub slug: String,
+    pub vault_path: String,
+    pub premise: String, // the spine / top-line (feature-dungeons.md §6)
+    pub topology: String, // one of DUNGEON_TOPOLOGIES, or "none"
+    pub tone: String,    // "tragedy" | "comedy"
+    pub twist: String,   // "false_victory" | "false_defeat" | "neither"
+    #[serde(default)]
+    pub beats: Vec<DungeonBeat>, // exactly 5, fixed order
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcFrontmatter {
     #[serde(rename = "type")]
     pub doc_type: String,
@@ -280,9 +307,28 @@ pub struct GodFrontmatter {
     pub published_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DungeonFrontmatter {
+    #[serde(rename = "type")]
+    pub doc_type: String, // "dungeon"
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    pub premise: String,
+    pub topology: String,
+    pub tone: String,
+    pub twist: String,
+    pub beats: Vec<DungeonBeat>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
 use super::output::{
-    OutputDoc, command_ref, doc, entity_card, entity_row, paragraph_text, paragraph_with_inlines,
-    text_node,
+    OutputDoc, StatusTone, command_ref, doc, entity_card, entity_row, heading, paragraph_text,
+    paragraph_with_inlines, status, text_node,
 };
 use super::utils::{normalize_unknown_list, normalize_unknown_text};
 
@@ -541,4 +587,61 @@ pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
         text_node(" to regenerate the narrative."),
     ]));
     output
+}
+
+pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
+    let mut out = doc();
+    // 1. spine / premise top-line (feature-dungeons.md §6)
+    out.push(heading(
+        2,
+        format!(
+            "{} — {}",
+            normalize_unknown_text(&draft.name),
+            normalize_unknown_text(&draft.premise)
+        ),
+    ));
+    // 2. topology line
+    let topo = if draft.topology.is_empty() || draft.topology == "none" {
+        "Topology: none (lay it out freely)".to_string()
+    } else {
+        format!("Topology: {}", draft.topology)
+    };
+    out.push(status(StatusTone::Info, topo));
+    // 3. five beat cards, each followed by its own reroll Paragraph
+    for (i, beat) in draft.beats.iter().enumerate() {
+        let mut rows = vec![
+            entity_row("Type:", normalize_unknown_text(&beat.content_type)),
+            entity_row("Idea:", normalize_unknown_text(&beat.idea)),
+            entity_row("Lever:", normalize_unknown_text(&beat.lever)),
+        ];
+        if let Some(loot) = &beat.loot {
+            if !loot.trim().is_empty() {
+                rows.push(entity_row("Loot:", loot.clone()));
+            }
+        }
+        rows.push(entity_row("Read-Aloud:", normalize_unknown_text(&beat.read_aloud)));
+        out.push(entity_card(
+            format!("{}. {}", i + 1, beat.function),
+            rows,
+        ));
+        let key = beat.function.to_lowercase();
+        out.push(paragraph_with_inlines(vec![
+            text_node("Reroll this beat: "),
+            command_ref(
+                format!("reroll {key}"),
+                format!("dungeon reroll {key}"),
+            ),
+        ]));
+    }
+    // 4. footer actions
+    out.push(paragraph_with_inlines(vec![
+        text_node("Use "),
+        command_ref("save", "save"),
+        text_node(", "),
+        command_ref("reroll", "reroll"),
+        text_node(" for a whole new dungeon, or "),
+        command_ref("cancel", "cancel"),
+        text_node(" to discard."),
+    ]));
+    out
 }

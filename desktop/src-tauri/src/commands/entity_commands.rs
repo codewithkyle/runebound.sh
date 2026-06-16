@@ -8,6 +8,7 @@ use crate::services::entity_admin::{
 };
 use crate::entities::EntityKind;
 use crate::entities::domains::{
+    dungeon_event_from_draft,
     event_event_from_draft,
     faction_event_from_draft,
     god_event_from_draft,
@@ -17,8 +18,8 @@ use crate::entities::domains::{
 };
 use crate::utils::path_for_display;
 use crate::app_state::{
-    EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession, LocationDraftSession,
-    NpcDraftSession,
+    DungeonDraftSession, EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession,
+    LocationDraftSession, NpcDraftSession,
 };
 
 pub async fn handle_load(
@@ -322,6 +323,31 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
             }
             (build_entity_card_text(&entity), Some(god_event_from_draft(&draft)))
         }
+        EntityType::Dungeon => {
+            let draft = DungeonDraftSession {
+                id: entity.id.clone(),
+                seed_prompt: None,
+                name: entity.name.clone(),
+                slug: entity.slug.clone(),
+                vault_path: path_for_display(&entity.vault_path),
+                premise: entity.premise.clone().unwrap_or_else(|| "Unknown".to_string()),
+                topology: entity.topology.clone().unwrap_or_else(|| "none".to_string()),
+                tone: entity.tone.clone().unwrap_or_else(|| "tragedy".to_string()),
+                twist: entity.twist.clone().unwrap_or_else(|| "neither".to_string()),
+                beats: entity.beats.clone().unwrap_or_default(),
+            };
+            {
+                let mut editor = state.editor_session.lock().await;
+                editor.set_dungeon(draft.clone());
+                editor.clear_kind(EntityKind::Npc);
+                editor.clear_kind(EntityKind::Location);
+                editor.clear_kind(EntityKind::Faction);
+                editor.clear_kind(EntityKind::Item);
+                editor.clear_kind(EntityKind::Event);
+                editor.clear_kind(EntityKind::God);
+            }
+            (build_entity_card_text(&entity), Some(dungeon_event_from_draft(&draft)))
+        }
     }
 }
 
@@ -426,6 +452,22 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
             rows.push(entity_row("rivals", entity.rivals.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", ")));
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc { blocks: vec![entity_card("God", rows)] }
+        }
+        EntityType::Dungeon => {
+            rows.push(entity_row("premise", entity.premise.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("topology", entity.topology.clone().unwrap_or_else(|| "none".to_string())));
+            rows.push(entity_row("tone", entity.tone.clone().unwrap_or_else(|| "Unknown".to_string())));
+            rows.push(entity_row("twist", entity.twist.clone().unwrap_or_else(|| "Unknown".to_string())));
+            if let Some(beats) = &entity.beats {
+                for (i, beat) in beats.iter().enumerate() {
+                    rows.push(entity_row(
+                        format!("beat {}", i + 1),
+                        format!("[{}] {}", beat.content_type, beat.idea),
+                    ));
+                }
+            }
+            rows.push(entity_row("path", path_for_display(&entity.vault_path)));
+            OutputDoc { blocks: vec![entity_card("Dungeon", rows)] }
         }
     }
 }
@@ -540,6 +582,36 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 entity.allies.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
                 entity.rivals.clone().unwrap_or_else(|| vec!["Unknown".to_string()]).join(", "),
                 path_for_display(&entity.vault_path)
+            )
+        }
+        EntityType::Dungeon => {
+            let beats = entity
+                .beats
+                .clone()
+                .unwrap_or_default()
+                .iter()
+                .enumerate()
+                .map(|(i, beat)| {
+                    format!(
+                        "beat {} [{}] {}: {}",
+                        i + 1,
+                        beat.content_type,
+                        beat.function,
+                        beat.idea
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            format!(
+                "## Dungeon\nname: {}\nslug: {}\npremise: {}\ntopology: {}\ntone: {}\ntwist: {}\npath: {}\n{}",
+                entity.name,
+                entity.slug,
+                entity.premise.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.topology.clone().unwrap_or_else(|| "none".to_string()),
+                entity.tone.clone().unwrap_or_else(|| "Unknown".to_string()),
+                entity.twist.clone().unwrap_or_else(|| "Unknown".to_string()),
+                path_for_display(&entity.vault_path),
+                beats,
             )
         }
     }

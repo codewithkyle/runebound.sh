@@ -5,7 +5,8 @@ use std::path::PathBuf;
 
 pub mod db {
     pub use dnd_core::db::{
-        Database, EventRow, FactionRow, GodRow, ItemRow, LocationRow, NpcRow, SoftDeleteRow,
+        Database, DungeonRow, EventRow, FactionRow, GodRow, ItemRow, LocationRow, NpcRow,
+        SoftDeleteRow,
     };
 }
 
@@ -568,6 +569,83 @@ impl GodRepository for ProdGodRepository {
 
     async fn list_all(&self, database: &Database) -> Result<Vec<db::GodRow>, String> {
         core_db::list_gods(&database.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+#[async_trait]
+pub trait DungeonRepository: Send + Sync {
+    async fn find_by_name_or_slug(
+        &self,
+        database: &Database,
+        name_or_slug: &str,
+    ) -> Result<Option<db::DungeonRow>, String>;
+    async fn find_by_id(
+        &self,
+        database: &Database,
+        id: &str,
+    ) -> Result<Option<db::DungeonRow>, String>;
+    async fn upsert(&self, database: &Database, row: &db::DungeonRow) -> Result<(), String>;
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::DungeonRow>, String>;
+    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::DungeonRow>, String>;
+}
+
+pub struct ProdDungeonRepository;
+
+#[async_trait]
+impl DungeonRepository for ProdDungeonRepository {
+    async fn find_by_name_or_slug(
+        &self,
+        database: &Database,
+        name_or_slug: &str,
+    ) -> Result<Option<db::DungeonRow>, String> {
+        core_db::find_dungeon_by_name_or_slug(&database.pool, name_or_slug)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn find_by_id(
+        &self,
+        database: &Database,
+        id: &str,
+    ) -> Result<Option<db::DungeonRow>, String> {
+        core_db::find_dungeon_by_id(&database.pool, id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn upsert(&self, database: &Database, row: &db::DungeonRow) -> Result<(), String> {
+        core_db::upsert_dungeon(&database.pool, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::DungeonRow>, String> {
+        core_db::search_dungeons_by_name(&database.pool, query, limit)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
+        core_db::delete_dungeon_by_id(&database.pool, id)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::DungeonRow>, String> {
+        core_db::list_dungeons(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }

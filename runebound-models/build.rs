@@ -115,6 +115,28 @@ fn generate_typescript() -> String {
     out.push_str("  rivals: string[];\n");
     out.push_str("};\n\n");
 
+    out.push_str("export type DungeonBeat = {\n");
+    out.push_str("  function: string;\n");
+    out.push_str("  content_type: string;\n");
+    out.push_str("  idea: string;\n");
+    out.push_str("  lever: string;\n");
+    out.push_str("  loot?: string | null;\n");
+    out.push_str("  read_aloud: string;\n");
+    out.push_str("};\n\n");
+
+    out.push_str("export type DungeonDraft = {\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  seed_prompt?: string | null;\n");
+    out.push_str("  name: string;\n");
+    out.push_str("  slug: string;\n");
+    out.push_str("  vault_path: string;\n");
+    out.push_str("  premise: string;\n");
+    out.push_str("  topology: string;\n");
+    out.push_str("  tone: string;\n");
+    out.push_str("  twist: string;\n");
+    out.push_str("  beats: DungeonBeat[];\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type NpcFrontmatter = {\n");
     out.push_str("  type: string;\n");
     out.push_str("  id: string;\n");
@@ -229,6 +251,22 @@ fn generate_typescript() -> String {
     out.push_str("  published_at?: string | null;\n");
     out.push_str("};\n\n");
 
+    out.push_str("export type DungeonFrontmatter = {\n");
+    out.push_str("  type: string;\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  slug: string;\n");
+    out.push_str("  name: string;\n");
+    out.push_str("  vault_path: string;\n");
+    out.push_str("  premise: string;\n");
+    out.push_str("  topology: string;\n");
+    out.push_str("  tone: string;\n");
+    out.push_str("  twist: string;\n");
+    out.push_str("  beats: DungeonBeat[];\n");
+    out.push_str("  created_at: string;\n");
+    out.push_str("  updated_at: string;\n");
+    out.push_str("  published_at?: string | null;\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type EntityCardRow = {\n");
     out.push_str("  label: string;\n");
     out.push_str("  value: string;\n");
@@ -281,6 +319,7 @@ fn generate_typescript() -> String {
     out.push_str(
         "  | { kind: \"load_god_draft_with_card\"; draft: GodDraft; entity_card: OutputDoc }\n",
     );
+    out.push_str("  | { kind: \"load_dungeon_draft_with_card\"; draft: DungeonDraft; entity_card: OutputDoc }\n");
     out.push_str("  | { kind: \"clear_drafts\" }\n");
     out.push_str("  | { kind: \"clear_terminal\"; clear_history: boolean }\n");
     out.push_str("  | { kind: \"exit_requested\" };\n\n");
