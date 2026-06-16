@@ -37,6 +37,15 @@
 
 - `start setup` runs setup manually at any time.
 
+### Implementation notes (wizard internals)
+
+The wizard runs as a separate dispatch route, not through the command registry: while `onboarding.active`, input is intercepted by `try_execute_onboarding` (`core/src/command.rs`) before registry dispatch. This carries two invariants that have regressed before:
+
+- **Seed shown fields from effective config, identically across entry points.** Every flow that reaches a menu (`start setup`, `setup vault`, `setup llm`, `setup model`) must seed the fields its prompt displays from `load_effective(...)`. The Ollama menu renders `2: Continue with <ollama.base_url>`; because `OnboardingSession`'s default base URL is `http://127.0.0.1:11434`, seeding only "when empty" never picks up the configured server. Seed unconditionally so the prompt reflects the saved config.
+- **`cancel` must exit the wizard.** Setup verbs live in `try_execute_onboarding`, so the desktop `cancel` handler never runs during setup. Both `cancel` and `cancel setup` reset onboarding.
+
+Full dispatch and context model: `docs/command-contexts.md`.
+
 ## Command Surface (v1)
 
 - `config`

@@ -27,7 +27,7 @@ The project is a Rust workspace with a Tauri desktop frontend. Responsibilities 
 
 ## 2. Command Dispatch Architecture
 
-All commands follow one path:
+The common path (registry dispatch) is:
 
 1. Parse input
 2. Normalize aliases/help form
@@ -35,10 +35,19 @@ All commands follow one path:
 4. Execute handler
 5. Return `CommandResponse`
 
+Two routes intentionally diverge from this (override and onboarding interception); they are described below.
+
 There are two registries using the same `command-handler` crate:
 
-- Core registry in `core/src/command.rs` for `status`, `config`, `help`, `exit`, `setup`
+- Core registry in `core/src/command.rs` (`status`, `config`, `help`, `exit`, `setup`, `ping`)
 - Desktop registry in `desktop/src-tauri/src/commands/mod.rs` for desktop interaction commands
+
+The desktop registry is consulted first; a miss falls through to the core registry. Two routes bypass plain registry dispatch and must be kept in mind:
+
+- **Desktop overrides core for the same root.** Registering a root in both registries makes the desktop handler win in the desktop app — the supported way to give a core command access to desktop-only state. `help` does this so it can read the open entity editor for context-aware output.
+- **Onboarding interception.** While the setup wizard is active (`onboarding.active`), input is routed to `try_execute_onboarding` *before* registry dispatch, so the desktop registry is bypassed during setup.
+
+See `docs/command-contexts.md` for the full dispatch-route, context, and parser rules.
 
 ### Dispatch Types
 
@@ -120,8 +129,11 @@ The manifest in `command-specs/src/lib.rs` is the single source of truth for:
 - command names, subcommands, examples
 - aliases
 - execution target (`Core` or `Desktop`)
-- autocomplete visibility
+- autocomplete visibility (`show_in_autocomplete`)
+- subcommand requirement (`requires_subcommand` — drives the parser's argument-vs-subcommand decision)
 - canonical help command for clickability
+
+The same file also owns **context availability** via `command_availability(name)` and the `InputContext`/`CommandAvailability` enums. This is the single source of truth for which commands appear in which context (default surface, setup wizard, entity editor), consumed by both autocomplete and the help index. Adding a command without an explicit availability arm leaves it `Default`-only (invisible in editors) — a common regression. The parser's `requires_subcommand` semantics and the help↔autocomplete parity are documented in `docs/command-contexts.md`; read it before changing visibility, parsing, or help.
 
 Manifest data is consumed by:
 
@@ -183,12 +195,13 @@ Do not define parallel, hand-rolled TS interfaces for model concepts already in 
 
 ### A) Add New Top-Level Command
 
-1. Add `CommandSpec` in `command-specs/src/lib.rs`
-2. Implement handler in `desktop/src-tauri/src/commands/<domain>_commands.rs` (or `core/src/command.rs` for core)
-3. Register handler entry in `desktop/src-tauri/src/commands/mod.rs` (or core registry)
-4. Verify help/autocomplete/clickability paths
+1. Add `CommandSpec` in `command-specs/src/lib.rs` (set `requires_subcommand` correctly: `false` if it takes a free-form argument such as a name/value, even when it also has a `help` subcommand)
+2. Add a `command_availability` arm in `command-specs/src/lib.rs` unless the command is genuinely default-surface-only (the `_ => Default` fallthrough hides it from every editor context)
+3. Implement handler in `desktop/src-tauri/src/commands/<domain>_commands.rs` (or `core/src/command.rs` for core)
+4. Register handler entry in `desktop/src-tauri/src/commands/mod.rs` (or core registry)
+5. Verify help and autocomplete in **each** context the command should appear in (default, entity editor, setup), plus clickability paths
 
-No router changes are needed for normal top-level command additions.
+No router changes are needed for normal top-level command additions. See `docs/command-contexts.md` for availability and parser rules.
 
 ### B) Add New Subcommand
 
@@ -220,6 +233,9 @@ No router changes are needed for normal top-level command additions.
 | Duplicated cross-layer types | Causes drift between Rust and TS | Use `runebound-models` first |
 | Large, ad-hoc parsing in frontend for command semantics | Duplicates backend command rules | Keep parser authority backend-first |
 | Depending on markdown heuristics for command links | Fragile clickability | Emit explicit `command_ref` nodes |
+| Hard-coding per-command visibility in a surface | Drifts from the real availability and from other surfaces | Ask `command_availability(name)` — the single source of truth |
+| Relying on context to "block" a command from running | Contexts only filter help/autocomplete, not execution | Guard inside the handler if a command must be refused |
+| New command left on the `_ => Default` availability arm | Silently hidden in every editor context | Add an explicit `command_availability` arm |
 
 ---
 
@@ -239,9 +255,10 @@ This is acceptable for current velocity, but if entity count grows rapidly, cons
 
 Before merging any feature that changes commands/entities:
 
-- [ ] Manifest updates complete in `command-specs/src/lib.rs`
+- [ ] Manifest updates complete in `command-specs/src/lib.rs` (including `requires_subcommand` and a `command_availability` arm)
 - [ ] Handler implementation placed in correct command domain module
 - [ ] Registry registration updated
+- [ ] Help and autocomplete verified in every context the command should appear in (default / entity editor / setup)
 - [ ] Repository/service boundaries respected (no direct DB from handlers)
 - [ ] `output_doc` and `command_ref` used for actionable output
 - [ ] Frontend model usage comes from generated `desktop/src/generated/models.ts`
@@ -253,6 +270,7 @@ Before merging any feature that changes commands/entities:
 
 ## 12. Related Docs
 
+- `docs/command-contexts.md` for command contexts, availability, parser semantics, and the setup-wizard dispatch route
 - `docs/cli.md` for command UX contracts and command implementation checklist
 - `docs/render.md` for output rendering rules and card/output extension guidance
 - `docs/feature-development.md` for end-to-end implementation playbooks
