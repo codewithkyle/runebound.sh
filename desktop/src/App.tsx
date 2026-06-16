@@ -1057,6 +1057,9 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "create item" || lowered.startsWith("create item ")) {
     return "generating item";
   }
+  if (lowered === "create event" || lowered.startsWith("create event ")) {
+    return "generating event";
+  }
   if (lowered === "reroll" || lowered.startsWith("reroll ")) {
     return "rerolling draft";
   }
@@ -1072,10 +1075,14 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "item reroll" || lowered.startsWith("item reroll ")) {
     return "rerolling item";
   }
+  if (lowered === "event reroll" || lowered.startsWith("event reroll ")) {
+    return "rerolling event";
+  }
   if (
     lowered.startsWith("npc save") ||
     lowered.startsWith("location save") ||
     lowered.startsWith("item save") ||
+    lowered.startsWith("event save") ||
     lowered === "save"
   ) {
     return "saving draft";
