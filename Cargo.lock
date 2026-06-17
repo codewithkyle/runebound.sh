@@ -152,6 +152,7 @@ version = "0.4.0"
 dependencies = [
  "command-handler",
  "serde",
+ "ts-rs",
 ]
 
 [[package]]

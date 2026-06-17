@@ -1,5 +1,6 @@
 use command_handler::{ExecutionTarget as HandlerExecutionTarget, HandlerMetadata};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 #[derive(Debug, Clone)]
 pub struct HandlerMetadataDescriptor {
@@ -27,7 +28,7 @@ impl From<HandlerMetadataDescriptor> for HandlerMetadata {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandManifest {
     pub commands: Vec<CommandSpec>,
     pub aliases: Vec<CommandAlias>,
@@ -41,13 +42,13 @@ pub struct CommandManifest {
 /// prefix (`"create npc"`, `"npc reroll"`, `"publish"`, …). The frontend matches
 /// the longest prefix of the user's input and shows `label` while the command
 /// runs. Single source of truth so the spinner taxonomy lives with the manifest.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SpinnerHint {
     pub command: String,
     pub label: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandSpec {
     pub name: String,
     pub summary: String,
@@ -60,7 +61,7 @@ pub struct CommandSpec {
     pub show_in_autocomplete: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SubcommandSpec {
     pub name: String,
     pub summary: String,
@@ -68,7 +69,7 @@ pub struct SubcommandSpec {
     pub examples: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct OptionSpec {
     pub name: String,
     pub short: Option<String>,
@@ -78,7 +79,7 @@ pub struct OptionSpec {
     pub completion: CompletionHint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueHint {
     Path,
@@ -88,7 +89,7 @@ pub enum ValueHint {
     Text,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CompletionHint {
     None,
@@ -96,7 +97,7 @@ pub enum CompletionHint {
     DynamicProvider(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandExecution {
     Core,
@@ -112,7 +113,7 @@ impl From<CommandExecution> for HandlerExecutionTarget {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandAlias {
     pub from: Vec<String>,
     pub to: Vec<String>,

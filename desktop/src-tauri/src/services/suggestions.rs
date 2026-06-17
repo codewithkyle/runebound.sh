@@ -6,6 +6,7 @@ use dnd_core::config::{Verbosity, load_effective};
 use dnd_core::vault::Vault;
 use runebound_models::utils::DUNGEON_FUNCTIONS;
 use serde::Serialize;
+use ts_rs::TS;
 
 use dnd_core::command_manifest::InputContext;
 
@@ -180,14 +181,15 @@ impl SuggestionService {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct CommandSuggestion {
     pub label: String,
     pub completion: String,
     pub helper_text: Option<SuggestionHelperText>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum SuggestionHelperText {
     Command,
     Npc,

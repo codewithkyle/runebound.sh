@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
-import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
+import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion, type SuggestionHelperText } from "./command/parser-client";
 import { buildEntryDoc } from "./output/entry-doc";
 import { OutputRenderer } from "./output/renderer";
 import type {
@@ -23,7 +23,7 @@ type HistoryEntry = {
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon" | "reference";
+  helperText?: SuggestionHelperText;
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
