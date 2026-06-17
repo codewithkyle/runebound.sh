@@ -8,13 +8,6 @@ import type {
   CommandClientEvent,
   CommandResponse,
   OutputSegment,
-  NpcDraft,
-  LocationDraft,
-  FactionDraft,
-  ItemDraft,
-  EventDraft,
-  GodDraft,
-  DungeonDraft,
   WizardView,
 } from "./generated/models";
 
@@ -91,14 +84,6 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon">("none");
-  const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
-  const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
-  const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
-  const [itemDraft, setItemDraft] = createSignal<ItemDraft | null>(null);
-  const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
-  const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
-  const [dungeonDraft, setDungeonDraft] = createSignal<DungeonDraft | null>(null);
   // The structured wizard view from the backend's last response, so the next
   // `continue`/`reroll` shows the right generation spinner. null = no wizard active.
   const [wizardView, setWizardView] = createSignal<WizardView | null>(null);
@@ -531,86 +516,6 @@ export default function App() {
     }
 
     switch (event.kind) {
-      case "load_npc_draft_with_card":
-        setNpcDraft(event.draft);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("npc");
-        return;
-      case "load_location_draft_with_card":
-        setLocationDraft(event.draft);
-        setNpcDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("location");
-        return;
-      case "load_faction_draft_with_card":
-        setFactionDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("faction");
-        return;
-      case "load_item_draft_with_card":
-        setItemDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("item");
-        return;
-      case "load_event_draft_with_card":
-        setEventDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("event");
-        return;
-      case "load_god_draft_with_card":
-        setGodDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("god");
-        return;
-      case "load_dungeon_draft_with_card":
-        setDungeonDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setEditorMode("dungeon");
-        return;
-      case "clear_drafts":
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("none");
-        return;
       case "clear_terminal":
         setEntries([]);
         if (event.clear_history) {
@@ -621,10 +526,8 @@ export default function App() {
       case "exit_requested":
         void invoke("exit_app");
         return;
-      default: {
-        const exhaustiveCheck: never = event;
-        return exhaustiveCheck;
-      }
+      default:
+        return;
     }
   };
 
