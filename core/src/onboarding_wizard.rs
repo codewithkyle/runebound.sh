@@ -743,6 +743,24 @@ onboarding_wizard!(
     finalize_model
 );
 
+/// Map an entry command to the wizard it launches, or `None` if it is not an
+/// onboarding launcher (e.g. `setup verbosity`, `setup help`, which stay normal
+/// commands). The host's launcher then calls `start_wizard(id, host)`.
+pub fn onboarding_entry_wizard_id(input: &str) -> Option<&'static str> {
+    let lowered: Vec<String> = input
+        .split_whitespace()
+        .map(|token| token.to_ascii_lowercase())
+        .collect();
+    let tokens: Vec<&str> = lowered.iter().map(String::as_str).collect();
+    match tokens.as_slice() {
+        ["start", "setup"] => Some("setup"),
+        ["setup", "vault"] => Some("setup-vault"),
+        ["setup", "llm"] => Some("setup-llm"),
+        ["setup", "model"] | ["model"] => Some("setup-model"),
+        _ => None,
+    }
+}
+
 /// Register all four onboarding wizards into a host's registry. Called by the
 /// desktop (`H = AppState`) and the core/CLI host (`H = CoreOnboardingCtx`).
 pub fn register_onboarding_wizards<H: OnboardingHost>(registry: &mut WizardRegistry<H>) {

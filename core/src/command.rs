@@ -1675,7 +1675,7 @@ fn report_list_block(report: &CheckReport) -> OutputBlock {
     list(items)
 }
 
-fn output_doc_from_error_text(message: String) -> OutputDoc {
+pub(crate) fn output_doc_from_error_text(message: String) -> OutputDoc {
     if message.to_lowercase().contains("first-time setup required") {
         let missing_values = extract_missing_values(&message);
         let mut output_doc = doc();
