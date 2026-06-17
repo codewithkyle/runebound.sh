@@ -3,7 +3,6 @@ use std::collections::HashSet;
 use dnd_core::command_manifest::{self, CommandManifest, CommandSpec};
 use dnd_core::command_parse::{self, ParseResult, ParseStage};
 use dnd_core::config::{Verbosity, load_effective};
-use dnd_core::session::{OllamaStepState, OnboardingFlow, VaultStepState};
 use dnd_core::vault::Vault;
 use serde::Serialize;
 
@@ -175,32 +174,6 @@ impl SuggestionService {
                         helper_text: Some(SuggestionHelperText::Location),
                     });
                 }
-            }
-        }
-
-        // `continue` is only meaningful in specific onboarding contexts (the
-        // Ollama/vault menus and the LLM model step). Surface it for typeahead
-        // there so it is discoverable, but never in normal command entry.
-        let suggest_continue = {
-            let service = state.command_service.lock().await;
-            let onboarding = &service.session().onboarding;
-            onboarding.active
-                && (onboarding.ollama_substate == OllamaStepState::MenuShown
-                    || (onboarding.vault_substate == VaultStepState::MenuShown
-                        && !onboarding.vault_path.trim().is_empty())
-                    || (onboarding.flow == OnboardingFlow::Llm && onboarding.step == 3))
-        };
-        if suggest_continue {
-            let query = trimmed.to_ascii_lowercase();
-            if !query.is_empty() && "continue".starts_with(&query) {
-                suggestions.insert(
-                    0,
-                    CommandSuggestion {
-                        label: "continue".to_string(),
-                        completion: "continue".to_string(),
-                        helper_text: Some(SuggestionHelperText::Command),
-                    },
-                );
             }
         }
 

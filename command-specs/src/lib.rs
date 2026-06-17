@@ -107,15 +107,15 @@ pub struct CommandAlias {
 
 /// Runtime input context that gates which commands are offered in autocomplete.
 ///
-/// Derived from editor state: an open entity draft, the setup/config wizard, or
-/// neither (the default command surface).
+/// Derived from editor state: an open entity draft, an active multi-step wizard
+/// (including onboarding), or neither (the default command surface).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InputContext {
     Default,
-    ConfigEditor,
     /// An entity draft is open; the tag is the entity's command root ("npc", ...).
     EntityEditor(String),
-    /// A multi-step wizard is running; the tag is the active wizard id ("dungeon", ...).
+    /// A multi-step wizard is running; the tag is the active wizard id ("dungeon",
+    /// "setup", ...). Onboarding is a wizard, so there is no separate config context.
     Wizard(String),
 }
 
@@ -130,19 +130,15 @@ pub enum CommandAvailability {
     Default,
     /// Every context (help, clear).
     Always,
-    /// Only while the setup/config editor is active.
-    ConfigEditor,
-    /// Any active editor — config or entity (save, cancel).
-    AnyEditor,
     /// Default surface plus any open entity draft (publish).
     DefaultOrEntityEditor,
-    /// Only while some entity draft is open (reroll).
+    /// Only while some entity draft is open (reroll, save).
     EntityEditorOnly,
     /// Only while the matching entity kind's editor is active (npc, location, ...).
     EntityScoped(&'static str),
     /// Only while a wizard is active (continue, back).
     AnyWizard,
-    /// Any active editor (config/entity) or an active wizard (cancel).
+    /// Any open entity draft or an active wizard (cancel).
     AnyEditorOrWizard,
 }
 
@@ -151,11 +147,6 @@ impl CommandAvailability {
         match self {
             CommandAvailability::Always => true,
             CommandAvailability::Default => matches!(context, InputContext::Default),
-            CommandAvailability::ConfigEditor => matches!(context, InputContext::ConfigEditor),
-            CommandAvailability::AnyEditor => matches!(
-                context,
-                InputContext::ConfigEditor | InputContext::EntityEditor(_)
-            ),
             CommandAvailability::DefaultOrEntityEditor => matches!(
                 context,
                 InputContext::Default | InputContext::EntityEditor(_)
@@ -169,7 +160,7 @@ impl CommandAvailability {
             CommandAvailability::AnyWizard => matches!(context, InputContext::Wizard(_)),
             CommandAvailability::AnyEditorOrWizard => matches!(
                 context,
-                InputContext::ConfigEditor | InputContext::EntityEditor(_) | InputContext::Wizard(_)
+                InputContext::EntityEditor(_) | InputContext::Wizard(_)
             ),
         }
     }
@@ -190,9 +181,11 @@ pub fn command_availability(name: &str) -> CommandAvailability {
         "god" => CommandAvailability::EntityScoped("god"),
         "dungeon" => CommandAvailability::EntityScoped("dungeon"),
         "reroll" => CommandAvailability::EntityEditorOnly,
-        "save" => CommandAvailability::AnyEditor,
-        // `cancel` exits an editor *or* a wizard; `continue`/`back` are wizard nav verbs.
+        // `save` writes an entity draft; onboarding's `save` is a wizard step token,
+        // not a manifest command. `cancel` exits an entity editor *or* a wizard.
+        "save" => CommandAvailability::EntityEditorOnly,
         "cancel" => CommandAvailability::AnyEditorOrWizard,
+        // `continue`/`back` are wizard nav verbs.
         "continue" | "back" => CommandAvailability::AnyWizard,
         "publish" => CommandAvailability::DefaultOrEntityEditor,
         "help" | "clear" => CommandAvailability::Always,
@@ -1320,7 +1313,7 @@ mod tests {
         assert!(command_availability("npc").is_visible_in(&npc_editor()));
         assert!(!command_availability("npc").is_visible_in(&location_editor()));
         assert!(!command_availability("npc").is_visible_in(&InputContext::Default));
-        assert!(!command_availability("npc").is_visible_in(&InputContext::ConfigEditor));
+        assert!(!command_availability("npc").is_visible_in(&InputContext::Wizard("setup".to_string())));
     }
 
     #[test]
@@ -1332,24 +1325,25 @@ mod tests {
         assert!(command_availability("reroll").is_visible_in(&npc_editor()));
         assert!(command_availability("reroll").is_visible_in(&location_editor()));
         assert!(!command_availability("reroll").is_visible_in(&InputContext::Default));
-        assert!(!command_availability("reroll").is_visible_in(&InputContext::ConfigEditor));
+        assert!(!command_availability("reroll").is_visible_in(&InputContext::Wizard("setup".to_string())));
     }
 
     #[test]
-    fn save_and_cancel_are_visible_in_any_editor_but_not_default() {
-        // `save` is editor-only; `cancel` additionally exits an active wizard.
-        assert_eq!(command_availability("save"), CommandAvailability::AnyEditor);
+    fn save_is_entity_editor_only_and_cancel_also_exits_a_wizard() {
+        // `save` writes an entity draft; `cancel` exits an entity editor or a
+        // wizard. (Onboarding's `save`/`cancel` are handled by the wizard route,
+        // not these manifest commands.)
+        assert_eq!(command_availability("save"), CommandAvailability::EntityEditorOnly);
         assert_eq!(
             command_availability("cancel"),
             CommandAvailability::AnyEditorOrWizard
         );
+        let wizard = InputContext::Wizard("dungeon".to_string());
         for root in ["save", "cancel"] {
             assert!(command_availability(root).is_visible_in(&npc_editor()));
-            assert!(command_availability(root).is_visible_in(&InputContext::ConfigEditor));
             assert!(!command_availability(root).is_visible_in(&InputContext::Default));
         }
         // `cancel` is also visible inside a wizard; `save` is not.
-        let wizard = InputContext::Wizard("dungeon".to_string());
         assert!(command_availability("cancel").is_visible_in(&wizard));
         assert!(!command_availability("save").is_visible_in(&wizard));
     }
@@ -1361,7 +1355,6 @@ mod tests {
             assert_eq!(command_availability(root), CommandAvailability::AnyWizard);
             assert!(command_availability(root).is_visible_in(&wizard));
             assert!(!command_availability(root).is_visible_in(&InputContext::Default));
-            assert!(!command_availability(root).is_visible_in(&InputContext::ConfigEditor));
             assert!(!command_availability(root).is_visible_in(&npc_editor()));
         }
     }
@@ -1374,8 +1367,8 @@ mod tests {
         );
         assert!(command_availability("publish").is_visible_in(&InputContext::Default));
         assert!(command_availability("publish").is_visible_in(&npc_editor()));
-        // Not the setup wizard.
-        assert!(!command_availability("publish").is_visible_in(&InputContext::ConfigEditor));
+        // Not inside a wizard.
+        assert!(!command_availability("publish").is_visible_in(&InputContext::Wizard("setup".to_string())));
     }
 
     #[test]
@@ -1384,7 +1377,7 @@ mod tests {
             assert_eq!(command_availability(root), CommandAvailability::Always);
             for context in [
                 InputContext::Default,
-                InputContext::ConfigEditor,
+                InputContext::Wizard("setup".to_string()),
                 npc_editor(),
             ] {
                 assert!(command_availability(root).is_visible_in(&context));

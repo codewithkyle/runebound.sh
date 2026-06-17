@@ -424,10 +424,10 @@ mod tests {
     use super::build_desktop_handler_registry;
     use command_specs::{CommandExecution, command_manifest, handler_metadata_for};
 
-    /// Commands dispatched outside the registries via onboarding interception
-    /// (handled in `try_execute_onboarding` *before* registry lookup). They are
-    /// marked `Desktop`/`Core` in the manifest but have no registry handler.
-    /// See docs/command-contexts.md §4.
+    /// Onboarding entry commands launched by the generic wizard route
+    /// (`start_wizard` via `onboarding_entry_wizard_id`, *before* registry lookup).
+    /// They are marked `Desktop`/`Core` in the manifest but have no registry
+    /// handler. See docs/command-contexts.md §4.
     const ONBOARDING_INTERCEPTED: &[&str] = &["start", "model"];
 
     /// Wizard nav verbs handled by the generic wizard route

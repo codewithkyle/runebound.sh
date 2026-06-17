@@ -552,10 +552,10 @@ impl AppState {
     }
 
     /// Resolve the current input context that gates autocomplete + help. Precedence:
-    /// an open entity draft, then an active wizard, then the setup/config wizard,
-    /// else the default surface. This is the single resolution point shared by the
-    /// suggestion service and the desktop `help` handler so the two cannot drift
-    /// (see docs/command-contexts.md).
+    /// an open entity draft, then an active wizard (which now includes onboarding —
+    /// `setup`/`setup-vault`/`setup-llm`/`setup-model`), else the default surface.
+    /// This is the single resolution point shared by the suggestion service and the
+    /// desktop `help` handler so the two cannot drift (see docs/command-contexts.md).
     pub(crate) async fn resolve_input_context(&self) -> InputContext {
         let active_kind = {
             let editor = self.editor_session.lock().await;
@@ -567,15 +567,7 @@ impl AppState {
         if let Some(id) = self.wizard_session.lock().await.active_id {
             return InputContext::Wizard(id.to_string());
         }
-        let onboarding_active = {
-            let service = self.command_service.lock().await;
-            service.session().onboarding.active
-        };
-        if onboarding_active {
-            InputContext::ConfigEditor
-        } else {
-            InputContext::Default
-        }
+        InputContext::Default
     }
 }
 

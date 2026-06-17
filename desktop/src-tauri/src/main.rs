@@ -17,10 +17,7 @@ use dnd_core::command::{CommandClientEvent, CommandResponse, reject_help_flags};
 use dnd_core::command_manifest::CommandManifest;
 use dnd_core::command_parse::{normalize_command_input, parse_command_input};
 use dnd_core::db;
-use dnd_core::session::{OnboardingFlow, VaultStepState};
 use tokio::sync::Mutex;
-
-use crate::commands::setup_commands::{self, FolderPick};
 
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
@@ -63,36 +60,6 @@ async fn run_command(
             }
             return Err("invalid command".to_string());
         }
-    }
-
-    let (onboarding_active, want_vault_dialog, vault_flow) = {
-        let service = state.command_service.lock().await;
-        let onboarding = &service.session().onboarding;
-        let want_dialog = onboarding.active
-            && onboarding.vault_substate == VaultStepState::MenuShown
-            && normalized_input.trim() == "1";
-        (onboarding.active, want_dialog, onboarding.flow)
-    };
-
-    if onboarding_active {
-        // The vault menu's "dialog picker" option needs the native folder
-        // picker, which is only reachable here (with the app handle). Open it,
-        // then forward a `set vault <path>` line the core flow already handles.
-        let line = if want_vault_dialog {
-            match setup_commands::pick_vault_folder(&app_handle) {
-                Ok(FolderPick::Picked(path)) => format!("set vault {path}"),
-                // Cancelled: re-show the vault menu in the same flow.
-                Ok(FolderPick::Cancelled) => match vault_flow {
-                    OnboardingFlow::Vault => "setup vault".to_string(),
-                    _ => "start setup".to_string(),
-                },
-                Err(e) => return Err(e),
-            }
-        } else {
-            normalized_input.clone()
-        };
-        let mut service = state.command_service.lock().await;
-        return Ok(service.execute_line(&line).await);
     }
 
     // Generic wizard dispatch: while a wizard is active, route the raw line to the
