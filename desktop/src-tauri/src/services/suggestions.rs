@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 
-use dnd_core::command_manifest::{self, CommandManifest, CommandSpec};
+use dnd_core::command_manifest::{self, ArgumentKind, CommandManifest, CommandSpec};
 use dnd_core::command_parse::{self, ParseResult, ParseStage};
 use dnd_core::config::{Verbosity, load_effective};
 use dnd_core::vault::Vault;
+use runebound_models::utils::DUNGEON_FUNCTIONS;
 use serde::Serialize;
 
 use dnd_core::command_manifest::InputContext;
@@ -100,49 +101,30 @@ impl SuggestionService {
 
         let trimmed = input.trim();
         let lowered = trimmed.to_ascii_lowercase();
-        let is_load_context = lowered == "load" || lowered.starts_with("load ");
-        let is_delete_context = lowered == "delete" || lowered.starts_with("delete ");
-        let is_show_context = lowered == "show" || lowered.starts_with("show ");
-        let is_preview_context = lowered == "preview" || lowered.starts_with("preview ");
-        let is_publish_help = lowered.starts_with("publish help");
-        let is_publish_context =
-            !is_publish_help && (lowered == "publish" || lowered.starts_with("publish "));
-        let search_query = if is_load_context {
-            trimmed[4..].trim()
-        } else if is_delete_context {
-            trimmed[6..].trim()
-        } else if is_show_context {
-            trimmed[4..].trim()
-        } else if is_preview_context {
-            trimmed[7..].trim()
-        } else if is_publish_context {
-            trimmed["publish".len()..].trim()
-        } else {
-            trimmed
+        // The command root is the first token; its byte length is the same in the
+        // original-cased `trimmed` (roots are ASCII). `publish help` is docs, not
+        // an entity-search context.
+        let root = lowered.split_whitespace().next().unwrap_or("");
+        let is_publish_help = root == "publish" && lowered.starts_with("publish help");
+        let entity_search_root = match (
+            is_publish_help,
+            command_manifest::command_argument_kind(root),
+        ) {
+            (false, Some(ArgumentKind::EntitySearch)) => Some(root),
+            _ => None,
+        };
+        // Derive the search query by stripping the root token — never a
+        // hand-counted byte offset, so a command rename can't silently desync it.
+        let search_query = match entity_search_root {
+            Some(root) => trimmed[root.len()..].trim(),
+            None => trimmed,
         };
 
         if !search_query.is_empty()
-            && (is_load_context
-                || is_delete_context
-                || is_show_context
-                || is_preview_context
-                || is_publish_context
-                || !starts_with_known_command_root(trimmed, &manifest))
+            && (entity_search_root.is_some() || !starts_with_known_command_root(trimmed, &manifest))
         {
             let entity_results = search_entities(state, search_query.to_string(), Some(6)).await?;
-            let prefix = if is_load_context {
-                Some("load")
-            } else if is_delete_context {
-                Some("delete")
-            } else if is_show_context {
-                Some("show")
-            } else if is_preview_context {
-                Some("preview")
-            } else if is_publish_context {
-                Some("publish")
-            } else {
-                None
-            };
+            let prefix = entity_search_root;
 
             for entity in entity_results {
                 let completion = match prefix {
@@ -568,19 +550,25 @@ fn build_field_suggestions(
 
     let prefix = parsed.completion.current_token.to_ascii_lowercase();
     let base = replace_current_token(input, &parsed.completion.current_token);
-    let mut field_names: Vec<&'static str> = if verb == "set" {
+    let mut field_names: Vec<String> = if verb == "set" {
         settable_fields(kind)
-            .map(|spec| spec.display_name)
+            .map(|spec| spec.display_name.to_string())
             .collect()
     } else {
         rerollable_fields(kind)
-            .map(|spec| spec.display_name)
+            .map(|spec| spec.display_name.to_string())
             .collect()
     };
     // Dungeon beats are addressed by their function name (a beat target), which
     // the flat schema can't supply: `dungeon reroll setback`, `dungeon set climax`.
+    // Derive the lowercase beat keys from the shared `DUNGEON_FUNCTIONS` constant
+    // so they can't drift from the canonical beat list.
     if kind == EntityKind::Dungeon {
-        field_names.extend(["entrance", "puzzle", "setback", "climax", "resolution"]);
+        field_names.extend(
+            DUNGEON_FUNCTIONS
+                .iter()
+                .map(|beat| beat.to_ascii_lowercase()),
+        );
     }
 
     Some(
@@ -881,14 +869,18 @@ fn build_reference_suggestions_from_entries(
 }
 
 fn npc_travel_location_query(input: &str) -> Option<String> {
+    // The prefix is ASCII, so its byte length is the strip offset in the
+    // original-cased input — derived from the literal, not a magic number.
+    const PREFIX: &str = "npc travel to";
     let trimmed = input.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
-    if lowered == "npc travel to" {
+    if lowered == PREFIX {
         return Some(String::new());
     }
-    if lowered.starts_with("npc travel to ") {
-        return Some(trimmed[14..].trim().to_string());
+    let prefix_with_space = format!("{PREFIX} ");
+    if lowered.starts_with(&prefix_with_space) {
+        return Some(trimmed[prefix_with_space.len()..].trim().to_string());
     }
 
     None

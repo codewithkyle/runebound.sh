@@ -193,6 +193,28 @@ pub fn command_availability(name: &str) -> CommandAvailability {
     }
 }
 
+/// The shape of a command's trailing argument.
+///
+/// Used by autocomplete to extract the user's query by stripping the parsed
+/// command root, instead of hand-counted byte offsets that break silently on a
+/// rename. Mirrors [`command_availability`] as the single source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgumentKind {
+    /// Free-text matched against saved entity names: `load`/`delete`/`show`/
+    /// `preview`/`publish <name>`. The query is everything after the root token.
+    EntitySearch,
+}
+
+/// The argument shape for a command's trailing tokens, or `None` if the command
+/// takes no entity-search argument. Single source of truth so the suggestion
+/// service derives the query by stripping the root token, never by byte offset.
+pub fn command_argument_kind(name: &str) -> Option<ArgumentKind> {
+    match name {
+        "load" | "delete" | "show" | "preview" | "publish" => Some(ArgumentKind::EntitySearch),
+        _ => None,
+    }
+}
+
 pub fn handler_metadata_for(root: &str) -> Option<HandlerMetadataDescriptor> {
     let manifest = command_manifest();
     let command = manifest
@@ -1233,7 +1255,8 @@ pub fn command_manifest() -> CommandManifest {
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandAvailability, CommandExecution, InputContext, command_availability, command_manifest,
+        ArgumentKind, CommandAvailability, CommandExecution, InputContext, command_argument_kind,
+        command_availability, command_manifest,
     };
     use std::collections::HashSet;
 
@@ -1473,6 +1496,36 @@ mod tests {
             assert!(
                 requires_subcommand_for(root),
                 "{root} is a menu-style root and must be requires_subcommand: true",
+            );
+        }
+    }
+
+    #[test]
+    fn entity_search_argument_kinds_match_real_command_roots() {
+        // The roots that take an entity-name query must all be real commands, so
+        // suggestion stripping (`trimmed[root.len()..]`) lands on an actual root.
+        let roots = manifest_roots();
+        for root in ["load", "delete", "show", "preview", "publish"] {
+            assert_eq!(
+                command_argument_kind(root),
+                Some(ArgumentKind::EntitySearch),
+                "{root} should declare an EntitySearch argument",
+            );
+            assert!(
+                roots.iter().any(|name| name.as_str() == root),
+                "{root} declares an argument kind but is not a manifest command",
+            );
+        }
+    }
+
+    #[test]
+    fn menu_style_roots_take_no_entity_search_argument() {
+        // `history` takes a numeric index, not a name; menu roots take subcommands.
+        for root in ["history", "create", "config", "npc", "calendar"] {
+            assert_eq!(
+                command_argument_kind(root),
+                None,
+                "{root} must not be an entity-search argument context",
             );
         }
     }
