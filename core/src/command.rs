@@ -930,7 +930,7 @@ pub(crate) fn error_status_doc(message: impl Into<String>) -> OutputDoc {
 
 fn setup_required_doc(setup: &SetupRequired) -> OutputDoc {
     let mut document = doc()
-        .with_block(status(StatusTone::Warning, "First-time setup required"))
+        .with_block(heading(2, "First-time setup required"))
         .with_block(paragraph_text(
             "runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.",
         ))
@@ -1004,7 +1004,7 @@ mod tests {
 
     #[test]
     fn setup_required_error_builds_a_structured_doc_from_issues() {
-        use runebound_models::output::{InlineNode, OutputBlock, StatusTone};
+        use runebound_models::output::{InlineNode, OutputBlock};
 
         let err: anyhow::Error = SetupRequired {
             issues: vec!["vault.path is not configured".to_string()],
@@ -1013,14 +1013,12 @@ mod tests {
         .into();
         let document = output_doc_from_error(&err);
 
-        // Leads with a Warning-toned status so the frontend styles it as a gate,
-        // not an error — keyed off the doc's tone, not a string match.
+        // Leads with a heading (not an Error-toned status), so the frontend renders
+        // it as a neutral gate rather than a hard error — keyed off the doc's
+        // structure, not a string match.
         assert!(matches!(
             document.blocks.first(),
-            Some(OutputBlock::Status {
-                tone: StatusTone::Warning,
-                ..
-            })
+            Some(OutputBlock::Heading { level: 2, .. })
         ));
         // Offers a clickable `start setup` (a real command_ref, not prose-guessing).
         let has_start_setup = document.blocks.iter().any(|block| {

@@ -393,13 +393,13 @@ export default function App() {
           updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
         }
         const errorText = response.error || rendered.text || "command failed";
-        // A response can carry a soft gate (the first-time-setup doc leads with a
-        // Warning status) rather than a hard failure. Style by the doc's own tone
-        // — a structured signal — instead of matching the rendered English.
+        // Only a doc that leads with an Error-toned status is a hard failure (red).
+        // Anything else — e.g. the first-time-setup gate, which leads with a heading
+        // — is a soft gate rendered neutrally. Keyed off the doc's structure, not the
+        // rendered English.
         const leadBlock = rendered.outputDoc?.blocks[0];
-        const leadTone = leadBlock?.kind === "status" ? leadBlock.tone : null;
-        const entryKind = leadTone && leadTone !== "error" ? "output" : "error";
-        appendEntry(entryKind, errorText, rendered.outputDoc);
+        const isHardError = leadBlock?.kind === "status" && leadBlock.tone === "error";
+        appendEntry(isHardError ? "error" : "output", errorText, rendered.outputDoc);
       }
     } catch (error) {
       if (spinnerId !== null) {
