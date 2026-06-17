@@ -123,6 +123,8 @@ fn generate_typescript() -> String {
     out.push_str("  lever: string;\n");
     out.push_str("  loot?: string | null;\n");
     out.push_str("  design_note: string;\n");
+    out.push_str("  overlay?: string | null;\n");
+    out.push_str("  factions: boolean;\n");
     out.push_str("};\n\n");
 
     out.push_str("export type DungeonDraft = {\n");

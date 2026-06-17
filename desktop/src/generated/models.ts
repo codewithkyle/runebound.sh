@@ -115,6 +115,8 @@ export type DungeonBeat = {
   lever: string;
   loot?: string | null;
   design_note: string;
+  overlay?: string | null;
+  factions: boolean;
 };
 
 export type DungeonDraft = {

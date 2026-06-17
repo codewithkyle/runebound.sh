@@ -97,7 +97,7 @@ const OVERLAYS: &[Weight] = &[("foreshadowing", 40), ("history", 40), ("map", 20
 const FACTION_CHANCE_PCT: u32 = 25;
 
 /// An overlay placed on a specific beat (it layers onto that beat's anchor type).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlannedOverlay {
     pub beat_index: usize,
     pub overlay_type: String,

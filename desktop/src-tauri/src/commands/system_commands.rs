@@ -17,7 +17,8 @@ use dnd_core::command::render_help_overview;
 use dnd_core::command_manifest::InputContext;
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
-use runebound_models::dungeon_plan::roll_dungeon_content_plan;
+use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
+use runebound_models::{apply_plan_meta_to_beats, plan_meta_from_beats};
 
 
 pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
@@ -137,19 +138,36 @@ async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt
     };
 
     // Whole-dungeon regen re-runs the two-pass generator from the stored seed +
-    // the dials, rolling a fresh content plan (variety across rerolls) and
-    // replacing all five beats while keeping tone/twist/topology authoritative.
+    // the dials, replacing all five beats while keeping tone/twist/topology
+    // authoritative. The room types the user locked in are authoritative too, so we
+    // REUSE the draft's existing beat types rather than rolling a fresh plan — a
+    // whole reroll rewrites the story and prose, never which type fills each beat.
     let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
 
-    let plan = roll_dungeon_content_plan(
-        std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|duration| duration.as_nanos() as u64)
-            .unwrap_or(0),
-    );
+    let plan = if draft.beats.len() == 5 {
+        let anchors: [String; 5] =
+            std::array::from_fn(|i| draft.beats[i].content_type.trim().to_string());
+        // Honor everything the user locked in: the anchor types AND the overlay +
+        // faction tint recovered from the beats.
+        let (overlay, factions) = plan_meta_from_beats(&draft.beats);
+        DungeonContentPlan {
+            anchors,
+            overlay,
+            factions,
+        }
+    } else {
+        // Defensive: a malformed draft without its five beats falls back to a fresh
+        // roll so the reroll can still rebuild a complete dungeon.
+        roll_dungeon_content_plan(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos() as u64)
+                .unwrap_or(0),
+        )
+    };
     let SeedGeneration { seed: story, .. } = ai
         .generate_dungeon_story(
             &plan,
@@ -181,7 +199,10 @@ async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt
     draft.location = normalize_unknown_text(&seed.location);
     draft.story = story.story.clone();
     draft.premise = normalize_unknown_text(&seed.premise);
-    draft.beats = seed.into_beats();
+    let mut beats = seed.into_beats();
+    // Re-stamp the overlay + faction tint so they persist on the regenerated beats.
+    apply_plan_meta_to_beats(&mut beats, &plan);
+    draft.beats = beats;
 
     {
         let mut editor = state.editor_session.lock().await;

@@ -956,6 +956,10 @@ impl EntityRerollService {
                     lever: normalize_unknown_text(lever),
                     loot,
                     design_note: normalize_unknown_text(design_note),
+                    // Preserve the rolled overlay/faction tint across a single-beat
+                    // reroll — only the prose changes, not the plan metadata.
+                    overlay: current.overlay.clone(),
+                    factions: current.factions,
                 },
             });
         }

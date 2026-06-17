@@ -8,6 +8,7 @@ use runebound_models::output::{
     OutputDoc, doc, heading, image, list, paragraph_text, text_node,
 };
 use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
+use runebound_models::apply_plan_meta_to_beats;
 use runebound_models::utils::{DUNGEON_FUNCTIONS, DUNGEON_TONES, DUNGEON_TOPOLOGIES, DUNGEON_TWISTS, make_entity_id};
 
 use crate::app_state::{AppState, DungeonCreationFlow, DungeonDraftSession};
@@ -523,6 +524,11 @@ async fn finalize_dungeon(state: &AppState) -> CommandResult {
     // seed_prompt persists the premise+context bias so later rerolls reuse it.
     let seed_prompt = build_seed_prompt(premise.as_deref(), &context);
 
+    // Stamp the rolled overlay + faction tint onto the beats so they persist with
+    // the dungeon and a later whole-dungeon reroll can honor them.
+    let mut beats = seed.into_beats();
+    apply_plan_meta_to_beats(&mut beats, &plan);
+
     let draft = DungeonDraftSession {
         id: make_entity_id("dungeon"),
         seed_prompt,
@@ -535,7 +541,7 @@ async fn finalize_dungeon(state: &AppState) -> CommandResult {
         topology,
         tone,
         twist,
-        beats: seed.into_beats(),
+        beats,
     };
 
     {

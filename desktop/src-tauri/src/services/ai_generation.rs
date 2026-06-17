@@ -1186,6 +1186,10 @@ impl DungeonSeed {
                 lever: beat.lever.clone(),
                 loot: beat.loot.clone(),
                 design_note: beat.design_note.clone(),
+                // The plan's overlay/faction tint are stamped on afterward (the seed
+                // doesn't carry them); see apply_plan_meta_to_beats.
+                overlay: None,
+                factions: false,
             })
             .collect()
     }

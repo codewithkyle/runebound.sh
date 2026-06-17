@@ -890,6 +890,8 @@ mod tests {
                     lever: "What keeps the water out?".to_string(),
                     loot: None,
                     design_note: "Establishes the flooded threat and gates entry.".to_string(),
+                    overlay: None,
+                    factions: false,
                 },
                 DungeonBeat {
                     function: "Resolution".to_string(),
@@ -899,6 +901,8 @@ mod tests {
                     lever: "Who else wants what was forged here?".to_string(),
                     loot: Some("A still-warm blade".to_string()),
                     design_note: "Pays off the forge setup and hooks a rival faction.".to_string(),
+                    overlay: None,
+                    factions: false,
                 },
             ],
             created_at: "2026-06-16T00:00:00Z".to_string(),
