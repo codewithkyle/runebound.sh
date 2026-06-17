@@ -4,19 +4,21 @@
 
 ---
 
-## 1. The three input contexts
+## 1. The input contexts
 
 Every command surface (autocomplete and help) is gated by an **input context**, defined by `InputContext` in `command-specs/src/lib.rs`:
 
 | Context | When active | Detected from |
 |---|---|---|
-| `Default` | No editor open — the normal command surface | neither editor below is active |
-| `ConfigEditor` | The setup/onboarding wizard is running | `session.onboarding.active` (core `SessionState`) |
+| `Default` | No editor open — the normal command surface | none of the contexts below is active |
 | `EntityEditor(kind)` | An entity draft is open; tag is the command root (`"npc"`, `"location"`, …) | `EditorSession::active_kind()` (desktop `AppState`) |
+| `Wizard(id)` | A multi-step wizard is running; tag is the wizard id (`"dungeon"`, `"setup"`, `"setup-vault"`, …) | `wizard_session.active_id` (desktop `AppState`) |
 
-`EntityEditor` takes precedence over `ConfigEditor` when resolving the live context (an open draft wins over an in-progress wizard).
+Onboarding (`start setup` and the `setup vault|llm|model` sub-flows) is a **wizard** like any other, so there is no separate config context — it resolves to `Wizard("setup")` etc.
 
-> **Where context is resolved:** entity-editor state lives in the **desktop** `EditorSession`, not core's `SessionState`. Core alone can only distinguish `Default` vs. `ConfigEditor`. Anything that must know about an open entity editor (the suggestion service, the context-aware `help`) is therefore computed in the desktop layer. See `services/suggestions.rs` and the desktop `help` handler in `commands/system_commands.rs` for the canonical resolution snippet — copy it rather than re-deriving context ad hoc.
+Precedence when resolving the live context (in `AppState::resolve_input_context`): an open entity draft (`EntityEditor`) wins, then an active wizard (`Wizard`), else `Default`. A wizard and the entity editor it finalizes into are never active at once.
+
+> **Where context is resolved:** entity-editor and wizard state live in the **desktop** `AppState`, not core's `SessionState`. Core alone only ever renders the `Default` surface. Anything that must know about an open entity editor or active wizard (the suggestion service, the context-aware `help`) is therefore computed in the desktop layer. **`AppState::resolve_input_context()` is the one canonical resolver** — call it (the suggestion service and the desktop `help` handler both do) rather than re-deriving context ad hoc.
 
 ---
 
@@ -28,11 +30,11 @@ Every command surface (autocomplete and help) is gated by an **input context**, 
 pub enum CommandAvailability {
     Default,                 // default surface only (create, calendar, undo, load, …)
     Always,                  // every context (help, clear)
-    ConfigEditor,            // setup wizard only
-    AnyEditor,               // config or entity editor (save, cancel)
     DefaultOrEntityEditor,   // default surface + any entity draft (publish)
-    EntityEditorOnly,        // any entity draft (reroll)
+    EntityEditorOnly,        // any entity draft (reroll, save)
     EntityScoped(&'static str), // only the matching entity kind's editor (npc, location, …)
+    AnyWizard,               // any active wizard (continue, back)
+    AnyEditorOrWizard,       // any entity draft or active wizard (cancel)
 }
 ```
 
@@ -78,20 +80,24 @@ Most commands follow the registry path, but two routes bypass it. Know all three
 
 1. **Registry dispatch (the common path).** Desktop registry (`desktop/src-tauri/src/commands/mod.rs`) is tried first; on a miss it falls through to the core registry (`core/src/command.rs`), then to free-form entity resolution in `router.rs`.
 
-2. **Desktop overrides core for the same root.** Because the desktop registry is consulted first, registering a root in *both* registries makes the desktop handler win in the desktop app. This is the supported way to give a core command access to desktop-only state. **`help` uses this**: core has a `help` handler (knows only `Default`/`ConfigEditor`), and the desktop registers a `help` override that also sees the entity editor and renders the full context-aware index. If you add such an override, keep the two in sync via the shared core renderer (`render_help_overview`).
+2. **Desktop overrides core for the same root.** Because the desktop registry is consulted first, registering a root in *both* registries makes the desktop handler win in the desktop app. This is the supported way to give a core command access to desktop-only state. **`help` uses this**: core has a `help` handler (renders the `Default` surface), and the desktop registers a `help` override that also sees the entity editor and active wizard and renders the full context-aware index. If you add such an override, keep the two in sync via the shared core renderer (`render_help_overview`).
 
-3. **Onboarding interception (setup wizard).** When `onboarding.active`, input is routed to `try_execute_onboarding` *before* registry dispatch (in core's `execute_line`, and in desktop `run_command`). The desktop registry is bypassed entirely during setup. Consequences:
-   - Setup verbs (`continue`, menu numbers `1`/`2`/`3`, `set vault`, `set ollama`, `test ollama`, `use model`, `cancel`) are handled inside `try_execute_onboarding` — **not** by desktop handlers. The desktop `cancel` handler does not run during setup, so `cancel` is accepted explicitly there (both `cancel` and `cancel setup` exit the wizard).
-   - `model` / `setup model` are also handled on this path (before the `active` guard), so they work outside an active wizard too.
+3. **Generic wizard route (includes onboarding).** When `wizard_session.active_id` is set, input is routed to `try_execute_active_wizard` (the `wizard` crate's `runtime.rs`) *before* registry dispatch — in desktop `run_command` (host = `AppState`) and in core's `CommandService::execute_line` (host = `CoreOnboardingCtx`). Onboarding's entry commands (`start setup`, `setup vault|llm|model`, `model`) are launched here too, via `onboarding_entry_wizard_id` → `start_wizard`, ahead of the registry. This is **one** route shared by every registered wizard — the dungeon flow's and onboarding's former bespoke interceptors were both deleted in favor of it. Consequences:
+   - The active step's `accept()` consumes the raw line, so step answers (`2`, a path, a free-text premise, `save`) are never parsed as commands. The nav verbs `continue`/`back`/`cancel` are real manifest commands gated to wizard contexts (`AnyWizard` / `AnyEditorOrWizard`) — handled by the route, not by desktop handlers. `cancel` (and `cancel <id>`) exits the wizard.
+   - A step may request a host capability via `WizardTransition::Native` (e.g. the onboarding vault picker); the engine calls `WizardHost::perform_native`, which opens the dialog on desktop and degrades gracefully (re-renders the step) on the CLI.
+   - The response carries a structured `WizardView { id, step_id, awaiting_llm_label }` so the frontend spinner needs no prompt-text matching.
+   - Adding a wizard adds **no** dispatch code — register a `Wizard` and point a launch command at `start_wizard`. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
+
+   `setup verbosity` (a one-shot config write) and `setup help` are **not** wizards — they stay normal `setup` subcommands handled by the registry.
 
 ---
 
-## 5. Onboarding session invariants
+## 5. Onboarding seed invariants
 
-The wizard's prompts read from `OnboardingSession` fields, which are seeded when a flow starts. The seeding must be consistent across entry points:
+Each onboarding wizard seeds its accumulator from effective config on entry (`Wizard::seed(host)` → `seed_data` in `core/src/onboarding_wizard.rs`):
 
-- **Seed parity.** `start setup` (full flow) and `setup llm` must seed `ollama_base_url` (and other shown fields) from the **same effective config**. The menu prompt renders `2: Continue with <ollama_base_url>`, so if one entry point seeds it unconditionally and another only when empty, the prompts disagree. Because `OnboardingSession::default()` is `http://127.0.0.1:11434`, an "only when empty" seed never picks up the configured server — seed unconditionally from `load_effective(...)`. This was the `start setup` "continue with 127.0.0.1" regression.
-- **`reset_onboarding` clears flow state, not persisted config.** Cancelling/finishing resets `active`, `step`, substates, and the model list — it does not write config. Config is only written by the `save` step.
+- **Seed parity.** Every flow seeds `ollama_base_url` **unconditionally** from `load_effective(...)`, so the Ollama menu renders `2: Continue with <configured server>` rather than the `127.0.0.1` default. Seeding "only when empty" never picks up the configured server — this was the `start setup` "continue with 127.0.0.1" regression. (Locked by a test; see `docs/onboarding-wizard-port.md` §3.5.)
+- **No config write until `finalize`.** Cancelling resets the wizard session (`active_id`/cursor/data) and writes nothing. Config is written only by each wizard's `finalize` (`finalize_full`/`finalize_vault`/`finalize_llm`/`finalize_model`).
 
 ---
 
@@ -101,10 +107,10 @@ When you touch command visibility, parsing, help, or onboarding:
 
 - [ ] New command has an explicit `command_availability` arm (or `Default`-only is deliberate and noted).
 - [ ] Free-form-argument commands are `requires_subcommand: false`; menu-style roots are `true`.
-- [ ] Help verified in **each** relevant context: `Default`, inside an entity editor, and (if relevant) during setup. Entity-editor help shows global commands **plus** the editor's commands.
+- [ ] Help verified in **each** relevant context: `Default`, inside an entity editor, and (if relevant) inside a wizard. Entity-editor help shows global commands **plus** the editor's commands.
 - [ ] Autocomplete filtered correctly for the same contexts (`cargo test suggestions`, run from `desktop/src-tauri`).
 - [ ] If a command needs entity-editor state, it is dispatched (or overridden) in the desktop layer, not core-only.
-- [ ] Onboarding entry points seed shown fields identically; `cancel` exits the wizard.
+- [ ] New wizards register a `Wizard` (no bespoke interceptor); the in-wizard command surface comes from the active step's `suggest()` + the global verbs via `active_step_suggestions` — no per-command filter added.
 - [ ] Parser change covered by a `command_parse` unit test (argument-vs-subcommand cases).
 
 ---

@@ -95,7 +95,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 1. Extend events/types in `runebound-models/src/events.rs` if needed
 2. Regenerate TS models (`cargo build -p runebound-models`)
 3. Handle new event/draft pathways in `desktop/src/App.tsx`
-4. Add spinner labels in `commandSpinnerLabel()` (`desktop/src/App.tsx`) for the new kind's LLM-backed commands — `create <kind>`, `<kind> reroll`, and `<kind> save` (see §7). The generation/reroll commands call the LLM and MUST show a spinner.
+4. Add spinner labels in `commandSpinnerLabel()` (`desktop/src/App.tsx`) for the new kind's LLM-backed commands — `create <kind>`, `<kind> reroll`, and `<kind> save` (see §8). The generation/reroll commands call the LLM and MUST show a spinner.
 5. Verify card rendering through existing `OutputRenderer` path
 6. Confirm client events (draft load, clear, etc.) trigger the desired UI flows
 
@@ -135,7 +135,32 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 ---
 
-## 7. Output and UX Standards
+## 7. Playbook F: Add a New Wizard
+
+A *wizard* is a guided multi-step flow (ask a sequence of questions, then build an artifact) — `create dungeon` is the reference. The engine in `desktop/src-tauri/src/wizards/` owns dispatch, the nav verbs, clickable prompts, autocomplete, and the spinner signal; a new wizard is additive data + one trait impl. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
+
+### Steps + wizard
+
+1. Create `wizards/<name>.rs`. Define the accumulator struct (the per-flow answers; the cursor/history are engine-owned in `WizardSession`).
+2. Implement one `WizardStep<AppState>` per step (`id`/`prompt`/`choices`/`awaiting_llm_label`/`accept`):
+   - Build prompts **only** with the `wizard` crate's `prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`) so every `WizardChoice` renders as a clickable `command_ref`. Never hand-build a prompt with back-tick text.
+   - `accept()` validates the input and returns a `WizardTransition` (`Stay`/`Next`/`Goto(id)`/`Back`/`Complete`/`Cancel`); it and `finalize()` are the only places `&AppState` is touched.
+   - Set `awaiting_llm_label()` (e.g. `"generating story"`) on any step whose submission calls the LLM — this drives the spinner with no frontend text-matching (see §8).
+3. Implement the `Wizard<AppState>` trait (`id`/`title`/`steps`/`seed`/`finalize`). `finalize()` builds the artifact and hands off (open an entity draft, write config, …) exactly like a one-shot create handler.
+
+### Wiring
+
+4. Register the wizard with one line in `build_default_wizard_registry()` (`wizards/mod.rs`).
+5. Point the entry command at `start_wizard("<id>", state)` (mirror `create dungeon` in `commands/create_commands.rs`).
+6. **No plumbing edits.** Dispatch, `InputContext::Wizard`, the global verbs (`continue`/`back`/`cancel` + the in-wizard `help`), step typeahead (`active_step_suggestions` = the step's `suggest()` + globals), and the `WizardView` spinner signal all work unchanged. Give each step a `summary()` (for `help`) and `with_help(...)` on its choices; override `suggest()` only for staged multi-token args. If a wizard needs a brand-new *capability*, that is a shared engine change in `wizards/`, not per-wizard code (`docs/onboarding-wizard-port.md` tracks the planned extensions).
+
+### Verify
+
+7. `cargo test suggestions` (step-token typeahead), then walk the flow manually: every step's choices clickable, `back`/`cancel` at each step, the spinner on LLM-backed steps, and `finalize` producing the artifact.
+
+---
+
+## 8. Output and UX Standards
 
 - Prefer `output_doc` for non-trivial output
 - Use `command_ref` for actionable text
@@ -151,10 +176,15 @@ Example entity classes: `item`, `dungeon`, `quest`.
   LLM-backed command or entity kind and skip this, the call will appear to do
   nothing until it returns. This is the gap the "missing events spinner" fix
   closed; treat a spinner as part of the feature, not a follow-up.
+  - **Wizard steps are the exception to the pattern, not the rule:** a step whose
+    submission calls the LLM sets `awaiting_llm_label()`, which rides the structured
+    `WizardView` signal so the frontend shows the spinner without any
+    `commandSpinnerLabel()` text-matching. Set the label; don't add a per-command
+    pattern for wizard verbs.
 
 ---
 
-## 8. Anti-Patterns to Avoid
+## 9. Anti-Patterns to Avoid
 
 - command logic in `router.rs` or `main.rs`
 - direct DB access from command handlers
@@ -164,7 +194,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 ---
 
-## 9. Definition of Done Checklist
+## 10. Definition of Done Checklist
 
 Use this for every feature PR:
 
@@ -184,7 +214,7 @@ Use this for every feature PR:
 
 ---
 
-## 10. Suggested PR Verification Commands
+## 11. Suggested PR Verification Commands
 
 ```bash
 cargo build -p runebound-models
@@ -199,7 +229,7 @@ Then manually test the affected command flows in desktop UI:
 
 ---
 
-## 11. Related Docs
+## 12. Related Docs
 
 - `docs/architecture.md`
 - `docs/cli.md`

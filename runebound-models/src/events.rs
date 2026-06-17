@@ -52,6 +52,21 @@ pub struct CommandResponse {
     pub segments: Vec<OutputSegment>,
     pub output_doc: Option<OutputDoc>,
     pub client_event: Option<CommandClientEvent>,
+    /// Set when a multi-step wizard is active, so the frontend can drive the
+    /// spinner from a structured signal instead of matching prompt text.
+    pub wizard: Option<WizardView>,
+}
+
+/// Structured view of the active wizard step, returned alongside a wizard
+/// prompt. Drives the frontend spinner label without prompt-text sniffing.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WizardView {
+    /// Active wizard id, e.g. "dungeon".
+    pub id: String,
+    /// Current step id, e.g. "plan_review".
+    pub step_id: String,
+    /// Spinner label to show when the user submits from this step (None = instant).
+    pub awaiting_llm_label: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

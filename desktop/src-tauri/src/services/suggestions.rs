@@ -3,13 +3,15 @@ use std::collections::HashSet;
 use dnd_core::command_manifest::{self, CommandManifest, CommandSpec};
 use dnd_core::command_parse::{self, ParseResult, ParseStage};
 use dnd_core::config::{Verbosity, load_effective};
-use dnd_core::session::{OllamaStepState, OnboardingFlow, VaultStepState};
 use dnd_core::vault::Vault;
 use serde::Serialize;
+
+use dnd_core::command_manifest::InputContext;
 
 use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
 use crate::services::entity_admin::EntityType;
+use crate::wizards::WizardChoice;
 use crate::services::vault_ref::{
     VaultReferenceEntry, can_start_reference_at, load_vault_reference_entries,
 };
@@ -53,6 +55,21 @@ impl SuggestionService {
             }
         }
 
+        // Resolve the input context once (entity editor wins over an active wizard,
+        // which wins over onboarding). Shared with the desktop `help` handler via
+        // AppState::resolve_input_context so the two cannot drift.
+        let context = state.resolve_input_context().await;
+
+        // In a wizard the active step owns the entire command surface: its own
+        // tokens, staged args (`set room <room> <type>`, `reroll <room>`), and the
+        // global verbs (back/cancel/help). Skip the manifest/entity passes so no
+        // off-context command leaks in. (@-reference completion above still runs,
+        // so the context step's @vault refs keep working.)
+        if matches!(context, InputContext::Wizard(_)) {
+            let choices = crate::wizards::active_step_suggestions(state, &input).await;
+            return Ok(wizard_choices_to_suggestions(choices));
+        }
+
         let manifest = command_manifest::command_manifest();
         let parsed = command_parse::parse_command_input(&input);
         let mut suggestions = build_command_suggestions(&manifest, &parsed, &input);
@@ -62,24 +79,6 @@ impl SuggestionService {
             editor.active_kind()
         };
         let is_npc = matches!(active_kind, Some(EntityKind::Npc));
-
-        // Resolve the current input context (entity editor takes precedence over an
-        // in-progress setup wizard) and keep only commands the manifest declares
-        // visible there. This replaces the former hard-coded per-kind blacklist.
-        let context = match active_kind {
-            Some(kind) => command_manifest::InputContext::EntityEditor(kind.as_str().to_string()),
-            None => {
-                let onboarding_active = {
-                    let service = state.command_service.lock().await;
-                    service.session().onboarding.active
-                };
-                if onboarding_active {
-                    command_manifest::InputContext::ConfigEditor
-                } else {
-                    command_manifest::InputContext::Default
-                }
-            }
-        };
 
         suggestions.retain(|suggestion| {
             let root = suggestion
@@ -178,29 +177,18 @@ impl SuggestionService {
             }
         }
 
-        // `continue` is only meaningful in specific onboarding contexts (the
-        // Ollama/vault menus and the LLM model step). Surface it for typeahead
-        // there so it is discoverable, but never in normal command entry.
-        let suggest_continue = {
-            let service = state.command_service.lock().await;
-            let onboarding = &service.session().onboarding;
-            onboarding.active
-                && (onboarding.ollama_substate == OllamaStepState::MenuShown
-                    || (onboarding.vault_substate == VaultStepState::MenuShown
-                        && !onboarding.vault_path.trim().is_empty())
-                    || (onboarding.flow == OnboardingFlow::Llm && onboarding.step == 3))
-        };
-        if suggest_continue {
-            let query = trimmed.to_ascii_lowercase();
-            if !query.is_empty() && "continue".starts_with(&query) {
-                suggestions.insert(
-                    0,
-                    CommandSuggestion {
-                        label: "continue".to_string(),
-                        completion: "continue".to_string(),
-                        helper_text: Some(SuggestionHelperText::Command),
-                    },
-                );
+        // Bare `reroll <field/beat>` is the active-kind system command (e.g.
+        // `reroll setback` inside the dungeon editor). Its argument has no entity
+        // root, so it isn't completed by build_command_suggestions; finish it here
+        // from the active draft's rerollable fields. (`<kind> reroll <field>` is
+        // already handled via the entity root.)
+        if let Some(kind) = active_kind {
+            if lowered.starts_with("reroll ") {
+                if let Some(field_suggestions) =
+                    build_active_reroll_suggestions(kind, &parsed, &input)
+                {
+                    suggestions.extend(field_suggestions);
+                }
             }
         }
 
@@ -554,8 +542,36 @@ fn build_entity_field_argument_suggestions(
     if subcommand != "set" && subcommand != "reroll" {
         return None;
     }
+    // `<kind> verb <field>`: the field argument is the third token (index 2).
+    let label_prefix = format!("{} {}", command.name, subcommand);
+    build_field_suggestions(kind, subcommand, &label_prefix, 2, parsed, input)
+}
 
-    let args = &parsed.normalized_tokens[2..];
+/// Argument completion for the bare active-kind `reroll <field>` system command
+/// (e.g. `reroll setback` inside the dungeon editor). Unlike `<kind> reroll`, the
+/// bare form has no entity root, so it can't be reached via `entity_kind_for_root`;
+/// the caller supplies the active draft's kind. The field is the second token.
+fn build_active_reroll_suggestions(
+    kind: EntityKind,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    build_field_suggestions(kind, "reroll", "reroll", 1, parsed, input)
+}
+
+/// Shared field/beat completion for `set`/`reroll`, used by both the entity-root
+/// form (`<kind> verb <field>`, `arg_start = 2`) and the bare active-kind
+/// `reroll <field>` system command (`arg_start = 1`). `label_prefix` precedes the
+/// field in the displayed label.
+fn build_field_suggestions(
+    kind: EntityKind,
+    verb: &str,
+    label_prefix: &str,
+    arg_start: usize,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    let args = parsed.normalized_tokens.get(arg_start..).unwrap_or(&[]);
     let should_suggest_fields =
         args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
     if !should_suggest_fields {
@@ -564,7 +580,7 @@ fn build_entity_field_argument_suggestions(
 
     let prefix = parsed.completion.current_token.to_ascii_lowercase();
     let base = replace_current_token(input, &parsed.completion.current_token);
-    let mut field_names: Vec<&'static str> = if subcommand == "set" {
+    let mut field_names: Vec<&'static str> = if verb == "set" {
         settable_fields(kind).map(|spec| spec.display_name).collect()
     } else {
         rerollable_fields(kind)
@@ -577,18 +593,32 @@ fn build_entity_field_argument_suggestions(
         field_names.extend(["entrance", "puzzle", "setback", "climax", "resolution"]);
     }
 
-    let prefix_label = format!("{} {}", command.name, subcommand);
     Some(
         field_names
             .into_iter()
             .filter(|field| field.starts_with(&prefix))
             .map(|field| CommandSuggestion {
-                label: format!("{prefix_label} {field}"),
+                label: format!("{label_prefix} {field}"),
                 completion: format!("{base}{field} "),
                 helper_text: Some(SuggestionHelperText::Command),
             })
             .collect(),
     )
+}
+
+/// Map the active wizard step's suggestions (already prefix-filtered, staged, and
+/// deduped by the engine's `active_step_suggestions`) into `CommandSuggestion`s.
+/// The completion is the choice `token` (what gets submitted), the label is the
+/// choice `label` (what the user sees).
+fn wizard_choices_to_suggestions(choices: Vec<WizardChoice>) -> Vec<CommandSuggestion> {
+    choices
+        .into_iter()
+        .map(|choice| CommandSuggestion {
+            label: choice.label,
+            completion: choice.token,
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
 }
 
 fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
@@ -873,11 +903,14 @@ fn npc_travel_location_query(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_command_suggestions, build_entity_field_argument_suggestions,
-        build_reference_suggestions_from_entries, entity_kind_for_root, extract_active_reference_query,
-        find_command, npc_travel_location_query, ActiveReferenceQuery, VaultReferenceEntry,
+        build_active_reroll_suggestions, build_command_suggestions,
+        build_entity_field_argument_suggestions, build_reference_suggestions_from_entries,
+        entity_kind_for_root, extract_active_reference_query, find_command,
+        npc_travel_location_query, wizard_choices_to_suggestions, ActiveReferenceQuery,
+        SuggestionHelperText, VaultReferenceEntry,
     };
     use crate::entities::EntityKind;
+    use crate::wizards::WizardChoice;
     use crate::services::vault_ref::extract_prompt_reference_keys;
     use dnd_core::{command_manifest, command_parse};
 
@@ -1247,6 +1280,66 @@ mod tests {
                 .any(|suggestion| suggestion.completion == "dungeon reroll setback "),
             "missing setback beat suggestion"
         );
+    }
+
+    #[test]
+    fn bare_reroll_suggests_dungeon_beats_from_active_kind() {
+        // Inside the dungeon editor the user types the bare system `reroll <beat>`;
+        // it has no entity root, so completion comes from the active kind.
+        let parsed = command_parse::parse_command_input("reroll set");
+        let suggestions =
+            build_active_reroll_suggestions(EntityKind::Dungeon, &parsed, "reroll set")
+                .expect("expected suggestions");
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.completion == "reroll setback "),
+            "missing bare reroll beat suggestion"
+        );
+        // The label is the bare form, not `dungeon reroll …`.
+        assert!(suggestions.iter().all(|item| item.label.starts_with("reroll ")));
+    }
+
+    #[test]
+    fn bare_reroll_suggests_scalar_fields_too() {
+        let parsed = command_parse::parse_command_input("reroll p");
+        let suggestions = build_active_reroll_suggestions(EntityKind::Dungeon, &parsed, "reroll p")
+            .expect("expected suggestions");
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.completion == "reroll premise "),
+            "missing bare reroll scalar field suggestion"
+        );
+    }
+
+    #[test]
+    fn bare_reroll_stops_suggesting_after_a_complete_field() {
+        // `reroll setback ` has chosen its field; no further field suggestions.
+        let parsed = command_parse::parse_command_input("reroll setback ");
+        assert!(
+            build_active_reroll_suggestions(EntityKind::Dungeon, &parsed, "reroll setback ")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn wizard_choices_map_label_and_token_to_suggestion() {
+        // The engine has already filtered/staged/deduped; the service only maps
+        // each WizardChoice to a CommandSuggestion (label shown, token submitted).
+        let choices = vec![
+            WizardChoice::new("1: Tragedy", "1"),
+            WizardChoice::new("set room entrance combat", "set room entrance combat"),
+        ];
+        let suggestions = wizard_choices_to_suggestions(choices);
+        assert_eq!(suggestions.len(), 2);
+        assert_eq!(suggestions[0].label, "1: Tragedy");
+        assert_eq!(suggestions[0].completion, "1");
+        assert_eq!(suggestions[1].completion, "set room entrance combat");
+        assert!(matches!(
+            suggestions[1].helper_text,
+            Some(SuggestionHelperText::Command)
+        ));
     }
 
     #[test]

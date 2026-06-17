@@ -62,7 +62,7 @@ If command shape changes without manifest changes, UX consistency breaks.
 - Core dispatch: `core/src/command.rs` registry.
 - Desktop dispatch: `desktop/src-tauri/src/commands/mod.rs` registry via `router.rs` (tried before the core registry; a root in both registries lets the desktop handler override core).
 - Unknown desktop roots may fall back to entity resolution for load/show/preview behavior.
-- **Setup wizard bypasses the registry:** while `onboarding.active`, input is intercepted by `try_execute_onboarding` before dispatch, so setup verbs (`continue`, menu numbers, `set vault`, `set ollama`, `cancel`) are handled there, not by desktop handlers. See `docs/command-contexts.md §4`.
+- **Wizards bypass the registry:** while a wizard is active (including onboarding — `setup`/`setup-vault`/`setup-llm`/`setup-model`), input is intercepted by `try_execute_active_wizard` before dispatch, so step answers (menu numbers, paths, `save`, `cancel`) are handled by the active step, not by desktop handlers. Onboarding's launchers (`start setup`, `setup vault|llm|model`, `model`) start the wizard the same way. See `docs/command-contexts.md §4`.
 
 ---
 
@@ -79,12 +79,13 @@ Key behavior:
 
 - `Tab` completes current suggestion
 - suggestions stay live as user edits
-- suggestions are filtered by **input context** (`InputContext`: `Default`, `ConfigEditor`, `EntityEditor(kind)`), resolved from `EditorSession::active_kind()` and `onboarding.active`
+- suggestions are filtered by **input context** (`InputContext`: `Default`, `EntityEditor(kind)`, `Wizard(id)` — onboarding is `Wizard("setup")` etc.), resolved by `AppState::resolve_input_context()` (the one canonical resolver)
 - visibility comes only from `command_availability(name)` in `command-specs/src/lib.rs` — the single source of truth shared with the help index. Do not hard-code per-command filters here; add/adjust the availability arm instead
+- **inside a wizard**, the active step owns the surface: the suggestion service early-returns `active_step_suggestions()`, which combines the step's `suggest()` (per-step tokens plus staged args like `set room <room> <type>`) with the always-available global verbs (`back`/`cancel`/`help`). Only the commands valid at the current step are offered — a wizard author adds neither a filter nor a bespoke branch here
 - **Help mirrors autocomplete.** The `help` index uses the same context + `command_availability`, so a visibility change updates both. Verify both surfaces when you change availability (full model: `docs/command-contexts.md`)
 - Global system commands (`save`, `reroll`, `cancel`) must stay visible whenever any draft is active; only hide them when `active_kind` is `None`
 - `entity_kind_for_root()` in `services/suggestions.rs` must map every supported root to its `EntityKind` so field completions work
-- `build_entity_field_argument_suggestions()` pulls directly from `settable_fields`/`rerollable_fields`; add schema entries before exposing new fields
+- `build_entity_field_argument_suggestions()` pulls directly from `settable_fields`/`rerollable_fields`; add schema entries before exposing new fields. Both the entity-root form (`<kind> reroll <field>`) and the bare active-kind system command (`reroll <field>`, e.g. `reroll setback` in the dungeon editor) complete through the shared `build_field_suggestions()` — the bare form keys off `active_kind`, not an entity root
 - Every autocomplete change requires a matching unit test in `services/suggestions.rs` (`cargo test suggestions`)
 
 Current active kinds:
@@ -109,6 +110,7 @@ When adding a new entity, update `EntityKind`, schemas, command handlers, and su
 - Actionable command text should be clickable.
 - Preferred path: backend emits `InlineNode::CommandRef`.
 - Fallback path: `markdown.ts` heuristics.
+- **Wizard prompts get clickability by construction:** build every step prompt with the `wizard` crate's `prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`), which render each `WizardChoice` as a `command_ref`. Never hand-build a wizard prompt with back-tick text — that was the dungeon-flow clickability regression.
 
 For any new command, ensure at least one explicit `command_ref` path exists in guidance output.
 

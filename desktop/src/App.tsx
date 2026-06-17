@@ -15,6 +15,7 @@ import type {
   EventDraft,
   GodDraft,
   DungeonDraft,
+  WizardView,
 } from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
@@ -98,9 +99,9 @@ export default function App() {
   const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
   const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
   const [dungeonDraft, setDungeonDraft] = createSignal<DungeonDraft | null>(null);
-  // Which dungeon-flow review screen the backend last rendered, so the next
-  // `continue`/`reroll` shows the right generation spinner. null = not on one.
-  const [dungeonFlowScreen, setDungeonFlowScreen] = createSignal<DungeonFlowScreen>(null);
+  // The structured wizard view from the backend's last response, so the next
+  // `continue`/`reroll` shows the right generation spinner. null = no wizard active.
+  const [wizardView, setWizardView] = createSignal<WizardView | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
@@ -357,7 +358,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), dungeonFlowScreen());
+    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), wizardView());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -379,10 +380,11 @@ export default function App() {
         // shows the connection-test spinner. Only update on success; on error we
         // keep the prior context so a retry still shows the spinner.
         setOllamaPrompt(detectOllamaPrompt(rendered.text));
-        // Track which dungeon-flow review screen was just rendered so the next
-        // `continue`/`reroll` shows the right spinner (story vs. cards). Cleared
-        // once the flow leaves the review screens (any other rendered output).
-        setDungeonFlowScreen(detectDungeonFlowScreen(rendered.text));
+        // Track the active wizard step from the structured signal so the next
+        // `continue`/`reroll` shows the right spinner (story vs. dungeon). Clears
+        // itself when the response carries no wizard (the flow finalized/cancelled
+        // or no wizard is running).
+        setWizardView(response.wizard ?? null);
         applyClientEvent(response.client_event);
         const outputDocOverride = outputDocFromClientEvent(response.client_event);
         const suppressOutput =
@@ -1068,45 +1070,44 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
   return null;
 }
 
-// Which dungeon-flow review screen the backend just rendered. The completing
-// inputs (`continue`/`reroll`) are generic words, so — like the Ollama heuristic —
-// we recognize the prompt rather than the input to pick the spinner.
-type DungeonFlowScreen = "plan" | "story" | null;
-
-function detectDungeonFlowScreen(text: string): DungeonFlowScreen {
-  if (text.includes("Step 6 of 6 — Room Plan")) {
-    return "plan";
+// Pick the spinner label for a submission made inside a wizard, from the
+// structured `WizardView` (no prompt-text matching). A step that declares an
+// `awaiting_llm_label` (the dungeon plan/story screens, the onboarding Ollama
+// steps) shows it for any *advancing* submission. Inputs that act locally (a
+// screen's `reroll`/`set`, or `back`/`cancel`/`help`) spend no LLM/probe call,
+// so they get no spinner. The story screen's `reroll` is the one input-dependent
+// case: it re-runs Pass 1 (a new story), with its own label.
+function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null {
+  const isReroll =
+    lowered === "reroll" ||
+    lowered === "redo" ||
+    lowered.startsWith("reroll ") ||
+    lowered.startsWith("redo ");
+  if (wizard.step_id === "story_review" && isReroll) {
+    return "generating story";
   }
-  if (text.includes("Create Dungeon — Story")) {
-    return "story";
+  if (!wizard.awaiting_llm_label) {
+    return null;
   }
-  return null;
+  const isLocalAction =
+    isReroll ||
+    lowered === "back" ||
+    lowered === "cancel" ||
+    lowered === "help" ||
+    lowered.startsWith("set ");
+  return isLocalAction ? null : wizard.awaiting_llm_label;
 }
 
 function commandSpinnerLabel(
   raw: string,
   ollamaPrompt: "menu" | "url" | null,
-  dungeonFlowScreen: DungeonFlowScreen,
+  wizard: WizardView | null,
 ): string | null {
   const lowered = raw.trim().toLowerCase();
-  // Dungeon flow review screens. The room-plan screen rolls/sets locally (no
-  // spinner); only `continue` there spends an LLM call (Pass 1 = the story). At
-  // the story screen, `continue` builds the cards (Pass 2) and `reroll` rewrites
-  // the story (Pass 1 again).
-  if (dungeonFlowScreen === "plan") {
-    if (lowered === "continue" || lowered === "accept") {
-      return "generating story";
-    }
-    // `reroll` and `set` re-roll/pin locally and return instantly — no spinner.
-    return null;
-  }
-  if (dungeonFlowScreen === "story") {
-    if (lowered === "continue" || lowered === "accept") {
-      return "generating dungeon";
-    }
-    if (lowered === "reroll" || lowered === "redo" || lowered.startsWith("reroll ") || lowered.startsWith("redo ")) {
-      return "generating story";
-    }
+  // Inside a wizard, every submission is intercepted by the wizard runtime, so
+  // only the wizard's own spinner logic applies (no `create`/`reroll` fallthrough).
+  if (wizard) {
+    return wizardSpinnerLabel(wizard, lowered);
   }
   // Commands that always probe the Ollama server.
   if (lowered === "test ollama") {

@@ -14,7 +14,6 @@ use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text, prepend_notice};
 use dnd_core::command::render_help_overview;
-use dnd_core::command_manifest::InputContext;
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
 use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
@@ -23,26 +22,9 @@ use runebound_models::{apply_plan_meta_to_beats, plan_meta_from_beats};
 
 pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
     // Resolve the current input context so the help index lists the commands
-    // actually runnable here — an open entity editor takes precedence over an
-    // in-progress setup wizard. Mirrors the suggestion service's context logic.
-    let active_kind = {
-        let editor = invocation.state.editor_session.lock().await;
-        editor.active_kind()
-    };
-    let context = match active_kind {
-        Some(kind) => InputContext::EntityEditor(kind.as_str().to_string()),
-        None => {
-            let onboarding_active = {
-                let service = invocation.state.command_service.lock().await;
-                service.session().onboarding.active
-            };
-            if onboarding_active {
-                InputContext::ConfigEditor
-            } else {
-                InputContext::Default
-            }
-        }
-    };
+    // actually runnable here. Shared with the suggestion service via
+    // AppState::resolve_input_context so the two cannot drift.
+    let context = invocation.state.resolve_input_context().await;
 
     let overview = render_help_overview(&context);
     Ok(Some(ok_response_with_doc(

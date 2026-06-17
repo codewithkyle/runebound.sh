@@ -1,0 +1,9 @@
+[package]
+name = "wizard"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+runebound-models = { path = "../runebound-models" }
+async-trait = "0.1"
+tokio = { workspace = true, features = ["sync"] }

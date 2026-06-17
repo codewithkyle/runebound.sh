@@ -8,6 +8,7 @@ mod repositories;
 mod router;
 mod services;
 mod utils;
+mod wizards;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,13 +17,11 @@ use dnd_core::command::{CommandClientEvent, CommandResponse, reject_help_flags};
 use dnd_core::command_manifest::CommandManifest;
 use dnd_core::command_parse::{normalize_command_input, parse_command_input};
 use dnd_core::db;
-use dnd_core::session::{OnboardingFlow, VaultStepState};
 use tokio::sync::Mutex;
-
-use crate::commands::setup_commands::{self, FolderPick};
 
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
+use crate::wizards::build_default_wizard_registry;
 use crate::repositories::{
     DocumentRepository, EventRepository, FactionRepository, GenerationRepository, GodRepository,
     ItemRepository, LocationRepository, NpcRepository, ProdDocumentRepository, ProdEventRepository,
@@ -63,47 +62,28 @@ async fn run_command(
         }
     }
 
-    let (onboarding_active, want_vault_dialog, vault_flow) = {
-        let service = state.command_service.lock().await;
-        let onboarding = &service.session().onboarding;
-        let want_dialog = onboarding.active
-            && onboarding.vault_substate == VaultStepState::MenuShown
-            && normalized_input.trim() == "1";
-        (onboarding.active, want_dialog, onboarding.flow)
-    };
-
-    if onboarding_active {
-        // The vault menu's "dialog picker" option needs the native folder
-        // picker, which is only reachable here (with the app handle). Open it,
-        // then forward a `set vault <path>` line the core flow already handles.
-        let line = if want_vault_dialog {
-            match setup_commands::pick_vault_folder(&app_handle) {
-                Ok(FolderPick::Picked(path)) => format!("set vault {path}"),
-                // Cancelled: re-show the vault menu in the same flow.
-                Ok(FolderPick::Cancelled) => match vault_flow {
-                    OnboardingFlow::Vault => "setup vault".to_string(),
-                    _ => "start setup".to_string(),
-                },
-                Err(e) => return Err(e),
-            }
-        } else {
-            normalized_input.clone()
-        };
-        let mut service = state.command_service.lock().await;
-        return Ok(service.execute_line(&line).await);
+    // Generic wizard dispatch: while a wizard is active, route the raw line to the
+    // wizard engine before registry dispatch, so step answers like `"2"` or a
+    // free-text premise aren't parsed as commands. This is the single, first-class
+    // dispatch route for every multi-step wizard.
+    if let Some(response) =
+        crate::wizards::try_execute_active_wizard(&normalized_input, state.inner()).await?
+    {
+        let trimmed = normalized_input.trim();
+        if !trimmed.is_empty() {
+            let mut service = state.command_service.lock().await;
+            service.session_mut().push_history(trimmed, 50);
+        }
+        return Ok(response);
     }
 
-    // Guided dungeon-creation flow: while active, route the raw line to the flow
-    // state machine and bypass registry dispatch (exactly how onboarding does),
-    // so step answers like `"2"` or a free-text premise aren't parsed as commands.
-    let dungeon_flow_active = {
-        let flow = state.dungeon_flow.lock().await;
-        flow.active
-    };
-    if dungeon_flow_active {
-        if let Some(response) =
-            crate::commands::dungeon_flow::try_execute_dungeon_flow(&normalized_input, state.inner()).await?
-        {
+    // Onboarding entry commands (start setup / setup vault|llm|model / model) launch
+    // their wizard on *this* host, so the native folder picker is available via
+    // `AppState::perform_native`. Active-onboarding input is consumed by the generic
+    // wizard route above; `setup verbosity`/`setup help` are not entry commands and
+    // fall through to the core handlers.
+    if let Some(id) = dnd_core::onboarding_wizard::onboarding_entry_wizard_id(&normalized_input) {
+        if let Some(response) = crate::wizards::start_wizard(id, state.inner()).await? {
             let trimmed = normalized_input.trim();
             if !trimmed.is_empty() {
                 let mut service = state.command_service.lock().await;
@@ -181,6 +161,7 @@ fn main() {
     let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
 
     let domains = Arc::new(build_default_registry());
+    let wizards = Arc::new(build_default_wizard_registry());
 
     let app_state = AppState {
         workspace_root,
@@ -199,8 +180,10 @@ fn main() {
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
         domains,
-        dungeon_flow: Mutex::new(crate::app_state::DungeonCreationFlow::default()),
+        wizards,
+        wizard_session: Mutex::new(crate::wizards::WizardSession::default()),
         boot_ollama_health: Mutex::new(None),
+        app_handle: std::sync::Mutex::new(None),
     };
 
     // Startup cleanup (vault sync / soft-delete reaping) now runs as the
@@ -209,6 +192,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .setup(|app| {
+            // Stash the app handle so the onboarding wizard's native folder picker
+            // (AppState::perform_native) can reach the dialog plugin.
+            use tauri::Manager;
+            let state = app.state::<AppState>();
+            *state.app_handle.lock().unwrap() = Some(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             run_command,
             suggest_command_input,

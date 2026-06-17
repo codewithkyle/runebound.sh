@@ -4,12 +4,13 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use dnd_core::command_manifest::InputContext;
 use runebound_models::{
-    DungeonContentPlan, DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft,
-    NpcDraft,
+    DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft, NpcDraft,
 };
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
+use crate::wizards::{WizardRegistry, WizardSession};
 use crate::repositories::{
     Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
     GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
@@ -23,27 +24,6 @@ pub type ItemDraftSession = ItemDraft;
 pub type EventDraftSession = EventDraft;
 pub type GodDraftSession = GodDraft;
 pub type DungeonDraftSession = DungeonDraft;
-
-/// In-memory state machine for the guided `create dungeon` flow (steps A–E).
-/// Like `OnboardingSession`, nothing here persists mid-flow; it lives on
-/// `AppState` and is intercepted before registry dispatch in `main.rs`.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DungeonCreationFlow {
-    pub active: bool,
-    pub step: u8,                 // 1..=5 (A..E), 6 = room plan review, 7 = story review
-    pub premise: Option<String>,  // None = "generate one"
-    pub tone: Option<String>,     // DUNGEON_TONES
-    pub twist: Option<String>,    // DUNGEON_TWISTS
-    pub context: String,          // step D free-text (references/constraints); "" = skipped
-    pub topology: Option<String>, // DUNGEON_TOPOLOGIES incl. "none"
-    // Step 6 locks in the rolled content plan (which type fills each beat); step 7
-    // carries the Pass-1 story reviewed against it, so `continue` can structure it
-    // (Pass 2) and `reroll` can rewrite the prose without re-rolling the plan.
-    pub plan: Option<DungeonContentPlan>,
-    pub story_name: Option<String>,
-    pub story_location: Option<String>,
-    pub story_text: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) enum DraftEnvelope {
@@ -504,11 +484,18 @@ pub(crate) struct AppState {
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
     pub(crate) domains: Arc<EntityDomainRegistry>,
-    /// In-memory state for the guided `create dungeon` flow (steps A–E).
-    pub(crate) dungeon_flow: Mutex<DungeonCreationFlow>,
+    /// Registry of multi-step wizards, mirroring `domains`. Adding a wizard is one
+    /// line in `build_default_wizard_registry()`.
+    pub(crate) wizards: Arc<WizardRegistry<AppState>>,
+    /// Live state of the active wizard (cursor, history, accumulator).
+    pub(crate) wizard_session: Mutex<WizardSession>,
     /// Cached result of the boot LLM health probe, reused to render the MOTD
     /// without re-probing the Ollama server.
     pub(crate) boot_ollama_health: Mutex<Option<dnd_core::health::OllamaHealth>>,
+    /// The Tauri app handle, set once at `setup`. Used by the onboarding wizard's
+    /// native folder picker (`WizardHost::perform_native`). A `std::sync::Mutex`
+    /// (never held across `.await`) so the handle can be set after construction.
+    pub(crate) app_handle: std::sync::Mutex<Option<tauri::AppHandle>>,
 }
 
 impl AppState {
@@ -562,6 +549,25 @@ impl AppState {
 
     pub(crate) fn domains(&self) -> Arc<EntityDomainRegistry> {
         self.domains.clone()
+    }
+
+    /// Resolve the current input context that gates autocomplete + help. Precedence:
+    /// an open entity draft, then an active wizard (which now includes onboarding —
+    /// `setup`/`setup-vault`/`setup-llm`/`setup-model`), else the default surface.
+    /// This is the single resolution point shared by the suggestion service and the
+    /// desktop `help` handler so the two cannot drift (see docs/command-contexts.md).
+    pub(crate) async fn resolve_input_context(&self) -> InputContext {
+        let active_kind = {
+            let editor = self.editor_session.lock().await;
+            editor.active_kind()
+        };
+        if let Some(kind) = active_kind {
+            return InputContext::EntityEditor(kind.as_str().to_string());
+        }
+        if let Some(id) = self.wizard_session.lock().await.active_id {
+            return InputContext::Wizard(id.to_string());
+        }
+        InputContext::Default
     }
 }
 

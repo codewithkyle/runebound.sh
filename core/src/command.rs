@@ -21,9 +21,7 @@ use crate::output::{
     code, command_ref, doc, heading, list, paragraph_text, paragraph_with_inlines, status,
     text_node,
 };
-use crate::session::{
-    OllamaStepState, OnboardingFlow, OnboardingSession, SessionState, VaultStepState,
-};
+use crate::session::SessionState;
 use crate::vault::{Vault, is_path_writable};
 use command_specs::handler_metadata_for;
 
@@ -88,8 +86,12 @@ struct CoreHandlerInvocation<'a> {
     _tokens: &'a [String],
     lowered: &'a [String],
     manifest: &'a CommandManifest,
-    session: &'a mut SessionState,
-    raw_input: &'a str,
+    /// Session state for handlers that mutate it; currently unread (the onboarding
+    /// handler that used it moved to the wizard engine).
+    _session: &'a mut SessionState,
+    /// Kept on the invocation for handlers that need the verbatim line; currently
+    /// unread (the onboarding handler that used it moved to the wizard engine).
+    _raw_input: &'a str,
 }
 
 fn core_handler_registry() -> &'static HandlerRegistry<CoreHandler> {
@@ -149,14 +151,9 @@ fn help_handler_entry() -> HandlerEntry<CoreHandler> {
         metadata_for("help"),
         CoreHandler::new(|invocation| {
             Box::pin(async move {
-                // Core only knows about the setup wizard; the desktop layer
-                // overrides this handler when an entity editor is open.
-                let context = if invocation.session.onboarding.active {
-                    InputContext::ConfigEditor
-                } else {
-                    InputContext::Default
-                };
-                Ok(help_overview(invocation.manifest, &context))
+                // Core renders the default surface; the desktop overrides this
+                // handler to resolve the entity-editor and wizard contexts.
+                Ok(help_overview(invocation.manifest, &InputContext::Default))
             })
         }),
     )
@@ -227,15 +224,45 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
         metadata_for("setup"),
         CoreHandler::new(|invocation| {
             Box::pin(async move {
-                match try_execute_onboarding(
-                    invocation.workspace_root,
-                    invocation.raw_input,
-                    invocation.session,
-                )
-                .await?
-                {
-                    Some(output) => Ok(output),
-                    None => bail!("unknown setup command"),
+                // The interactive launchers (`setup vault|llm|model`, `start setup`,
+                // `model`) are intercepted ahead of dispatch by the wizard route in
+                // `CommandService::execute_line` (and the desktop `run_command`), so
+                // they never reach this handler. What remains is the static help and
+                // the direct `setup verbosity` config write.
+                match invocation.lowered.get(1).map(String::as_str) {
+                    None | Some("help") => Ok(CommandOutput::with_doc(
+                        render_command_help(invocation.manifest, "setup"),
+                        command_help_doc(invocation.manifest, "setup", None),
+                    )),
+                    Some("verbosity") => {
+                        let loaded = load_effective(invocation.workspace_root)?;
+                        match invocation.lowered.get(2) {
+                            None => Ok(CommandOutput::text(format!(
+                                "generation verbosity is '{}'.\nUsage: setup verbosity <brief|medium|verbose>",
+                                loaded.effective.generation.verbosity.as_str(),
+                            ))),
+                            Some(raw) => {
+                                let Some(level) = Verbosity::parse(raw) else {
+                                    bail!(
+                                        "unknown verbosity '{raw}'. choose one of: brief, medium, verbose"
+                                    );
+                                };
+                                let mut config = loaded.effective;
+                                config.generation.verbosity = level;
+                                let path = save_config(invocation.workspace_root, &config)?;
+                                Ok(CommandOutput::text(format!(
+                                    "generation verbosity set to '{}' ({}).",
+                                    level.as_str(),
+                                    path.display()
+                                )))
+                            }
+                        }
+                    }
+                    Some("vault") | Some("llm") | Some("model") => bail!(
+                        "`setup {}` starts an interactive wizard; run it from the console.",
+                        invocation.lowered[1]
+                    ),
+                    Some(other) => bail!("unknown setup command: {other}. use `setup help`"),
                 }
             })
         }),
@@ -257,43 +284,6 @@ pub async fn execute_line_with_session(
         session.push_history(trimmed, 50);
     }
 
-    let normalized_input = normalize_command_input(input);
-    match try_execute_onboarding(workspace_root, &normalized_input, session).await {
-        Ok(Some(output)) => {
-            let output_text = output.output.clone();
-            return CommandResponse {
-                ok: true,
-                output: output.output,
-                error: None,
-                exit_code: 0,
-                segments: vec![OutputSegment {
-                    kind: OutputSegmentKind::Text,
-                    text: output_text,
-                    command_ref: None,
-                }],
-                output_doc: output.output_doc,
-                client_event: None,
-            };
-        }
-        Ok(None) => {}
-        Err(err) => {
-            let error_text = err.to_string();
-            return CommandResponse {
-                ok: false,
-                output: String::new(),
-                error: Some(error_text.clone()),
-                exit_code: 1,
-                segments: vec![OutputSegment {
-                    kind: OutputSegmentKind::Error,
-                    text: error_text,
-                    command_ref: None,
-                }],
-                output_doc: Some(output_doc_from_error_text(err.to_string())),
-                client_event: None,
-            };
-        }
-    }
-
     match execute_line_internal(workspace_root, input, session).await {
         Ok(output) => {
             let output_text = output.output.clone();
@@ -309,6 +299,7 @@ pub async fn execute_line_with_session(
                 }],
                 output_doc: output.output_doc,
                 client_event: None,
+                wizard: None,
             }
         }
         Err(err) => {
@@ -325,542 +316,13 @@ pub async fn execute_line_with_session(
                 }],
                 output_doc: Some(output_doc_from_error_text(err.to_string())),
                 client_event: None,
+                wizard: None,
             }
         }
     }
 }
 
-async fn try_execute_onboarding(
-    workspace_root: &Path,
-    input: &str,
-    session: &mut SessionState,
-) -> Result<Option<CommandOutput>> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    let lowered: Vec<String> = trimmed
-        .split_whitespace()
-        .map(|token| token.to_ascii_lowercase())
-        .collect();
-    if lowered.is_empty() {
-        return Ok(None);
-    }
-
-    if lowered == ["start", "setup"] {
-        let loaded = load_effective(workspace_root)?;
-        let current_vault = config_vault_path_string(&loaded.effective);
-        session.onboarding.active = true;
-        session.onboarding.flow = OnboardingFlow::Full;
-        // Seed the Ollama field from the saved config so the menu's "continue
-        // with <url>" reflects the configured server, not the built-in default.
-        session.onboarding.ollama_base_url = loaded.effective.ollama.base_url.clone();
-
-        // Show the vault menu on first entry, or when re-entered while still at
-        // the vault step (e.g. after the native picker was cancelled).
-        if session.onboarding.step <= 1 {
-            session.onboarding.step = 1;
-            session.onboarding.vault_substate = VaultStepState::MenuShown;
-            if session.onboarding.vault_path.trim().is_empty()
-                && let Some(path) = &current_vault
-            {
-                session.onboarding.vault_path = path.clone();
-            }
-            let current = if session.onboarding.vault_path.trim().is_empty() {
-                None
-            } else {
-                Some(session.onboarding.vault_path.clone())
-            };
-            return Ok(Some(CommandOutput::text(vault_menu_text(
-                current.as_deref(),
-                OnboardingFlow::Full,
-            ))));
-        }
-
-        return Ok(Some(CommandOutput::text(
-            "setup already started. use show setup or continue with next step.".to_string(),
-        )));
-    }
-
-    if lowered == ["setup", "vault"] {
-        let loaded = load_effective(workspace_root)?;
-        let current_vault = config_vault_path_string(&loaded.effective);
-        session.onboarding.active = true;
-        session.onboarding.flow = OnboardingFlow::Vault;
-        session.onboarding.step = 1;
-        session.onboarding.vault_substate = VaultStepState::MenuShown;
-        if let Some(path) = &current_vault {
-            session.onboarding.vault_path = path.clone();
-        }
-        return Ok(Some(CommandOutput::text(vault_menu_text(
-            current_vault.as_deref(),
-            OnboardingFlow::Vault,
-        ))));
-    }
-
-    if lowered == ["setup", "llm"] {
-        let loaded = load_effective(workspace_root)?;
-        session.onboarding.active = true;
-        session.onboarding.flow = OnboardingFlow::Llm;
-        session.onboarding.ollama_base_url = loaded.effective.ollama.base_url.clone();
-        if let Some(m) = &loaded.effective.ollama.model {
-            session.onboarding.selected_model = m.clone();
-        }
-        return Ok(Some(enter_ollama_menu(&mut session.onboarding, None)));
-    }
-
-    if lowered == ["model"] || lowered == ["setup", "model"] {
-        let loaded = load_effective(workspace_root)?;
-        let base_url = loaded.effective.ollama.base_url.clone();
-        if base_url.trim().is_empty() {
-            bail!("no Ollama server is configured. run setup llm first.");
-        }
-        let normalized = normalize_ollama_input(&base_url);
-        health::validate_ollama_url(&normalized)?;
-        // Probe the configured server for its model list (shows the spinner).
-        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
-
-        session.onboarding.active = true;
-        session.onboarding.flow = OnboardingFlow::Model;
-        session.onboarding.vault_substate = VaultStepState::Inactive;
-        session.onboarding.ollama_substate = OllamaStepState::Inactive;
-        session.onboarding.ollama_base_url = normalized;
-        session.onboarding.ollama_models = models.clone();
-        if let Some(model) = &loaded.effective.ollama.model {
-            session.onboarding.selected_model = model.clone();
-        } else if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
-            session.onboarding.selected_model = models[0].clone();
-        }
-        session.onboarding.step = 3;
-
-        return Ok(Some(CommandOutput::text(model_step_text(
-            &detail,
-            &models,
-            OnboardingFlow::Model,
-            &session.onboarding.selected_model,
-        ))));
-    }
-
-    if lowered.first().map(String::as_str) == Some("setup")
-        && lowered.get(1).map(String::as_str) == Some("verbosity")
-    {
-        // A direct config write (not a wizard flow): set generation verbosity,
-        // or, with no argument, report the current value. Accepts free text and
-        // validates against the known levels.
-        let loaded = load_effective(workspace_root)?;
-        match lowered.get(2) {
-            None => {
-                return Ok(Some(CommandOutput::text(format!(
-                    "generation verbosity is '{}'.\nUsage: setup verbosity <brief|medium|verbose>",
-                    loaded.effective.generation.verbosity.as_str(),
-                ))));
-            }
-            Some(raw) => {
-                let Some(level) = Verbosity::parse(raw) else {
-                    bail!("unknown verbosity '{raw}'. choose one of: brief, medium, verbose");
-                };
-                let mut config = loaded.effective;
-                config.generation.verbosity = level;
-                let path = save_config(workspace_root, &config)?;
-                return Ok(Some(CommandOutput::text(format!(
-                    "generation verbosity set to '{}' ({}).",
-                    level.as_str(),
-                    path.display()
-                ))));
-            }
-        }
-    }
-
-    if lowered == ["setup", "help"] {
-        if !session.onboarding.active {
-            let loaded = load_effective(workspace_root)?;
-            session.onboarding.active = true;
-            session.onboarding.step = 0;
-            if session.onboarding.ollama_base_url.trim().is_empty() {
-                session.onboarding.ollama_base_url = loaded.effective.ollama.base_url;
-            }
-        }
-        return Ok(Some(CommandOutput::text(
-            [
-                "## Setup commands",
-                "start setup",
-                "setup vault",
-                "setup llm",
-                "setup model",
-                "setup verbosity <brief|medium|verbose>",
-                "set vault <path>",
-                "set ollama <url>",
-                "test ollama",
-                "set model <name>",
-                "use model <index>",
-                "continue",
-                "show setup",
-                "save",
-                "cancel setup",
-            ]
-            .join("\n"),
-        )));
-    }
-
-    if !session.onboarding.active {
-        return Ok(None);
-    }
-
-    if lowered == ["show", "setup"] {
-        return Ok(Some(CommandOutput::text(
-            [
-                "## Current setup",
-                &format!(
-                    "vault: {}",
-                    if session.onboarding.vault_path.trim().is_empty() {
-                        "(not set)"
-                    } else {
-                        session.onboarding.vault_path.as_str()
-                    }
-                ),
-                &format!(
-                    "ollama: {}",
-                    if session.onboarding.ollama_base_url.trim().is_empty() {
-                        "(not set)"
-                    } else {
-                        session.onboarding.ollama_base_url.as_str()
-                    }
-                ),
-                &format!(
-                    "model: {}",
-                    if session.onboarding.selected_model.trim().is_empty() {
-                        "(not set)"
-                    } else {
-                        session.onboarding.selected_model.as_str()
-                    }
-                ),
-            ]
-            .join("\n"),
-        )));
-    }
-
-    if lowered == ["cancel"] || lowered == ["cancel", "setup"] {
-        reset_onboarding(&mut session.onboarding);
-        return Ok(Some(CommandOutput::text(
-            "setup cancelled. run start setup anytime to continue.".to_string(),
-        )));
-    }
-
-    // `continue` at the model step (LLM/model flows) keeps the current model and
-    // saves. The Ollama-server step's `continue` is handled by the menu block below.
-    if lowered == ["continue"]
-        && session.onboarding.step == 3
-        && matches!(
-            session.onboarding.flow,
-            OnboardingFlow::Llm | OnboardingFlow::Model
-        )
-    {
-        if session.onboarding.selected_model.trim().is_empty() {
-            bail!("no model is selected. choose a model first.");
-        }
-        return Ok(Some(save_model_step(workspace_root, session).await?));
-    }
-
-    if let Some(path) = extract_trailing_argument(trimmed, "set vault") {
-        let expanded = expand_tilde_path(&path);
-        validate_vault_path_for_onboarding(&expanded)?;
-
-        session.onboarding.vault_path = expanded.display().to_string();
-        session.onboarding.vault_substate = VaultStepState::Inactive;
-
-        if session.onboarding.flow == OnboardingFlow::Vault {
-            return Ok(Some(save_vault_section(workspace_root, session).await?));
-        }
-
-        let vault = session.onboarding.vault_path.clone();
-        return Ok(Some(enter_ollama_menu(&mut session.onboarding, Some(&vault))));
-    }
-
-    if let Some(url) = extract_trailing_argument(trimmed, "set ollama") {
-        let normalized = normalize_ollama_input(&url);
-        if normalized.is_empty() {
-            bail!("ollama URL cannot be empty");
-        }
-        health::validate_ollama_url(&normalized)?;
-        session.onboarding.ollama_base_url = normalized.clone();
-        session.onboarding.ollama_substate = OllamaStepState::Inactive;
-        if session.onboarding.step < 2 {
-            session.onboarding.step = 2;
-        }
-        return Ok(Some(CommandOutput::text(format!(
-            "ollama URL set to: {normalized}\nrun test ollama to verify connection."
-        ))));
-    }
-
-    if lowered == ["test", "ollama"] {
-        let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
-        health::validate_ollama_url(&normalized)?;
-        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
-        session.onboarding.ollama_base_url = normalized;
-        session.onboarding.ollama_models = models.clone();
-        if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
-            session.onboarding.selected_model = models[0].clone();
-        }
-        session.onboarding.ollama_substate = OllamaStepState::Inactive;
-        session.onboarding.step = 3;
-
-        return Ok(Some(CommandOutput::text(model_step_text(
-            &detail,
-            &models,
-            session.onboarding.flow,
-            &session.onboarding.selected_model,
-        ))));
-    }
-
-    if let Some(index_input) = extract_trailing_argument(trimmed, "use model") {
-        let index = index_input
-            .parse::<usize>()
-            .map_err(|_| anyhow!("model index out of range: {index_input}"))?;
-        if index == 0 || index > session.onboarding.ollama_models.len() {
-            bail!("model index out of range: {index_input}");
-        }
-        let selected = session.onboarding.ollama_models[index - 1].clone();
-        session.onboarding.selected_model = selected.clone();
-        if session.onboarding.flow != OnboardingFlow::Full {
-            return Ok(Some(save_model_step(workspace_root, session).await?));
-        }
-        if session.onboarding.step < 4 {
-            session.onboarding.step = 4;
-        }
-        return Ok(Some(CommandOutput::text(save_prompt_text(&selected))));
-    }
-
-    if let Some(model_name) = extract_trailing_argument(trimmed, "set model") {
-        if model_name.trim().is_empty() {
-            bail!("model name cannot be empty");
-        }
-        session.onboarding.selected_model = model_name.clone();
-        if session.onboarding.flow != OnboardingFlow::Full {
-            return Ok(Some(save_model_step(workspace_root, session).await?));
-        }
-        if session.onboarding.step < 4 {
-            session.onboarding.step = 4;
-        }
-        return Ok(Some(CommandOutput::text(save_prompt_text(&model_name))));
-    }
-
-    if session.onboarding.vault_substate == VaultStepState::MenuShown {
-        match trimmed {
-            "1" => bail!(
-                "the dialog picker is only available in the desktop app; choose 2 to type a path"
-            ),
-            "2" => {
-                session.onboarding.vault_substate = VaultStepState::AwaitingPath;
-                return Ok(Some(CommandOutput::text(
-                    [
-                        "Enter the path to your vault and press Enter.",
-                        "Example: /path/to/your/Obsidian/Vault",
-                    ]
-                    .join("\n"),
-                )));
-            }
-            "3" | "continue" if !session.onboarding.vault_path.trim().is_empty() => {
-                if session.onboarding.flow == OnboardingFlow::Vault {
-                    return Ok(Some(save_vault_section(workspace_root, session).await?));
-                }
-                let vault = session.onboarding.vault_path.clone();
-                return Ok(Some(enter_ollama_menu(&mut session.onboarding, Some(&vault))));
-            }
-            other => {
-                let current = if session.onboarding.vault_path.trim().is_empty() {
-                    None
-                } else {
-                    Some(session.onboarding.vault_path.clone())
-                };
-                return Ok(Some(CommandOutput::text(format!(
-                    "invalid choice: {other}\n\n{}",
-                    vault_menu_text(current.as_deref(), session.onboarding.flow)
-                ))));
-            }
-        }
-    }
-
-    if session.onboarding.vault_substate == VaultStepState::AwaitingPath && !trimmed.is_empty() {
-        let expanded = expand_tilde_path(trimmed);
-        validate_vault_path_for_onboarding(&expanded)?;
-        session.onboarding.vault_path = expanded.display().to_string();
-        session.onboarding.vault_substate = VaultStepState::Inactive;
-        if session.onboarding.flow == OnboardingFlow::Vault {
-            return Ok(Some(save_vault_section(workspace_root, session).await?));
-        }
-        let vault = session.onboarding.vault_path.clone();
-        return Ok(Some(enter_ollama_menu(&mut session.onboarding, Some(&vault))));
-    }
-
-    // Ollama server menu: choose between configuring a new server or continuing
-    // with the current one.
-    if session.onboarding.ollama_substate == OllamaStepState::MenuShown {
-        match trimmed {
-            "1" => {
-                session.onboarding.ollama_substate = OllamaStepState::AwaitingUrl;
-                return Ok(Some(CommandOutput::text(ollama_url_prompt_text())));
-            }
-            "2" | "continue" => {
-                let normalized = normalize_ollama_input(&session.onboarding.ollama_base_url);
-                health::validate_ollama_url(&normalized)?;
-                let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
-                session.onboarding.ollama_base_url = normalized;
-                session.onboarding.ollama_models = models.clone();
-                if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
-                    session.onboarding.selected_model = models[0].clone();
-                }
-                session.onboarding.ollama_substate = OllamaStepState::Inactive;
-                session.onboarding.step = 3;
-                return Ok(Some(CommandOutput::text(model_step_text(
-                    &detail,
-                    &models,
-                    session.onboarding.flow,
-                    &session.onboarding.selected_model,
-                ))));
-            }
-            other => {
-                return Ok(Some(CommandOutput::text(format!(
-                    "invalid choice: {other}\n\n{}",
-                    ollama_menu_text(&session.onboarding.ollama_base_url, None)
-                ))));
-            }
-        }
-    }
-
-    if session.onboarding.ollama_substate == OllamaStepState::AwaitingUrl && !trimmed.is_empty() {
-        let normalized = normalize_ollama_input(trimmed);
-        health::validate_ollama_url(&normalized)?;
-        let (detail, models) = probe_ollama_models(&normalized, OLLAMA_SETUP_TIMEOUT_SECONDS).await?;
-
-        session.onboarding.ollama_base_url = normalized;
-        session.onboarding.ollama_models = models.clone();
-        if session.onboarding.selected_model.trim().is_empty() && !models.is_empty() {
-            session.onboarding.selected_model = models[0].clone();
-        }
-        session.onboarding.ollama_substate = OllamaStepState::Inactive;
-        session.onboarding.step = 3;
-
-        return Ok(Some(CommandOutput::text(model_step_text(
-            &detail,
-            &models,
-            session.onboarding.flow,
-            &session.onboarding.selected_model,
-        ))));
-    }
-
-    if session.onboarding.step == 3 && !trimmed.is_empty() {
-        if let Ok(index) = trimmed.parse::<usize>() {
-            if index >= 1 && index <= session.onboarding.ollama_models.len() {
-                session.onboarding.selected_model =
-                    session.onboarding.ollama_models[index - 1].clone();
-            } else {
-                bail!("model index out of range: {trimmed}");
-            }
-        } else {
-            session.onboarding.selected_model = trimmed.to_string();
-        }
-        if session.onboarding.flow != OnboardingFlow::Full {
-            return Ok(Some(save_model_step(workspace_root, session).await?));
-        }
-        session.onboarding.step = 4;
-        return Ok(Some(CommandOutput::text(save_prompt_text(
-            &session.onboarding.selected_model,
-        ))));
-    }
-
-    if lowered == ["save"] || lowered == ["save", "setup"] {
-        if session.onboarding.vault_path.trim().is_empty() {
-            bail!("vault path is missing. run set vault <path>.");
-        }
-        if session.onboarding.ollama_base_url.trim().is_empty() {
-            bail!("ollama URL is missing. run set ollama <url>.");
-        }
-
-        let missing_model = session.onboarding.selected_model.trim().is_empty();
-
-        let loaded = load_effective(workspace_root)?;
-        let mut config = loaded.effective;
-        config.vault.path = Some(PathBuf::from(&session.onboarding.vault_path));
-        config.ollama.base_url = session.onboarding.ollama_base_url.clone();
-        if !missing_model {
-            config.ollama.model = Some(session.onboarding.selected_model.clone());
-        }
-
-        let issues = required_issues(&config);
-        if !issues.is_empty() {
-            bail!("missing required config:\n- {}", issues.join("\n- "));
-        }
-
-        let config_path = save_config(workspace_root, &config)?;
-        let vault_path = config
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| anyhow!("vault.path is not configured"))?;
-        let vault = Vault::new(vault_path);
-        vault.ensure_structure()?;
-        let db = db::init_database().await?;
-
-        let report = health::run_quick_checks(&config).await;
-        let warnings: Vec<String> = report
-            .items
-            .into_iter()
-            .filter(|item| !item.ok)
-            .map(|item| format!("{}: {}", item.name, item.detail))
-            .collect();
-
-        reset_onboarding(&mut session.onboarding);
-
-        let mut lines = vec![
-            "## Onboarding complete".to_string(),
-            format!("config saved: {}", config_path.display()),
-            format!("vault ready: {}", vault.root().display()),
-            format!("database ready: {}", db.path.display()),
-        ];
-        let mut document = doc()
-            .with_block(heading(2, "Onboarding complete"))
-            .with_block(list(vec![
-                vec![text_node(format!("config saved: {}", config_path.display()))],
-                vec![text_node(format!("vault ready: {}", vault.root().display()))],
-                vec![text_node(format!("database ready: {}", db.path.display()))],
-            ]));
-        if missing_model {
-            lines.push("ollama model not set; run `start setup` later to choose a model if you plan to use AI generation.".to_string());
-            document = document.with_block(paragraph_with_inlines(vec![
-                text_node("ollama model not set; run "),
-                command_ref("start setup", "start setup"),
-                text_node(" later to choose a model if you plan to use AI generation."),
-            ]));
-        }
-        if !warnings.is_empty() {
-            lines.push("setup warnings:".to_string());
-            lines.extend(warnings.iter().map(|warning| format!("- {warning}")));
-            document = document
-                .with_block(heading(3, "Setup warnings"))
-                .with_block(list(
-                    warnings.iter().map(|warning| vec![text_node(warning.clone())]).collect(),
-                ));
-        }
-
-        return Ok(Some(CommandOutput::with_doc(lines.join("\n"), document)));
-    }
-
-    Ok(Some(CommandOutput::text(
-        "setup mode is active. use setup help to continue guided onboarding.".to_string(),
-    )))
-}
-
-fn reset_onboarding(onboarding: &mut OnboardingSession) {
-    onboarding.active = false;
-    onboarding.step = 0;
-    onboarding.flow = OnboardingFlow::Full;
-    onboarding.vault_substate = VaultStepState::Inactive;
-    onboarding.ollama_substate = OllamaStepState::Inactive;
-    onboarding.ollama_models.clear();
-}
-
-fn config_vault_path_string(config: &AppConfig) -> Option<String> {
+pub(crate) fn config_vault_path_string(config: &AppConfig) -> Option<String> {
     config
         .vault
         .path
@@ -869,226 +331,7 @@ fn config_vault_path_string(config: &AppConfig) -> Option<String> {
         .filter(|value| !value.trim().is_empty())
 }
 
-fn vault_menu_text(current: Option<&str>, _flow: OnboardingFlow) -> String {
-    let mut lines = vec!["## Vault setup".to_string()];
-    let current = current.filter(|value| !value.trim().is_empty());
-    if let Some(path) = current {
-        lines.push(format!("current vault: {path}"));
-    }
-    lines.push("1: Select a vault with the dialog picker".to_string());
-    lines.push("2: Type the path to the vault".to_string());
-    if current.is_some() {
-        lines.push("3: Continue (keep current vault)".to_string());
-    }
-    lines.join("\n")
-}
-
-fn ollama_menu_text(url: &str, vault_set: Option<&str>) -> String {
-    let mut lines = Vec::new();
-    if let Some(vault) = vault_set.filter(|value| !value.trim().is_empty()) {
-        lines.push(format!("vault set to: {vault}"));
-    }
-    lines.push("## Step 2: Ollama server".to_string());
-    lines.push(format!("current server: {url}"));
-    lines.push("1: Configure a new server".to_string());
-    lines.push(format!("2: Continue with {url}"));
-    lines.join("\n")
-}
-
-fn ollama_url_prompt_text() -> String {
-    [
-        "Enter your Ollama URL and press Enter.",
-        "Example: http://127.0.0.1:11434",
-    ]
-    .join("\n")
-}
-
-/// Move the session into the Ollama step's menu sub-state and render its prompt.
-fn enter_ollama_menu(onboarding: &mut OnboardingSession, vault_set: Option<&str>) -> CommandOutput {
-    onboarding.step = 2;
-    onboarding.vault_substate = VaultStepState::Inactive;
-    onboarding.ollama_substate = OllamaStepState::MenuShown;
-    CommandOutput::text(ollama_menu_text(&onboarding.ollama_base_url, vault_set))
-}
-
-fn model_step_text(detail: &str, models: &[String], flow: OnboardingFlow, current_model: &str) -> String {
-    let mut lines = vec![
-        "## Step 3: Model".to_string(),
-        detail.to_string(),
-        "Enter a model name and press Enter.".to_string(),
-        "Or enter a model number from the list below.".to_string(),
-    ];
-    if matches!(flow, OnboardingFlow::Llm | OnboardingFlow::Model)
-        && !current_model.trim().is_empty()
-    {
-        lines.push(format!("Or type continue to keep {current_model}."));
-    }
-    if models.is_empty() {
-        lines.push("(no models returned)".to_string());
-    } else {
-        lines.extend(
-            models
-                .iter()
-                .enumerate()
-                .map(|(index, model)| format!("{}: {}", index + 1, model)),
-        );
-    }
-    lines.join("\n")
-}
-
-fn save_prompt_text(model: &str) -> String {
-    [
-        &format!("model set to: {model}"),
-        "## Step 4: Save config",
-        "Type save to finish.",
-    ]
-    .join("\n")
-}
-
-async fn save_vault_section(
-    workspace_root: &Path,
-    session: &mut SessionState,
-) -> Result<CommandOutput> {
-    if session.onboarding.vault_path.trim().is_empty() {
-        bail!("vault path is missing.");
-    }
-
-    let loaded = load_effective(workspace_root)?;
-    let mut config = loaded.effective;
-    config.vault.path = Some(PathBuf::from(&session.onboarding.vault_path));
-
-    let config_path = save_config(workspace_root, &config)?;
-    let vault_path = config
-        .vault
-        .path
-        .clone()
-        .ok_or_else(|| anyhow!("vault.path is not configured"))?;
-    let vault = Vault::new(vault_path);
-    vault.ensure_structure()?;
-
-    reset_onboarding(&mut session.onboarding);
-
-    Ok(CommandOutput::text(
-        [
-            "## Vault updated".to_string(),
-            format!("config saved: {}", config_path.display()),
-            format!("vault ready: {}", vault.root().display()),
-        ]
-        .join("\n"),
-    ))
-}
-
-async fn save_llm_section(
-    workspace_root: &Path,
-    session: &mut SessionState,
-) -> Result<CommandOutput> {
-    if session.onboarding.ollama_base_url.trim().is_empty() {
-        bail!("ollama URL is missing. run set ollama <url>.");
-    }
-
-    let loaded = load_effective(workspace_root)?;
-    let mut config = loaded.effective;
-    config.ollama.base_url = session.onboarding.ollama_base_url.clone();
-    let missing_model = session.onboarding.selected_model.trim().is_empty();
-    if !missing_model {
-        config.ollama.model = Some(session.onboarding.selected_model.clone());
-    }
-
-    let config_path = save_config(workspace_root, &config)?;
-
-    let mut lines = vec![
-        "## LLM updated".to_string(),
-        format!("config saved: {}", config_path.display()),
-        format!("ollama: {}", config.ollama.base_url),
-    ];
-    let mut rows = vec![
-        vec![text_node(format!("config saved: {}", config_path.display()))],
-        vec![text_node(format!("ollama: {}", config.ollama.base_url))],
-    ];
-    let mut model_note = None;
-    if missing_model {
-        lines.push("model not set; run `setup llm` later to choose one.".to_string());
-        model_note = Some(paragraph_with_inlines(vec![
-            text_node("model not set; run "),
-            command_ref("setup llm", "setup llm"),
-            text_node(" later to choose one."),
-        ]));
-    } else {
-        lines.push(format!("model: {}", session.onboarding.selected_model));
-        rows.push(vec![text_node(format!(
-            "model: {}",
-            session.onboarding.selected_model
-        ))]);
-    }
-
-    reset_onboarding(&mut session.onboarding);
-
-    let mut document = doc()
-        .with_block(heading(2, "LLM updated"))
-        .with_block(list(rows));
-    if let Some(note) = model_note {
-        document = document.with_block(note);
-    }
-
-    Ok(CommandOutput::with_doc(lines.join("\n"), document))
-}
-
-/// Persist the chosen model at the end of the model step, picking the right
-/// scope for the active flow.
-async fn save_model_step(
-    workspace_root: &Path,
-    session: &mut SessionState,
-) -> Result<CommandOutput> {
-    match session.onboarding.flow {
-        OnboardingFlow::Model => save_model_section(workspace_root, session).await,
-        _ => save_llm_section(workspace_root, session).await,
-    }
-}
-
-/// Save only the selected Ollama model, leaving the server URL untouched.
-async fn save_model_section(
-    workspace_root: &Path,
-    session: &mut SessionState,
-) -> Result<CommandOutput> {
-    if session.onboarding.selected_model.trim().is_empty() {
-        bail!("no model is selected. choose a model first.");
-    }
-
-    let loaded = load_effective(workspace_root)?;
-    let mut config = loaded.effective;
-    config.ollama.model = Some(session.onboarding.selected_model.clone());
-
-    let config_path = save_config(workspace_root, &config)?;
-    let model = session.onboarding.selected_model.clone();
-
-    reset_onboarding(&mut session.onboarding);
-
-    Ok(CommandOutput::text(
-        [
-            "## Model updated".to_string(),
-            format!("config saved: {}", config_path.display()),
-            format!("model: {model}"),
-        ]
-        .join("\n"),
-    ))
-}
-
-fn extract_trailing_argument(input: &str, prefix: &str) -> Option<String> {
-    let lowered = input.to_ascii_lowercase();
-    let prefix_lower = prefix.to_ascii_lowercase();
-    if !lowered.starts_with(&prefix_lower) {
-        return None;
-    }
-
-    let rest = input[prefix.len()..].trim();
-    if rest.is_empty() {
-        None
-    } else {
-        Some(rest.to_string())
-    }
-}
-
-fn expand_tilde_path(input: &str) -> PathBuf {
+pub(crate) fn expand_tilde_path(input: &str) -> PathBuf {
     if input == "~" {
         if let Some(home) = dirs::home_dir() {
             return home;
@@ -1104,7 +347,7 @@ fn expand_tilde_path(input: &str) -> PathBuf {
     PathBuf::from(input)
 }
 
-fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
+pub(crate) fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
     if !path.exists() {
         bail!("vault path does not exist: {}", path.display());
     }
@@ -1115,7 +358,7 @@ fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn normalize_ollama_input(value: &str) -> String {
+pub(crate) fn normalize_ollama_input(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -1130,7 +373,7 @@ fn normalize_ollama_input(value: &str) -> String {
 ///
 /// Delegates the `/api/tags` request to the shared [`health::probe_ollama`] and
 /// surfaces failures as errors so the setup spinner flips to an error state.
-async fn probe_ollama_models(
+pub(crate) async fn probe_ollama_models(
     base_url: &str,
     timeout_seconds: u64,
 ) -> Result<(String, Vec<String>)> {
@@ -1163,48 +406,14 @@ async fn execute_line_internal(
         shell_words::split(&normalized_input).map_err(|e| anyhow!("invalid command input: {e}"))?;
     let manifest = command_manifest();
     let normalized_words = normalize_alias_tokens(&parsed_words, &manifest);
-    let rewritten_tokens = rewrite_onboarding_tokens(&normalized_words, &normalized_input, session);
-    let tokens_ref = if let Some(ref rewritten) = rewritten_tokens {
-        rewritten.as_slice()
-    } else {
-        &normalized_words
-    };
     execute_dispatched(
         workspace_root,
-        tokens_ref,
+        &normalized_words,
         &manifest,
         session,
         &normalized_input,
     )
     .await
-}
-
-fn rewrite_onboarding_tokens(
-    tokens: &[String],
-    raw_input: &str,
-    session: &SessionState,
-) -> Option<Vec<String>> {
-    if !session.onboarding.active {
-        return None;
-    }
-
-    if tokens.is_empty() {
-        let trimmed = raw_input.trim();
-        if trimmed.is_empty() {
-            return None;
-        }
-        return Some(vec![
-            "setup".to_string(),
-            "input".to_string(),
-            trimmed.to_string(),
-        ]);
-    }
-
-    if tokens.len() == 1 && tokens[0].eq_ignore_ascii_case("save") {
-        return Some(vec!["setup".to_string(), "save".to_string()]);
-    }
-
-    None
 }
 
 /// Reject `-h`/`--help` anywhere in a command, returning the phrase-help hint to
@@ -1257,8 +466,8 @@ async fn execute_dispatched(
             _tokens: tokens,
             lowered: &lowered,
             manifest,
-            session,
-            raw_input,
+            _session: session,
+            _raw_input: raw_input,
         };
         return entry.execute(invocation).await;
     }
@@ -1544,7 +753,7 @@ pub const OLLAMA_BOOT_TIMEOUT_SECONDS: u64 = 5;
 /// actively waiting and may point at a remote server) but still bounded so a dead
 /// server can't hang setup. Distinct from `ollama.timeout_seconds`, which is the
 /// LLM generation budget and far too long for a connectivity check.
-const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
+pub(crate) const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
 
 /// Probe the configured Ollama server to confirm the LLM is running.
 ///
@@ -1671,7 +880,7 @@ fn report_list_block(report: &CheckReport) -> OutputBlock {
     list(items)
 }
 
-fn output_doc_from_error_text(message: String) -> OutputDoc {
+pub(crate) fn output_doc_from_error_text(message: String) -> OutputDoc {
     if message.to_lowercase().contains("first-time setup required") {
         let missing_values = extract_missing_values(&message);
         let mut output_doc = doc();
@@ -1716,15 +925,11 @@ fn extract_missing_values(message: &str) -> Vec<String> {
 mod tests {
     use std::path::Path;
 
-    use super::{
-        build_core_handler_registry, execute_line_result, execute_line_with_session,
-        ollama_menu_text, vault_menu_text,
-    };
-    use crate::session::{OllamaStepState, OnboardingFlow, SessionState, VaultStepState};
+    use super::{build_core_handler_registry, execute_line_result};
     use command_specs::{CommandExecution, command_manifest};
 
-    /// `model` is marked `Core` in the manifest but dispatched via onboarding
-    /// interception (before registry lookup), so it has no core registry entry.
+    /// `model` (and the `setup`/`start` launchers) are dispatched via the wizard
+    /// route ahead of registry lookup, so `model` has no core registry entry.
     /// See docs/command-contexts.md §4.
     const ONBOARDING_INTERCEPTED_CORE: &[&str] = &["model"];
 
@@ -1747,15 +952,6 @@ mod tests {
         }
     }
 
-    // A unique, writable directory per test. The shared temp dir cannot be used
-    // because `is_path_writable` writes a fixed-name probe file, which races
-    // across parallel tests.
-    fn unique_temp_vault(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("runebound-test-{name}"));
-        std::fs::create_dir_all(&dir).expect("create temp vault dir");
-        dir
-    }
-
     #[tokio::test]
     async fn rejects_help_flags_in_favor_of_phrase_help() {
         let result = execute_line_result(Path::new("."), "config --help").await;
@@ -1770,138 +966,5 @@ mod tests {
             .await
             .expect("expected help config to succeed");
         assert!(result.output.contains("## config"));
-    }
-
-    #[tokio::test]
-    async fn start_setup_shows_vault_menu() {
-        let mut session = SessionState::default();
-        let resp = execute_line_with_session(Path::new("."), "start setup", &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("## Vault setup"));
-        assert!(resp.output.contains("1: Select a vault with the dialog picker"));
-        assert!(resp.output.contains("2: Type the path to the vault"));
-        assert!(session.onboarding.active);
-        assert_eq!(session.onboarding.flow, OnboardingFlow::Full);
-        assert_eq!(session.onboarding.vault_substate, VaultStepState::MenuShown);
-    }
-
-    #[tokio::test]
-    async fn vault_dialog_choice_errors_in_core() {
-        let mut session = SessionState::default();
-        execute_line_with_session(Path::new("."), "start setup", &mut session).await;
-        let resp = execute_line_with_session(Path::new("."), "1", &mut session).await;
-        assert!(!resp.ok);
-        assert!(resp.error.unwrap_or_default().contains("desktop app"));
-    }
-
-    #[tokio::test]
-    async fn vault_type_path_choice_awaits_path() {
-        let mut session = SessionState::default();
-        execute_line_with_session(Path::new("."), "start setup", &mut session).await;
-        let resp = execute_line_with_session(Path::new("."), "2", &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("Enter the path"));
-        assert_eq!(session.onboarding.vault_substate, VaultStepState::AwaitingPath);
-    }
-
-    #[tokio::test]
-    async fn vault_invalid_choice_reprints_menu() {
-        let mut session = SessionState::default();
-        execute_line_with_session(Path::new("."), "start setup", &mut session).await;
-        let resp = execute_line_with_session(Path::new("."), "banana", &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("invalid choice"));
-        assert!(resp.output.contains("## Vault setup"));
-        assert_eq!(session.onboarding.vault_substate, VaultStepState::MenuShown);
-    }
-
-    #[tokio::test]
-    async fn full_flow_typed_path_advances_to_ollama() {
-        // Uses a unique temp dir as a stand-in vault: it exists, is a directory,
-        // and is writable. The Full flow does not save at the vault step, so no
-        // config is written.
-        let tmp = unique_temp_vault("full-flow-advances");
-        let mut session = SessionState::default();
-        execute_line_with_session(Path::new("."), "start setup", &mut session).await;
-        execute_line_with_session(Path::new("."), "2", &mut session).await;
-        let resp = execute_line_with_session(Path::new("."), &tmp.display().to_string(), &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("## Step 2: Ollama server"));
-        // The "vault set to" confirmation precedes the step heading (tweak #2).
-        let vault_idx = resp.output.find("vault set to").expect("vault confirmation");
-        let heading_idx = resp.output.find("## Step 2").expect("step heading");
-        assert!(vault_idx < heading_idx);
-        assert_eq!(session.onboarding.step, 2);
-        assert_eq!(session.onboarding.ollama_substate, OllamaStepState::MenuShown);
-        assert_eq!(session.onboarding.vault_substate, VaultStepState::Inactive);
-        assert_eq!(session.onboarding.flow, OnboardingFlow::Full);
-    }
-
-    #[tokio::test]
-    async fn ollama_menu_configure_new_awaits_url() {
-        let tmp = unique_temp_vault("ollama-menu-awaits-url");
-        let mut session = SessionState::default();
-        execute_line_with_session(Path::new("."), "start setup", &mut session).await;
-        execute_line_with_session(Path::new("."), "2", &mut session).await;
-        execute_line_with_session(Path::new("."), &tmp.display().to_string(), &mut session).await;
-        let resp = execute_line_with_session(Path::new("."), "1", &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("Enter your Ollama URL"));
-        assert_eq!(session.onboarding.ollama_substate, OllamaStepState::AwaitingUrl);
-    }
-
-    #[test]
-    fn vault_menu_shows_current_before_options() {
-        let text = vault_menu_text(Some("/tmp/vault"), OnboardingFlow::Full);
-        let current_idx = text.find("current vault: /tmp/vault").expect("current vault");
-        let option_idx = text.find("1: Select").expect("option 1");
-        assert!(current_idx < option_idx);
-        assert!(text.contains("3: Continue"));
-    }
-
-    #[test]
-    fn ollama_menu_offers_continue_with_current_server() {
-        let text = ollama_menu_text("http://host:1234", Some("/tmp/vault"));
-        let vault_idx = text.find("vault set to: /tmp/vault").expect("vault line");
-        let heading_idx = text.find("## Step 2").expect("heading");
-        let server_idx = text.find("current server: http://host:1234").expect("server line");
-        let option_idx = text.find("1: Configure").expect("option 1");
-        assert!(vault_idx < heading_idx);
-        assert!(server_idx < option_idx);
-        assert!(text.contains("2: Continue with http://host:1234"));
-    }
-
-    #[tokio::test]
-    async fn setup_vault_uses_vault_flow() {
-        let mut session = SessionState::default();
-        let resp = execute_line_with_session(Path::new("."), "setup vault", &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("## Vault setup"));
-        assert!(session.onboarding.active);
-        assert_eq!(session.onboarding.flow, OnboardingFlow::Vault);
-        assert_eq!(session.onboarding.vault_substate, VaultStepState::MenuShown);
-    }
-
-    #[tokio::test]
-    async fn setup_llm_uses_llm_flow() {
-        let mut session = SessionState::default();
-        let resp = execute_line_with_session(Path::new("."), "setup llm", &mut session).await;
-        assert!(resp.ok, "error: {:?}", resp.error);
-        assert!(resp.output.contains("## Step 2: Ollama server"));
-        assert!(resp.output.contains("1: Configure a new server"));
-        assert!(resp.output.contains("2: Continue with"));
-        assert!(session.onboarding.active);
-        assert_eq!(session.onboarding.flow, OnboardingFlow::Llm);
-        assert_eq!(session.onboarding.step, 2);
-        assert_eq!(session.onboarding.ollama_substate, OllamaStepState::MenuShown);
-    }
-
-    #[test]
-    fn session_state_round_trips_with_new_fields() {
-        let session = SessionState::default();
-        let json = serde_json::to_string(&session).expect("serialize");
-        let back: SessionState = serde_json::from_str(&json).expect("deserialize");
-        assert_eq!(back.onboarding.flow, OnboardingFlow::Full);
-        assert_eq!(back.onboarding.vault_substate, VaultStepState::Inactive);
     }
 }

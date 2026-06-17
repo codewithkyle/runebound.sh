@@ -330,6 +330,12 @@ fn generate_typescript() -> String {
     out.push_str("  | { kind: \"clear_terminal\"; clear_history: boolean }\n");
     out.push_str("  | { kind: \"exit_requested\" };\n\n");
 
+    out.push_str("export type WizardView = {\n");
+    out.push_str("  id: string;\n");
+    out.push_str("  step_id: string;\n");
+    out.push_str("  awaiting_llm_label?: string | null;\n");
+    out.push_str("};\n\n");
+
     out.push_str("export type CommandResponse = {\n");
     out.push_str("  ok: boolean;\n");
     out.push_str("  output: string;\n");
@@ -338,6 +344,7 @@ fn generate_typescript() -> String {
     out.push_str("  segments?: OutputSegment[];\n");
     out.push_str("  output_doc?: OutputDoc | null;\n");
     out.push_str("  client_event?: CommandClientEvent | null;\n");
+    out.push_str("  wizard?: WizardView | null;\n");
     out.push_str("};\n\n");
 
     out

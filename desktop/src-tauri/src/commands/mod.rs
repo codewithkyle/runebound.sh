@@ -9,7 +9,6 @@ pub mod item_commands;
 pub mod event_commands;
 pub mod god_commands;
 pub mod dungeon_commands;
-pub mod dungeon_flow;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
@@ -126,6 +125,7 @@ pub fn ok_response_with_doc(
         }],
         output_doc,
         client_event,
+        wizard: None,
     }
 }
 
@@ -424,11 +424,18 @@ mod tests {
     use super::build_desktop_handler_registry;
     use command_specs::{CommandExecution, command_manifest, handler_metadata_for};
 
-    /// Commands dispatched outside the registries via onboarding interception
-    /// (handled in `try_execute_onboarding` *before* registry lookup). They are
-    /// marked `Desktop`/`Core` in the manifest but have no registry handler.
-    /// See docs/command-contexts.md §4.
+    /// Onboarding entry commands launched by the generic wizard route
+    /// (`start_wizard` via `onboarding_entry_wizard_id`, *before* registry lookup).
+    /// They are marked `Desktop`/`Core` in the manifest but have no registry
+    /// handler. See docs/command-contexts.md §4.
     const ONBOARDING_INTERCEPTED: &[&str] = &["start", "model"];
+
+    /// Wizard nav verbs handled by the generic wizard route
+    /// (`try_execute_active_wizard`) *before* registry lookup, so they have no
+    /// registry handler. `cancel` is excluded: it keeps a real editor handler and
+    /// is only additionally intercepted while a wizard is active. See
+    /// docs/command-contexts.md §4 (route 4).
+    const WIZARD_INTERCEPTED: &[&str] = &["continue", "back"];
 
     #[test]
     fn every_desktop_command_has_a_registered_handler() {
@@ -437,7 +444,9 @@ mod tests {
             if !matches!(command.execution, CommandExecution::Desktop) {
                 continue;
             }
-            if ONBOARDING_INTERCEPTED.contains(&command.name.as_str()) {
+            if ONBOARDING_INTERCEPTED.contains(&command.name.as_str())
+                || WIZARD_INTERCEPTED.contains(&command.name.as_str())
+            {
                 continue;
             }
             assert!(
