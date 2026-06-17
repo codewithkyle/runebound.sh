@@ -1,4 +1,4 @@
-.PHONY: run build rust frontend tauri-backend deps clean release release-watch release-download
+.PHONY: run build lint rust frontend tauri-backend deps clean release release-watch release-download
 
 .DEFAULT_GOAL := run
 
@@ -9,7 +9,17 @@ TAURI_DIR := $(DESKTOP_DIR)/src-tauri
 run: build
 	cd "$(DESKTOP_DIR)" && npm run tauri -- dev
 
-build: deps rust frontend tauri-backend
+build: deps lint rust frontend tauri-backend
+
+# Lint gate: the tree must be rustfmt-clean and clippy-clean (zero warnings) on
+# both the workspace and the separately-compiled desktop crate. Added in the
+# v0.5.0 cleanup so formatting and lints can't regress. Run standalone with
+# `make lint`.
+lint:
+	cargo fmt --check
+	cargo fmt --check --manifest-path "$(TAURI_DIR)/Cargo.toml"
+	cargo clippy --workspace --all-targets -- -D warnings
+	cargo clippy --manifest-path "$(TAURI_DIR)/Cargo.toml" --all-targets -- -D warnings
 
 deps: $(DESKTOP_DIR)/node_modules
 
