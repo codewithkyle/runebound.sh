@@ -12,7 +12,6 @@ use dnd_core::command_manifest::InputContext;
 
 use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
-use crate::services::entity_admin::EntityType;
 use crate::services::vault_ref::{
     VaultReferenceEntry, can_start_reference_at, load_vault_reference_entries,
 };
@@ -136,13 +135,13 @@ impl SuggestionService {
                     label: entity.name,
                     completion,
                     helper_text: Some(match entity.entity_type {
-                        EntityType::Npc => SuggestionHelperText::Npc,
-                        EntityType::Location => SuggestionHelperText::Location,
-                        EntityType::Faction => SuggestionHelperText::Faction,
-                        EntityType::Item => SuggestionHelperText::Item,
-                        EntityType::Event => SuggestionHelperText::Event,
-                        EntityType::God => SuggestionHelperText::God,
-                        EntityType::Dungeon => SuggestionHelperText::Dungeon,
+                        EntityKind::Npc => SuggestionHelperText::Npc,
+                        EntityKind::Location => SuggestionHelperText::Location,
+                        EntityKind::Faction => SuggestionHelperText::Faction,
+                        EntityKind::Item => SuggestionHelperText::Item,
+                        EntityKind::Event => SuggestionHelperText::Event,
+                        EntityKind::God => SuggestionHelperText::God,
+                        EntityKind::Dungeon => SuggestionHelperText::Dungeon,
                     }),
                 });
             }
@@ -204,7 +203,7 @@ pub enum SuggestionHelperText {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EntitySuggestion {
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub name: String,
     pub slug: String,
 }
@@ -260,37 +259,37 @@ async fn search_entities(
     let mut items: Vec<EntitySuggestion> = npcs
         .into_iter()
         .map(|npc| EntitySuggestion {
-            entity_type: EntityType::Npc,
+            entity_type: EntityKind::Npc,
             name: npc.name,
             slug: npc.slug,
         })
         .chain(locations.into_iter().map(|location| EntitySuggestion {
-            entity_type: EntityType::Location,
+            entity_type: EntityKind::Location,
             name: location.name,
             slug: location.slug,
         }))
         .chain(factions.into_iter().map(|faction| EntitySuggestion {
-            entity_type: EntityType::Faction,
+            entity_type: EntityKind::Faction,
             name: faction.name,
             slug: faction.slug,
         }))
         .chain(items.into_iter().map(|item| EntitySuggestion {
-            entity_type: EntityType::Item,
+            entity_type: EntityKind::Item,
             name: item.name,
             slug: item.slug,
         }))
         .chain(events.into_iter().map(|event| EntitySuggestion {
-            entity_type: EntityType::Event,
+            entity_type: EntityKind::Event,
             name: event.name,
             slug: event.slug,
         }))
         .chain(gods.into_iter().map(|god| EntitySuggestion {
-            entity_type: EntityType::God,
+            entity_type: EntityKind::God,
             name: god.name,
             slug: god.slug,
         }))
         .chain(dungeons.into_iter().map(|dungeon| EntitySuggestion {
-            entity_type: EntityType::Dungeon,
+            entity_type: EntityKind::Dungeon,
             name: dungeon.name,
             slug: dungeon.slug,
         }))

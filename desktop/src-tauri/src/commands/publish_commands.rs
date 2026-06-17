@@ -13,7 +13,7 @@ use crate::app_state::{
 };
 use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
 use crate::entities::EntityKind;
-use crate::services::entity_admin::{EntityAdminService, EntityDetails, EntityType};
+use crate::services::entity_admin::{EntityAdminService, EntityDetails};
 use crate::services::entity_persistence::{
     EntityPersistenceService, SaveDungeonDraftInput, SaveEventDraftInput, SaveFactionDraftInput,
     SaveGodDraftInput, SaveItemDraftInput, SaveLocationDraftInput, SaveNpcDraftInput,
@@ -114,7 +114,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
         .unwrap_or(false);
 
     let (markdown, vault_path) = match target.entity_type {
-        EntityType::Npc => {
+        EntityKind::Npc => {
             let frontmatter = match store
                 .load_npc(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -133,10 +133,10 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             .await;
             (
                 render_npc_markdown_with_links(&frontmatter, &linker),
-                resolved_publish_path(EntityType::Npc, &frontmatter.slug, &frontmatter.vault_path),
+                resolved_publish_path(EntityKind::Npc, &frontmatter.slug, &frontmatter.vault_path),
             )
         }
-        EntityType::Location => {
+        EntityKind::Location => {
             let frontmatter = match store
                 .load_location(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -156,13 +156,13 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             (
                 render_location_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
-                    EntityType::Location,
+                    EntityKind::Location,
                     &frontmatter.slug,
                     &frontmatter.vault_path,
                 ),
             )
         }
-        EntityType::Faction => {
+        EntityKind::Faction => {
             let frontmatter = match store
                 .load_faction(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -182,13 +182,13 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             (
                 render_faction_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
-                    EntityType::Faction,
+                    EntityKind::Faction,
                     &frontmatter.slug,
                     &frontmatter.vault_path,
                 ),
             )
         }
-        EntityType::Item => {
+        EntityKind::Item => {
             let frontmatter = match store
                 .load_item(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -207,10 +207,10 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             .await;
             (
                 render_item_markdown_with_links(&frontmatter, &linker),
-                resolved_publish_path(EntityType::Item, &frontmatter.slug, &frontmatter.vault_path),
+                resolved_publish_path(EntityKind::Item, &frontmatter.slug, &frontmatter.vault_path),
             )
         }
-        EntityType::Event => {
+        EntityKind::Event => {
             let frontmatter = match store
                 .load_event(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -230,13 +230,13 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             (
                 render_event_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
-                    EntityType::Event,
+                    EntityKind::Event,
                     &frontmatter.slug,
                     &frontmatter.vault_path,
                 ),
             )
         }
-        EntityType::God => {
+        EntityKind::God => {
             let frontmatter = match store
                 .load_god(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -255,10 +255,10 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             .await;
             (
                 render_god_markdown_with_links(&frontmatter, &linker),
-                resolved_publish_path(EntityType::God, &frontmatter.slug, &frontmatter.vault_path),
+                resolved_publish_path(EntityKind::God, &frontmatter.slug, &frontmatter.vault_path),
             )
         }
-        EntityType::Dungeon => {
+        EntityKind::Dungeon => {
             let frontmatter = match store
                 .load_dungeon(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -278,7 +278,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
             (
                 render_dungeon_markdown_with_links(&frontmatter, &linker),
                 resolved_publish_path(
-                    EntityType::Dungeon,
+                    EntityKind::Dungeon,
                     &frontmatter.slug,
                     &frontmatter.vault_path,
                 ),
@@ -323,7 +323,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
     // to so sync's path-based reconciliation matches the real file.
     let now = now_timestamp();
     match target.entity_type {
-        EntityType::Npc => {
+        EntityKind::Npc => {
             if let Some(mut frontmatter) = store
                 .load_npc(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -335,7 +335,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                     .map_err(|err| err.to_string())?;
             }
         }
-        EntityType::Location => {
+        EntityKind::Location => {
             if let Some(mut frontmatter) = store
                 .load_location(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -347,7 +347,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                     .map_err(|err| err.to_string())?;
             }
         }
-        EntityType::Faction => {
+        EntityKind::Faction => {
             if let Some(mut frontmatter) = store
                 .load_faction(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -359,7 +359,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                     .map_err(|err| err.to_string())?;
             }
         }
-        EntityType::Item => {
+        EntityKind::Item => {
             if let Some(mut frontmatter) = store
                 .load_item(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -371,7 +371,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                     .map_err(|err| err.to_string())?;
             }
         }
-        EntityType::Event => {
+        EntityKind::Event => {
             if let Some(mut frontmatter) = store
                 .load_event(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -383,7 +383,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                     .map_err(|err| err.to_string())?;
             }
         }
-        EntityType::God => {
+        EntityKind::God => {
             if let Some(mut frontmatter) = store
                 .load_god(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -395,7 +395,7 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                     .map_err(|err| err.to_string())?;
             }
         }
-        EntityType::Dungeon => {
+        EntityKind::Dungeon => {
             if let Some(mut frontmatter) = store
                 .load_dungeon(&target.slug)
                 .map_err(|err| err.to_string())?
@@ -423,39 +423,30 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
     if !args.is_empty() {
         let mut editor = state.editor_session.lock().await;
         let open = match target.entity_type {
-            EntityType::Npc => editor
+            EntityKind::Npc => editor
                 .get_npc()
                 .is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Location => editor
+            EntityKind::Location => editor
                 .get_location()
                 .is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Faction => editor
+            EntityKind::Faction => editor
                 .get_faction()
                 .is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Item => editor
+            EntityKind::Item => editor
                 .get_item()
                 .is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Event => editor
+            EntityKind::Event => editor
                 .get_event()
                 .is_some_and(|draft| draft.slug == target.slug),
-            EntityType::God => editor
+            EntityKind::God => editor
                 .get_god()
                 .is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Dungeon => editor
+            EntityKind::Dungeon => editor
                 .get_dungeon()
                 .is_some_and(|draft| draft.slug == target.slug),
         };
         if open {
-            let kind = match target.entity_type {
-                EntityType::Npc => EntityKind::Npc,
-                EntityType::Location => EntityKind::Location,
-                EntityType::Faction => EntityKind::Faction,
-                EntityType::Item => EntityKind::Item,
-                EntityType::Event => EntityKind::Event,
-                EntityType::God => EntityKind::God,
-                EntityType::Dungeon => EntityKind::Dungeon,
-            };
-            editor.clear_kind(kind);
+            editor.clear_kind(target.entity_type);
             closed_editor = true;
         }
     }
@@ -563,7 +554,7 @@ fn publish_help() -> CommandResult {
 }
 
 struct PublishTargetInfo {
-    entity_type: EntityType,
+    entity_type: EntityKind,
     slug: String,
     name: String,
 }
@@ -586,19 +577,19 @@ fn missing_canonical_message(target: &PublishTargetInfo) -> String {
     )
 }
 
-fn command_root_for(entity_type: &EntityType) -> &'static str {
+fn command_root_for(entity_type: &EntityKind) -> &'static str {
     match entity_type {
-        EntityType::Npc => "npc",
-        EntityType::Location => "location",
-        EntityType::Faction => "faction",
-        EntityType::Item => "item",
-        EntityType::Event => "event",
-        EntityType::God => "god",
-        EntityType::Dungeon => "dungeon",
+        EntityKind::Npc => "npc",
+        EntityKind::Location => "location",
+        EntityKind::Faction => "faction",
+        EntityKind::Item => "item",
+        EntityKind::Event => "event",
+        EntityKind::God => "god",
+        EntityKind::Dungeon => "dungeon",
     }
 }
 
-fn resolved_publish_path(entity_type: EntityType, slug: &str, stored_path: &str) -> String {
+fn resolved_publish_path(entity_type: EntityKind, slug: &str, stored_path: &str) -> String {
     let normalized = normalize_relative_path_for_storage(stored_path);
     let slug_default = normalize_relative_path_for_storage(&format!(
         "{}/{}.md",
@@ -617,15 +608,15 @@ fn resolved_publish_path(entity_type: EntityType, slug: &str, stored_path: &str)
     }
 }
 
-fn entity_directory(entity_type: &EntityType) -> &'static str {
+fn entity_directory(entity_type: &EntityKind) -> &'static str {
     match entity_type {
-        EntityType::Npc => "npcs",
-        EntityType::Location => "locations",
-        EntityType::Faction => "factions",
-        EntityType::Item => "items",
-        EntityType::Event => "events",
-        EntityType::God => "gods",
-        EntityType::Dungeon => "dungeons",
+        EntityKind::Npc => "npcs",
+        EntityKind::Location => "locations",
+        EntityKind::Faction => "factions",
+        EntityKind::Item => "items",
+        EntityKind::Event => "events",
+        EntityKind::God => "gods",
+        EntityKind::Dungeon => "dungeons",
     }
 }
 
@@ -708,7 +699,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::Npc,
+                entity_type: EntityKind::Npc,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -735,7 +726,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::Location,
+                entity_type: EntityKind::Location,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -769,7 +760,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::Faction,
+                entity_type: EntityKind::Faction,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -796,7 +787,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::Item,
+                entity_type: EntityKind::Item,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -814,7 +805,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::Event,
+                entity_type: EntityKind::Event,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -845,7 +836,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::God,
+                entity_type: EntityKind::God,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -870,7 +861,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                 .await?;
 
             PublishTargetInfo {
-                entity_type: EntityType::Dungeon,
+                entity_type: EntityKind::Dungeon,
                 slug: result.slug,
                 name: draft.name,
             }
@@ -892,20 +883,20 @@ mod tests {
 
     #[test]
     fn slug_based_paths_are_title_cased() {
-        let path = resolved_publish_path(EntityType::Npc, "lirael-drake", "npcs/lirael-drake.md");
+        let path = resolved_publish_path(EntityKind::Npc, "lirael-drake", "npcs/lirael-drake.md");
         assert_eq!(path, "npcs/Lirael Drake.md");
     }
 
     #[test]
     fn slug_suffix_is_preserved() {
-        let path = resolved_publish_path(EntityType::Npc, "shadow-clan-2", "npcs/shadow-clan-2.md");
+        let path = resolved_publish_path(EntityKind::Npc, "shadow-clan-2", "npcs/shadow-clan-2.md");
         assert_eq!(path, "npcs/Shadow Clan 2.md");
     }
 
     #[test]
     fn custom_paths_are_left_alone() {
         let path = resolved_publish_path(
-            EntityType::Location,
+            EntityKind::Location,
             "ember-vault",
             "locations/subfolders/ember-vault.md",
         );

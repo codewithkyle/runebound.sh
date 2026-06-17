@@ -12,9 +12,7 @@ use crate::entities::domains::{
     dungeon_event_from_draft, event_event_from_draft, faction_event_from_draft,
     god_event_from_draft, item_event_from_draft, location_event_from_draft, npc_event_from_draft,
 };
-use crate::services::entity_admin::{
-    EntityAdminService, EntityDetails, EntityType, SoftDeleteEntityInput,
-};
+use crate::services::entity_admin::{EntityAdminService, EntityDetails, SoftDeleteEntityInput};
 use crate::utils::path_for_display;
 
 pub async fn handle_load(
@@ -199,7 +197,7 @@ pub(crate) async fn build_load_response(
     state: tauri::State<'_, AppState>,
 ) -> (String, Option<CommandClientEvent>) {
     match entity.entity_type {
-        EntityType::Npc => {
+        EntityKind::Npc => {
             let draft = NpcDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -252,7 +250,7 @@ pub(crate) async fn build_load_response(
                 Some(npc_event_from_draft(&draft)),
             )
         }
-        EntityType::Location => {
+        EntityKind::Location => {
             let draft = LocationDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -300,7 +298,7 @@ pub(crate) async fn build_load_response(
                 Some(location_event_from_draft(&draft)),
             )
         }
-        EntityType::Faction => {
+        EntityKind::Faction => {
             let draft = FactionDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -380,7 +378,7 @@ pub(crate) async fn build_load_response(
                 Some(faction_event_from_draft(&draft)),
             )
         }
-        EntityType::Item => {
+        EntityKind::Item => {
             let draft = ItemDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -440,7 +438,7 @@ pub(crate) async fn build_load_response(
                 Some(item_event_from_draft(&draft)),
             )
         }
-        EntityType::Event => {
+        EntityKind::Event => {
             let draft = EventDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -461,7 +459,7 @@ pub(crate) async fn build_load_response(
                 Some(event_event_from_draft(&draft)),
             )
         }
-        EntityType::God => {
+        EntityKind::God => {
             let draft = GodDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -526,7 +524,7 @@ pub(crate) async fn build_load_response(
                 Some(god_event_from_draft(&draft)),
             )
         }
-        EntityType::Dungeon => {
+        EntityKind::Dungeon => {
             let draft = DungeonDraftSession {
                 id: entity.id.clone(),
                 seed_prompt: None,
@@ -579,7 +577,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
     ];
 
     match entity.entity_type {
-        EntityType::Npc => {
+        EntityKind::Npc => {
             rows.push(entity_row(
                 "race",
                 entity.race.clone().unwrap_or_else(|| "Unknown".to_string()),
@@ -654,7 +652,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
                 blocks: vec![entity_card("NPC", rows)],
             }
         }
-        EntityType::Location => {
+        EntityKind::Location => {
             rows.push(entity_row(
                 "kind",
                 entity
@@ -721,7 +719,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
                 blocks: vec![entity_card("Location", rows)],
             }
         }
-        EntityType::Faction => {
+        EntityKind::Faction => {
             rows.push(entity_row(
                 "kind",
                 entity
@@ -843,7 +841,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
                 blocks: vec![entity_card("Faction", rows)],
             }
         }
-        EntityType::Item => {
+        EntityKind::Item => {
             rows.push(entity_row(
                 "category",
                 entity
@@ -920,14 +918,14 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
                 blocks: vec![entity_card("Item", rows)],
             }
         }
-        EntityType::Event => {
+        EntityKind::Event => {
             rows.push(entity_row("body", entity.body.clone().unwrap_or_default()));
             rows.push(entity_row("path", path_for_display(&entity.vault_path)));
             OutputDoc {
                 blocks: vec![entity_card("Event", rows)],
             }
         }
-        EntityType::God => {
+        EntityKind::God => {
             rows.push(entity_row(
                 "epithet",
                 entity
@@ -1021,7 +1019,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
                 blocks: vec![entity_card("God", rows)],
             }
         }
-        EntityType::Dungeon => {
+        EntityKind::Dungeon => {
             rows.push(entity_row(
                 "location",
                 entity
@@ -1072,7 +1070,7 @@ fn build_entity_card_doc(entity: &EntityDetails) -> OutputDoc {
 
 fn build_entity_card_text(entity: &EntityDetails) -> String {
     match entity.entity_type {
-        EntityType::Npc => {
+        EntityKind::Npc => {
             let carrying = entity
                 .carrying
                 .as_ref()
@@ -1117,7 +1115,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
-        EntityType::Location => {
+        EntityKind::Location => {
             format!(
                 "## Location\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
                 entity.name,
@@ -1159,7 +1157,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
-        EntityType::Faction => {
+        EntityKind::Faction => {
             format!(
                 "## Faction\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\npublic: {}\nagenda: {}\nmethods: {}\nleadership: {}\nheadquarters: {}\ninfluence: {}\nresources: {}\nallies: {}\nrivals: {}\nreputation: {}\ntension: {}\ngoals_short: {}\ngoals_long: {}\nsymbol: {}\npath: {}",
                 entity.name,
@@ -1235,7 +1233,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
-        EntityType::Item => {
+        EntityKind::Item => {
             let materials = entity
                 .materials
                 .as_ref()
@@ -1285,7 +1283,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
-        EntityType::Event => {
+        EntityKind::Event => {
             format!(
                 "## Event\nname: {}\nslug: {}\npath: {}\n\n{}",
                 entity.name,
@@ -1294,7 +1292,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 entity.body.clone().unwrap_or_default(),
             )
         }
-        EntityType::God => {
+        EntityKind::God => {
             format!(
                 "## God\nname: {}\nslug: {}\nepithet: {}\nrank: {}\nrank_custom: {}\nalignment: {}\ndomains: {}\nsymbol: {}\nappearance: {}\ndogma: {}\nrealm: {}\nworshippers: {}\nclergy: {}\nallies: {}\nrivals: {}\npath: {}",
                 entity.name,
@@ -1351,7 +1349,7 @@ fn build_entity_card_text(entity: &EntityDetails) -> String {
                 path_for_display(&entity.vault_path)
             )
         }
-        EntityType::Dungeon => {
+        EntityKind::Dungeon => {
             let beats = entity
                 .beats
                 .clone()

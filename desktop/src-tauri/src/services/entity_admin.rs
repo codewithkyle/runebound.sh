@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
+use crate::entities::EntityKind;
 use crate::repositories::db;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
@@ -211,7 +212,7 @@ impl EntityAdminService {
         {
             return Ok(Some(EntityDetails {
                 id: npc.id,
-                entity_type: EntityType::Npc,
+                entity_type: EntityKind::Npc,
                 name: npc.name,
                 slug: npc.slug,
                 race: Some(npc.race),
@@ -284,7 +285,7 @@ impl EntityAdminService {
         {
             return Ok(Some(EntityDetails {
                 id: location.id,
-                entity_type: EntityType::Location,
+                entity_type: EntityKind::Location,
                 name: location.name,
                 slug: location.slug,
                 race: None,
@@ -357,7 +358,7 @@ impl EntityAdminService {
         {
             return Ok(Some(EntityDetails {
                 id: faction.id,
-                entity_type: EntityType::Faction,
+                entity_type: EntityKind::Faction,
                 name: faction.name,
                 slug: faction.slug,
                 race: None,
@@ -430,7 +431,7 @@ impl EntityAdminService {
         {
             return Ok(Some(EntityDetails {
                 id: item.id,
-                entity_type: EntityType::Item,
+                entity_type: EntityKind::Item,
                 name: item.name,
                 slug: item.slug,
                 race: None,
@@ -503,7 +504,7 @@ impl EntityAdminService {
         {
             return Ok(Some(EntityDetails {
                 id: event.id,
-                entity_type: EntityType::Event,
+                entity_type: EntityKind::Event,
                 name: event.name,
                 slug: event.slug,
                 race: None,
@@ -576,7 +577,7 @@ impl EntityAdminService {
         {
             return Ok(Some(EntityDetails {
                 id: god.id,
-                entity_type: EntityType::God,
+                entity_type: EntityKind::God,
                 name: god.name,
                 slug: god.slug,
                 race: None,
@@ -651,7 +652,7 @@ impl EntityAdminService {
                 serde_json::from_str(&dungeon.beats_json).unwrap_or_default();
             return Ok(Some(EntityDetails {
                 id: dungeon.id,
-                entity_type: EntityType::Dungeon,
+                entity_type: EntityKind::Dungeon,
                 name: dungeon.name,
                 slug: dungeon.slug,
                 race: None,
@@ -808,7 +809,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Npc,
+                entity_type: EntityKind::Npc,
                 id: npc.id,
                 name: npc.name,
                 slug: npc.slug,
@@ -870,7 +871,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Location,
+                entity_type: EntityKind::Location,
                 id: location.id,
                 name: location.name,
                 slug: location.slug,
@@ -939,7 +940,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Faction,
+                entity_type: EntityKind::Faction,
                 id: faction.id,
                 name: faction.name,
                 slug: faction.slug,
@@ -1000,7 +1001,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Item,
+                entity_type: EntityKind::Item,
                 id: item.id,
                 name: item.name,
                 slug: item.slug,
@@ -1054,7 +1055,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Event,
+                entity_type: EntityKind::Event,
                 id: event.id,
                 name: event.name,
                 slug: event.slug,
@@ -1118,7 +1119,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::God,
+                entity_type: EntityKind::God,
                 id: god.id,
                 name: god.name,
                 slug: god.slug,
@@ -1178,7 +1179,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Dungeon,
+                entity_type: EntityKind::Dungeon,
                 id: dungeon.id,
                 name: dungeon.name,
                 slug: dungeon.slug,
@@ -1284,7 +1285,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Npc,
+                entity_type: EntityKind::Npc,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1349,7 +1350,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Location,
+                entity_type: EntityKind::Location,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1419,7 +1420,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Faction,
+                entity_type: EntityKind::Faction,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1483,7 +1484,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Item,
+                entity_type: EntityKind::Item,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1538,7 +1539,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Event,
+                entity_type: EntityKind::Event,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1605,7 +1606,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::God,
+                entity_type: EntityKind::God,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1666,7 +1667,7 @@ impl EntityAdminService {
                 .await?;
 
             return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Dungeon,
+                entity_type: EntityKind::Dungeon,
                 id: payload.id,
                 name: payload.name,
                 slug: restored_slug,
@@ -1687,7 +1688,7 @@ impl EntityAdminService {
     pub async fn soft_delete_for_publish(
         &self,
         state: &AppState,
-        entity_type: EntityType,
+        entity_type: EntityKind,
         slug: &str,
     ) -> Result<(), String> {
         let database = state.database();
@@ -1698,37 +1699,37 @@ impl EntityAdminService {
         // Look up the live row (without deleting yet) so the recovery record is
         // written before anything is destroyed.
         let Some((id, name, vault_path)) = (match entity_type {
-            EntityType::Npc => state
+            EntityKind::Npc => state
                 .npc_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Location => state
+            EntityKind::Location => state
                 .location_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Faction => state
+            EntityKind::Faction => state
                 .faction_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Item => state
+            EntityKind::Item => state
                 .item_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Event => state
+            EntityKind::Event => state
                 .event_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::God => state
+            EntityKind::God => state
                 .god_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Dungeon => state
+            EntityKind::Dungeon => state
                 .dungeon_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
@@ -1765,43 +1766,43 @@ impl EntityAdminService {
             .await?;
 
         match entity_type {
-            EntityType::Npc => {
+            EntityKind::Npc => {
                 state
                     .npc_repo()
                     .delete_by_id(database.as_ref(), &id)
                     .await?
             }
-            EntityType::Location => {
+            EntityKind::Location => {
                 state
                     .location_repo()
                     .delete_by_id(database.as_ref(), &id)
                     .await?
             }
-            EntityType::Faction => {
+            EntityKind::Faction => {
                 state
                     .faction_repo()
                     .delete_by_id(database.as_ref(), &id)
                     .await?
             }
-            EntityType::Item => {
+            EntityKind::Item => {
                 state
                     .item_repo()
                     .delete_by_id(database.as_ref(), &id)
                     .await?
             }
-            EntityType::Event => {
+            EntityKind::Event => {
                 state
                     .event_repo()
                     .delete_by_id(database.as_ref(), &id)
                     .await?
             }
-            EntityType::God => {
+            EntityKind::God => {
                 state
                     .god_repo()
                     .delete_by_id(database.as_ref(), &id)
                     .await?
             }
-            EntityType::Dungeon => {
+            EntityKind::Dungeon => {
                 state
                     .dungeon_repo()
                     .delete_by_id(database.as_ref(), &id)
@@ -1862,7 +1863,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::Npc,
+                    entity_type: EntityKind::Npc,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -1898,7 +1899,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::Location,
+                    entity_type: EntityKind::Location,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -1931,7 +1932,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::Faction,
+                    entity_type: EntityKind::Faction,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -1964,7 +1965,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::Item,
+                    entity_type: EntityKind::Item,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -1997,7 +1998,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::Event,
+                    entity_type: EntityKind::Event,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -2030,7 +2031,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::God,
+                    entity_type: EntityKind::God,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -2063,7 +2064,7 @@ impl EntityAdminService {
                     .mark_undone(database.as_ref(), soft_delete.id, &now)
                     .await?;
                 Ok(UndoSoftDeleteResult {
-                    entity_type: EntityType::Dungeon,
+                    entity_type: EntityKind::Dungeon,
                     id: frontmatter.id,
                     name: frontmatter.name,
                     slug: frontmatter.slug,
@@ -2084,7 +2085,7 @@ pub struct SoftDeleteEntityInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SoftDeleteEntityResult {
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub id: String,
     pub name: String,
     pub slug: String,
@@ -2093,7 +2094,7 @@ pub struct SoftDeleteEntityResult {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UndoSoftDeleteResult {
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub id: String,
     pub name: String,
     pub slug: String,
@@ -2114,36 +2115,10 @@ pub struct EnsureLocationResult {
     pub created_record: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityType {
-    Npc,
-    Location,
-    Faction,
-    Item,
-    Event,
-    God,
-    Dungeon,
-}
-
-impl EntityType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EntityType::Npc => "npc",
-            EntityType::Location => "location",
-            EntityType::Faction => "faction",
-            EntityType::Item => "item",
-            EntityType::Event => "event",
-            EntityType::God => "god",
-            EntityType::Dungeon => "dungeon",
-        }
-    }
-}
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EntityDetails {
     pub id: String,
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub name: String,
     pub slug: String,
     pub race: Option<String>,

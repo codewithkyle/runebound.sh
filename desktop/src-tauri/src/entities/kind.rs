@@ -1,4 +1,7 @@
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+use serde::{Deserialize, Serialize};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum EntityKind {
     Npc,
     Location,
@@ -50,3 +53,28 @@ pub const ALL_ENTITY_KINDS: [EntityKind; 7] = [
     EntityKind::God,
     EntityKind::Dungeon,
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // `EntityKind` replaced a duplicate `EntityType` enum that serialized
+    // `snake_case`. These lock that the wire form is byte-identical to `as_str`
+    // (so persisted/serialized `entity_type` values stay compatible).
+    #[test]
+    fn serializes_as_its_snake_case_str() {
+        for kind in ALL_ENTITY_KINDS {
+            let json = serde_json::to_string(&kind).expect("serialize kind");
+            assert_eq!(json, format!("\"{}\"", kind.as_str()));
+        }
+    }
+
+    #[test]
+    fn round_trips_through_serde() {
+        for kind in ALL_ENTITY_KINDS {
+            let json = serde_json::to_string(&kind).expect("serialize kind");
+            let back: EntityKind = serde_json::from_str(&json).expect("deserialize kind");
+            assert_eq!(back, kind);
+        }
+    }
+}
