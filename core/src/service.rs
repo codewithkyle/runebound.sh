@@ -95,7 +95,7 @@ fn error_response(message: String) -> CommandResponse {
             text: message.clone(),
             command_ref: None,
         }],
-        output_doc: Some(command::output_doc_from_error_text(message)),
+        output_doc: Some(command::error_status_doc(message)),
         client_event: None,
         wizard: None,
     }

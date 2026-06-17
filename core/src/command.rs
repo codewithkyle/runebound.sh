@@ -314,7 +314,7 @@ pub async fn execute_line_with_session(
                     text: error_text,
                     command_ref: None,
                 }],
-                output_doc: Some(output_doc_from_error_text(err.to_string())),
+                output_doc: Some(output_doc_from_error(&err)),
                 client_event: None,
                 wizard: None,
             }
@@ -708,15 +708,14 @@ async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
 
     let issues = required_issues(&config);
     if !issues.is_empty() {
-        bail!(
-            "## First-time setup required\n\
-             \nrunebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.\n\
-             \nRun `start setup` to begin guided setup.\n\
-             \n## Config paths\n\
-             - global: {global_config_path}\n\
-             \n## Missing required values\n- {}",
-            issues.join("\n- ")
-        );
+        // Surface the bootstrap gate as typed data, not a prose string: the
+        // structured doc is built directly from `issues` (see `setup_required_doc`)
+        // instead of being re-parsed out of a rendered message.
+        return Err(SetupRequired {
+            issues,
+            global_config_path,
+        }
+        .into());
     }
 
     validate_for_runtime(&config)?;
@@ -876,52 +875,85 @@ fn report_list_block(report: &CheckReport) -> OutputBlock {
     list(items)
 }
 
-pub(crate) fn output_doc_from_error_text(message: String) -> OutputDoc {
-    if message.to_lowercase().contains("first-time setup required") {
-        let missing_values = extract_missing_values(&message);
-        let mut output_doc = doc();
-        output_doc.push(heading(2, "First-time setup required"));
-        output_doc.push(paragraph_text(
-            "runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path."
-                .to_string(),
-        ));
-        output_doc.push(paragraph_with_inlines(vec![command_ref(
-            "start setup",
-            "start setup",
-        )]));
-        if !missing_values.is_empty() {
-            output_doc.push(heading(2, "Missing required values"));
-            output_doc.push(list(
-                missing_values
-                    .into_iter()
-                    .map(|value| vec![text_node(value)])
-                    .collect(),
-            ));
-        }
-        return output_doc;
-    }
-
-    doc().with_block(status(StatusTone::Error, message))
+/// The bootstrap gate: required config is missing, so the app can't run yet.
+///
+/// Modeled as a typed error (not a prose string) so the structured `OutputDoc`
+/// is built directly from `issues` rather than re-parsed from a rendered message.
+/// `Display` keeps a readable message for the plain-text `error` field, logs, and
+/// the CLI. Kept `ok:false` (a non-zero exit) by design — this is a gate, but
+/// `status` should still fail for scripting.
+#[derive(Debug)]
+pub(crate) struct SetupRequired {
+    pub issues: Vec<String>,
+    pub global_config_path: String,
 }
 
-fn extract_missing_values(message: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    for line in message.lines() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("- ")
-            && !value.is_empty()
-        {
-            values.push(value.to_string());
-        }
+impl std::fmt::Display for SetupRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "First-time setup required\n\n\
+             runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.\n\n\
+             Run `start setup` to begin guided setup.\n\n\
+             Config paths\n- global: {}\n\n\
+             Missing required values\n- {}",
+            self.global_config_path,
+            self.issues.join("\n- "),
+        )
     }
-    values
+}
+
+impl std::error::Error for SetupRequired {}
+
+/// Build the structured error doc for a failed command, keying off the typed
+/// error rather than sniffing its rendered text. The bootstrap gate gets a
+/// `Warning`-toned doc with a clickable `start setup`; everything else is a plain
+/// `Error`-toned status block.
+pub(crate) fn output_doc_from_error(err: &anyhow::Error) -> OutputDoc {
+    if let Some(setup) = err.downcast_ref::<SetupRequired>() {
+        return setup_required_doc(setup);
+    }
+    error_status_doc(err.to_string())
+}
+
+/// A plain error doc: a single `Error`-toned status block. Used for ordinary
+/// failures and by the service layer's error responses.
+pub(crate) fn error_status_doc(message: impl Into<String>) -> OutputDoc {
+    doc().with_block(status(StatusTone::Error, message.into()))
+}
+
+fn setup_required_doc(setup: &SetupRequired) -> OutputDoc {
+    let mut document = doc()
+        .with_block(status(StatusTone::Warning, "First-time setup required"))
+        .with_block(paragraph_text(
+            "runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.",
+        ))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Run "),
+            command_ref("start setup", "start setup"),
+            text_node(" to begin guided setup."),
+        ]));
+    if !setup.issues.is_empty() {
+        document = document
+            .with_block(heading(3, "Missing required values"))
+            .with_block(list(
+                setup
+                    .issues
+                    .iter()
+                    .map(|issue| vec![text_node(issue.clone())])
+                    .collect(),
+            ));
+    }
+    document
 }
 
 #[cfg(test)]
 mod tests {
     use std::path::Path;
 
-    use super::{build_core_handler_registry, execute_line_result};
+    use super::{
+        SetupRequired, build_core_handler_registry, execute_line_result, output_doc_from_error,
+    };
     use command_specs::{CommandExecution, command_manifest};
 
     /// `model` (and the `setup`/`start` launchers) are dispatched via the wizard
@@ -962,5 +994,67 @@ mod tests {
             .await
             .expect("expected help config to succeed");
         assert!(result.output.contains("## config"));
+    }
+
+    #[test]
+    fn setup_required_error_builds_a_structured_doc_from_issues() {
+        use runebound_models::output::{InlineNode, OutputBlock, StatusTone};
+
+        let err: anyhow::Error = SetupRequired {
+            issues: vec!["vault.path is not configured".to_string()],
+            global_config_path: "/tmp/config.toml".to_string(),
+        }
+        .into();
+        let document = output_doc_from_error(&err);
+
+        // Leads with a Warning-toned status so the frontend styles it as a gate,
+        // not an error — keyed off the doc's tone, not a string match.
+        assert!(matches!(
+            document.blocks.first(),
+            Some(OutputBlock::Status {
+                tone: StatusTone::Warning,
+                ..
+            })
+        ));
+        // Offers a clickable `start setup` (a real command_ref, not prose-guessing).
+        let has_start_setup = document.blocks.iter().any(|block| {
+            match block {
+            OutputBlock::Paragraph { inlines } => inlines.iter().any(|node| {
+                matches!(node, InlineNode::CommandRef { command, .. } if command == "start setup")
+            }),
+            _ => false,
+        }
+        });
+        assert!(
+            has_start_setup,
+            "setup doc must offer a clickable start setup"
+        );
+        // The typed issues render structurally as a list (no `- ` re-parse).
+        let has_issue = document.blocks.iter().any(|block| match block {
+            OutputBlock::List { items } => items.iter().any(|item| {
+                item.iter().any(|node| {
+                    matches!(node, InlineNode::Text { text } if text.contains("vault.path is not configured"))
+                })
+            }),
+            _ => false,
+        });
+        assert!(
+            has_issue,
+            "missing-values list must include the typed issue"
+        );
+    }
+
+    #[test]
+    fn ordinary_errors_render_as_an_error_status() {
+        use runebound_models::output::{OutputBlock, StatusTone};
+
+        let document = output_doc_from_error(&anyhow::anyhow!("something broke"));
+        assert!(matches!(
+            document.blocks.as_slice(),
+            [OutputBlock::Status {
+                tone: StatusTone::Error,
+                ..
+            }]
+        ));
     }
 }
