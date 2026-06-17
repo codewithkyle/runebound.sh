@@ -48,8 +48,8 @@ impl WizardChoice {
 
 /// Where the engine goes after a step's `accept()`. The full set is the engine's
 /// navigation vocabulary; a given wizard need not exercise every variant (the
-/// dungeon wizard drives forward + review loops, while `Back`/`Cancel` are
-/// step-requested forms the runtime also handles and the onboarding port uses).
+/// dungeon wizard drives forward + review loops, while `Back`/`Cancel`/`Native`
+/// are step-requested forms the runtime also handles and the onboarding port uses).
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub enum WizardTransition {
@@ -65,6 +65,31 @@ pub enum WizardTransition {
     Complete,
     /// Reset and exit.
     Cancel,
+    /// Hand off to a host-native capability (e.g. a folder picker). The engine
+    /// calls `WizardHost::perform_native`; on success it submits the result to
+    /// the action's target step, on cancel it re-renders the requesting step.
+    Native(NativeAction),
+}
+
+/// A host-native capability a step can request mid-flow that the host-agnostic
+/// engine cannot perform itself. The engine routes it through
+/// `WizardHost::perform_native`, then resumes the wizard with the result.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub enum NativeAction {
+    /// Open a native folder picker. On success the chosen path is submitted to
+    /// the step with id `resubmit_to` (as if the user had typed it there); on
+    /// cancel the requesting step is re-rendered.
+    PickFolder { resubmit_to: &'static str },
+}
+
+/// The result of a `WizardHost::perform_native` call. `Provided` carries the
+/// value to feed back into the wizard; `Cancelled` (the default for a host
+/// without the capability) re-renders the requesting step.
+#[derive(Debug, Clone)]
+pub enum NativeOutcome {
+    Provided(String),
+    Cancelled,
 }
 
 /// One declarative step in a wizard, generic over the host type `H`.
@@ -126,9 +151,10 @@ pub trait Wizard<H: Send + Sync>: Send + Sync {
     /// The ordered steps the engine walks.
     fn steps(&self) -> &[Arc<dyn WizardStep<H>>];
 
-    /// The initial accumulator when the wizard starts. (The onboarding spike will
-    /// generalize this to `seed(ctx)` for config-seeded wizards.)
-    fn seed(&self) -> WizardData;
+    /// The initial accumulator when the wizard starts. Receives the host context
+    /// so config-seeded wizards (e.g. onboarding) can pre-fill from effective
+    /// config; the dungeon wizard ignores it.
+    fn seed(&self, host: &H) -> WizardData;
 
     /// Called on the terminal step's `Complete`: build the artifact (open a draft,
     /// write config) and hand off. The engine resets the session afterward.

@@ -510,7 +510,7 @@ impl Wizard<AppState> for DungeonWizard {
         &self.steps
     }
 
-    fn seed(&self) -> WizardData {
+    fn seed(&self, _host: &AppState) -> WizardData {
         WizardData::new(DungeonWizardData::default())
     }
 
