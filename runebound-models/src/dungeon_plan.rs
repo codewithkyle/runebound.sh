@@ -18,8 +18,8 @@
 //! Dungeon-level appearance rates are a *union* over five beats, so a type
 //! sprinkled thinly across many beats becomes common; to stay rare (forge ~10%)
 //! a type must live in essentially one signature beat. The weights below are
-//! tuned to: combat ~90%, puzzle ~76%, cache 66%, oddity/offshoot ~40%,
-//! sidekick ~38%, forge ~10% (see the statistical test at the bottom).
+//! tuned to: combat ~93%, puzzle ~82%, cache ~77%, oddity ~42%, offshoot ~50%,
+//! sidekick ~20% (entrance-only), forge ~12% (see the statistical test below).
 
 /// A small, dependency-free deterministic PRNG (SplitMix64). Seedable so the roll
 /// is reproducible in tests; call sites seed it from wall-clock micros, matching
@@ -49,21 +49,18 @@ type Weight = (&'static str, u32);
 
 // Per-beat anchor weights (each column sums to 100). Order matches
 // DUNGEON_FUNCTIONS: Entrance, Puzzle, Setback, Climax, Resolution.
-const ENTRANCE: &[Weight] = &[("combat", 32), ("puzzle", 34), ("offshoot", 22), ("sidekick", 12)];
-const PUZZLE: &[Weight] = &[
-    ("combat", 18),
-    ("puzzle", 46),
-    ("offshoot", 8),
-    ("sidekick", 22),
-    ("forge", 6),
-];
-const SETBACK: &[Weight] = &[("combat", 38), ("puzzle", 24), ("offshoot", 24), ("oddity", 14)];
-const CLIMAX: &[Weight] = &[("combat", 64), ("puzzle", 12), ("oddity", 24)];
+// Sidekick is ENTRANCE-ONLY: a weak model reliably introduces the companion in
+// the opening beat regardless of where the roll places it, so we stop fighting it
+// and only allow a sidekick at beat 1, where "meet an ally who then accompanies
+// you" is exactly right. ~20% of dungeons get one; the rest never do.
+const ENTRANCE: &[Weight] = &[("combat", 28), ("puzzle", 30), ("offshoot", 22), ("sidekick", 20)];
+const PUZZLE: &[Weight] = &[("combat", 24), ("puzzle", 54), ("offshoot", 16), ("forge", 6)];
+const SETBACK: &[Weight] = &[("combat", 36), ("puzzle", 28), ("offshoot", 22), ("oddity", 14)];
+const CLIMAX: &[Weight] = &[("combat", 60), ("puzzle", 16), ("oddity", 24)];
 const RESOLUTION: &[Weight] = &[
-    ("cache", 66),
+    ("cache", 76),
     ("oddity", 8),
-    ("offshoot", 8),
-    ("sidekick", 14),
+    ("offshoot", 12),
     ("forge", 4),
 ];
 
@@ -198,6 +195,20 @@ mod tests {
     }
 
     #[test]
+    fn sidekick_appears_only_at_the_entrance() {
+        // The model can't reliably hold a sidekick to a later beat, so it is
+        // allowed ONLY at the entrance (beat 0) and nowhere else.
+        let weight = |table: &[Weight], t: &str| {
+            table.iter().find(|(n, _)| *n == t).map(|(_, w)| *w).unwrap_or(0)
+        };
+        let per_beat: Vec<u32> = BEAT_TABLES.iter().map(|t| weight(t, "sidekick")).collect();
+        assert!(per_beat[0] > 0, "sidekick should be available at the entrance");
+        for (i, w) in per_beat.iter().enumerate().skip(1) {
+            assert_eq!(*w, 0, "sidekick must not appear at beat {i}: {per_beat:?}");
+        }
+    }
+
+    #[test]
     fn same_seed_is_deterministic() {
         let a = roll_dungeon_content_plan(42);
         let b = roll_dungeon_content_plan(42);
@@ -284,10 +295,10 @@ mod tests {
         // adjacency rule renormalizes excluded weight onto the heaviest type, so
         // combat lands a touch above its naive ~90%). Weights are the design
         // artifact; these assertions guard against accidental retuning.
-        assert!(within(pct(combat), 92.5, 3.0), "combat {:.1}%", pct(combat));
-        assert!(within(pct(puzzle), 78.0, 4.0), "puzzle {:.1}%", pct(puzzle));
-        assert!(within(pct(cache), 67.0, 4.0), "cache {:.1}%", pct(cache));
-        assert!(within(pct(oddity), 41.0, 4.0), "oddity {:.1}%", pct(oddity));
+        assert!(within(pct(combat), 93.0, 3.0), "combat {:.1}%", pct(combat));
+        assert!(within(pct(puzzle), 82.0, 4.0), "puzzle {:.1}%", pct(puzzle));
+        assert!(within(pct(cache), 77.0, 4.0), "cache {:.1}%", pct(cache));
+        assert!(within(pct(oddity), 42.0, 4.0), "oddity {:.1}%", pct(oddity));
         assert!(within(pct(forge), 12.0, 3.0), "forge {:.1}%", pct(forge));
         assert!(within(pct(overlay), 45.0, 4.0), "overlay {:.1}%", pct(overlay));
         assert!(within(pct(factions), 25.0, 4.0), "factions {:.1}%", pct(factions));

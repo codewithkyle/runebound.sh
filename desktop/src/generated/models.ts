@@ -111,9 +111,10 @@ export type DungeonBeat = {
   function: string;
   content_type: string;
   idea: string;
+  player_goals: string;
   lever: string;
   loot?: string | null;
-  read_aloud: string;
+  design_note: string;
 };
 
 export type DungeonDraft = {

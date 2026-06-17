@@ -789,30 +789,39 @@ impl AiGenerationService {
             ),
             None => String::new(),
         };
-        let topology_directive = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
-            String::new()
-        } else {
-            format!("The place is laid out as \"{topology}\"; let that shape how the party moves deeper. ")
+        let topology_directive = match topology_shape(topology) {
+            Some(shape) => {
+                format!("The space is shaped like {shape}; let that guide how the party moves deeper. ")
+            }
+            None => String::new(),
         };
         let steer_directive = match extra {
             Some(value) => format!("The GM asked for this in the retold version: {value}. "),
+            None => String::new(),
+        };
+        let sidekick_directive = match plan.anchors.iter().position(|a| a == "sidekick") {
+            Some(idx) => format!(
+                "The ally introduced in movement {} is a companion, not a place: they join the party and travel with them through the movements that follow, until the dungeon ends — keep them present in those later movements rather than forgetting them after their first scene. ",
+                idx + 1
+            ),
             None => String::new(),
         };
 
         let elements = pass1_elements_block(plan);
 
         let system_prompt = format!(
-            "You are a master storyteller seeding a dungeon for a tabletop game master. Write a SHORT story — one to two tight paragraphs, no more — that a GM can read in fifteen seconds and immediately see the shape of an adventure. The north star is SPECIFIC BUT UNRESOLVED: concrete, evocative sparks that raise questions and never spell out every answer.\n\n\
+            "You are a master storyteller seeding a dungeon for a tabletop game master. Your goal is a COMPLETE, self-contained micro-story in two short paragraphs — a real tale that runs from a clear beginning to a definite END, not a fragment, a mood piece, or a description of a place. Things must HAPPEN and someone must ACT; carry the tale all the way to its ending and never trail off in atmosphere. A GM should read it in fifteen seconds and see the whole shape of an adventure. The north star is SPECIFIC BUT UNRESOLVED: concrete, evocative sparks that raise questions, even as the tale itself reaches a complete arc.\n\n\
 ONE LOCATION. The whole story happens inside a single bounded place the party enters and moves DEEPER into — e.g. \"a drowned bell-foundry\", \"a hijacked customs house\". Name that place. They never travel to another region, town, or building; they go further in, not elsewhere. Keep the cast and threats consistent from first line to last.\n\n\
-Tell it with the classic shape — a setup, an inciting turn, rising tension, a peak, and a resolution — but write it as flowing prose; do NOT label the parts. The five movements, in order, must each be built around the element given here, connected causally into one escalating descent:\n\n{elements}\n\
-Tone: {tone} — let it color the whole arc. Twist: {twist}. {faction_directive}{overlay_directive}{topology_directive}{steer_directive}\n\n\
+Move through five movements in order — a setup, an inciting turn, rising tension, a peak, and a resolution — and actually REACH the fifth (the ending); do not stop after the setup or the descent. Do NOT label the parts; let it read as two flowing paragraphs, roughly six to ten sentences total. Pace the movements so the confrontation lands at the FOURTH movement (the peak), never earlier. Each element below belongs to exactly ONE movement — build that movement around it and keep it out of the others:\n\n{elements}\n\
+Tone: {tone} — let it color the whole arc. Twist: {twist}. {faction_directive}{sidekick_directive}{overlay_directive}{topology_directive}{steer_directive}\n\n\
 {premise_directive} {context_directive}\n\n\
 Avoid retelling these recent stories: {recent}.{reference}\n\n\
-Return only JSON: name (a short evocative title), location (the one place, a short phrase), and story (the one-to-two-paragraph tale).",
+Return only JSON: name (a short evocative title), location (the one place, a short phrase), and story (the complete two-paragraph tale, beginning to end).",
             elements = elements,
             tone = tone,
             twist = twist_directive(twist),
             faction_directive = faction_directive,
+            sidekick_directive = sidekick_directive,
             overlay_directive = overlay_directive,
             topology_directive = topology_directive,
             steer_directive = steer_directive,
@@ -895,13 +904,14 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
 
         let beat_schema = serde_json::json!({
             "type": "object",
-            "required": ["idea", "lever", "read_aloud"],
+            "required": ["idea", "player_goals", "lever", "design_note"],
             "additionalProperties": false,
             "properties": {
                 "idea": { "type": "string", "minLength": 1 },
+                "player_goals": { "type": "string", "minLength": 1 },
                 "lever": { "type": "string", "minLength": 1 },
                 "loot": { "type": ["string", "null"] },
-                "read_aloud": { "type": "string", "minLength": 1 }
+                "design_note": { "type": "string", "minLength": 1 }
             }
         });
         let schema = serde_json::json!({
@@ -920,10 +930,18 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
         } else {
             String::new()
         };
-        let topology_note = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
-            String::new()
-        } else {
-            format!("Spatial layout follows \"{topology}\"; let it inform the read_aloud — how rooms connect and what is glimpsed beyond. ")
+        let topology_note = match topology_shape(topology) {
+            Some(shape) => {
+                format!("Spatial layout: {shape}; let it inform how the beats connect (especially whether the Setback loops the party back toward the entrance). ")
+            }
+            None => String::new(),
+        };
+        let sidekick_note = match plan.anchors.iter().position(|a| a == "sidekick") {
+            Some(idx) => format!(
+                "The sidekick beat (beat {}) introduces a companion who then accompanies the party: where the story shows them, let the idea or lever of the beats AFTER it involve that ally rather than dropping them after their introduction. ",
+                idx + 1
+            ),
+            None => String::new(),
         };
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
@@ -933,17 +951,19 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
 
         let system_prompt = format!(
             "You are structuring a finished story into a game master's index cards. The story below is LOCKED — do not invent new events, places, characters, or items; only express what is already there. The north star is SPECIFIC BUT UNRESOLVED: each field is a concrete spark that never states the final answer.\n\n\
-The story has five movements in order. Produce exactly five beats in the same order; beat N renders movement N. For each beat write four fields:\n\
-- idea: 1-2 sentences — what happens in this beat.\n\
+The story has five movements in order. Produce exactly five beats in the same order; beat N renders movement N. SCOPE EACH BEAT TO ITSELF: every field describes ONLY what happens in that one beat — never summarize the whole dungeon in a single beat, never name the final confrontation or ending before its own beat, and do not let beat 1 preview the climax. For each beat write four fields:\n\
+- idea: 1-2 sentences — what happens in THIS beat only.\n\
+- player_goals: 1 sentence — the clear, concrete goal for the players in THIS beat: what they must learn, do, reach, or overcome to complete it (not the goal of the whole dungeon).\n\
 - lever: ONE complication, question, or hook the GM can pull, in 1-2 sentences.\n\
 - loot: a conditional reward line, OR null (see each beat's rule below).\n\
-- read_aloud: 1-2 sentences of STATIC VISUAL only — shape, scale, materials, light, one or two notable objects. No action, no NPC behavior; it doubles as a map-making seed. Favor one-object-triple-duty: the notable object is also where the loot hides and what the lever hooks on.\n\n\
-Each beat has a fixed role and content type, written here. Honor them exactly; do not change them, and make the idea actually deliver that content type's mechanic:\n\n{assignment}\n\
-{faction_note}{topology_note}Tone: {tone}. Twist shape: {twist}.\n\n\
+- design_note: 1 sentence to the GM (out of fiction) — how this beat fits the overall dungeon and story: what it sets up, pays off, or escalates.\n\n\
+Each beat has a fixed role and content type, written here. Honor them EXACTLY — every beat must deliver its listed content type's mechanic, even where that movement of the story is brief: lead the idea with that mechanic, recasting the story's own props (a chain, a hook, a ledger) to serve it. Never change a beat's type. A beat typed combat MUST stage an actual fight (convey tactics and behavior) — never render a combat beat as a choice, a conversation, or a quiet decision. A non-combat beat must NOT be turned into a fight. The FINAL beat is the payoff — a reward, a revelation, or humble pie — NOT a second battle:\n\n{assignment}\n\
+{faction_note}{sidekick_note}{topology_note}Tone: {tone}. Twist shape: {twist}.\n\n\
 Also produce premise: a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).\n\n\
-Keep every field tight — 1-2 sentences; a paragraph of boxed text is over-generating. Return only JSON: premise, and the five beats (idea, lever, loot, read_aloud) in order.",
+Keep every field tight — 1-2 sentences; a paragraph of boxed text is over-generating. Return only JSON: premise, and the five beats (idea, player_goals, lever, loot, design_note) in order.",
             assignment = assignment,
             faction_note = faction_note,
+            sidekick_note = sidekick_note,
             topology_note = topology_note,
             tone = tone,
             twist = twist,
@@ -994,9 +1014,10 @@ Keep every field tight — 1-2 sentences; a paragraph of boxed text is over-gene
                 .map(|(i, beat)| DungeonBeatSeed {
                     content_type: plan.anchors[i].clone(),
                     idea: beat.idea,
+                    player_goals: beat.player_goals,
                     lever: beat.lever,
                     loot: beat.loot,
-                    read_aloud: beat.read_aloud,
+                    design_note: beat.design_note,
                 })
                 .collect();
             let mut seed = DungeonSeed {
@@ -1108,10 +1129,13 @@ pub struct EventSeed {
 pub struct DungeonBeatSeed {
     pub content_type: String,
     pub idea: String,
+    #[serde(default)]
+    pub player_goals: String,
     pub lever: String,
     #[serde(default)]
     pub loot: Option<String>,
-    pub read_aloud: String,
+    #[serde(default)]
+    pub design_note: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -1133,8 +1157,9 @@ impl DungeonSeed {
         for beat in self.beats.iter_mut() {
             beat.content_type = normalize_unknown_text(&beat.content_type).to_ascii_lowercase();
             beat.idea = normalize_unknown_text(&beat.idea);
+            beat.player_goals = normalize_unknown_text(&beat.player_goals);
             beat.lever = normalize_unknown_text(&beat.lever);
-            beat.read_aloud = normalize_unknown_text(&beat.read_aloud);
+            beat.design_note = normalize_unknown_text(&beat.design_note);
             beat.loot = beat
                 .loot
                 .as_ref()
@@ -1157,9 +1182,10 @@ impl DungeonSeed {
                     .to_string(),
                 content_type: beat.content_type.clone(),
                 idea: beat.idea.clone(),
+                player_goals: beat.player_goals.clone(),
                 lever: beat.lever.clone(),
                 loot: beat.loot.clone(),
-                read_aloud: beat.read_aloud.clone(),
+                design_note: beat.design_note.clone(),
             })
             .collect()
     }
@@ -1194,10 +1220,13 @@ struct DungeonStructured {
 #[derive(Debug, Clone, serde::Deserialize)]
 struct DungeonStructuredBeat {
     idea: String,
+    #[serde(default)]
+    player_goals: String,
     lever: String,
     #[serde(default)]
     loot: Option<String>,
-    read_aloud: String,
+    #[serde(default)]
+    design_note: String,
 }
 
 fn describe_recent_dungeon_stories(payloads: Vec<String>) -> String {
@@ -1224,7 +1253,7 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
         "forge" => "a forge, crucible, or workshop where something can be made or repaired",
         "puzzle" => "a sealed way forward — a barred door or mechanism — that opens only once the party finds the right key or condition",
         "offshoot" => "an optional branching path: a side chamber, a hidden room, or a tempting dead end",
-        "sidekick" => "a lone ally met here who can join the party for as long as they stay in this place",
+        "sidekick" => "a lone ally met here who joins the party and travels deeper with them through the rest of this place",
         "oddity" => "a strange and significant object that is the very reason this place exists",
         _ => "something noteworthy",
     }
@@ -1239,7 +1268,7 @@ fn anchor_mechanic(content_type: &str) -> &'static str {
         "forge" => "a place to craft or repair magic items; the idea must involve that crafting or repair",
         "puzzle" => "a locked-door->key obstacle of one or more steps; never a riddle or logic puzzle",
         "offshoot" => "an optional side passage, hidden room, or dead end off the main path",
-        "sidekick" => "a dungeon-only ally met and possibly recruited here, who leaves when the dungeon ends",
+        "sidekick" => "a dungeon-only ally introduced here who joins the party and stays with them through the later beats, leaving only when the dungeon ends",
         "oddity" => "the world-significant object that is the reason this dungeon exists",
         _ => "a noteworthy room",
     }
@@ -1251,6 +1280,24 @@ fn overlay_phrase(overlay_type: &str) -> &'static str {
         "history" => "a piece of lore about this place, its people, or its makers",
         "map" => "a glimpse of the surrounding world — a route, a landmark, or a link to somewhere else",
         _ => "a telling detail",
+    }
+}
+
+/// Plain-language layout for a topology, so its SHAPE can inform generation
+/// without ever leaking the proper-noun name (e.g. "Foglio's Snail") into the
+/// prose, where the model would otherwise reuse it as the dungeon's name.
+fn topology_shape(topology: &str) -> Option<&'static str> {
+    match topology {
+        "The Railroad" => Some("a straight sequence of rooms, each leading to the next"),
+        "The Moose" => Some("a short dead-end branch near the entrance off a longer main passage"),
+        "The V for Vendetta" => Some("two passages branching in opposite directions from the entrance"),
+        "The Arrow" => Some("a three-way junction near the entrance"),
+        "The Fauchard Fork" => Some("an early fork into one short path and one longer path"),
+        "The Evil Mule" => Some("a branch that soon forks again into two"),
+        "Foglio's Snail" => Some("two rooms deep, then a split into two hidden side rooms"),
+        "The Paw" => Some("a hub that branches into three rooms"),
+        "The Cross" => Some("a central hub with rooms opening off every side"),
+        _ => None, // "none" / unknown — impose no spatial shape
     }
 }
 
@@ -1292,24 +1339,30 @@ fn pass2_assignment_block(plan: &DungeonContentPlan) -> String {
         "the first obstacle inside (roleplay, a sealed way, or a trap)",
         "the cost, where the party PAYS",
         "the peak: a real confrontation, reversal, or revelation",
-        "the payoff",
+        "the payoff — a reward, a revelation, or humble pie, NOT another fight",
     ];
     const LOOT_RULES: [&str; 5] = [
         "Loot: null.",
         "Loot: null.",
         "Loot: null.",
         "Loot: only if it reads as the boss's hoard.",
-        "Loot: the reward goes here (unless the story already handed it over).",
+        "Loot: REQUIRED — name a concrete reward the party claims here.",
     ];
     let mut out = String::new();
     for (i, anchor) in plan.anchors.iter().enumerate() {
+        // A cache beat is a reward stash anywhere it lands: loot is mandatory.
+        let loot_rule = if anchor == "cache" {
+            "Loot: REQUIRED — name a concrete reward the party claims here."
+        } else {
+            LOOT_RULES[i]
+        };
         out.push_str(&format!(
             "Beat {} — {}. Type: {} — {}. {}",
             i + 1,
             ROLES[i],
             anchor.to_uppercase(),
             anchor_mechanic(anchor),
-            LOOT_RULES[i],
+            loot_rule,
         ));
         if let Some(overlay) = &plan.overlay {
             if overlay.beat_index == i {

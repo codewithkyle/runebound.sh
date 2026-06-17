@@ -138,10 +138,13 @@ pub struct DungeonBeat {
     pub function: String, // fixed skeleton: Entrance|Puzzle|Setback|Climax|Resolution
     pub content_type: String, // one of DUNGEON_CONTENT_TYPES (the 11)
     pub idea: String,     // 1-2 lines: what happens here
+    #[serde(default)]
+    pub player_goals: String, // what players should learn/do/achieve by completing this beat
     pub lever: String,    // one complication/question/hook
     #[serde(default)]
     pub loot: Option<String>, // conditional — None where the beat doesn't earn it
-    pub read_aloud: String, // 1-2 sentence static visual description
+    #[serde(default)]
+    pub design_note: String, // how this beat fits the overall dungeon and story
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -621,6 +624,7 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
         let mut rows = vec![
             entity_row("Type:", normalize_unknown_text(&beat.content_type)),
             entity_row("Idea:", normalize_unknown_text(&beat.idea)),
+            entity_row("Player Goals:", normalize_unknown_text(&beat.player_goals)),
             entity_row("Lever:", normalize_unknown_text(&beat.lever)),
         ];
         if let Some(loot) = &beat.loot {
@@ -628,7 +632,7 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
                 rows.push(entity_row("Loot:", loot.clone()));
             }
         }
-        rows.push(entity_row("Read-Aloud:", normalize_unknown_text(&beat.read_aloud)));
+        rows.push(entity_row("Design:", normalize_unknown_text(&beat.design_note)));
         out.push(entity_card(
             format!("{}. {}", i + 1, beat.function),
             rows,

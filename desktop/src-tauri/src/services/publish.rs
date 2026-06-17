@@ -157,8 +157,8 @@ pub fn render_dungeon_markdown(frontmatter: &DungeonFrontmatter) -> String {
 }
 
 /// A dungeon publishes as: a premise intro line, a topology line, then one `##`
-/// section per beat (`## 1. Entrance — [combat]`) carrying Idea / Lever / Loot
-/// (omitted when absent) / Read-Aloud. The GM tweaks freely after publish.
+/// section per beat (`## 1. Entrance — [combat]`) carrying Idea / Player Goals /
+/// Lever / Loot (omitted when absent) / Design. The GM tweaks freely after publish.
 pub fn render_dungeon_markdown_with_links(
     frontmatter: &DungeonFrontmatter,
     linker: &EntityLinker,
@@ -189,6 +189,10 @@ pub fn render_dungeon_markdown_with_links(
         if idea != "Unknown" {
             writeln!(&mut out, "**Idea:** {}", linker.link_prose(&idea)).ok();
         }
+        let player_goals = normalize_unknown_text(&beat.player_goals);
+        if player_goals != "Unknown" {
+            writeln!(&mut out, "**Player Goals:** {}", linker.link_prose(&player_goals)).ok();
+        }
         let lever = normalize_unknown_text(&beat.lever);
         if lever != "Unknown" {
             writeln!(&mut out, "**Lever:** {}", linker.link_prose(&lever)).ok();
@@ -199,9 +203,9 @@ pub fn render_dungeon_markdown_with_links(
                 writeln!(&mut out, "**Loot:** {}", linker.link_prose(loot)).ok();
             }
         }
-        let read_aloud = normalize_unknown_text(&beat.read_aloud);
-        if read_aloud != "Unknown" {
-            writeln!(&mut out, "**Read-Aloud:** {}", linker.link_prose(&read_aloud)).ok();
+        let design_note = normalize_unknown_text(&beat.design_note);
+        if design_note != "Unknown" {
+            writeln!(&mut out, "**Design:** {}", linker.link_prose(&design_note)).ok();
         }
         writeln!(&mut out).ok();
     }
@@ -209,17 +213,18 @@ pub fn render_dungeon_markdown_with_links(
     out
 }
 
-/// The narrative prose of a dungeon — every beat's idea/lever/loot/read-aloud
-/// joined, for Tier 2 mention extraction.
+/// The narrative prose of a dungeon — every beat's idea/player-goals/lever/loot
+/// joined, for Tier 2 mention extraction. The design_note is an out-of-fiction GM
+/// aside, so it is excluded.
 pub fn dungeon_prose(frontmatter: &DungeonFrontmatter) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for beat in &frontmatter.beats {
         parts.push(beat.idea.as_str());
+        parts.push(beat.player_goals.as_str());
         parts.push(beat.lever.as_str());
         if let Some(loot) = &beat.loot {
             parts.push(loot.as_str());
         }
-        parts.push(beat.read_aloud.as_str());
     }
     join_prose(&parts)
 }
@@ -867,17 +872,19 @@ mod tests {
                     function: "Entrance".to_string(),
                     content_type: "puzzle".to_string(),
                     idea: "A sealed sluice gate bars the way.".to_string(),
+                    player_goals: "Find what opens the gate and get inside.".to_string(),
                     lever: "What keeps the water out?".to_string(),
                     loot: None,
-                    read_aloud: "A rusted iron gate, chest-high water beyond.".to_string(),
+                    design_note: "Establishes the flooded threat and gates entry.".to_string(),
                 },
                 DungeonBeat {
                     function: "Resolution".to_string(),
                     content_type: "cache".to_string(),
                     idea: "The reignited forge yields its prize.".to_string(),
+                    player_goals: "Claim the forged reward and decide who gets it.".to_string(),
                     lever: "Who else wants what was forged here?".to_string(),
                     loot: Some("A still-warm blade".to_string()),
-                    read_aloud: "A cold anvil the size of a cart.".to_string(),
+                    design_note: "Pays off the forge setup and hooks a rival faction.".to_string(),
                 },
             ],
             created_at: "2026-06-16T00:00:00Z".to_string(),

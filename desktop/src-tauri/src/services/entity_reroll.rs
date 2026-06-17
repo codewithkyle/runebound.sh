@@ -849,14 +849,15 @@ impl EntityRerollService {
 
         let schema = serde_json::json!({
             "type": "object",
-            "required": ["content_type", "idea", "lever", "read_aloud"],
+            "required": ["content_type", "idea", "player_goals", "lever", "design_note"],
             "additionalProperties": false,
             "properties": {
                 "content_type": { "type": "string", "enum": DUNGEON_CONTENT_TYPES },
                 "idea": { "type": "string", "minLength": 1 },
+                "player_goals": { "type": "string", "minLength": 1 },
                 "lever": { "type": "string", "minLength": 1 },
                 "loot": { "type": ["string", "null"] },
-                "read_aloud": { "type": "string", "minLength": 1 }
+                "design_note": { "type": "string", "minLength": 1 }
             }
         });
 
@@ -887,7 +888,7 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field to 2-3 sentences and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 2-3 sentences (for combat: tactics/behavior, never creature names). lever is one hook/question in 1-2 sentences. read_aloud is 2-3 sentences of STATIC VISUAL only (shape, scale, materials, light, notable objects — no action). This beat is a room or area INSIDE the dungeon's single location (shown below) — keep it there; do not move the party to a new region, town, or building. {loot_rule} Pick a content_type that fits this beat's function (match its MEANING, not just the word: forge = a place to craft magic items; foreshadowing/history/map are overlays that layer onto a concrete beat, never the whole beat) and ideally differs from its current one to keep variety.{reference_suffix}",
+                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field tight and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 1-2 sentences (for combat: tactics/behavior, never creature names). player_goals is one sentence — the clear, concrete goal for the players here (what they must learn, do, reach, or overcome). lever is one hook/question in 1-2 sentences. design_note is one sentence to the GM, out of fiction, on how this beat fits the overall dungeon and story. This beat is a room or area INSIDE the dungeon's single location (shown below) — keep it there; do not move the party to a new region, town, or building. {loot_rule} Pick a content_type that fits this beat's function (match its MEANING, not just the word: forge = a place to craft magic items; foreshadowing/history/map are overlays that layer onto a concrete beat, never the whole beat) and ideally differs from its current one to keep variety.{reference_suffix}",
                             loot_rule = loot_rule,
                             reference_suffix = reference_suffix
                         )
@@ -926,10 +927,13 @@ impl EntityRerollService {
             let Some(idea) = parsed.get("idea").and_then(|v| v.as_str()) else {
                 continue;
             };
+            let Some(player_goals) = parsed.get("player_goals").and_then(|v| v.as_str()) else {
+                continue;
+            };
             let Some(lever) = parsed.get("lever").and_then(|v| v.as_str()) else {
                 continue;
             };
-            let Some(read_aloud) = parsed.get("read_aloud").and_then(|v| v.as_str()) else {
+            let Some(design_note) = parsed.get("design_note").and_then(|v| v.as_str()) else {
                 continue;
             };
             let loot = parsed
@@ -948,9 +952,10 @@ impl EntityRerollService {
                     function: function.to_string(),
                     content_type,
                     idea: normalize_unknown_text(idea),
+                    player_goals: normalize_unknown_text(player_goals),
                     lever: normalize_unknown_text(lever),
                     loot,
-                    read_aloud: normalize_unknown_text(read_aloud),
+                    design_note: normalize_unknown_text(design_note),
                 },
             });
         }
@@ -1640,14 +1645,14 @@ fn dungeon_context_summary(
             ));
         } else {
             lines.push(format!(
-                "beat {} [{}] type={} | idea={} | lever={} | loot={} | read_aloud={}",
+                "beat {} [{}] type={} | idea={} | player_goals={} | lever={} | loot={}",
                 i + 1,
                 function,
                 beat.content_type,
                 beat.idea,
+                beat.player_goals,
                 beat.lever,
                 beat.loot.as_deref().unwrap_or("none"),
-                beat.read_aloud,
             ));
         }
     }

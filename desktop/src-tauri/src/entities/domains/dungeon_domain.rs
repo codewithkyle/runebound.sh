@@ -45,16 +45,18 @@ pub fn beat_index_from_token(token: &str) -> Option<usize> {
         .position(|func| func.eq_ignore_ascii_case(trimmed))
 }
 
-const BEAT_FIELDS: [&str; 5] = ["content_type", "idea", "lever", "loot", "read_aloud"];
+const BEAT_FIELDS: [&str; 6] =
+    ["content_type", "idea", "player_goals", "lever", "loot", "design_note"];
 
 fn canonical_beat_field(raw: &str) -> Option<&'static str> {
     let normalized = raw.trim().to_ascii_lowercase().replace('-', "_");
     match normalized.as_str() {
         "content_type" | "type" | "content" => Some("content_type"),
         "idea" => Some("idea"),
+        "player_goals" | "playergoals" | "goals" | "goal" => Some("player_goals"),
         "lever" | "hook" => Some("lever"),
         "loot" | "reward" => Some("loot"),
-        "read_aloud" | "readaloud" | "read" | "boxed" => Some("read_aloud"),
+        "design_note" | "designnote" | "design" | "note" => Some("design_note"),
         _ => None,
     }
 }
@@ -167,7 +169,8 @@ impl EntityDomain for DungeonDomain {
                             Some(beat_value.to_string())
                         };
                     }
-                    "read_aloud" => beat.read_aloud = beat_value.to_string(),
+                    "player_goals" => beat.player_goals = beat_value.to_string(),
+                    "design_note" => beat.design_note = beat_value.to_string(),
                     _ => {}
                 }
                 let snapshot = draft.clone();
@@ -401,14 +404,15 @@ pub fn dungeon_summary_text(draft: &DungeonDraftSession) -> String {
     ];
     for (i, beat) in draft.beats.iter().enumerate() {
         lines.push(format!(
-            "beat {} [{}] {}: idea={} | lever={} | loot={} | read_aloud={}",
+            "beat {} [{}] {}: idea={} | player_goals={} | lever={} | loot={} | design={}",
             i + 1,
             beat.content_type,
             beat.function,
             beat.idea,
+            beat.player_goals,
             beat.lever,
             beat.loot.as_deref().unwrap_or("none"),
-            beat.read_aloud,
+            beat.design_note,
         ));
     }
     lines.push(format!("path: {}", draft.vault_path));
@@ -424,8 +428,9 @@ pub fn dungeon_event_from_draft(draft: &DungeonDraftSession) -> CommandClientEve
     for beat in normalized_draft.beats.iter_mut() {
         beat.content_type = normalize_unknown_text(&beat.content_type);
         beat.idea = normalize_unknown_text(&beat.idea);
+        beat.player_goals = normalize_unknown_text(&beat.player_goals);
         beat.lever = normalize_unknown_text(&beat.lever);
-        beat.read_aloud = normalize_unknown_text(&beat.read_aloud);
+        beat.design_note = normalize_unknown_text(&beat.design_note);
         beat.loot = beat
             .loot
             .as_ref()
