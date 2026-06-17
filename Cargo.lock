@@ -284,6 +284,7 @@ name = "dnd-core"
 version = "0.4.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "command-handler",
  "command-specs",
@@ -297,6 +298,7 @@ dependencies = [
  "tokio",
  "toml",
  "url",
+ "wizard",
 ]
 
 [[package]]

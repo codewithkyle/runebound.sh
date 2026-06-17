@@ -153,8 +153,10 @@ pub trait Wizard<H: Send + Sync>: Send + Sync {
 
     /// The initial accumulator when the wizard starts. Receives the host context
     /// so config-seeded wizards (e.g. onboarding) can pre-fill from effective
-    /// config; the dungeon wizard ignores it.
-    fn seed(&self, host: &H) -> WizardData;
+    /// config; the dungeon wizard ignores it. Async + fallible so a wizard can do
+    /// I/O on entry (e.g. probe a server) and refuse to start (`Err`) if a
+    /// precondition fails.
+    async fn seed(&self, host: &H) -> Result<WizardData, String>;
 
     /// Called on the terminal step's `Complete`: build the artifact (open a draft,
     /// write config) and hand off. The engine resets the session afterward.

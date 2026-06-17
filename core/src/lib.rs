@@ -7,6 +7,7 @@ pub mod db;
 pub mod entity_store;
 pub mod health;
 pub mod npc;
+pub mod onboarding_wizard;
 pub mod output;
 pub mod serialization;
 pub mod service;

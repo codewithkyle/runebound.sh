@@ -864,7 +864,7 @@ fn reset_onboarding(onboarding: &mut OnboardingSession) {
     onboarding.ollama_models.clear();
 }
 
-fn config_vault_path_string(config: &AppConfig) -> Option<String> {
+pub(crate) fn config_vault_path_string(config: &AppConfig) -> Option<String> {
     config
         .vault
         .path
@@ -1092,7 +1092,7 @@ fn extract_trailing_argument(input: &str, prefix: &str) -> Option<String> {
     }
 }
 
-fn expand_tilde_path(input: &str) -> PathBuf {
+pub(crate) fn expand_tilde_path(input: &str) -> PathBuf {
     if input == "~" {
         if let Some(home) = dirs::home_dir() {
             return home;
@@ -1108,7 +1108,7 @@ fn expand_tilde_path(input: &str) -> PathBuf {
     PathBuf::from(input)
 }
 
-fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
+pub(crate) fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
     if !path.exists() {
         bail!("vault path does not exist: {}", path.display());
     }
@@ -1119,7 +1119,7 @@ fn validate_vault_path_for_onboarding(path: &Path) -> Result<()> {
     Ok(())
 }
 
-fn normalize_ollama_input(value: &str) -> String {
+pub(crate) fn normalize_ollama_input(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
         return String::new();
@@ -1134,7 +1134,7 @@ fn normalize_ollama_input(value: &str) -> String {
 ///
 /// Delegates the `/api/tags` request to the shared [`health::probe_ollama`] and
 /// surfaces failures as errors so the setup spinner flips to an error state.
-async fn probe_ollama_models(
+pub(crate) async fn probe_ollama_models(
     base_url: &str,
     timeout_seconds: u64,
 ) -> Result<(String, Vec<String>)> {
@@ -1548,7 +1548,7 @@ pub const OLLAMA_BOOT_TIMEOUT_SECONDS: u64 = 5;
 /// actively waiting and may point at a remote server) but still bounded so a dead
 /// server can't hang setup. Distinct from `ollama.timeout_seconds`, which is the
 /// LLM generation budget and far too long for a connectivity check.
-const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
+pub(crate) const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
 
 /// Probe the configured Ollama server to confirm the LLM is running.
 ///

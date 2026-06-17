@@ -510,8 +510,8 @@ impl Wizard<AppState> for DungeonWizard {
         &self.steps
     }
 
-    fn seed(&self, _host: &AppState) -> WizardData {
-        WizardData::new(DungeonWizardData::default())
+    async fn seed(&self, _host: &AppState) -> Result<WizardData, String> {
+        Ok(WizardData::new(DungeonWizardData::default()))
     }
 
     /// `continue` at the story review: structure the locked story (Pass 2), assemble

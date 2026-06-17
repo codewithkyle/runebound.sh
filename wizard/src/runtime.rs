@@ -49,12 +49,15 @@ pub async fn start_wizard<H: WizardHost>(id: &'static str, host: &H) -> CommandR
     let Some(wizard) = host.wizard_registry().get(id) else {
         return Err(format!("unknown wizard: {id}"));
     };
+    // Seed before claiming the session so a failed seed (e.g. a probe error)
+    // leaves any prior session untouched and surfaces the error.
+    let data = wizard.seed(host).await?;
     let mut session = host.wizard_session().lock().await;
     *session = WizardSession {
         active_id: Some(id),
         cursor: 0,
         history: Vec::new(),
-        data: Some(wizard.seed(host)),
+        data: Some(data),
     };
     let Some(step) = wizard.steps().first().cloned() else {
         *session = WizardSession::default();
@@ -446,11 +449,11 @@ mod tests {
         fn steps(&self) -> &[Arc<dyn WizardStep<FakeHost>>] {
             &self.steps
         }
-        fn seed(&self, host: &FakeHost) -> WizardData {
+        async fn seed(&self, host: &FakeHost) -> Result<WizardData, String> {
             // Exercise the seed(host) hook: pull a value from the host context.
-            WizardData::new(TestData {
+            Ok(WizardData::new(TestData {
                 picked: Some(host.seed_path.clone()),
-            })
+            }))
         }
         async fn finalize(&self, _host: &FakeHost, d: &WizardData) -> CommandResult {
             let picked = data(d).picked.clone().unwrap_or_default();
