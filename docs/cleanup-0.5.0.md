@@ -82,6 +82,7 @@ The core architecture is sound. This plan is about **finishing the additive refa
 | P4.2 | High | ✅ | `slug` required in TS but `#[serde(default)]` in Rust | 4 |
 | P4.3 | Medium | 🔶 | `WIKILINK_UNSAFE` const duplicated | 4 |
 | P4.4 | Low | 🔶 | Mention grounding uses substring, not word-boundary | 4 |
+| P4.5 | Medium | ✅ | `CommandManifest` TS still hand-maintained (`parser-client.ts`) | 4 (follow-up) |
 | P5.1 | High | ✅ | `EntityType` duplicates `EntityKind` | 5 |
 | P5.2 | High | ✅ | Services re-enumerate 7 kinds (admin/reroll/persistence) | 5 |
 | P5.3 | High | ✅ | 6 near-identical entity command modules | 5 |
@@ -244,28 +245,43 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 4 — Shared-contract & generation hardening
+## Phase 4 — Shared-contract & generation hardening — **DONE ✅ (2026-06-17)**
 
 *Goal: make the Rust↔TS contract single-sourced and drift-proof.*
 
-- [ ] **P4.1 — Replace hand-written TS generation** · High · ✅
+> **Outcome:** The Rust types in `runebound-models` are now the literal single
+> source for the frontend contract. The 351-line hand-written `build.rs` (which
+> had already silently drifted — it emitted no `EventFrontmatter`) is gone,
+> replaced by `#[derive(TS)]` (ts-rs) + an integration test
+> (`runebound-models/tests/ts_models.rs`) that bundles each type's `decl()` into
+> `desktop/src/generated/models.ts`. That test doubles as a **drift guard**:
+> `cargo test --workspace` fails if the on-disk file doesn't match the Rust
+> types; regenerate with **`UPDATE_MODELS=1 cargo test -p runebound-models`**.
+> Decision taken with the user: **ts-rs derive** over a parity test (network
+> resolved `ts-rs v12` with `serde-compat`, and all frontend-facing structs live
+> in one crate). The `*Frontmatter` types are disk-only and never cross to the
+> UI, so they're **excluded from the contract** (which also retires the
+> EventFrontmatter drift). P4.3/P4.4 hoisted the duplicated wikilink-unsafe const
+> and unified the two link layers on one whole-word boundary rule.
+>
+> Verified: workspace tests green (incl. the new drift guard) + desktop 121 tests
+> (incl. a new sub-word grounding test); `make lint` (clippy `-D warnings` +
+> `cargo fmt --check`, both targets) exit 0; `tsc --noEmit` + `vite build` clean
+> against the regenerated `models.ts`; grep gates confirm one
+> `WIKILINK_UNSAFE_CHARS` definition and no `LINK_UNSAFE`.
+
+- [x] **P4.1 — Replace hand-written TS generation** · High · ✅ — *done: `#[derive(TS)]` on the frontend-facing types in `drafts.rs`/`output.rs`/`events.rs`; deleted `build.rs`; added `tests/ts_models.rs` (bundler + `UPDATE_MODELS=1` regen / `assert_eq` drift guard, path anchored on `CARGO_MANIFEST_DIR`). serde-compat reproduces the `tag="kind"`/`rename_all` discriminated unions exactly; `///` docs now also cross as JSDoc. Disk-only `*Frontmatter` types intentionally excluded.*
   `runebound-models/build.rs` (351 lines of `push_str`) transcribes every struct field by hand, with no test asserting it matches the Rust types. It also writes into a sibling crate's source tree from a build script (non-hermetic — part of why desktop is a separate workspace).
   **Fix:** adopt `ts-rs` or `typeshare` (derive TS from the structs), making the Rust definitions the literal single source. If avoiding a new dep, at minimum add an integration test that serializes a sample of each struct and asserts JSON keys match the emitted TS keys, and anchor the output path on `CARGO_MANIFEST_DIR`. Prefer the derive route.
-  *Phase 3 note:* the `CommandManifest` TS type is **hand-maintained** in `desktop/src/command/parser-client.ts` (not `generated/models.ts`), and Phase 3 added `spinner_hints: SpinnerHint[]` to both the Rust struct and that hand-written TS type. Whatever single-source mechanism P4 adopts should cover the manifest types too (incl. `SpinnerHint`), since the manifest crosses the boundary via `get_command_manifest`.
+  *Scope note (follow-up):* P4.1 single-sourced the **`runebound-models`** contract (`get_command_input` / event payloads). The **`CommandManifest`** family (`CommandSpec`/`SubcommandSpec`/`OptionSpec`/`CommandAlias`/`SpinnerHint` + the `completion`/`value_hint`/`execution` enums) lives in the **`command-specs`** crate and is still **hand-maintained** in `desktop/src/command/parser-client.ts` — it crosses via `get_command_manifest` and remains a drift risk. Extending the same `#[derive(TS)]` mechanism to `command-specs` is a clean follow-up (**P4.5**), held back here only because the approved Phase 4 scope was the models contract and the `completion` field is a serde-adjacent enum that needs its ts-rs output verified. Until then the two manifest representations must be edited in lockstep.
 
-- [ ] **P4.2 — `slug` required in TS but `#[serde(default)]` in Rust** · High · ✅
-  `build.rs:14` (`NpcDraft.slug: string`) and `:86` (`EventDraft.slug: string`) vs `drafts.rs:38`/`:135` (`#[serde(default)] pub slug`). TS contract is stricter than the wire contract.
-  **Fix:** falls out automatically once P4.1 uses a derive (it'll emit `slug?: string`). If staying hand-rolled, emit these optional. Decide whether `slug` should instead be guaranteed-populated before crossing to the frontend.
+- [x] **P4.2 — `slug` required in TS but `#[serde(default)]` in Rust** · High · ✅ — *resolved (reasoned deviation): ts-rs emits `slug: string` (**required**), which is the accurate frontend contract — a `String` is always serialized, so a draft crossing to the UI always carries a slug. The `#[serde(default)]` is read-time leniency for pre-slug TOML (now documented on `NpcDraft::slug`/`EventDraft::slug`), not a frontend-optional signal. The doc's "emit `slug?`" suggestion was declined because it would misrepresent what the frontend receives. `Option<…>` fields (`seed_prompt`) stay `… | null`; `#[ts(optional)]` is the one-liner if TS-optional is ever wanted.*
 
-- [ ] **P4.3 — Dedupe `WIKILINK_UNSAFE`** · Medium · 🔶
-  `services/mention_extraction.rs:23` and `services/publish.rs:332` define identical `&['[', ']', '|', '#', '^']` consts, each commenting that it "mirrors the other."
-  **Fix:** hoist one `pub const WIKILINK_UNSAFE_CHARS` and reference from both.
+- [x] **P4.3 — Dedupe `WIKILINK_UNSAFE`** · Medium · ✅ — *done: hoisted one `pub(crate) WIKILINK_UNSAFE_CHARS` in `publish.rs` (the canonical wikilink module the extractor already references) and deleted `mention_extraction.rs`'s `LINK_UNSAFE`, referencing the shared const.*
 
-- [ ] **P4.4 — Mention grounding uses substring, not word-boundary** · Low · 🔶
-  `services/mention_extraction.rs:88,103` use `prose_lower.contains(&lower)`, so "Vex" is "grounded" by prose containing "Vexley".
-  **Fix:** reuse `publish.rs`'s `boundary_before`/`boundary_after` word-boundary check for consistency between the two layers.
+- [x] **P4.4 — Mention grounding uses substring, not word-boundary** · Low · ✅ — *done: exposed `publish.rs`'s `boundary_before`/`boundary_after` and added `contains_word_boundary`; the extractor now grounds each candidate as a whole word (so "Vex" no longer rides on "Vexley"), sharing the prose linker's rule. Added a regression test.*
 
-**Phase 4 verify:** `cargo build -p runebound-models` regenerates `desktop/src/generated/models.ts` cleanly; the new parity test passes; frontend `tsc`/build is green; diff the regenerated TS to confirm no unexpected shape changes.
+**Phase 4 verify (done):** codegen moved off `cargo build` — `UPDATE_MODELS=1 cargo test -p runebound-models` **regenerates** `desktop/src/generated/models.ts`, and a plain `cargo test --workspace` is the **drift guard** (asserts the file matches the Rust types). Both test suites green; `make lint` exit 0; `tsc`/`vite build` clean; diff of the regenerated TS shows only the intended changes (the `*Frontmatter` types removed + cosmetic ts-rs formatting), consumed discriminated unions unchanged.
 
 ---
 
@@ -386,6 +402,7 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 - [ ] **P8.1 — Bump version `0.4.0` → `0.5.0`** in `Cargo.toml` (workspace), `desktop/src-tauri/Cargo.toml`, `desktop/src-tauri/tauri.conf.json`, `desktop/package.json`. (Confirm `Cargo.lock` updates.)
 - [ ] **P8.2 — Full verification matrix:** `cargo test --workspace` + `cargo test --manifest-path desktop/src-tauri/Cargo.toml` + both clippy commands clean + `make build` + frontend build + a manual smoke pass of onboarding, each entity lifecycle, the dungeon wizard, calendar/moon, and publish.
+  *(Note since P4.1: `desktop/src/generated/models.ts` is generated by ts-rs and drift-guarded by `cargo test --workspace`. If a `#[derive(TS)]` type changed, regenerate with `UPDATE_MODELS=1 cargo test -p runebound-models` and commit the updated `models.ts` before tagging.)*
 - [ ] **P8.3 — Docs:** update `docs/architecture.md` §10 (resolved friction), update any playbooks the P5 unification changed (the "Add a New Entity" checklist should now be much shorter), and archive this file.
 - [ ] **P8.4 — Tag and cut the release.**
 
