@@ -17,6 +17,18 @@ const EVENT_DIR: &str = "events";
 const GOD_DIR: &str = "gods";
 const DUNGEON_DIR: &str = "dungeons";
 
+/// Every per-kind subdirectory of the entity store, in kind order. The single
+/// source the store ensures + writes into, so the kind set can't drift.
+const ENTITY_DIRS: [&str; 7] = [
+    NPC_DIR,
+    LOCATION_DIR,
+    FACTION_DIR,
+    ITEM_DIR,
+    EVENT_DIR,
+    GOD_DIR,
+    DUNGEON_DIR,
+];
+
 pub struct EntityStore {
     root: PathBuf,
 }
@@ -35,48 +47,12 @@ impl EntityStore {
     }
 
     fn ensure_dirs(&self) -> Result<()> {
-        fs::create_dir_all(self.root.join(NPC_DIR)).with_context(|| {
-            format!(
-                "failed to create npc directory at {}",
-                self.root.join(NPC_DIR).display()
-            )
-        })?;
-        fs::create_dir_all(self.root.join(LOCATION_DIR)).with_context(|| {
-            format!(
-                "failed to create location directory at {}",
-                self.root.join(LOCATION_DIR).display()
-            )
-        })?;
-        fs::create_dir_all(self.root.join(FACTION_DIR)).with_context(|| {
-            format!(
-                "failed to create faction directory at {}",
-                self.root.join(FACTION_DIR).display()
-            )
-        })?;
-        fs::create_dir_all(self.root.join(ITEM_DIR)).with_context(|| {
-            format!(
-                "failed to create item directory at {}",
-                self.root.join(ITEM_DIR).display()
-            )
-        })?;
-        fs::create_dir_all(self.root.join(EVENT_DIR)).with_context(|| {
-            format!(
-                "failed to create event directory at {}",
-                self.root.join(EVENT_DIR).display()
-            )
-        })?;
-        fs::create_dir_all(self.root.join(GOD_DIR)).with_context(|| {
-            format!(
-                "failed to create god directory at {}",
-                self.root.join(GOD_DIR).display()
-            )
-        })?;
-        fs::create_dir_all(self.root.join(DUNGEON_DIR)).with_context(|| {
-            format!(
-                "failed to create dungeon directory at {}",
-                self.root.join(DUNGEON_DIR).display()
-            )
-        })?;
+        for dir in ENTITY_DIRS {
+            let path = self.root.join(dir);
+            fs::create_dir_all(&path).with_context(|| {
+                format!("failed to create {dir} directory at {}", path.display())
+            })?;
+        }
         Ok(())
     }
 
@@ -260,5 +236,36 @@ impl EntityStore {
 
     pub fn list_dungeons(&self) -> Result<Vec<DungeonFrontmatter>> {
         self.list_entities(DUNGEON_DIR)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    fn temp_root() -> PathBuf {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let root =
+            std::env::temp_dir().join(format!("dnd_entity_store_{}_{}", std::process::id(), n));
+        let _ = fs::remove_dir_all(&root);
+        root
+    }
+
+    #[test]
+    fn ensure_dirs_creates_every_kind_directory() {
+        let root = temp_root();
+        let store = EntityStore { root: root.clone() };
+        store.ensure_dirs().expect("ensure dirs");
+
+        assert_eq!(ENTITY_DIRS.len(), 7, "every entity kind must have a dir");
+        for dir in ENTITY_DIRS {
+            assert!(
+                root.join(dir).is_dir(),
+                "expected entity store subdirectory `{dir}` to be created"
+            );
+        }
+        let _ = fs::remove_dir_all(&root);
     }
 }
