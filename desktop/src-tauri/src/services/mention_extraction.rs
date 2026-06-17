@@ -19,10 +19,7 @@ use std::path::Path;
 use crate::services::ollama_chat::{
     build_chat_client, load_generation_config, post_chat_for_content,
 };
-
-/// Characters that can't appear in a clean `[[wikilink]]` target (mirrors the
-/// guard in [`super::publish`]).
-const LINK_UNSAFE: &[char] = &['[', ']', '|', '#', '^'];
+use crate::services::publish::{WIKILINK_UNSAFE_CHARS, contains_word_boundary};
 
 /// Recognize proper-noun entity names in `prose` that are not already in
 /// `known_lower` (a set of lowercased known names). Returns canonical-cased
@@ -96,13 +93,14 @@ fn filter_mentions(raw: Vec<String>, prose: &str, known_lower: &HashSet<String>)
         if trimmed.len() < 2 {
             continue;
         }
-        if trimmed.contains(LINK_UNSAFE) {
+        if trimmed.contains(WIKILINK_UNSAFE_CHARS) {
             continue;
         }
         let lower = trimmed.to_ascii_lowercase();
-        // Ground every name in the actual text — guards against the model
-        // inventing names that were never written.
-        if !prose_lower.contains(&lower) {
+        // Ground every name as a *whole word* in the actual text — guards against
+        // the model inventing names, and against a short name ("Vex") riding on a
+        // longer unrelated word ("Vexley"). Shares the prose linker's boundary rule.
+        if !contains_word_boundary(&prose_lower, &lower) {
             continue;
         }
         // Already-known names are handled by the store/vault candidate set.
@@ -160,6 +158,21 @@ mod tests {
             &known(&[]),
         );
         assert_eq!(out, vec!["The Sundering".to_string()]);
+    }
+
+    #[test]
+    fn rejects_a_sub_word_match_but_keeps_a_whole_word() {
+        // "Vex" appears only inside "Vexley" — not a whole-word mention, so it is
+        // not grounded. "Vexley" itself is a whole word and survives.
+        let prose = "The ledger was signed by Vexley of the river guild.";
+        let dropped = filter_mentions(vec!["Vex".to_string()], prose, &known(&[]));
+        assert!(
+            dropped.is_empty(),
+            "sub-word 'Vex' must not ground on 'Vexley'"
+        );
+
+        let kept = filter_mentions(vec!["Vexley".to_string()], prose, &known(&[]));
+        assert_eq!(kept, vec!["Vexley".to_string()]);
     }
 
     #[test]

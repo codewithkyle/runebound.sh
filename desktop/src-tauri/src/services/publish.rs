@@ -349,7 +349,8 @@ fn join_prose(fields: &[&str]) -> String {
 /// Characters with special meaning inside an Obsidian `[[wikilink]]` target
 /// (`|` alias, `#` heading, `^` block, and the brackets themselves). If a value
 /// contains any of them we leave it unlinked rather than emit a broken link.
-const WIKILINK_UNSAFE: &[char] = &['[', ']', '|', '#', '^'];
+/// Shared with `mention_extraction` so both link layers agree on what's unsafe.
+pub(crate) const WIKILINK_UNSAFE_CHARS: &[char] = &['[', ']', '|', '#', '^'];
 
 /// Wrap a single entity name in an Obsidian `[[wikilink]]`. This is what lets a
 /// relational reference resolve to — or stub out — another entity's page, even
@@ -367,7 +368,7 @@ fn wikilink(value: &str) -> String {
     if trimmed.starts_with("[[") && trimmed.ends_with("]]") {
         return trimmed.to_string();
     }
-    if trimmed.contains(WIKILINK_UNSAFE) {
+    if trimmed.contains(WIKILINK_UNSAFE_CHARS) {
         return trimmed.to_string();
     }
     format!("[[{trimmed}]]")
@@ -400,7 +401,7 @@ impl EntityLinker {
             // Never link a page to itself.
             .filter(|name| name.to_ascii_lowercase() != self_lower)
             // A name with link-unsafe characters can't form a clean target.
-            .filter(|name| !name.contains(WIKILINK_UNSAFE))
+            .filter(|name| !name.contains(WIKILINK_UNSAFE_CHARS))
             // De-duplicate case-insensitively, keeping the first casing seen.
             .filter(|name| seen.insert(name.to_ascii_lowercase()))
             .collect();
@@ -474,7 +475,7 @@ impl EntityLinker {
 
 /// A left word boundary exists at byte `i` when the preceding char is absent or
 /// not alphanumeric (so we match whole words, not substrings inside a word).
-fn boundary_before(text: &str, i: usize) -> bool {
+pub(crate) fn boundary_before(text: &str, i: usize) -> bool {
     text[..i]
         .chars()
         .next_back()
@@ -484,11 +485,26 @@ fn boundary_before(text: &str, i: usize) -> bool {
 /// A right word boundary exists at byte `end` when the following char is absent
 /// or not alphanumeric. This keeps possessives working: matching "Waterdeep" in
 /// "Waterdeep's" ends before the apostrophe, yielding `[[Waterdeep]]'s`.
-fn boundary_after(text: &str, end: usize) -> bool {
+pub(crate) fn boundary_after(text: &str, end: usize) -> bool {
     text[end..]
         .chars()
         .next()
         .is_none_or(|c| !c.is_alphanumeric())
+}
+
+/// Whole-word containment: true iff `needle` occurs in `haystack` bounded by a
+/// word boundary on both sides. Both inputs must already be lowercased
+/// (`to_ascii_lowercase` is byte-preserving, so byte offsets line up — the same
+/// invariant [`EntityLinker::link_prose`] relies on). This is the grounding check
+/// the mention extractor shares with the prose linker, so "Vex" is not treated as
+/// present just because the text contains "Vexley".
+pub(crate) fn contains_word_boundary(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    haystack.match_indices(needle).any(|(idx, _)| {
+        boundary_before(haystack, idx) && boundary_after(haystack, idx + needle.len())
+    })
 }
 
 fn write_attr_line(out: &mut String, label: &str, value: &str) {
