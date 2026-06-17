@@ -110,7 +110,7 @@ When adding a new entity, update `EntityKind`, schemas, command handlers, and su
 - Actionable command text should be clickable.
 - Preferred path: backend emits `InlineNode::CommandRef`.
 - Fallback path: `markdown.ts` heuristics.
-- **Wizard prompts get clickability by construction:** build every step prompt with the `wizards/prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`), which render each `WizardChoice` as a `command_ref`. Never hand-build a wizard prompt with back-tick text — that was the dungeon-flow clickability regression.
+- **Wizard prompts get clickability by construction:** build every step prompt with the `wizard` crate's `prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`), which render each `WizardChoice` as a `command_ref`. Never hand-build a wizard prompt with back-tick text — that was the dungeon-flow clickability regression.
 
 For any new command, ensure at least one explicit `command_ref` path exists in guidance output.
 

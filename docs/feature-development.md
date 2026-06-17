@@ -142,15 +142,15 @@ A *wizard* is a guided multi-step flow (ask a sequence of questions, then build 
 ### Steps + wizard
 
 1. Create `wizards/<name>.rs`. Define the accumulator struct (the per-flow answers; the cursor/history are engine-owned in `WizardSession`).
-2. Implement one `WizardStep` per step (`id`/`prompt`/`choices`/`awaiting_llm_label`/`accept`):
-   - Build prompts **only** with the `wizards/prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`) so every `WizardChoice` renders as a clickable `command_ref`. Never hand-build a prompt with back-tick text.
+2. Implement one `WizardStep<AppState>` per step (`id`/`prompt`/`choices`/`awaiting_llm_label`/`accept`):
+   - Build prompts **only** with the `wizard` crate's `prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`) so every `WizardChoice` renders as a clickable `command_ref`. Never hand-build a prompt with back-tick text.
    - `accept()` validates the input and returns a `WizardTransition` (`Stay`/`Next`/`Goto(id)`/`Back`/`Complete`/`Cancel`); it and `finalize()` are the only places `&AppState` is touched.
    - Set `awaiting_llm_label()` (e.g. `"generating story"`) on any step whose submission calls the LLM — this drives the spinner with no frontend text-matching (see §8).
-3. Implement the `Wizard` trait (`id`/`title`/`steps`/`seed`/`finalize`). `finalize()` builds the artifact and hands off (open an entity draft, write config, …) exactly like a one-shot create handler.
+3. Implement the `Wizard<AppState>` trait (`id`/`title`/`steps`/`seed`/`finalize`). `finalize()` builds the artifact and hands off (open an entity draft, write config, …) exactly like a one-shot create handler.
 
 ### Wiring
 
-4. Register the wizard with one line in `build_default_wizard_registry()` (`wizards/registry.rs`).
+4. Register the wizard with one line in `build_default_wizard_registry()` (`wizards/mod.rs`).
 5. Point the entry command at `start_wizard("<id>", state)` (mirror `create dungeon` in `commands/create_commands.rs`).
 6. **No plumbing edits.** Dispatch, `InputContext::Wizard`, the global verbs (`continue`/`back`/`cancel` + the in-wizard `help`), step typeahead (`active_step_suggestions` = the step's `suggest()` + globals), and the `WizardView` spinner signal all work unchanged. Give each step a `summary()` (for `help`) and `with_help(...)` on its choices; override `suggest()` only for staged multi-token args. If a wizard needs a brand-new *capability*, that is a shared engine change in `wizards/`, not per-wizard code (`docs/onboarding-wizard-port.md` tracks the planned extensions).
 

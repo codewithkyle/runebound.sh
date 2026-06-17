@@ -6,19 +6,18 @@
 //! `command_ref` rendering, and the structured spinner signal; an author writes
 //! only the per-step `prompt`/`choices`/`accept` and the wizard's `finalize`.
 //!
-//! `accept()` and `finalize()` are the *only* host-coupling points (they take
-//! `&AppState`); everything else here is host-agnostic so the engine can later be
-//! promoted to a shared crate (see docs/onboarding-wizard-port.md §3.1).
+//! Both traits are generic over a host type `H` (the host context — `AppState`
+//! for the desktop app, an `OnboardingCtx` for core/CLI). `accept()` and
+//! `finalize()` are the *only* host-coupling points (they take `&H`); everything
+//! else here is host-agnostic.
 
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use runebound_models::output::OutputDoc;
 
-use crate::app_state::AppState;
-use crate::entities::common::CommandResult;
-
-use super::session::WizardData;
+use crate::CommandResult;
+use crate::session::WizardData;
 
 /// A clickable/typeable choice on a step: the visible `label`, the literal
 /// `token` submitted when it is clicked or completed, and an optional one-line
@@ -68,14 +67,14 @@ pub enum WizardTransition {
     Cancel,
 }
 
-/// One declarative step in a wizard.
+/// One declarative step in a wizard, generic over the host type `H`.
 #[async_trait]
-pub trait WizardStep: Send + Sync {
+pub trait WizardStep<H: Send + Sync>: Send + Sync {
     /// Stable id, e.g. "tone", "plan_review".
     fn id(&self) -> &'static str;
 
     /// Build the step prompt. MUST emit `command_ref` for actionable tokens — use
-    /// the `super::prompt` helpers so clickability is by construction.
+    /// the `crate::prompt` helpers so clickability is by construction.
     fn prompt(&self, data: &WizardData) -> OutputDoc;
 
     /// One-line summary of what this step is for and what free-text/parameterized
@@ -96,7 +95,7 @@ pub trait WizardStep: Send + Sync {
     /// commands (e.g. suggest rooms after `set room `, then types). The global
     /// verbs (`back`/`cancel`/`help`) are appended by the runtime, not here.
     fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
-        super::prompt::filter_choices(&self.choices(data), input)
+        crate::prompt::filter_choices(&self.choices(data), input)
     }
 
     /// Spinner label to show when submitting from this step triggers an LLM call.
@@ -111,13 +110,13 @@ pub trait WizardStep: Send + Sync {
         &self,
         input: &str,
         data: &mut WizardData,
-        state: &AppState,
+        host: &H,
     ) -> Result<WizardTransition, String>;
 }
 
-/// A registerable, multi-step wizard.
+/// A registerable, multi-step wizard, generic over the host type `H`.
 #[async_trait]
-pub trait Wizard: Send + Sync {
+pub trait Wizard<H: Send + Sync>: Send + Sync {
     /// Stable id used as the `InputContext::Wizard` tag, e.g. "dungeon".
     fn id(&self) -> &'static str;
 
@@ -125,7 +124,7 @@ pub trait Wizard: Send + Sync {
     fn title(&self) -> &'static str;
 
     /// The ordered steps the engine walks.
-    fn steps(&self) -> &[Arc<dyn WizardStep>];
+    fn steps(&self) -> &[Arc<dyn WizardStep<H>>];
 
     /// The initial accumulator when the wizard starts. (The onboarding spike will
     /// generalize this to `seed(ctx)` for config-seeded wizards.)
@@ -133,5 +132,5 @@ pub trait Wizard: Send + Sync {
 
     /// Called on the terminal step's `Complete`: build the artifact (open a draft,
     /// write config) and hand off. The engine resets the session afterward.
-    async fn finalize(&self, state: &AppState, data: &WizardData) -> CommandResult;
+    async fn finalize(&self, host: &H, data: &WizardData) -> CommandResult;
 }

@@ -1,28 +1,43 @@
 //! The single generic wizard dispatch route. `try_execute_active_wizard` is the
 //! one interceptor that replaces every bespoke per-flow interceptor: it reads the
-//! active wizard, handles the global nav verbs (`cancel`/`back`), delegates to the
-//! active step's `accept()`, applies the resulting `WizardTransition`, and renders
-//! the next prompt (or runs `finalize`).
+//! active wizard, handles the global nav verbs (`cancel`/`back`/`help`), delegates
+//! to the active step's `accept()`, applies the resulting `WizardTransition`, and
+//! renders the next prompt (or runs `finalize`).
+//!
+//! Generic over a host `H: WizardHost` — the host owns the registry and the live
+//! session, and is itself the context passed to `accept()`/`finalize()`. The
+//! desktop app implements `WizardHost for AppState`; core/CLI will implement it
+//! for its own onboarding context.
 
-use runebound_models::CommandResponse;
-use runebound_models::WizardView;
-use runebound_models::output::{doc, paragraph_text};
+use tokio::sync::Mutex;
 
-use crate::app_state::AppState;
-use crate::commands::ok_response_with_doc;
-use crate::entities::common::{command_message_response_with_doc, CommandResult};
+use runebound_models::output::{OutputDoc, doc, paragraph_text};
+use runebound_models::{CommandResponse, OutputSegment, OutputSegmentKind, WizardView};
 
-use super::prompt::doc_to_plain_text;
-use super::session::{WizardData, WizardSession};
-use super::wizard::{Wizard, WizardChoice, WizardStep, WizardTransition};
+use crate::CommandResult;
+use crate::prompt::doc_to_plain_text;
+use crate::registry::WizardRegistry;
+use crate::session::{WizardData, WizardSession};
+use crate::wizard::{Wizard, WizardChoice, WizardStep, WizardTransition};
+
+/// A host that can drive wizards: it owns the registry of registered wizards and
+/// the live session, and is itself the context passed to steps' `accept()` and
+/// `finalize()`. Implemented by the desktop `AppState` (and, in the onboarding
+/// port, by a core-side context). `Self` is the wizard host type `H`.
+pub trait WizardHost: Send + Sync + Sized {
+    /// The registry of wizards available to this host.
+    fn wizard_registry(&self) -> &WizardRegistry<Self>;
+    /// The live wizard session (active id, cursor, history, accumulator).
+    fn wizard_session(&self) -> &Mutex<WizardSession>;
+}
 
 /// `create dungeon` and friends call this to launch a wizard and return its first
 /// prompt. Resets any prior session.
-pub async fn start_wizard(id: &'static str, state: &AppState) -> CommandResult {
-    let Some(wizard) = state.wizards().get(id) else {
+pub async fn start_wizard<H: WizardHost>(id: &'static str, host: &H) -> CommandResult {
+    let Some(wizard) = host.wizard_registry().get(id) else {
         return Err(format!("unknown wizard: {id}"));
     };
-    let mut session = state.wizard_session.lock().await;
+    let mut session = host.wizard_session().lock().await;
     *session = WizardSession {
         active_id: Some(id),
         cursor: 0,
@@ -63,12 +78,12 @@ fn dedupe_choices(choices: Vec<WizardChoice>) -> Vec<WizardChoice> {
 /// tokens + staged args like `set room <room> <type>`) plus the always-available
 /// global verbs, prefix-filtered and deduped. Empty when no wizard is active.
 /// The suggestion service calls this and maps the result to `CommandSuggestion`.
-pub async fn active_step_suggestions(state: &AppState, input: &str) -> Vec<WizardChoice> {
-    let session = state.wizard_session.lock().await;
+pub async fn active_step_suggestions<H: WizardHost>(host: &H, input: &str) -> Vec<WizardChoice> {
+    let session = host.wizard_session().lock().await;
     let Some(id) = session.active_id else {
         return Vec::new();
     };
-    let Some(wizard) = state.wizards().get(id) else {
+    let Some(wizard) = host.wizard_registry().get(id) else {
         return Vec::new();
     };
     let Some(step) = wizard.steps().get(session.cursor) else {
@@ -78,7 +93,7 @@ pub async fn active_step_suggestions(state: &AppState, input: &str) -> Vec<Wizar
         return Vec::new();
     };
     let mut out = step.suggest(input, data);
-    out.extend(super::prompt::filter_choices(
+    out.extend(crate::prompt::filter_choices(
         &global_verbs(!session.history.is_empty()),
         input,
     ));
@@ -87,15 +102,15 @@ pub async fn active_step_suggestions(state: &AppState, input: &str) -> Vec<Wizar
 
 /// Intercepted before registry dispatch while a wizard is active. Returns
 /// `Ok(None)` when no wizard is active (fall through to normal dispatch).
-pub async fn try_execute_active_wizard(line: &str, state: &AppState) -> CommandResult {
+pub async fn try_execute_active_wizard<H: WizardHost>(line: &str, host: &H) -> CommandResult {
     let trimmed = line.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
-    let mut session = state.wizard_session.lock().await;
+    let mut session = host.wizard_session().lock().await;
     let Some(id) = session.active_id else {
         return Ok(None);
     };
-    let Some(wizard) = state.wizards().get(id) else {
+    let Some(wizard) = host.wizard_registry().get(id) else {
         // Defensive: active id with no registered wizard — drop the session.
         *session = WizardSession::default();
         return Ok(None);
@@ -129,7 +144,7 @@ pub async fn try_execute_active_wizard(line: &str, state: &AppState) -> CommandR
     };
     let transition = {
         let data = session.data.as_mut().expect("active wizard data");
-        step.accept(trimmed, data, state).await?
+        step.accept(trimmed, data, host).await?
     };
 
     match transition {
@@ -139,7 +154,7 @@ pub async fn try_execute_active_wizard(line: &str, state: &AppState) -> CommandR
             session.history.push(current);
             session.cursor = current + 1;
             if session.cursor >= wizard.steps().len() {
-                return complete(wizard.as_ref(), &mut session, state).await;
+                return complete(wizard.as_ref(), &mut session, host).await;
             }
             Ok(Some(render_current(wizard.as_ref(), &session)))
         }
@@ -158,7 +173,7 @@ pub async fn try_execute_active_wizard(line: &str, state: &AppState) -> CommandR
             }
             Ok(Some(render_current(wizard.as_ref(), &session)))
         }
-        WizardTransition::Complete => complete(wizard.as_ref(), &mut session, state).await,
+        WizardTransition::Complete => complete(wizard.as_ref(), &mut session, host).await,
         WizardTransition::Cancel => {
             *session = WizardSession::default();
             cancelled(wizard.as_ref())
@@ -167,19 +182,19 @@ pub async fn try_execute_active_wizard(line: &str, state: &AppState) -> CommandR
 }
 
 /// Run the wizard's `finalize` on the accumulated data, then reset the session.
-async fn complete(
-    wizard: &dyn Wizard,
+async fn complete<H: WizardHost>(
+    wizard: &dyn Wizard<H>,
     session: &mut WizardSession,
-    state: &AppState,
+    host: &H,
 ) -> CommandResult {
     let data = session.data.take().expect("active wizard data");
-    let result = wizard.finalize(state, &data).await;
+    let result = wizard.finalize(host, &data).await;
     *session = WizardSession::default();
     result
 }
 
 /// Render the step the cursor currently points at.
-fn render_current(wizard: &dyn Wizard, session: &WizardSession) -> CommandResponse {
+fn render_current<H: Send + Sync>(wizard: &dyn Wizard<H>, session: &WizardSession) -> CommandResponse {
     let step = &wizard.steps()[session.cursor];
     let data = session.data.as_ref().expect("active wizard data");
     render_step(wizard, step.as_ref(), data)
@@ -187,10 +202,14 @@ fn render_current(wizard: &dyn Wizard, session: &WizardSession) -> CommandRespon
 
 /// Build a `CommandResponse` for a step prompt: the clickable `output_doc`, a
 /// plain-text fallback, and the structured `WizardView` spinner signal.
-fn render_step(wizard: &dyn Wizard, step: &dyn WizardStep, data: &WizardData) -> CommandResponse {
+fn render_step<H: Send + Sync>(
+    wizard: &dyn Wizard<H>,
+    step: &dyn WizardStep<H>,
+    data: &WizardData,
+) -> CommandResponse {
     let document = step.prompt(data);
     let text = doc_to_plain_text(&document);
-    let mut response = ok_response_with_doc(text, Some(document), None);
+    let mut response = ok_response_with_doc(text, document);
     response.wizard = Some(WizardView {
         id: wizard.id().to_string(),
         step_id: step.id().to_string(),
@@ -202,15 +221,18 @@ fn render_step(wizard: &dyn Wizard, step: &dyn WizardStep, data: &WizardData) ->
 /// Render the current step's `help`: its summary plus a clickable, described
 /// line per command (step choices + global verbs). Keeps the `WizardView` so the
 /// context (and the next submission's spinner) stays intact.
-fn render_step_help(wizard: &dyn Wizard, session: &WizardSession) -> CommandResponse {
+fn render_step_help<H: Send + Sync>(
+    wizard: &dyn Wizard<H>,
+    session: &WizardSession,
+) -> CommandResponse {
     let step = wizard.steps()[session.cursor].as_ref();
     let data = session.data.as_ref().expect("active wizard data");
     let mut commands = step.choices(data);
     commands.extend(global_verbs(!session.history.is_empty()));
     let commands = dedupe_choices(commands);
-    let document = super::prompt::step_help_doc(step.summary(), &commands);
+    let document = crate::prompt::step_help_doc(step.summary(), &commands);
     let text = doc_to_plain_text(&document);
-    let mut response = ok_response_with_doc(text, Some(document), None);
+    let mut response = ok_response_with_doc(text, document);
     response.wizard = Some(WizardView {
         id: wizard.id().to_string(),
         step_id: step.id().to_string(),
@@ -219,10 +241,30 @@ fn render_step_help(wizard: &dyn Wizard, session: &WizardSession) -> CommandResp
     response
 }
 
-fn cancelled(wizard: &dyn Wizard) -> CommandResult {
+fn cancelled<H: Send + Sync>(wizard: &dyn Wizard<H>) -> CommandResult {
     let message = format!("{} cancelled.", wizard.title());
-    command_message_response_with_doc(
+    Ok(Some(ok_response_with_doc(
         message.clone(),
         doc().with_block(paragraph_text(message)),
-    )
+    )))
+}
+
+/// The engine's own `CommandResponse` builder: a successful response carrying a
+/// structured `output_doc` and its plain-text fallback, with no client event
+/// (steps never emit one — only a wizard's `finalize`, which is host code, does).
+fn ok_response_with_doc(output: String, output_doc: OutputDoc) -> CommandResponse {
+    CommandResponse {
+        ok: true,
+        output: output.clone(),
+        error: None,
+        exit_code: 0,
+        segments: vec![OutputSegment {
+            kind: OutputSegmentKind::Text,
+            text: output,
+            command_ref: None,
+        }],
+        output_doc: Some(output_doc),
+        client_event: None,
+        wizard: None,
+    }
 }

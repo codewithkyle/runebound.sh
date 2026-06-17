@@ -28,9 +28,8 @@ use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, DungeonStory, SeedGeneration};
 use crate::utils::{normalize_unknown_text, prepend_notice};
 
-use super::prompt::{action_row, wizard_menu};
-use super::session::WizardData;
-use super::wizard::{Wizard, WizardChoice, WizardStep, WizardTransition};
+use wizard::prompt::{action_row, wizard_menu};
+use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 
 /// Anchor (room) content types the GM may pin with `set room`. Excludes the
 /// overlay/tint types, which are never a room on their own.
@@ -86,7 +85,7 @@ fn dungeon_data_mut(d: &mut WizardData) -> &mut DungeonWizardData {
 struct PremiseStep;
 
 #[async_trait]
-impl WizardStep for PremiseStep {
+impl WizardStep<AppState> for PremiseStep {
     fn id(&self) -> &'static str {
         "premise"
     }
@@ -132,7 +131,7 @@ impl WizardStep for PremiseStep {
 struct ToneStep;
 
 #[async_trait]
-impl WizardStep for ToneStep {
+impl WizardStep<AppState> for ToneStep {
     fn id(&self) -> &'static str {
         "tone"
     }
@@ -175,7 +174,7 @@ impl WizardStep for ToneStep {
 struct TwistStep;
 
 #[async_trait]
-impl WizardStep for TwistStep {
+impl WizardStep<AppState> for TwistStep {
     fn id(&self) -> &'static str {
         "twist"
     }
@@ -220,7 +219,7 @@ impl WizardStep for TwistStep {
 struct ContextStep;
 
 #[async_trait]
-impl WizardStep for ContextStep {
+impl WizardStep<AppState> for ContextStep {
     fn id(&self) -> &'static str {
         "context"
     }
@@ -261,7 +260,7 @@ impl WizardStep for ContextStep {
 struct TopologyStep;
 
 #[async_trait]
-impl WizardStep for TopologyStep {
+impl WizardStep<AppState> for TopologyStep {
     fn id(&self) -> &'static str {
         "topology"
     }
@@ -279,7 +278,7 @@ impl WizardStep for TopologyStep {
                 "The nine dungeon topologies — each named form with its entrance (E) marked",
             ))
             .with_block(paragraph_text("Pick one of the nine forms, or 0 for none:"))
-            .with_block(super::prompt::choice_lines(&self.choices(data)))
+            .with_block(wizard::prompt::choice_lines(&self.choices(data)))
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
@@ -313,7 +312,7 @@ impl WizardStep for TopologyStep {
 struct PlanReviewStep;
 
 #[async_trait]
-impl WizardStep for PlanReviewStep {
+impl WizardStep<AppState> for PlanReviewStep {
     fn id(&self) -> &'static str {
         "plan_review"
     }
@@ -406,7 +405,7 @@ impl WizardStep for PlanReviewStep {
 struct StoryReviewStep;
 
 #[async_trait]
-impl WizardStep for StoryReviewStep {
+impl WizardStep<AppState> for StoryReviewStep {
     fn id(&self) -> &'static str {
         "story_review"
     }
@@ -478,7 +477,7 @@ impl WizardStep for StoryReviewStep {
 // ---------------------------------------------------------------------------
 
 pub struct DungeonWizard {
-    steps: Vec<Arc<dyn WizardStep>>,
+    steps: Vec<Arc<dyn WizardStep<AppState>>>,
 }
 
 impl DungeonWizard {
@@ -498,7 +497,7 @@ impl DungeonWizard {
 }
 
 #[async_trait]
-impl Wizard for DungeonWizard {
+impl Wizard<AppState> for DungeonWizard {
     fn id(&self) -> &'static str {
         "dungeon"
     }
@@ -507,7 +506,7 @@ impl Wizard for DungeonWizard {
         "Create Dungeon"
     }
 
-    fn steps(&self) -> &[Arc<dyn WizardStep>] {
+    fn steps(&self) -> &[Arc<dyn WizardStep<AppState>>] {
         &self.steps
     }
 
@@ -774,7 +773,7 @@ fn suggest_plan_review(input: &str, base_choices: &[WizardChoice]) -> Vec<Wizard
         return suggest_reroll(&tokens, ends_space);
     }
 
-    let mut out = super::prompt::filter_choices(base_choices, input);
+    let mut out = wizard::prompt::filter_choices(base_choices, input);
     if !lowered.is_empty() && "set".starts_with(&lowered) {
         out.push(staged("set room", true));
     }

@@ -3,7 +3,7 @@
 //! `WizardChoice` always renders as a `command_ref`, so clicking submits its
 //! token. This closes the clickability regression by construction.
 //!
-//! Host-agnostic (no `AppState`).
+//! Host-agnostic (no host type).
 
 use runebound_models::output::{
     InlineNode, OutputBlock, OutputDoc, command_ref, doc, heading, list, paragraph_text,

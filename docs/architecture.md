@@ -21,7 +21,8 @@ The project is a Rust workspace with a Tauri desktop frontend. Responsibilities 
 | `command-handler` | Generic dispatch primitives | `CommandHandler`, `HandlerEntry`, `HandlerRegistry`, `HandlerMetadata` |
 | `command-specs` | Command manifest source of truth | `command_manifest()`, `CommandManifest`, `CommandSpec`, `handler_metadata_for()` |
 | `runebound-models` | Shared models + TS generation | `NpcDraft`, `LocationDraft`, `FactionDraft`, `ItemDraft`, `OutputDoc`, `events` |
-| `desktop/src-tauri` | Desktop command backend | `commands/`, `services/`, `repositories/`, `router.rs`, `main.rs` |
+| `wizard` | Host-agnostic multi-step wizard engine, generic over a host `H: WizardHost` | `Wizard`, `WizardStep`, `WizardTransition`, `WizardSession`, `WizardRegistry`, `WizardHost`, `runtime`, `prompt` |
+| `desktop/src-tauri` | Desktop command backend | `commands/`, `services/`, `repositories/`, `router.rs`, `main.rs`, `wizards/` (binds the engine to `AppState`) |
 
 ---
 
@@ -46,7 +47,7 @@ The desktop registry is consulted first; a miss falls through to the core regist
 
 - **Desktop overrides core for the same root.** Registering a root in both registries makes the desktop handler win in the desktop app — the supported way to give a core command access to desktop-only state. `help` does this so it can read the open entity editor for context-aware output.
 - **Onboarding interception.** While the setup wizard is active (`onboarding.active`), input is routed to `try_execute_onboarding` *before* registry dispatch, so the desktop registry is bypassed during setup.
-- **Generic wizard route.** While any registered wizard is active (`wizard_session.active_id`), input is routed to `try_execute_active_wizard` (`wizards/runtime.rs`) *before* registry dispatch. This is **one** route that serves every wizard, not a per-flow interceptor — adding a wizard adds no dispatch code. See §4's Wizard Framework.
+- **Generic wizard route.** While any registered wizard is active (`wizard_session.active_id`), input is routed to `try_execute_active_wizard` (the `wizard` crate's `runtime.rs`, wired in `main.rs`) *before* registry dispatch. This is **one** route that serves every wizard, not a per-flow interceptor — adding a wizard adds no dispatch code. See §4's Wizard Framework.
 
 See `docs/command-contexts.md` for the full dispatch-route, context, and parser rules.
 
@@ -96,13 +97,9 @@ desktop/src-tauri/src/
 |  |- domain.rs            # EntityDomain trait + result helpers
 |  |- registry.rs          # EntityDomainRegistry builder
 |  `- domains/             # npc|location|faction|item domain adapters
-|- wizards/                # multi-step wizard engine (mirrors entities/)
-|  |- wizard.rs            # Wizard + WizardStep traits, WizardChoice/Transition
-|  |- session.rs           # WizardSession (cursor + history + type-erased data)
-|  |- registry.rs          # WizardRegistry + build_default_wizard_registry()
-|  |- runtime.rs           # try_execute_active_wizard(): the single dispatch route
-|  |- prompt.rs            # wizard_menu/action_row: clickable prompts by construction
-|  `- dungeon.rs           # the dungeon wizard (declarative steps)
+|- wizards/                # binds the `wizard` engine crate to AppState
+|  |- mod.rs               # impl WizardHost for AppState + build_default_wizard_registry() + re-exports
+|  `- dungeon.rs           # the dungeon wizard (declarative steps, impl Wizard<AppState>)
 |- repositories/
 |  `- mod.rs               # repository traits + Prod* implementations
 `- services/
@@ -132,28 +129,30 @@ This setup keeps command modules small and makes onboarding new entity types a m
 
 ### Wizard Framework
 
-Multi-step *wizards* (guided flows like `create dungeon` that ask a sequence of questions before producing an artifact) use the same additive, registry-backed pattern as entities — deliberately mirrored so the two read the same way. A wizard is **declarative data plus one trait impl**; the plumbing (dispatch, navigation verbs, clickable prompts, autocomplete context, the spinner signal) lives in `wizards/` once and never changes per wizard.
+Multi-step *wizards* (guided flows like `create dungeon` that ask a sequence of questions before producing an artifact) use the same additive, registry-backed pattern as entities — deliberately mirrored so the two read the same way. A wizard is **declarative data plus one trait impl**; the plumbing (dispatch, navigation verbs, clickable prompts, autocomplete context, the spinner signal) lives once and never changes per wizard.
+
+The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs` is the concrete wizard. This split is what lets core/CLI reuse the same engine (see `docs/onboarding-wizard-port.md`).
 
 | Entity domain (one-shot create) | Wizard (multi-step flow) |
 |---|---|
 | `EntityKind` variant | stable `id()` string (`"dungeon"`) |
 | `EntitySchema` + `EntityFieldSpec` | ordered `WizardStep`s (declarative) |
-| `EntityDomain` trait (`entities/domain.rs`) | `Wizard` trait (`wizards/wizard.rs`) |
+| `EntityDomain` trait (`entities/domain.rs`) | `Wizard` trait (`wizard` crate, `wizard.rs`) |
 | `EntityDomainRegistry` + `build_default_registry()` | `WizardRegistry` + `build_default_wizard_registry()` |
 | `EditorSession` (`active_kind` + draft map) | `WizardSession` (`active_id` + cursor + history + type-erased data) |
 | `InputContext::EntityEditor(kind)` | `InputContext::Wizard(id)` |
 | `CommandAvailability::EntityScoped` | `CommandAvailability::AnyWizard` (`continue`/`back`) + `AnyEditorOrWizard` (`cancel`) |
-| Card footer emits `command_ref` (`drafts.rs`) | Step prompt emits `command_ref` **by construction** (`wizards/prompt.rs`) |
+| Card footer emits `command_ref` (`drafts.rs`) | Step prompt emits `command_ref` **by construction** (`wizard` crate, `prompt.rs`) |
 
-Key pieces:
+Key pieces (all in the `wizard` crate unless noted):
 
-- **`Wizard` + `WizardStep` traits** (`wizards/wizard.rs`): a wizard exposes `id/title/steps/seed/finalize`; each step exposes `prompt/summary/choices/suggest/awaiting_llm_label/accept`. `accept()` returns a `WizardTransition` (`Stay`/`Next`/`Goto(id)`/`Back`/`Complete`/`Cancel`) and is — with `finalize()` — the *only* host-coupled surface (it takes `&AppState`); everything else is host-agnostic so the engine can later move to a shared crate. `summary()` feeds the in-wizard `help`; `suggest(input, data)` defaults to prefix-filtering `choices()` and is overridden for staged multi-token args (`set room <room> <type>`).
-- **`WizardSession`** (`wizards/session.rs`): the live cursor, a history stack that powers `back`, and a type-erased `WizardData` accumulator (`Box<dyn Any>`, the wizard analogue of `DraftEnvelope`). Lives on `AppState` next to `wizards: Arc<WizardRegistry>`.
-- **One dispatch route** (`wizards/runtime.rs`): `try_execute_active_wizard` handles the global verbs (`cancel`/`back`/`help` — `help` renders the step's commands without advancing), delegates to the active step's `accept()`, applies the transition, and renders the next prompt (or runs `finalize`). It populates the structured `CommandResponse.wizard: WizardView { id, step_id, awaiting_llm_label }` that drives the frontend spinner — no prompt-text matching.
-- **Clickability by construction** (`wizards/prompt.rs`): the sanctioned prompt builders (`wizard_menu`, `action_row`, `choice_lines`) render every `WizardChoice` as a `command_ref`, so an author *cannot* emit a non-clickable choice.
+- **`Wizard<H>` + `WizardStep<H>` traits** (`wizard.rs`): a wizard exposes `id/title/steps/seed/finalize`; each step exposes `prompt/summary/choices/suggest/awaiting_llm_label/accept`. `accept()` returns a `WizardTransition` (`Stay`/`Next`/`Goto(id)`/`Back`/`Complete`/`Cancel`) and is — with `finalize()` — the *only* host-coupled surface (it takes `&H`, the host context, e.g. `&AppState`); everything else is host-agnostic, which is why the engine is its own crate. `summary()` feeds the in-wizard `help`; `suggest(input, data)` defaults to prefix-filtering `choices()` and is overridden for staged multi-token args (`set room <room> <type>`).
+- **`WizardSession`** (`session.rs`): the live cursor, a history stack that powers `back`, and a type-erased `WizardData` accumulator (`Box<dyn Any>`, the wizard analogue of `DraftEnvelope`). Lives on the host (`AppState`) next to `wizards: Arc<WizardRegistry<AppState>>`; the `WizardHost` trait exposes both to the engine.
+- **One dispatch route** (`runtime.rs`): `try_execute_active_wizard` handles the global verbs (`cancel`/`back`/`help` — `help` renders the step's commands without advancing), delegates to the active step's `accept()`, applies the transition, and renders the next prompt (or runs `finalize`). It populates the structured `CommandResponse.wizard: WizardView { id, step_id, awaiting_llm_label }` that drives the frontend spinner — no prompt-text matching.
+- **Clickability by construction** (`prompt.rs`): the sanctioned prompt builders (`wizard_menu`, `action_row`, `choice_lines`) render every `WizardChoice` as a `command_ref`, so an author *cannot* emit a non-clickable choice.
 - **Autocomplete for free**: `resolve_input_context` returns `InputContext::Wizard(id)` while a wizard is active; the suggestion service then early-returns `active_step_suggestions`, which combines the step's `suggest()` (per-step tokens + staged args) with the always-available global verbs (`back`/`cancel`/`help`). The step owns the whole command surface, so only the commands valid *here* are offered.
 
-The dungeon wizard (`wizards/dungeon.rs`) is the reference implementation. See §8D for the "Add a New Wizard" playbook.
+The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the reference implementation. See §8D for the "Add a New Wizard" playbook.
 
 ## 5. Command Manifest and Metadata Rules
 
@@ -259,14 +258,14 @@ No router changes are needed for normal top-level command additions. See `docs/c
 
 Mirrors C, but for a sequence of prompts rather than a one-shot create. The plumbing is already written; a new wizard is additive data + one trait impl (see §4 Wizard Framework).
 
-1. **Steps + data**: in a new `wizards/<name>.rs`, define the accumulator struct and one `WizardStep` impl per step. Build prompts only with the `wizards/prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`) so every choice is a clickable `command_ref`. Set `awaiting_llm_label()` on any step whose submission calls the LLM.
+1. **Steps + data**: in a new `wizards/<name>.rs`, define the accumulator struct and one `WizardStep<AppState>` impl per step. Build prompts only with the `wizard` crate's `prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`) so every choice is a clickable `command_ref`. Set `awaiting_llm_label()` on any step whose submission calls the LLM.
 2. **Wizard impl**: implement the `Wizard` trait (`id/title/steps/seed/finalize`). `finalize()` builds the artifact and hands off (open an entity draft, write config, …) exactly as a create handler would.
-3. **Register**: add one line in `build_default_wizard_registry()` (`wizards/registry.rs`).
+3. **Register**: add one line in `build_default_wizard_registry()` (`wizards/mod.rs`).
 4. **Launch**: point the entry command at `start_wizard("<id>", state)` (mirror `create dungeon` in `create_commands.rs`).
 5. **No plumbing edits**: dispatch (`try_execute_active_wizard`), the nav verbs, `InputContext::Wizard`, the spinner signal, and step-token autocomplete all work without changes. The nav verbs already have `command_availability` arms (`continue`/`back` = `AnyWizard`, `cancel` = `AnyEditorOrWizard`).
 6. **Verify**: `cargo test suggestions` (step-token typeahead), then manually walk the flow — every step's choices clickable, `back`/`cancel` at each step, spinner on LLM steps, `finalize` produces the artifact.
 
-The only edits outside `wizards/<name>.rs` are the one registry line and the launch call. If a wizard needs a new step *capability* (a new `WizardTransition`, a config seed), that is an engine change in `wizards/` shared by all wizards — see `docs/onboarding-wizard-port.md` for the planned extensions.
+The only edits outside `wizards/<name>.rs` are the one registry line and the launch call. If a wizard needs a new step *capability* (a new `WizardTransition`, a config seed), that is an engine change in the `wizard` crate shared by all wizards — see `docs/onboarding-wizard-port.md` for the planned extensions.
 
 ---
 

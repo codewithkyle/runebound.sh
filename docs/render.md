@@ -66,7 +66,7 @@ For actionable command guidance, emit explicit `command_ref` inline nodes. Do no
 
 ### Wizard Prompt Builders
 
-Wizard step prompts must be built with the sanctioned helpers in `desktop/src-tauri/src/wizards/prompt.rs` — `wizard_menu` (numbered/option menu), `action_row` (a `·`-joined review verb row), and `choice_lines` (one choice per line). Each renders a `WizardChoice` as a `command_ref`, so clickability is guaranteed by construction. Never hand-build a wizard prompt from `paragraph_text` with back-tick verbs — that produces non-clickable code spans (the dungeon-flow regression).
+Wizard step prompts must be built with the sanctioned helpers in the `wizard` crate's `prompt.rs` — `wizard_menu` (numbered/option menu), `action_row` (a `·`-joined review verb row), and `choice_lines` (one choice per line). Each renders a `WizardChoice` as a `command_ref`, so clickability is guaranteed by construction. Never hand-build a wizard prompt from `paragraph_text` with back-tick verbs — that produces non-clickable code spans (the dungeon-flow regression).
 
 ---
 
@@ -163,7 +163,7 @@ Before merging rendering changes:
 |---|---|
 | Add output block / inline type | `runebound-models/src/output.rs` |
 | Add entity card builder | `runebound-models/src/drafts.rs` |
-| Build a wizard step prompt | `desktop/src-tauri/src/wizards/prompt.rs` (`wizard_menu`/`action_row`) |
+| Build a wizard step prompt | `wizard` crate `prompt.rs` (`wizard_menu`/`action_row`) |
 | Add rendering behavior | `desktop/src/output/renderer.tsx` |
 | Add fallback parse behavior | `desktop/src/output/markdown.ts` |
 | Add output styling | `desktop/src/index.css` and `desktop/src/output/theme.ts` |

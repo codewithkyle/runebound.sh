@@ -1,15 +1,15 @@
 //! Per-run wizard state: which wizard is active, where the cursor is, the history
 //! stack that powers `back`, and the type-erased accumulator.
 //!
-//! Host-agnostic by design (no `AppState`) so the engine can move to a shared
-//! crate later — only the trait `accept()`/`finalize()` touch host state.
+//! Host-agnostic by design (no host type) — only the trait `accept()`/`finalize()`
+//! touch host state.
 
 use std::any::Any;
 
 /// The per-wizard accumulator, type-erased so the engine is generic over every
 /// wizard. Mirrors how `DraftEnvelope` erases entity drafts, but uses `Any` (not
-/// an enum) so a future shared `wizard` crate need not know every concrete
-/// wizard's data type.
+/// an enum) so the shared `wizard` crate need not know every concrete wizard's
+/// data type.
 pub struct WizardData(Box<dyn Any + Send + Sync>);
 
 impl WizardData {

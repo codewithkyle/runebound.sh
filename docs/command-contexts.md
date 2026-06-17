@@ -88,7 +88,7 @@ Most commands follow the registry path, but three routes bypass it. Know all fou
    - `model` / `setup model` are also handled on this path (before the `active` guard), so they work outside an active wizard too.
    - Onboarding is itself a multi-step wizard but predates the generic engine (route 4); it lives in core and keeps its own route until the port in `docs/onboarding-wizard-port.md`.
 
-4. **Generic wizard route.** When `wizard_session.active_id` is set, input is routed to `try_execute_active_wizard` (`wizards/runtime.rs`) *before* registry dispatch in desktop `run_command`. Unlike onboarding, this is **one** route shared by every registered wizard — the dungeon flow's former bespoke interceptor was deleted in favor of it. Consequences:
+4. **Generic wizard route.** When `wizard_session.active_id` is set, input is routed to `try_execute_active_wizard` (the `wizard` crate's `runtime.rs`) *before* registry dispatch in desktop `run_command`. Unlike onboarding, this is **one** route shared by every registered wizard — the dungeon flow's former bespoke interceptor was deleted in favor of it. Consequences:
    - The active step's `accept()` consumes the raw line, so step answers (`2`, a free-text premise, `reroll`) are never parsed as commands. The nav verbs `continue`/`back`/`cancel` are real manifest commands gated to wizard contexts (`AnyWizard` / `AnyEditorOrWizard`) — handled by the route, not by desktop handlers.
    - The response carries a structured `WizardView { id, step_id, awaiting_llm_label }` so the frontend spinner needs no prompt-text matching.
    - Adding a wizard adds **no** dispatch code — register a `Wizard` and point a launch command at `start_wizard`. See `docs/architecture.md` §4 (Wizard Framework) and §8D.

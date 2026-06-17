@@ -486,7 +486,7 @@ pub(crate) struct AppState {
     pub(crate) domains: Arc<EntityDomainRegistry>,
     /// Registry of multi-step wizards, mirroring `domains`. Adding a wizard is one
     /// line in `build_default_wizard_registry()`.
-    pub(crate) wizards: Arc<WizardRegistry>,
+    pub(crate) wizards: Arc<WizardRegistry<AppState>>,
     /// Live state of the active wizard (cursor, history, accumulator).
     pub(crate) wizard_session: Mutex<WizardSession>,
     /// Cached result of the boot LLM health probe, reused to render the MOTD
@@ -545,10 +545,6 @@ impl AppState {
 
     pub(crate) fn domains(&self) -> Arc<EntityDomainRegistry> {
         self.domains.clone()
-    }
-
-    pub(crate) fn wizards(&self) -> Arc<WizardRegistry> {
-        self.wizards.clone()
     }
 
     /// Resolve the current input context that gates autocomplete + help. Precedence:
