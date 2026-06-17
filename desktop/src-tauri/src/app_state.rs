@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use tokio::sync::Mutex;
 
+use dnd_core::command_manifest::InputContext;
 use runebound_models::{
     DungeonContentPlan, DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft,
     NpcDraft,
@@ -562,6 +563,34 @@ impl AppState {
 
     pub(crate) fn domains(&self) -> Arc<EntityDomainRegistry> {
         self.domains.clone()
+    }
+
+    /// Resolve the current input context that gates autocomplete + help. An open
+    /// entity draft takes precedence over an in-progress setup wizard. This is the
+    /// single resolution point shared by the suggestion service and the desktop
+    /// `help` handler so the two cannot drift (see docs/command-contexts.md).
+    ///
+    /// Phase 2 will add an `InputContext::Wizard(id)` arm here once `AppState`
+    /// owns a `WizardSession`; for now an active wizard does not exist.
+    pub(crate) async fn resolve_input_context(&self) -> InputContext {
+        let active_kind = {
+            let editor = self.editor_session.lock().await;
+            editor.active_kind()
+        };
+        match active_kind {
+            Some(kind) => InputContext::EntityEditor(kind.as_str().to_string()),
+            None => {
+                let onboarding_active = {
+                    let service = self.command_service.lock().await;
+                    service.session().onboarding.active
+                };
+                if onboarding_active {
+                    InputContext::ConfigEditor
+                } else {
+                    InputContext::Default
+                }
+            }
+        }
     }
 }
 

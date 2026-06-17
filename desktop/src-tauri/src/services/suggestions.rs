@@ -65,21 +65,9 @@ impl SuggestionService {
 
         // Resolve the current input context (entity editor takes precedence over an
         // in-progress setup wizard) and keep only commands the manifest declares
-        // visible there. This replaces the former hard-coded per-kind blacklist.
-        let context = match active_kind {
-            Some(kind) => command_manifest::InputContext::EntityEditor(kind.as_str().to_string()),
-            None => {
-                let onboarding_active = {
-                    let service = state.command_service.lock().await;
-                    service.session().onboarding.active
-                };
-                if onboarding_active {
-                    command_manifest::InputContext::ConfigEditor
-                } else {
-                    command_manifest::InputContext::Default
-                }
-            }
-        };
+        // visible there. Shared with the desktop `help` handler via
+        // AppState::resolve_input_context so the two cannot drift.
+        let context = state.resolve_input_context().await;
 
         suggestions.retain(|suggestion| {
             let root = suggestion

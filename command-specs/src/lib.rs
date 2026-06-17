@@ -115,6 +115,8 @@ pub enum InputContext {
     ConfigEditor,
     /// An entity draft is open; the tag is the entity's command root ("npc", ...).
     EntityEditor(String),
+    /// A multi-step wizard is running; the tag is the active wizard id ("dungeon", ...).
+    Wizard(String),
 }
 
 /// Declarative visibility of a command across input contexts.
@@ -138,6 +140,10 @@ pub enum CommandAvailability {
     EntityEditorOnly,
     /// Only while the matching entity kind's editor is active (npc, location, ...).
     EntityScoped(&'static str),
+    /// Only while a wizard is active (continue, back).
+    AnyWizard,
+    /// Any active editor (config/entity) or an active wizard (cancel).
+    AnyEditorOrWizard,
 }
 
 impl CommandAvailability {
@@ -160,6 +166,11 @@ impl CommandAvailability {
             CommandAvailability::EntityScoped(tag) => {
                 matches!(context, InputContext::EntityEditor(active) if active == tag)
             }
+            CommandAvailability::AnyWizard => matches!(context, InputContext::Wizard(_)),
+            CommandAvailability::AnyEditorOrWizard => matches!(
+                context,
+                InputContext::ConfigEditor | InputContext::EntityEditor(_) | InputContext::Wizard(_)
+            ),
         }
     }
 }
@@ -179,7 +190,10 @@ pub fn command_availability(name: &str) -> CommandAvailability {
         "god" => CommandAvailability::EntityScoped("god"),
         "dungeon" => CommandAvailability::EntityScoped("dungeon"),
         "reroll" => CommandAvailability::EntityEditorOnly,
-        "save" | "cancel" => CommandAvailability::AnyEditor,
+        "save" => CommandAvailability::AnyEditor,
+        // `cancel` exits an editor *or* a wizard; `continue`/`back` are wizard nav verbs.
+        "cancel" => CommandAvailability::AnyEditorOrWizard,
+        "continue" | "back" => CommandAvailability::AnyWizard,
         "publish" => CommandAvailability::DefaultOrEntityEditor,
         "help" | "clear" => CommandAvailability::Always,
         _ => CommandAvailability::Default,
@@ -1177,6 +1191,31 @@ pub fn command_manifest() -> CommandManifest {
                 execution: CommandExecution::Core,
                 show_in_autocomplete: true,
             },
+            // Wizard navigation verbs. Handled by the wizard interceptor (not a
+            // registered handler); they are listed here so help + autocomplete
+            // surface them, gated to `AnyWizard` by `command_availability`.
+            CommandSpec {
+                name: "continue".to_string(),
+                summary: "Advance to the next step of the active wizard".to_string(),
+                examples: vec!["continue".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
+                name: "back".to_string(),
+                summary: "Return to the previous step of the active wizard".to_string(),
+                examples: vec!["back".to_string()],
+                subcommands: Vec::new(),
+                options: Vec::new(),
+                requires_subcommand: false,
+                canonical_help_command: None,
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
         ],
         aliases: vec![
             CommandAlias {
@@ -1298,11 +1337,32 @@ mod tests {
 
     #[test]
     fn save_and_cancel_are_visible_in_any_editor_but_not_default() {
+        // `save` is editor-only; `cancel` additionally exits an active wizard.
+        assert_eq!(command_availability("save"), CommandAvailability::AnyEditor);
+        assert_eq!(
+            command_availability("cancel"),
+            CommandAvailability::AnyEditorOrWizard
+        );
         for root in ["save", "cancel"] {
-            assert_eq!(command_availability(root), CommandAvailability::AnyEditor);
             assert!(command_availability(root).is_visible_in(&npc_editor()));
             assert!(command_availability(root).is_visible_in(&InputContext::ConfigEditor));
             assert!(!command_availability(root).is_visible_in(&InputContext::Default));
+        }
+        // `cancel` is also visible inside a wizard; `save` is not.
+        let wizard = InputContext::Wizard("dungeon".to_string());
+        assert!(command_availability("cancel").is_visible_in(&wizard));
+        assert!(!command_availability("save").is_visible_in(&wizard));
+    }
+
+    #[test]
+    fn nav_verbs_are_visible_only_in_a_wizard() {
+        let wizard = InputContext::Wizard("dungeon".to_string());
+        for root in ["continue", "back"] {
+            assert_eq!(command_availability(root), CommandAvailability::AnyWizard);
+            assert!(command_availability(root).is_visible_in(&wizard));
+            assert!(!command_availability(root).is_visible_in(&InputContext::Default));
+            assert!(!command_availability(root).is_visible_in(&InputContext::ConfigEditor));
+            assert!(!command_availability(root).is_visible_in(&npc_editor()));
         }
     }
 

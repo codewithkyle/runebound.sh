@@ -314,6 +314,12 @@ export type CommandClientEvent =
   | { kind: "clear_terminal"; clear_history: boolean }
   | { kind: "exit_requested" };
 
+export type WizardView = {
+  id: string;
+  step_id: string;
+  awaiting_llm_label?: string | null;
+};
+
 export type CommandResponse = {
   ok: boolean;
   output: string;
@@ -322,5 +328,6 @@ export type CommandResponse = {
   segments?: OutputSegment[];
   output_doc?: OutputDoc | null;
   client_event?: CommandClientEvent | null;
+  wizard?: WizardView | null;
 };
 

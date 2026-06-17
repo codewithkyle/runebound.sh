@@ -126,6 +126,7 @@ pub fn ok_response_with_doc(
         }],
         output_doc,
         client_event,
+        wizard: None,
     }
 }
 

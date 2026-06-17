@@ -273,6 +273,7 @@ pub async fn execute_line_with_session(
                 }],
                 output_doc: output.output_doc,
                 client_event: None,
+                wizard: None,
             };
         }
         Ok(None) => {}
@@ -290,6 +291,7 @@ pub async fn execute_line_with_session(
                 }],
                 output_doc: Some(output_doc_from_error_text(err.to_string())),
                 client_event: None,
+                wizard: None,
             };
         }
     }
@@ -309,6 +311,7 @@ pub async fn execute_line_with_session(
                 }],
                 output_doc: output.output_doc,
                 client_event: None,
+                wizard: None,
             }
         }
         Err(err) => {
@@ -325,6 +328,7 @@ pub async fn execute_line_with_session(
                 }],
                 output_doc: Some(output_doc_from_error_text(err.to_string())),
                 client_event: None,
+                wizard: None,
             }
         }
     }
