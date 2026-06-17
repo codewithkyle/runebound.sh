@@ -98,7 +98,9 @@ export default function App() {
   const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
   const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
   const [dungeonDraft, setDungeonDraft] = createSignal<DungeonDraft | null>(null);
-  const [dungeonTopologyPrompt, setDungeonTopologyPrompt] = createSignal(false);
+  // Which dungeon-flow review screen the backend last rendered, so the next
+  // `continue`/`reroll` shows the right generation spinner. null = not on one.
+  const [dungeonFlowScreen, setDungeonFlowScreen] = createSignal<DungeonFlowScreen>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
@@ -355,7 +357,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), dungeonTopologyPrompt());
+    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), dungeonFlowScreen());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -377,10 +379,10 @@ export default function App() {
         // shows the connection-test spinner. Only update on success; on error we
         // keep the prior context so a retry still shows the spinner.
         setOllamaPrompt(detectOllamaPrompt(rendered.text));
-        // Track the dungeon flow's Step E (topology) prompt so the next answer —
-        // a bare digit that completes the flow — shows a "generating dungeon"
-        // spinner. Cleared once the flow ends (any other rendered output).
-        setDungeonTopologyPrompt(detectDungeonTopologyPrompt(rendered.text));
+        // Track which dungeon-flow review screen was just rendered so the next
+        // `continue`/`reroll` shows the right spinner (story vs. cards). Cleared
+        // once the flow leaves the review screens (any other rendered output).
+        setDungeonFlowScreen(detectDungeonFlowScreen(rendered.text));
         applyClientEvent(response.client_event);
         const outputDocOverride = outputDocFromClientEvent(response.client_event);
         const suppressOutput =
@@ -1066,23 +1068,45 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
   return null;
 }
 
-// The dungeon flow's Step E prompt marker (mirrors the Ollama heuristic): the
-// completing answer is a bare digit, so we recognize the prompt rather than the
-// input to show the "generating dungeon" spinner on the next submit.
-function detectDungeonTopologyPrompt(text: string): boolean {
-  return text.includes("Step 5 of 5 — Topology");
+// Which dungeon-flow review screen the backend just rendered. The completing
+// inputs (`continue`/`reroll`) are generic words, so — like the Ollama heuristic —
+// we recognize the prompt rather than the input to pick the spinner.
+type DungeonFlowScreen = "plan" | "story" | null;
+
+function detectDungeonFlowScreen(text: string): DungeonFlowScreen {
+  if (text.includes("Create Dungeon — Room Plan")) {
+    return "plan";
+  }
+  if (text.includes("Create Dungeon — Story")) {
+    return "story";
+  }
+  return null;
 }
 
 function commandSpinnerLabel(
   raw: string,
   ollamaPrompt: "menu" | "url" | null,
-  dungeonTopologyPrompt: boolean,
+  dungeonFlowScreen: DungeonFlowScreen,
 ): string | null {
   const lowered = raw.trim().toLowerCase();
-  // The dungeon flow completes on a bare topology digit (0–9); show the
-  // generation spinner when the previous prompt was Step E.
-  if (dungeonTopologyPrompt && /^[0-9]$/.test(lowered)) {
-    return "generating dungeon";
+  // Dungeon flow review screens. The room-plan screen rolls/sets locally (no
+  // spinner); only `continue` there spends an LLM call (Pass 1 = the story). At
+  // the story screen, `continue` builds the cards (Pass 2) and `reroll` rewrites
+  // the story (Pass 1 again).
+  if (dungeonFlowScreen === "plan") {
+    if (lowered === "continue" || lowered === "accept") {
+      return "generating story";
+    }
+    // `reroll` and `set` re-roll/pin locally and return instantly — no spinner.
+    return null;
+  }
+  if (dungeonFlowScreen === "story") {
+    if (lowered === "continue" || lowered === "accept") {
+      return "generating dungeon";
+    }
+    if (lowered === "reroll" || lowered === "redo" || lowered.startsWith("reroll ") || lowered.startsWith("redo ")) {
+      return "generating story";
+    }
   }
   // Commands that always probe the Ollama server.
   if (lowered === "test ollama") {

@@ -293,7 +293,8 @@ fn generate_typescript() -> String {
     out.push_str("  | { kind: \"code\"; language?: string | null; text: string }\n");
     out.push_str("  | { kind: \"status\"; tone: StatusTone; text: string }\n");
     out.push_str("  | { kind: \"spinner\"; state: SpinnerState; text: string }\n");
-    out.push_str("  | { kind: \"entity_card\"; title: string; rows: EntityCardRow[] };\n\n");
+    out.push_str("  | { kind: \"entity_card\"; title: string; rows: EntityCardRow[] }\n");
+    out.push_str("  | { kind: \"image\"; src: string; alt: string };\n\n");
 
     out.push_str("export type OutputDoc = {\n");
     out.push_str("  blocks: OutputBlock[];\n");

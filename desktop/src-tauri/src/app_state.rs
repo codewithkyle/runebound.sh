@@ -30,14 +30,15 @@ pub type DungeonDraftSession = DungeonDraft;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DungeonCreationFlow {
     pub active: bool,
-    pub step: u8,                 // 1..=5 (A..E), 6 = story review
+    pub step: u8,                 // 1..=5 (A..E), 6 = room plan review, 7 = story review
     pub premise: Option<String>,  // None = "generate one"
     pub tone: Option<String>,     // DUNGEON_TONES
     pub twist: Option<String>,    // DUNGEON_TWISTS
     pub context: String,          // step D free-text (references/constraints); "" = skipped
     pub topology: Option<String>, // DUNGEON_TOPOLOGIES incl. "none"
-    // Step 6 (review) carries the rolled content plan and the Pass-1 story the GM
-    // is reviewing, so `continue` can structure it and `reroll` can replace it.
+    // Step 6 locks in the rolled content plan (which type fills each beat); step 7
+    // carries the Pass-1 story reviewed against it, so `continue` can structure it
+    // (Pass 2) and `reroll` can rewrite the prose without re-rolling the plan.
     pub plan: Option<DungeonContentPlan>,
     pub story_name: Option<String>,
     pub story_location: Option<String>,

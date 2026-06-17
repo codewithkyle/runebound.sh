@@ -285,7 +285,8 @@ export type OutputBlock =
   | { kind: "code"; language?: string | null; text: string }
   | { kind: "status"; tone: StatusTone; text: string }
   | { kind: "spinner"; state: SpinnerState; text: string }
-  | { kind: "entity_card"; title: string; rows: EntityCardRow[] };
+  | { kind: "entity_card"; title: string; rows: EntityCardRow[] }
+  | { kind: "image"; src: string; alt: string };
 
 export type OutputDoc = {
   blocks: OutputBlock[];

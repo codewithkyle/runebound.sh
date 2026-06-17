@@ -5,10 +5,10 @@
 
 use dnd_core::npc::slugify;
 use runebound_models::output::{
-    OutputDoc, doc, heading, list, paragraph_text, text_node,
+    OutputDoc, doc, heading, image, list, paragraph_text, text_node,
 };
-use runebound_models::dungeon_plan::roll_dungeon_content_plan;
-use runebound_models::utils::{DUNGEON_TONES, DUNGEON_TOPOLOGIES, DUNGEON_TWISTS, make_entity_id};
+use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
+use runebound_models::utils::{DUNGEON_FUNCTIONS, DUNGEON_TONES, DUNGEON_TOPOLOGIES, DUNGEON_TWISTS, make_entity_id};
 
 use crate::app_state::{AppState, DungeonCreationFlow, DungeonDraftSession};
 use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
@@ -19,10 +19,29 @@ use crate::entities::common::{
 use crate::services::ai_generation::{AiGenerationService, DungeonStory, SeedGeneration};
 use crate::utils::{normalize_unknown_text, prepend_notice};
 
-/// Marker line in the Step E prompt. The frontend spinner heuristic
-/// (`detectDungeonTopologyPrompt`) keys off this so the completing answer shows a
-/// "generating dungeon" spinner.
+/// Marker line in the Step E (topology) prompt. Also the logical key the frontend
+/// renderer maps to the bundled topology illustration.
 pub const STEP_E_MARKER: &str = "Step 5 of 5 — Topology";
+/// Marker in the Room Plan review prompt. The frontend spinner heuristic keys off
+/// this so `continue` here shows a "generating story" spinner.
+pub const PLAN_REVIEW_MARKER: &str = "Create Dungeon — Room Plan";
+/// Marker in the Story review prompt. `continue` here shows "generating dungeon"
+/// (Pass 2 / cards); `reroll` shows "generating story" (Pass 1 again).
+pub const STORY_REVIEW_MARKER: &str = "Create Dungeon — Story";
+
+/// Anchor (room) content types the GM may pin onto a beat with `set`. Excludes the
+/// overlay/tint types (foreshadowing, history, map, factions), which are never a
+/// room on their own.
+const SETTABLE_ROOM_TYPES: [&str; 8] = [
+    "combat",
+    "puzzle",
+    "cache",
+    "offshoot",
+    "sidekick",
+    "oddity",
+    "forge",
+    "ability_check",
+];
 
 /// Entry point: `create dungeon` activates the flow and returns the Step A prompt.
 pub async fn start_dungeon_flow(state: &AppState) -> CommandResult {
@@ -38,9 +57,10 @@ pub async fn start_dungeon_flow(state: &AppState) -> CommandResult {
 }
 
 /// Intercepted before registry dispatch while the flow is active. Validates the
-/// raw line against the current step, advances, and on Step E generates + opens
-/// the draft. Handles `cancel` explicitly (the desktop cancel handler never runs
-/// during the flow — same invariant as the setup wizard).
+/// raw line against the current step and advances: Step E rolls the room plan,
+/// the plan review (`continue`) writes the story, and the story review
+/// (`continue`) structures + opens the draft. Handles `cancel` explicitly (the
+/// desktop cancel handler never runs during the flow — same invariant as setup).
 pub async fn try_execute_dungeon_flow(line: &str, state: &AppState) -> CommandResult {
     let trimmed = line.trim();
     let lowered = trimmed.to_ascii_lowercase();
@@ -64,7 +84,8 @@ pub async fn try_execute_dungeon_flow(line: &str, state: &AppState) -> CommandRe
         3 => handle_step_c(trimmed, state).await,
         4 => handle_step_d(trimmed, state).await,
         5 => handle_step_e(trimmed, state).await,
-        6 => handle_step_f(trimmed, state).await,
+        6 => handle_step_f_plan(trimmed, state).await,
+        7 => handle_step_g_story(trimmed, state).await,
         _ => {
             // Defensive: an unknown step shouldn't happen, but never trap the user.
             reset_dungeon_flow(state).await;
@@ -215,12 +236,20 @@ fn step_e_doc() -> OutputDoc {
     for (i, name) in DUNGEON_TOPOLOGIES.iter().enumerate().skip(1) {
         options.push(format!("{i}: {name}"));
     }
-    let option_refs: Vec<&str> = options.iter().map(|s| s.as_str()).collect();
-    menu_doc(
-        STEP_E_MARKER,
-        "Pick one of the nine forms, or 0 for none:",
-        &option_refs,
-    )
+    let items: Vec<Vec<_>> = options
+        .iter()
+        .map(|option| vec![text_node(option.clone())])
+        .collect();
+    // Heading, then the topology illustration, then the prompt + options — the
+    // image sits "below the Step 5 header but above where we ask the user to pick".
+    doc()
+        .with_block(heading(2, STEP_E_MARKER))
+        .with_block(image(
+            "topology",
+            "The nine dungeon topologies — each named form with its entrance (E) marked",
+        ))
+        .with_block(paragraph_text("Pick one of the nine forms, or 0 for none:"))
+        .with_block(list(items))
 }
 
 fn step_e_text_plain() -> String {
@@ -234,33 +263,126 @@ async fn handle_step_e(trimmed: &str, state: &AppState) -> CommandResult {
     };
     let topology = DUNGEON_TOPOLOGIES[index].to_string();
 
-    // Snapshot the collected answers, store topology, then roll + write the story.
-    let (premise, context, tone, twist) = {
+    {
         let mut flow = state.dungeon_flow.lock().await;
-        flow.topology = Some(topology.clone());
+        flow.topology = Some(topology);
+    }
+
+    // The content-type roll is local and instant, so we surface it as its own
+    // review screen *before* spending an LLM call on the story.
+    roll_plan_and_review(state).await
+}
+
+// ---------------------------------------------------------------------------
+// Step F — Room plan review (continue / reroll / set)
+// ---------------------------------------------------------------------------
+
+/// Roll a fresh content plan, stash it on the flow, and show the rolled room types
+/// for review. Shared by Step E and `reroll` at the plan screen. No LLM call.
+async fn roll_plan_and_review(state: &AppState) -> CommandResult {
+    let plan = roll_dungeon_content_plan(plan_seed());
+    {
+        let mut flow = state.dungeon_flow.lock().await;
+        flow.plan = Some(plan.clone());
+        // A new plan invalidates any story reviewed against the previous roll.
+        flow.story_name = None;
+        flow.story_location = None;
+        flow.story_text = None;
+        flow.step = 6;
+    }
+    command_message_response_with_doc(plan_review_text_plain(&plan), plan_review_doc(&plan))
+}
+
+async fn handle_step_f_plan(trimmed: &str, state: &AppState) -> CommandResult {
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
+    let rest = parts.next().unwrap_or("").trim();
+
+    match cmd.as_str() {
+        "continue" | "accept" => generate_story_and_review(state, None).await,
+        "reroll" | "redo" => roll_plan_and_review(state).await,
+        "set" => set_room_type(state, rest).await,
+        _ => reshow_plan_review(state).await,
+    }
+}
+
+/// `set <room#> <type>`: pin one beat's room type, overriding the roll. Lets the GM
+/// take direct control of a beat the dice didn't land well.
+async fn set_room_type(state: &AppState, rest: &str) -> CommandResult {
+    let mut args = rest.split_whitespace();
+    let room = args.next().unwrap_or("");
+    let raw_type = args.next().unwrap_or("");
+
+    let index = match room.parse::<usize>() {
+        Ok(n) if (1..=5).contains(&n) => n - 1,
+        _ => return set_room_usage(state).await,
+    };
+    let normalized = raw_type.trim().to_ascii_lowercase().replace('-', "_");
+    if !SETTABLE_ROOM_TYPES.contains(&normalized.as_str()) {
+        return set_room_usage(state).await;
+    }
+
+    let plan = {
+        let mut flow = state.dungeon_flow.lock().await;
+        let Some(plan) = flow.plan.as_mut() else {
+            return reshow_plan_review(state).await;
+        };
+        plan.anchors[index] = normalized;
+        plan.clone()
+    };
+    command_message_response_with_doc(plan_review_text_plain(&plan), plan_review_doc(&plan))
+}
+
+async fn set_room_usage(state: &AppState) -> CommandResult {
+    let types = SETTABLE_ROOM_TYPES.join(", ");
+    let message =
+        format!("Usage: set <room 1-5> <type>. Types: {types}. (Type `continue`, `reroll`, or `cancel`.)");
+    match current_plan(state).await {
+        Some(plan) => command_message_response_with_doc(
+            format!("{message}\n\n{}", plan_review_text_plain(&plan)),
+            plan_review_doc(&plan).with_block(paragraph_text(message)),
+        ),
+        None => reshow_plan_review(state).await,
+    }
+}
+
+async fn reshow_plan_review(state: &AppState) -> CommandResult {
+    match current_plan(state).await {
+        Some(plan) => {
+            command_message_response_with_doc(plan_review_text_plain(&plan), plan_review_doc(&plan))
+        }
+        None => {
+            reset_dungeon_flow(state).await;
+            command_message_response_with_doc(
+                "dungeon flow reset.",
+                doc().with_block(paragraph_text("Dungeon flow reset; run create dungeon again.")),
+            )
+        }
+    }
+}
+
+async fn current_plan(state: &AppState) -> Option<DungeonContentPlan> {
+    state.dungeon_flow.lock().await.plan.clone()
+}
+
+/// Run Pass 1 against the locked plan and show the story for review. Shared by
+/// `continue` at the plan screen and `reroll [hint]` at the story screen — the plan
+/// stays fixed, so story variety comes from the prose, not a re-roll.
+async fn generate_story_and_review(state: &AppState, extra_prompt: Option<&str>) -> CommandResult {
+    let (plan, premise, context, tone, twist, topology) = {
+        let flow = state.dungeon_flow.lock().await;
         (
+            flow.plan.clone(),
             flow.premise.clone(),
             flow.context.clone(),
             flow.tone.clone().unwrap_or_else(|| "tragedy".to_string()),
             flow.twist.clone().unwrap_or_else(|| "neither".to_string()),
+            flow.topology.clone().unwrap_or_else(|| "none".to_string()),
         )
     };
-
-    generate_and_review_story(state, premise, &context, &tone, &twist, &topology, None).await
-}
-
-/// Roll a fresh content plan, run Pass 1, stash it on the flow, and show the story
-/// for review (the `continue` / `reroll` screen). Shared by Step E and `reroll`.
-async fn generate_and_review_story(
-    state: &AppState,
-    premise: Option<String>,
-    context: &str,
-    tone: &str,
-    twist: &str,
-    topology: &str,
-    extra_prompt: Option<&str>,
-) -> CommandResult {
-    let plan = roll_dungeon_content_plan(plan_seed());
+    let Some(plan) = plan else {
+        return reshow_plan_review(state).await;
+    };
 
     let ai = AiGenerationService;
     let database = state.database();
@@ -272,10 +394,10 @@ async fn generate_and_review_story(
         .generate_dungeon_story(
             &plan,
             premise,
-            context,
-            tone,
-            twist,
-            topology,
+            &context,
+            &tone,
+            &twist,
+            &topology,
             extra_prompt,
             &state.workspace_root,
             database.as_ref(),
@@ -285,11 +407,10 @@ async fn generate_and_review_story(
 
     {
         let mut flow = state.dungeon_flow.lock().await;
-        flow.plan = Some(plan);
         flow.story_name = Some(story.name.clone());
         flow.story_location = Some(story.location.clone());
         flow.story_text = Some(story.story.clone());
-        flow.step = 6;
+        flow.step = 7;
     }
 
     command_message_response_with_doc(
@@ -299,10 +420,10 @@ async fn generate_and_review_story(
 }
 
 // ---------------------------------------------------------------------------
-// Step F — Story review (continue / reroll)
+// Step G — Story review (continue / reroll)
 // ---------------------------------------------------------------------------
 
-async fn handle_step_f(trimmed: &str, state: &AppState) -> CommandResult {
+async fn handle_step_g_story(trimmed: &str, state: &AppState) -> CommandResult {
     let mut parts = trimmed.splitn(2, char::is_whitespace);
     let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
     let rest = parts.next().unwrap_or("").trim();
@@ -310,7 +431,8 @@ async fn handle_step_f(trimmed: &str, state: &AppState) -> CommandResult {
     match cmd.as_str() {
         "continue" | "accept" => finalize_dungeon(state).await,
         "reroll" | "redo" => {
-            reroll_story(state, (!rest.is_empty()).then_some(rest)).await
+            // Keep the locked plan; only the prose is regenerated (optionally steered).
+            generate_story_and_review(state, (!rest.is_empty()).then_some(rest)).await
         }
         _ => match current_review_story(state).await {
             Some(story) => command_message_response_with_doc(
@@ -328,23 +450,6 @@ async fn handle_step_f(trimmed: &str, state: &AppState) -> CommandResult {
             }
         },
     }
-}
-
-/// `reroll [hint]` at the review screen: roll a brand-new plan and story (variety
-/// across rerolls comes from re-rolling which type fills which beat), optionally
-/// steered by the GM's hint.
-async fn reroll_story(state: &AppState, extra: Option<&str>) -> CommandResult {
-    let (premise, context, tone, twist, topology) = {
-        let flow = state.dungeon_flow.lock().await;
-        (
-            flow.premise.clone(),
-            flow.context.clone(),
-            flow.tone.clone().unwrap_or_else(|| "tragedy".to_string()),
-            flow.twist.clone().unwrap_or_else(|| "neither".to_string()),
-            flow.topology.clone().unwrap_or_else(|| "none".to_string()),
-        )
-    };
-    generate_and_review_story(state, premise, &context, &tone, &twist, &topology, extra).await
 }
 
 /// `continue` at the review screen: structure the locked story (Pass 2), assemble
@@ -442,7 +547,7 @@ async fn current_review_story(state: &AppState) -> Option<DungeonStory> {
 
 fn review_text_plain(story: &DungeonStory) -> String {
     format!(
-        "{} — {}\n\n{}\n\nType `continue` to build the cards, `reroll [hint]` for a new story, or `cancel`.",
+        "{STORY_REVIEW_MARKER}\n\n{} — {}\n\n{}\n\nType `continue` to build the cards, `reroll [hint]` for a new story, or `cancel`.",
         story.name, story.location, story.story
     )
 }
@@ -452,10 +557,83 @@ fn review_doc(story: &DungeonStory, notice: &Option<String>) -> OutputDoc {
     if let Some(note) = notice {
         out = out.with_block(paragraph_text(note.clone()));
     }
-    out.with_block(heading(2, format!("{} — {}", story.name, story.location)))
+    out.with_block(heading(2, STORY_REVIEW_MARKER))
+        .with_block(heading(3, format!("{} — {}", story.name, story.location)))
         .with_block(paragraph_text(story.story.clone()))
         .with_block(paragraph_text(
             "Type `continue` to build the five cards, `reroll [hint]` for a new story, or `cancel` to stop.",
+        ))
+}
+
+// ---------------------------------------------------------------------------
+// Room plan review rendering
+// ---------------------------------------------------------------------------
+
+/// Title-case a snake_case content type for display: "ability_check" -> "Ability
+/// Check", "combat" -> "Combat".
+fn content_label(content_type: &str) -> String {
+    content_type
+        .split('_')
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// One "Function — Type" line per beat, plus any overlay/faction tint, as plain
+/// lines. Shared by the doc and plain-text renderings.
+fn plan_room_lines(plan: &DungeonContentPlan) -> Vec<String> {
+    let mut lines: Vec<String> = plan
+        .anchors
+        .iter()
+        .enumerate()
+        .map(|(i, anchor)| {
+            format!(
+                "{}. {} — {}",
+                i + 1,
+                DUNGEON_FUNCTIONS[i],
+                content_label(anchor)
+            )
+        })
+        .collect();
+    if let Some(overlay) = &plan.overlay {
+        lines.push(format!(
+            "Overlay: {} (layered on the {})",
+            content_label(&overlay.overlay_type),
+            DUNGEON_FUNCTIONS[overlay.beat_index]
+        ));
+    }
+    if plan.factions {
+        lines.push("Faction tint: a faction presence colors the whole dungeon".to_string());
+    }
+    lines
+}
+
+fn plan_review_text_plain(plan: &DungeonContentPlan) -> String {
+    format!(
+        "{PLAN_REVIEW_MARKER}\n\n{}\n\nType `continue` to write the story, `reroll` for a new roll, `set <room 1-5> <type>` to pin one, or `cancel`.",
+        plan_room_lines(plan).join("\n")
+    )
+}
+
+fn plan_review_doc(plan: &DungeonContentPlan) -> OutputDoc {
+    let items: Vec<Vec<_>> = plan_room_lines(plan)
+        .into_iter()
+        .map(|line| vec![text_node(line)])
+        .collect();
+    doc()
+        .with_block(heading(2, PLAN_REVIEW_MARKER))
+        .with_block(paragraph_text(
+            "The dice rolled these rooms for your dungeon:",
+        ))
+        .with_block(list(items))
+        .with_block(paragraph_text(
+            "Type `continue` to write the story, `reroll` for a new roll, `set <room 1-5> <type>` to pin one, or `cancel` to stop.",
         ))
 }
 
