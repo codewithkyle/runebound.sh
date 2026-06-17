@@ -36,18 +36,17 @@ The common path (registry dispatch) is:
 4. Execute handler
 5. Return `CommandResponse`
 
-Three routes intentionally diverge from this (override, onboarding interception, and the generic wizard route); they are described below.
+Two routes intentionally diverge from this (override and the generic wizard route); they are described below.
 
 There are two registries using the same `command-handler` crate:
 
 - Core registry in `core/src/command.rs` (`status`, `config`, `help`, `exit`, `setup`, `ping`)
 - Desktop registry in `desktop/src-tauri/src/commands/mod.rs` for desktop interaction commands
 
-The desktop registry is consulted first; a miss falls through to the core registry. Three routes bypass plain registry dispatch and must be kept in mind:
+The desktop registry is consulted first; a miss falls through to the core registry. Two routes bypass plain registry dispatch and must be kept in mind:
 
-- **Desktop overrides core for the same root.** Registering a root in both registries makes the desktop handler win in the desktop app — the supported way to give a core command access to desktop-only state. `help` does this so it can read the open entity editor for context-aware output.
-- **Onboarding interception.** While the setup wizard is active (`onboarding.active`), input is routed to `try_execute_onboarding` *before* registry dispatch, so the desktop registry is bypassed during setup.
-- **Generic wizard route.** While any registered wizard is active (`wizard_session.active_id`), input is routed to `try_execute_active_wizard` (the `wizard` crate's `runtime.rs`, wired in `main.rs`) *before* registry dispatch. This is **one** route that serves every wizard, not a per-flow interceptor — adding a wizard adds no dispatch code. See §4's Wizard Framework.
+- **Desktop overrides core for the same root.** Registering a root in both registries makes the desktop handler win in the desktop app — the supported way to give a core command access to desktop-only state. `help` does this so it can read the open entity editor and active wizard for context-aware output.
+- **Generic wizard route (includes onboarding).** While any registered wizard is active (`wizard_session.active_id`), input is routed to `try_execute_active_wizard` (the `wizard` crate's `runtime.rs`, wired in `main.rs` and core's `CommandService`) *before* registry dispatch; onboarding's entry commands launch the same way via `start_wizard`. This is **one** route that serves every wizard, not a per-flow interceptor — adding a wizard adds no dispatch code. The former bespoke onboarding and dungeon interceptors were both deleted in favor of it. See §4's Wizard Framework.
 
 See `docs/command-contexts.md` for the full dispatch-route, context, and parser rules.
 
@@ -166,7 +165,7 @@ The manifest in `command-specs/src/lib.rs` is the single source of truth for:
 - subcommand requirement (`requires_subcommand` — drives the parser's argument-vs-subcommand decision)
 - canonical help command for clickability
 
-The same file also owns **context availability** via `command_availability(name)` and the `InputContext`/`CommandAvailability` enums. This is the single source of truth for which commands appear in which context (default surface, setup wizard, entity editor), consumed by both autocomplete and the help index. Adding a command without an explicit availability arm leaves it `Default`-only (invisible in editors) — a common regression. The parser's `requires_subcommand` semantics and the help↔autocomplete parity are documented in `docs/command-contexts.md`; read it before changing visibility, parsing, or help.
+The same file also owns **context availability** via `command_availability(name)` and the `InputContext`/`CommandAvailability` enums. This is the single source of truth for which commands appear in which context (default surface, entity editor, active wizard), consumed by both autocomplete and the help index. Adding a command without an explicit availability arm leaves it `Default`-only (invisible in editors) — a common regression. The parser's `requires_subcommand` semantics and the help↔autocomplete parity are documented in `docs/command-contexts.md`; read it before changing visibility, parsing, or help.
 
 Manifest data is consumed by:
 

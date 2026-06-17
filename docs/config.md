@@ -39,10 +39,10 @@
 
 ### Implementation notes (wizard internals)
 
-The wizard runs as a separate dispatch route, not through the command registry: while `onboarding.active`, input is intercepted by `try_execute_onboarding` (`core/src/command.rs`) before registry dispatch. This carries two invariants that have regressed before:
+Onboarding is a set of **registered wizards** on the shared `wizard` engine (`core/src/onboarding_wizard.rs`): `setup` (full), `setup-vault`, `setup-llm`, `setup-model`, sharing the six step values (`vault_menu`, `vault_path`, `ollama_menu`, `ollama_url`, `model`, `save`). They run on the generic wizard dispatch route (the same one the dungeon wizard uses) — see `docs/command-contexts.md §4`. The steps are generic over an `OnboardingHost` capability trait so the same values run on the desktop (`AppState`, with a real folder picker) and core/CLI (`CoreOnboardingCtx`, picker degrades). Two invariants that have regressed before:
 
-- **Seed shown fields from effective config, identically across entry points.** Every flow that reaches a menu (`start setup`, `setup vault`, `setup llm`, `setup model`) must seed the fields its prompt displays from `load_effective(...)`. The Ollama menu renders `2: Continue with <ollama.base_url>`; because `OnboardingSession`'s default base URL is `http://127.0.0.1:11434`, seeding only "when empty" never picks up the configured server. Seed unconditionally so the prompt reflects the saved config.
-- **`cancel` must exit the wizard.** Setup verbs live in `try_execute_onboarding`, so the desktop `cancel` handler never runs during setup. Both `cancel` and `cancel setup` reset onboarding.
+- **Seed shown fields from effective config, identically across entry points.** Each wizard's `seed(host)` (`seed_data` in `onboarding_wizard.rs`) fills shown fields from `load_effective(...)`. The Ollama menu renders `2: Continue with <ollama.base_url>`; seed `ollama_base_url` **unconditionally** (not "only when empty") so the prompt reflects the saved server, not the `http://127.0.0.1:11434` default.
+- **`cancel` must exit the wizard.** `cancel` (and `cancel <id>`) is intercepted by the wizard route and resets the session; config is written only by each wizard's `finalize`.
 
 Full dispatch and context model: `docs/command-contexts.md`.
 

@@ -251,18 +251,18 @@ that makes a core-defined wizard usable from the desktop without the engine depe
 
 ## 8. Done checklist
 
-- [ ] `wizard` crate created; engine host-agnostic; dungeon re-pointed and unchanged
-- [ ] `seed()` + `WizardTransition::Native` (host-fulfilled, with CLI degradation) implemented and tested
-- [ ] Onboarding expressed as `setup`/`setup-vault`/`setup-llm`/`setup-model` registrations over shared steps
-- [ ] Setup prompts emit `command_ref` (clickable); autocomplete works in-setup via `InputContext::Wizard`
-- [ ] Native picker works on desktop; CLI path works headless with graceful degradation
-- [ ] `try_execute_onboarding`, `OnboardingSession`, substate enums, `rewrite_onboarding_tokens`, `main.rs`
-      onboarding block, suggestions `continue` branch all deleted
-- [ ] `InputContext::ConfigEditor` collapsed; availability arms + sentinel tests updated
-- [ ] Config-write parity + seed-parity locked by tests; written config byte-identical
-- [ ] Docs updated (`command-contexts`, `config`, `architecture`, `cli`); review doc items resolved
-- [ ] Root workspace **and** `desktop/src-tauri` build; `cargo test` + `make build` green; full manual setup verified
+- [x] `wizard` crate created; engine host-agnostic (generic over `H: WizardHost`); dungeon re-pointed and unchanged
+- [x] `seed(host)` (async + fallible) + `WizardTransition::Native` / `NativeOutcome` / `WizardHost::perform_native` (host-fulfilled, default = CLI degradation) implemented and unit-tested with a fake host
+- [x] Onboarding expressed as `setup`/`setup-vault`/`setup-llm`/`setup-model` registrations over shared `WizardStep` values, generic over an `OnboardingHost` capability trait
+- [x] Setup prompts emit `command_ref` (clickable); autocomplete works in-setup via `InputContext::Wizard`
+- [x] Native picker wired on desktop (`AppState::perform_native` → Tauri folder dialog); CLI degrades via the default `perform_native` *(desktop picker pending manual verification)*
+- [x] `try_execute_onboarding`, `OnboardingSession`, substate enums, `rewrite_onboarding_tokens`, the `main.rs` onboarding block, and the suggestions `continue` branch all deleted
+- [x] `InputContext::ConfigEditor` (and `CommandAvailability::ConfigEditor`/`AnyEditor`) collapsed; availability arms + sentinel tests updated
+- [~] Seed-parity enforced in code (unconditional `ollama_base_url` seed) and noted in docs; **config-write parity not yet locked by a golden-file test** (`save_config`/`load_effective` use the global config dir, so a write-asserting test needs a sandbox — follow-up). `finalize_*` are faithful ports of the former `save_*_section` logic.
+- [x] Docs updated (`command-contexts`, `config`, `architecture`, `cli`); review-doc items resolved
+- [x] Root workspace **and** `desktop/src-tauri` build; `cargo test` + `make build` green *(full manual setup verification by the user pending)*
 
 ---
 
 *Drafted: 2026-06-16 · branch `feature/dungeons` · spike 2 of 2 (after `docs/create-wizard-refactor.md`).*
+*Executed: 2026-06-17 on branch `multistep-wizard` (Phases A–D).*

@@ -62,7 +62,7 @@ If command shape changes without manifest changes, UX consistency breaks.
 - Core dispatch: `core/src/command.rs` registry.
 - Desktop dispatch: `desktop/src-tauri/src/commands/mod.rs` registry via `router.rs` (tried before the core registry; a root in both registries lets the desktop handler override core).
 - Unknown desktop roots may fall back to entity resolution for load/show/preview behavior.
-- **Setup wizard bypasses the registry:** while `onboarding.active`, input is intercepted by `try_execute_onboarding` before dispatch, so setup verbs (`continue`, menu numbers, `set vault`, `set ollama`, `cancel`) are handled there, not by desktop handlers. See `docs/command-contexts.md §4`.
+- **Wizards bypass the registry:** while a wizard is active (including onboarding — `setup`/`setup-vault`/`setup-llm`/`setup-model`), input is intercepted by `try_execute_active_wizard` before dispatch, so step answers (menu numbers, paths, `save`, `cancel`) are handled by the active step, not by desktop handlers. Onboarding's launchers (`start setup`, `setup vault|llm|model`, `model`) start the wizard the same way. See `docs/command-contexts.md §4`.
 
 ---
 
@@ -79,7 +79,7 @@ Key behavior:
 
 - `Tab` completes current suggestion
 - suggestions stay live as user edits
-- suggestions are filtered by **input context** (`InputContext`: `Default`, `ConfigEditor`, `EntityEditor(kind)`, `Wizard(id)`), resolved by `AppState::resolve_input_context()` (the one canonical resolver)
+- suggestions are filtered by **input context** (`InputContext`: `Default`, `EntityEditor(kind)`, `Wizard(id)` — onboarding is `Wizard("setup")` etc.), resolved by `AppState::resolve_input_context()` (the one canonical resolver)
 - visibility comes only from `command_availability(name)` in `command-specs/src/lib.rs` — the single source of truth shared with the help index. Do not hard-code per-command filters here; add/adjust the availability arm instead
 - **inside a wizard**, the active step owns the surface: the suggestion service early-returns `active_step_suggestions()`, which combines the step's `suggest()` (per-step tokens plus staged args like `set room <room> <type>`) with the always-available global verbs (`back`/`cancel`/`help`). Only the commands valid at the current step are offered — a wizard author adds neither a filter nor a bespoke branch here
 - **Help mirrors autocomplete.** The `help` index uses the same context + `command_availability`, so a visibility change updates both. Verify both surfaces when you change availability (full model: `docs/command-contexts.md`)

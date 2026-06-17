@@ -8,10 +8,17 @@
 
 > **✅ Resolved (2026-06-17).** Findings 1–5 were paid down by the wizard-framework refactor
 > (`docs/create-wizard-refactor.md`, Option B): `create dungeon`'s intake half now runs on the generic
-> wizard engine (`desktop/src-tauri/src/wizards/`). The bespoke `commands/dungeon_flow.rs`,
-> `DungeonCreationFlow`, and the `main.rs` interceptor are deleted. The framework itself is documented in
-> `docs/architecture.md` §4 (Wizard Framework) + §8D, `docs/command-contexts.md` §1/§4, `docs/cli.md`
-> §4/§5, `docs/feature-development.md` §7, and `docs/render.md` §3. Per-finding status is noted inline below.
+> wizard engine (the standalone `wizard` crate, bound to `AppState` in `desktop/src-tauri/src/wizards/`).
+> The bespoke `commands/dungeon_flow.rs`, `DungeonCreationFlow`, and the `main.rs` interceptor are deleted.
+> The framework itself is documented in `docs/architecture.md` §4 (Wizard Framework) + §8D,
+> `docs/command-contexts.md` §1/§4, `docs/cli.md` §4/§5, `docs/feature-development.md` §7, and
+> `docs/render.md` §3. Per-finding status is noted inline below.
+>
+> **✅ Onboarding too (`docs/onboarding-wizard-port.md`).** The `start setup` machine this review cites as
+> "the wizard `create dungeon` copied" is itself now ported onto the same engine: `try_execute_onboarding`,
+> `OnboardingSession`, and `InputContext::ConfigEditor` are deleted, so the historical references to them
+> below describe the pre-refactor state. Onboarding is now `Wizard("setup")` etc., sharing the one wizard
+> dispatch route — there is no longer a separate onboarding interception route.
 
 ---
 
