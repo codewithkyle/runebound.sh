@@ -527,10 +527,10 @@ fn collect_known_entity_names(store: &EntityStore, vault: &Vault) -> Result<Vec<
             if entry.markdown_path.is_none() {
                 continue; // directories are not link targets
             }
-            if let Some(title) = entry.key.rsplit('/').next() {
-                if !title.is_empty() {
-                    names.push(title.to_string());
-                }
+            if let Some(title) = entry.key.rsplit('/').next()
+                && !title.is_empty()
+            {
+                names.push(title.to_string());
             }
         }
     }
@@ -650,33 +650,6 @@ fn title_case_from_slug(slug: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn slug_based_paths_are_title_cased() {
-        let path = resolved_publish_path(EntityType::Npc, "lirael-drake", "npcs/lirael-drake.md");
-        assert_eq!(path, "npcs/Lirael Drake.md");
-    }
-
-    #[test]
-    fn slug_suffix_is_preserved() {
-        let path = resolved_publish_path(EntityType::Npc, "shadow-clan-2", "npcs/shadow-clan-2.md");
-        assert_eq!(path, "npcs/Shadow Clan 2.md");
-    }
-
-    #[test]
-    fn custom_paths_are_left_alone() {
-        let path = resolved_publish_path(
-            EntityType::Location,
-            "ember-vault",
-            "locations/subfolders/ember-vault.md",
-        );
-        assert_eq!(path, "locations/subfolders/ember-vault.md");
-    }
 }
 
 enum ActiveDraft {
@@ -911,4 +884,31 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
     }
 
     Ok(Some(publish_target))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slug_based_paths_are_title_cased() {
+        let path = resolved_publish_path(EntityType::Npc, "lirael-drake", "npcs/lirael-drake.md");
+        assert_eq!(path, "npcs/Lirael Drake.md");
+    }
+
+    #[test]
+    fn slug_suffix_is_preserved() {
+        let path = resolved_publish_path(EntityType::Npc, "shadow-clan-2", "npcs/shadow-clan-2.md");
+        assert_eq!(path, "npcs/Shadow Clan 2.md");
+    }
+
+    #[test]
+    fn custom_paths_are_left_alone() {
+        let path = resolved_publish_path(
+            EntityType::Location,
+            "ember-vault",
+            "locations/subfolders/ember-vault.md",
+        );
+        assert_eq!(path, "locations/subfolders/ember-vault.md");
+    }
 }

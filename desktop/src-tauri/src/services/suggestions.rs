@@ -165,16 +165,14 @@ impl SuggestionService {
             }
         }
 
-        if is_npc {
-            if let Some(location_query) = npc_travel_location_query(trimmed) {
-                let location_names = search_location_names(state, location_query, Some(8)).await?;
-                for location_name in location_names {
-                    suggestions.push(CommandSuggestion {
-                        label: location_name.clone(),
-                        completion: format!("npc travel to {} ", location_name),
-                        helper_text: Some(SuggestionHelperText::Location),
-                    });
-                }
+        if is_npc && let Some(location_query) = npc_travel_location_query(trimmed) {
+            let location_names = search_location_names(state, location_query, Some(8)).await?;
+            for location_name in location_names {
+                suggestions.push(CommandSuggestion {
+                    label: location_name.clone(),
+                    completion: format!("npc travel to {} ", location_name),
+                    helper_text: Some(SuggestionHelperText::Location),
+                });
             }
         }
 
@@ -183,14 +181,11 @@ impl SuggestionService {
         // root, so it isn't completed by build_command_suggestions; finish it here
         // from the active draft's rerollable fields. (`<kind> reroll <field>` is
         // already handled via the entity root.)
-        if let Some(kind) = active_kind {
-            if lowered.starts_with("reroll ") {
-                if let Some(field_suggestions) =
-                    build_active_reroll_suggestions(kind, &parsed, &input)
-                {
-                    suggestions.extend(field_suggestions);
-                }
-            }
+        if let Some(kind) = active_kind
+            && lowered.starts_with("reroll ")
+            && let Some(field_suggestions) = build_active_reroll_suggestions(kind, &parsed, &input)
+        {
+            suggestions.extend(field_suggestions);
         }
 
         let mut seen = HashSet::new();
@@ -317,7 +312,7 @@ async fn search_entities(
         }))
         .collect();
 
-    items.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    items.sort_by_key(|left| left.name.to_lowercase());
     items.truncate(limit as usize);
     Ok(items)
 }
@@ -356,26 +351,24 @@ fn build_command_suggestions(
     input: &str,
 ) -> Vec<CommandSuggestion> {
     if matches!(parsed.completion.stage, ParseStage::Root) {
-        if let Some(root_name) = parsed.completion.root.as_deref() {
-            if let Some(command) = find_command(manifest, root_name) {
-                if command.requires_subcommand
-                    && parsed
-                        .completion
-                        .current_token
-                        .eq_ignore_ascii_case(root_name)
-                {
-                    let mut hydrated_input = input.to_string();
-                    if !hydrated_input.ends_with(' ') {
-                        hydrated_input.push(' ');
-                    }
-                    return build_subcommand_suggestions(
-                        manifest,
-                        parsed.completion.root.as_deref(),
-                        &hydrated_input,
-                        "",
-                    );
-                }
+        if let Some(root_name) = parsed.completion.root.as_deref()
+            && let Some(command) = find_command(manifest, root_name)
+            && command.requires_subcommand
+            && parsed
+                .completion
+                .current_token
+                .eq_ignore_ascii_case(root_name)
+        {
+            let mut hydrated_input = input.to_string();
+            if !hydrated_input.ends_with(' ') {
+                hydrated_input.push(' ');
             }
+            return build_subcommand_suggestions(
+                manifest,
+                parsed.completion.root.as_deref(),
+                &hydrated_input,
+                "",
+            );
         }
 
         return build_root_suggestions(manifest, &parsed.completion.current_token);
@@ -470,25 +463,23 @@ fn build_argument_suggestions(
         }
     }
 
-    if command.name == "date" {
-        if let Some(suggestions) = build_date_argument_suggestions(subcommand_name, parsed, input) {
-            return suggestions;
-        }
+    if command.name == "date"
+        && let Some(suggestions) = build_date_argument_suggestions(subcommand_name, parsed, input)
+    {
+        return suggestions;
     }
 
-    if command.name == "setup" {
-        if let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input)
-        {
-            return suggestions;
-        }
+    if command.name == "setup"
+        && let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input)
+    {
+        return suggestions;
     }
 
-    if let Some(kind) = entity_kind_for_root(command.name.as_str()) {
-        if let Some(suggestions) =
+    if let Some(kind) = entity_kind_for_root(command.name.as_str())
+        && let Some(suggestions) =
             build_entity_field_argument_suggestions(kind, command, subcommand_name, parsed, input)
-        {
-            return suggestions;
-        }
+    {
+        return suggestions;
     }
 
     let options = match subcommand {
@@ -903,7 +894,6 @@ fn npc_travel_location_query(input: &str) -> Option<String> {
     None
 }
 
-#[cfg(test)]
 #[cfg(test)]
 mod tests {
     use super::{

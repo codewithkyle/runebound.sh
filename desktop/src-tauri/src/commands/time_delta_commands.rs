@@ -9,7 +9,7 @@ const DELTA_USAGE_HINT: &str = "Units: m=minutes, h=hours, d=days, w=weeks, y=ye
 pub async fn handle_time_delta(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let sign_char = invocation
         .lowered
-        .get(0)
+        .first()
         .and_then(|token| token.chars().next())
         .unwrap_or('+');
 

@@ -6,8 +6,8 @@
 //! step values run on every host: the desktop `AppState` (with a real folder
 //! picker via `WizardHost::perform_native`) and a core/CLI [`CoreOnboardingCtx`]
 //! (which degrades the picker gracefully). The four entry points are four `Wizard`
-//! registrations that share those step values; each wizard's `seed` sets its flow
-//! + pre-fills from effective config, and its `finalize` writes the right config
+//! registrations that share those step values; each wizard's `seed` sets its flow,
+//! pre-fills from effective config, and its `finalize` writes the right config
 //! section — see docs/command-contexts.md §4-§5 and docs/config.md for the
 //! dispatch route, seed invariants, and config keys.
 

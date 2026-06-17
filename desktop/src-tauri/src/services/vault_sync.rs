@@ -688,7 +688,7 @@ pub fn unique_trash_path(
     slug: &str,
     timestamp: &str,
 ) -> Result<String, String> {
-    let base = format!("{}-{}", slug, timestamp.replace(':', "").replace('-', ""));
+    let base = format!("{}-{}", slug, timestamp.replace([':', '-'], ""));
     let mut candidate = format!(".trash/{entity_dir}/{base}.md");
     let mut index = 2;
 

@@ -7,6 +7,7 @@ use runebound_models::{
 
 use crate::utils::normalize_unknown_text;
 
+#[cfg(test)]
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
     render_npc_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -66,6 +67,7 @@ pub fn render_location_markdown_with_links(
     out
 }
 
+#[cfg(test)]
 pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
     render_faction_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -76,10 +78,10 @@ pub fn render_faction_markdown_with_links(
 ) -> String {
     let mut out = String::new();
     write_attr_line(&mut out, "Kind", &frontmatter.kind_type);
-    if let Some(custom) = &frontmatter.kind_custom {
-        if !custom.trim().is_empty() {
-            write_attr_line(&mut out, "Kind (custom)", custom);
-        }
+    if let Some(custom) = &frontmatter.kind_custom
+        && !custom.trim().is_empty()
+    {
+        write_attr_line(&mut out, "Kind (custom)", custom);
     }
     writeln!(&mut out).ok();
     write_section(&mut out, "Headquarters", &frontmatter.headquarters, linker);
@@ -119,6 +121,7 @@ pub fn render_faction_markdown_with_links(
     out
 }
 
+#[cfg(test)]
 pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     render_item_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -144,10 +147,6 @@ pub fn render_item_markdown_with_links(
     out
 }
 
-pub fn render_god_markdown(frontmatter: &GodFrontmatter) -> String {
-    render_god_markdown_with_links(frontmatter, &EntityLinker::empty())
-}
-
 pub fn render_god_markdown_with_links(
     frontmatter: &GodFrontmatter,
     linker: &EntityLinker,
@@ -171,6 +170,7 @@ pub fn render_god_markdown_with_links(
     out
 }
 
+#[cfg(test)]
 pub fn render_dungeon_markdown(frontmatter: &DungeonFrontmatter) -> String {
     render_dungeon_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -264,10 +264,6 @@ pub fn dungeon_prose(frontmatter: &DungeonFrontmatter) -> String {
         }
     }
     join_prose(&parts)
-}
-
-pub fn render_event_markdown(frontmatter: &EventFrontmatter) -> String {
-    render_event_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
 
 /// An event publishes as its narrative body run through the prose linker — no
@@ -408,7 +404,7 @@ impl EntityLinker {
             // De-duplicate case-insensitively, keeping the first casing seen.
             .filter(|name| seen.insert(name.to_ascii_lowercase()))
             .collect();
-        names.sort_by(|a, b| b.len().cmp(&a.len()));
+        names.sort_by_key(|name| std::cmp::Reverse(name.len()));
         Self { names }
     }
 
@@ -435,13 +431,13 @@ impl EntityLinker {
 
         while i < text.len() {
             // Copy through an existing wikilink span verbatim.
-            if text[i..].starts_with("[[") {
-                if let Some(rel_end) = text[i..].find("]]") {
-                    let end = i + rel_end + 2;
-                    result.push_str(&text[i..end]);
-                    i = end;
-                    continue;
-                }
+            if text[i..].starts_with("[[")
+                && let Some(rel_end) = text[i..].find("]]")
+            {
+                let end = i + rel_end + 2;
+                result.push_str(&text[i..end]);
+                i = end;
+                continue;
             }
 
             if boundary_before(text, i) {
@@ -588,18 +584,18 @@ fn parse_text_list_items(value: &str) -> Vec<String> {
     }
 
     value
-        .split(|ch| matches!(ch, '\n' | ';' | ','))
+        .split(['\n', ';', ','])
         .map(|chunk| chunk.trim())
-        .map(|chunk| chunk.trim_start_matches(|c| matches!(c, '-' | '*' | '•' | '[' | ']')))
+        .map(|chunk| chunk.trim_start_matches(['-', '*', '•', '[', ']']))
         .map(|chunk| chunk.trim_matches(|c| c == '[' || c == ']'))
-        .map(|chunk| normalize_unknown_text(chunk))
+        .map(normalize_unknown_text)
         .filter(|chunk| chunk != "Unknown")
         .collect()
 }
 
 fn kind_display(frontmatter: &LocationFrontmatter) -> String {
     let kind = normalize_unknown_text(&frontmatter.kind_type);
-    if kind.to_ascii_lowercase() != "other" {
+    if !kind.eq_ignore_ascii_case("other") {
         return kind;
     }
     match frontmatter
@@ -614,7 +610,7 @@ fn kind_display(frontmatter: &LocationFrontmatter) -> String {
 
 fn rank_display(frontmatter: &GodFrontmatter) -> String {
     let rank = normalize_unknown_text(&frontmatter.rank);
-    if rank.to_ascii_lowercase() != "other" {
+    if !rank.eq_ignore_ascii_case("other") {
         return rank;
     }
     match frontmatter

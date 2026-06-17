@@ -194,7 +194,7 @@ fn build_calendar_import_doc(calendar: &StoredCalendar) -> OutputDoc {
     rows.push(entity_row(
         "state",
         format!(
-            "Year {}, {} {}, Day {}",
+            "Year {}, {} {}, Day {:02}:{:02}",
             calendar.state.year,
             calendar
                 .definition
@@ -202,7 +202,8 @@ fn build_calendar_import_doc(calendar: &StoredCalendar) -> OutputDoc {
                 .get(calendar.state.month_index)
                 .unwrap_or(&"Unknown".to_string()),
             calendar.state.day,
-            format!("{:02}:{:02}", calendar.state.hour_24, calendar.state.minute)
+            calendar.state.hour_24,
+            calendar.state.minute
         ),
     ));
 

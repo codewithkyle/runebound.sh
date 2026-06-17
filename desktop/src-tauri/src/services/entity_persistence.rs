@@ -126,12 +126,12 @@ impl EntityPersistenceService {
         store
             .save_npc(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_npc(&current.slug)
-                    .map_err(|err| err.to_string())?
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_npc(&current.slug)
+                .map_err(|err| err.to_string())?
         }
 
         let npc_row = db::NpcRow {
@@ -290,12 +290,12 @@ impl EntityPersistenceService {
         store
             .save_location(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_location(&current.slug)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_location(&current.slug)
+                .map_err(|err| err.to_string())?;
         }
 
         let location_row = db::LocationRow {
@@ -452,12 +452,12 @@ impl EntityPersistenceService {
         store
             .save_faction(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_faction(&current.slug)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_faction(&current.slug)
+                .map_err(|err| err.to_string())?;
         }
 
         let allies_db = faction_list_to_db_text(&allies)?;
@@ -618,12 +618,12 @@ impl EntityPersistenceService {
         store
             .save_god(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_god(&current.slug)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_god(&current.slug)
+                .map_err(|err| err.to_string())?;
         }
 
         let domains_db = faction_list_to_db_text(&domains)?;
@@ -758,12 +758,12 @@ impl EntityPersistenceService {
         store
             .save_dungeon(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_dungeon(&current.slug)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_dungeon(&current.slug)
+                .map_err(|err| err.to_string())?;
         }
 
         let beats_json = serde_json::to_string(&beats)
@@ -899,12 +899,12 @@ impl EntityPersistenceService {
         store
             .save_item(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_item(&current.slug)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_item(&current.slug)
+                .map_err(|err| err.to_string())?;
         }
 
         let item_row = db::ItemRow {
@@ -1026,12 +1026,12 @@ impl EntityPersistenceService {
         store
             .save_event(&frontmatter)
             .map_err(|err| err.to_string())?;
-        if let Some(current) = existing.as_ref() {
-            if current.slug != slug {
-                store
-                    .delete_event(&current.slug)
-                    .map_err(|err| err.to_string())?;
-            }
+        if let Some(current) = existing.as_ref()
+            && current.slug != slug
+        {
+            store
+                .delete_event(&current.slug)
+                .map_err(|err| err.to_string())?;
         }
 
         let event_row = db::EventRow {

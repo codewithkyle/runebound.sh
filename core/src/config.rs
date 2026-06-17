@@ -334,10 +334,10 @@ fn apply_partial(base: &mut AppConfig, partial: PartialAppConfig) {
         }
     }
 
-    if let Some(generation) = partial.generation {
-        if let Some(verbosity) = generation.verbosity {
-            base.generation.verbosity = verbosity;
-        }
+    if let Some(generation) = partial.generation
+        && let Some(verbosity) = generation.verbosity
+    {
+        base.generation.verbosity = verbosity;
     }
 }
 

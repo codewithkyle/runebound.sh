@@ -1,3 +1,10 @@
+// P5.2 (cleanup-0.5.0): the per-kind generator fan-out in this module (the
+// near-identical `generate_*` fns taking `workspace_root: &PathBuf`, plus an
+// `into_*` helper) collapses into one loop in P5.2; the `ptr_arg` and
+// `wrong_self_convention` lints there are resolved by that rewrite. Remove
+// these module allows when P5.2 lands.
+#![allow(clippy::ptr_arg, clippy::wrong_self_convention)]
+
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ollama_chat::{
     attempt_seed, build_chat_client, detail_directive, load_generation_config,
@@ -1489,14 +1496,14 @@ fn pass2_assignment_block(plan: &DungeonContentPlan) -> String {
             anchor_mechanic(anchor),
             loot_rule,
         ));
-        if let Some(overlay) = &plan.overlay {
-            if overlay.beat_index == i {
-                out.push_str(&format!(
-                    " Also layer in {}: {}.",
-                    overlay.overlay_type,
-                    overlay_phrase(&overlay.overlay_type)
-                ));
-            }
+        if let Some(overlay) = &plan.overlay
+            && overlay.beat_index == i
+        {
+            out.push_str(&format!(
+                " Also layer in {}: {}.",
+                overlay.overlay_type,
+                overlay_phrase(&overlay.overlay_type)
+            ));
         }
         out.push('\n');
     }

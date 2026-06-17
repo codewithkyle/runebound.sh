@@ -144,6 +144,12 @@ pub struct HandlerRegistry<B: HandlerBridge> {
     entries: HashMap<&'static str, HandlerEntry<B>>,
 }
 
+impl<B: HandlerBridge> Default for HandlerRegistry<B> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl<B: HandlerBridge> HandlerRegistry<B> {
     pub fn new() -> Self {
         Self {
@@ -167,6 +173,11 @@ impl<B: HandlerBridge> HandlerRegistry<B> {
         self.entries.values()
     }
 
+    // P7.5 (cleanup-0.5.0): `into_iter` is intentionally an inherent method that
+    // consumes the registry into owned entries; whether to rename it to
+    // `into_values` or implement `IntoIterator` is the deliberate API decision
+    // deferred to Phase 7. Remove this allow when P7.5 lands.
+    #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> impl Iterator<Item = HandlerEntry<B>> {
         self.entries.into_values()
     }

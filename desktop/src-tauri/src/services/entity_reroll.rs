@@ -1,3 +1,9 @@
+// P5.2 (cleanup-0.5.0): the per-kind reroll fan-out in this module (the
+// near-identical `reroll_*` fns taking `workspace_root: &PathBuf`) collapses
+// into one loop in P5.2; the `ptr_arg` lints there are resolved by that
+// rewrite. Remove this module allow when P5.2 lands.
+#![allow(clippy::ptr_arg)]
+
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
     anchor_mechanic, build_reference_context, describe_recent_npc_occupation_anchors,

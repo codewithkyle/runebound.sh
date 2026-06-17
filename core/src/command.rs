@@ -332,16 +332,16 @@ pub(crate) fn config_vault_path_string(config: &AppConfig) -> Option<String> {
 }
 
 pub(crate) fn expand_tilde_path(input: &str) -> PathBuf {
-    if input == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
+    if input == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        return home;
     }
 
-    if let Some(rest) = input.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = input.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
 
     PathBuf::from(input)
@@ -908,10 +908,10 @@ fn extract_missing_values(message: &str) -> Vec<String> {
     let mut values = Vec::new();
     for line in message.lines() {
         let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("- ") {
-            if !value.is_empty() {
-                values.push(value.to_string());
-            }
+        if let Some(value) = trimmed.strip_prefix("- ")
+            && !value.is_empty()
+        {
+            values.push(value.to_string());
         }
     }
     values

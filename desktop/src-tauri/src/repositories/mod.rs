@@ -661,6 +661,10 @@ pub trait DocumentRepository: Send + Sync {
         database: &Database,
         vault_path: &str,
     ) -> Result<Option<String>, String>;
+    // P6 (cleanup-0.5.0): the 8-arg document-index upsert is bundled into a
+    // struct when P6 reworks the repository layer (transactions + index upsert).
+    // Remove this allow then.
+    #[allow(clippy::too_many_arguments)]
     async fn upsert_index(
         &self,
         database: &Database,

@@ -121,7 +121,7 @@ async fn create_npc(trimmed: &str, state: tauri::State<'_, AppState>) -> Command
         id: make_entity_id("npc"),
         seed_prompt: prompt,
         name: seed.name.trim().to_string(),
-        slug: slugify(&seed.name.trim()),
+        slug: slugify(seed.name.trim()),
         race: seed.race.trim().to_string(),
         occupation: normalize_unknown_text(&seed.occupation),
         sex: normalize_sex(&seed.sex)?,

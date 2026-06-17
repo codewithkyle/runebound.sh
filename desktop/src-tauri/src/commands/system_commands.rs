@@ -276,7 +276,7 @@ async fn reroll_current_npc(
             generation_repo.as_ref(),
         )
         .await?;
-    draft.slug = slugify(&seed.name.trim());
+    draft.slug = slugify(seed.name.trim());
     draft.name = seed.name.trim().to_string();
     draft.race = seed.race.trim().to_string();
     draft.occupation = normalize_unknown_text(&seed.occupation);

@@ -205,6 +205,10 @@ pub fn entity_response_with_event(
     entity_ok_response(message, Some(event))
 }
 
+// P5.2 (cleanup-0.5.0): this helper returns a `CommandResult` as its `Err` to
+// short-circuit command parsing; that response type is part of the entity
+// fan-out P5.2 reworks. Remove this allow when that lands.
+#[allow(clippy::result_large_err)]
 pub fn parse_reroll_field_and_prompt(
     trimmed: &str,
     prefix: &str,

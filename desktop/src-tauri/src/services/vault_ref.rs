@@ -152,7 +152,7 @@ pub fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntr
         .iter()
         .filter(|entry| !entry.is_dir && entry.markdown_path.is_some())
         .collect();
-    candidates.sort_by(|left, right| right.key_lower.len().cmp(&left.key_lower.len()));
+    candidates.sort_by_key(|candidate| std::cmp::Reverse(candidate.key_lower.len()));
 
     // ASCII-lowercase is byte-length-preserving, so offsets computed from the
     // original `prompt`/`key` stay valid when indexing `prompt_lower`. A Unicode

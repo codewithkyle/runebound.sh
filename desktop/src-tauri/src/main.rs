@@ -83,15 +83,15 @@ async fn run_command(
     // `AppState::perform_native`. Active-onboarding input is consumed by the generic
     // wizard route above; `setup verbosity`/`setup help` are not entry commands and
     // fall through to the core handlers.
-    if let Some(id) = dnd_core::onboarding_wizard::onboarding_entry_wizard_id(&normalized_input) {
-        if let Some(response) = crate::wizards::start_wizard(id, state.inner()).await? {
-            let trimmed = normalized_input.trim();
-            if !trimmed.is_empty() {
-                let mut service = state.command_service.lock().await;
-                service.session_mut().push_history(trimmed, 50);
-            }
-            return Ok(response);
+    if let Some(id) = dnd_core::onboarding_wizard::onboarding_entry_wizard_id(&normalized_input)
+        && let Some(response) = crate::wizards::start_wizard(id, state.inner()).await?
+    {
+        let trimmed = normalized_input.trim();
+        if !trimmed.is_empty() {
+            let mut service = state.command_service.lock().await;
+            service.session_mut().push_history(trimmed, 50);
         }
+        return Ok(response);
     }
 
     // Reject `-h`/`--help` uniformly for desktop dispatch and the core fallthrough,

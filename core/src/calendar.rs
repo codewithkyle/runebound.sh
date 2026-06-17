@@ -304,8 +304,10 @@ pub struct CalendarDelta {
     unit: CalendarDeltaUnit,
 }
 
-impl CalendarDelta {
-    pub fn from_str(input: &str) -> Result<Self> {
+impl std::str::FromStr for CalendarDelta {
+    type Err = anyhow::Error;
+
+    fn from_str(input: &str) -> Result<Self> {
         if input.is_empty() {
             bail!("delta cannot be empty");
         }
@@ -316,7 +318,9 @@ impl CalendarDelta {
         let remainder: String = chars.collect();
         Self::from_parts(sign_char, remainder.as_str())
     }
+}
 
+impl CalendarDelta {
     pub fn from_parts(sign_char: char, payload: &str) -> Result<Self> {
         if payload.is_empty() {
             bail!("delta is missing an amount and unit");
@@ -1288,7 +1292,7 @@ mod tests {
         calendar.state.day = 10;
         let info = moon_phase_info(&calendar).expect("phase info");
         assert_eq!(info[0].cycle_length, 20);
-        assert_eq!(info[0].age, ((9 + 3) % 20) as u32);
+        assert_eq!(info[0].age, (9 + 3) as u32);
     }
 
     #[test]

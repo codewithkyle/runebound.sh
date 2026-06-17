@@ -10,10 +10,10 @@ pub fn apply_plan_meta_to_beats(beats: &mut [DungeonBeat], plan: &DungeonContent
         beat.overlay = None;
         beat.factions = plan.factions;
     }
-    if let Some(overlay) = &plan.overlay {
-        if let Some(beat) = beats.get_mut(overlay.beat_index) {
-            beat.overlay = Some(overlay.overlay_type.clone());
-        }
+    if let Some(overlay) = &plan.overlay
+        && let Some(beat) = beats.get_mut(overlay.beat_index)
+    {
+        beat.overlay = Some(overlay.overlay_type.clone());
     }
 }
 
@@ -687,10 +687,10 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
             entity_row("Player Goals:", normalize_unknown_text(&beat.player_goals)),
             entity_row("Lever:", normalize_unknown_text(&beat.lever)),
         ];
-        if let Some(loot) = &beat.loot {
-            if !loot.trim().is_empty() {
-                rows.push(entity_row("Loot:", loot.clone()));
-            }
+        if let Some(loot) = &beat.loot
+            && !loot.trim().is_empty()
+        {
+            rows.push(entity_row("Loot:", loot.clone()));
         }
         rows.push(entity_row(
             "Design:",

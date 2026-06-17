@@ -39,7 +39,7 @@ pub struct EntityFieldSpec {
 
 impl EntityFieldSpec {
     fn matches(&self, candidate: &str) -> bool {
-        self.canonical == candidate || self.aliases.iter().any(|alias| *alias == candidate)
+        self.canonical == candidate || self.aliases.contains(&candidate)
     }
 }
 
@@ -753,12 +753,10 @@ pub fn canonical_field_spec(
         return None;
     }
 
-    Some(
-        schema_for_kind(kind)
-            .fields
-            .iter()
-            .find(|spec| spec.matches(&normalized) && access.allows(spec))?,
-    )
+    schema_for_kind(kind)
+        .fields
+        .iter()
+        .find(|spec| spec.matches(&normalized) && access.allows(spec))
 }
 
 pub fn canonical_field_name(
