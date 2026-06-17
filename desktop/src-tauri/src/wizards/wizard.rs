@@ -20,13 +20,15 @@ use crate::entities::common::CommandResult;
 
 use super::session::WizardData;
 
-/// A clickable/typeable choice on a step: the visible `label` and the literal
-/// `token` submitted when it is clicked or completed. `{label:"1: Tragedy",
+/// A clickable/typeable choice on a step: the visible `label`, the literal
+/// `token` submitted when it is clicked or completed, and an optional one-line
+/// `help` description shown in the step's `help`. `{label:"1: Tragedy",
 /// token:"1"}` renders as `command_ref("1: Tragedy", "1")`.
 #[derive(Debug, Clone)]
 pub struct WizardChoice {
     pub label: String,
     pub token: String,
+    pub help: Option<String>,
 }
 
 impl WizardChoice {
@@ -34,7 +36,14 @@ impl WizardChoice {
         Self {
             label: label.into(),
             token: token.into(),
+            help: None,
         }
+    }
+
+    /// Attach a one-line description, shown next to the choice in `help`.
+    pub fn with_help(mut self, help: impl Into<String>) -> Self {
+        self.help = Some(help.into());
+        self
     }
 }
 
@@ -69,10 +78,25 @@ pub trait WizardStep: Send + Sync {
     /// the `super::prompt` helpers so clickability is by construction.
     fn prompt(&self, data: &WizardData) -> OutputDoc;
 
+    /// One-line summary of what this step is for and what free-text/parameterized
+    /// input it accepts, shown at the top of the step's `help`. Default: none.
+    fn summary(&self) -> &'static str {
+        ""
+    }
+
     /// Choices that should autocomplete and be clickable for this step. Default:
-    /// none (free-text steps).
+    /// none (free-text steps). These are the simple single-token verbs; staged
+    /// multi-token commands (`set room <room> <type>`) are produced by `suggest`.
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
         Vec::new()
+    }
+
+    /// Input-aware typeahead for this step. Default: the step's `choices()`
+    /// prefix-filtered by the current input. Override to stage multi-token
+    /// commands (e.g. suggest rooms after `set room `, then types). The global
+    /// verbs (`back`/`cancel`/`help`) are appended by the runtime, not here.
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        super::prompt::filter_choices(&self.choices(data), input)
     }
 
     /// Spinner label to show when submitting from this step triggers an LLM call.

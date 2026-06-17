@@ -37,11 +37,33 @@ pub async fn start_wizard(id: &'static str, state: &AppState) -> CommandResult {
     Ok(Some(render_step(wizard.as_ref(), step.as_ref(), data)))
 }
 
-/// The active step's declared `choices()`, for autocomplete typeahead. Returns
-/// empty when no wizard is active. Read-only snapshot — the suggestion service
-/// calls this to offer the current step's tokens (`1`, `generate`, `reroll`, …),
-/// the per-step counterpart to the manifest's generic nav verbs.
-pub async fn active_step_choices(state: &AppState) -> Vec<WizardChoice> {
+/// The always-available wizard verbs, appended to every step's suggestions and
+/// listed in `help`. `back` only when there is somewhere to go back to.
+fn global_verbs(has_history: bool) -> Vec<WizardChoice> {
+    let mut verbs = Vec::new();
+    if has_history {
+        verbs.push(WizardChoice::new("back", "back").with_help("Return to the previous step"));
+    }
+    verbs.push(WizardChoice::new("cancel", "cancel").with_help("Discard this wizard and exit"));
+    verbs.push(WizardChoice::new("help", "help").with_help("Show the commands available here"));
+    verbs
+}
+
+/// Dedupe choices by lowercased token, keeping the first occurrence (so a step's
+/// own `cancel` wins over the global one).
+fn dedupe_choices(choices: Vec<WizardChoice>) -> Vec<WizardChoice> {
+    let mut seen = std::collections::HashSet::new();
+    choices
+        .into_iter()
+        .filter(|choice| seen.insert(choice.token.to_ascii_lowercase()))
+        .collect()
+}
+
+/// Input-aware typeahead for the active step: the step's `suggest()` (per-step
+/// tokens + staged args like `set room <room> <type>`) plus the always-available
+/// global verbs, prefix-filtered and deduped. Empty when no wizard is active.
+/// The suggestion service calls this and maps the result to `CommandSuggestion`.
+pub async fn active_step_suggestions(state: &AppState, input: &str) -> Vec<WizardChoice> {
     let session = state.wizard_session.lock().await;
     let Some(id) = session.active_id else {
         return Vec::new();
@@ -55,7 +77,12 @@ pub async fn active_step_choices(state: &AppState) -> Vec<WizardChoice> {
     let Some(data) = session.data.as_ref() else {
         return Vec::new();
     };
-    step.choices(data)
+    let mut out = step.suggest(input, data);
+    out.extend(super::prompt::filter_choices(
+        &global_verbs(!session.history.is_empty()),
+        input,
+    ));
+    dedupe_choices(out)
 }
 
 /// Intercepted before registry dispatch while a wizard is active. Returns
@@ -87,6 +114,11 @@ pub async fn try_execute_active_wizard(line: &str, state: &AppState) -> CommandR
             session.cursor = prev;
         }
         return Ok(Some(render_current(wizard.as_ref(), &session)));
+    }
+
+    // Global verb: help — render the current step's commands without advancing.
+    if lowered == "help" || lowered == format!("help {id}") {
+        return Ok(Some(render_step_help(wizard.as_ref(), &session)));
     }
 
     // Delegate to the active step.
@@ -157,6 +189,26 @@ fn render_current(wizard: &dyn Wizard, session: &WizardSession) -> CommandRespon
 /// plain-text fallback, and the structured `WizardView` spinner signal.
 fn render_step(wizard: &dyn Wizard, step: &dyn WizardStep, data: &WizardData) -> CommandResponse {
     let document = step.prompt(data);
+    let text = doc_to_plain_text(&document);
+    let mut response = ok_response_with_doc(text, Some(document), None);
+    response.wizard = Some(WizardView {
+        id: wizard.id().to_string(),
+        step_id: step.id().to_string(),
+        awaiting_llm_label: step.awaiting_llm_label().map(str::to_string),
+    });
+    response
+}
+
+/// Render the current step's `help`: its summary plus a clickable, described
+/// line per command (step choices + global verbs). Keeps the `WizardView` so the
+/// context (and the next submission's spinner) stays intact.
+fn render_step_help(wizard: &dyn Wizard, session: &WizardSession) -> CommandResponse {
+    let step = wizard.steps()[session.cursor].as_ref();
+    let data = session.data.as_ref().expect("active wizard data");
+    let mut commands = step.choices(data);
+    commands.extend(global_verbs(!session.history.is_empty()));
+    let commands = dedupe_choices(commands);
+    let document = super::prompt::step_help_doc(step.summary(), &commands);
     let text = doc_to_plain_text(&document);
     let mut response = ok_response_with_doc(text, Some(document), None);
     response.wizard = Some(WizardView {

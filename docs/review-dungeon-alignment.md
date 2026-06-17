@@ -124,7 +124,7 @@ clickable; the plain-text linkifier in `App.tsx` only recognizes real command ro
 > (`drafts.rs:710-718`), which is why the editor half feels right and only the wizard feels broken.
 
 ### Finding 2 — The wizard has no `InputContext`; autocomplete is blind to it (the typeahead regression) — ✅ Resolved
-*Fixed: `InputContext::Wizard(id)` is resolved by `AppState::resolve_input_context()`, and the active step's tokens are surfaced via `active_step_choices()` / `wizard_step_suggestions()`.*
+*Fixed: `InputContext::Wizard(id)` is resolved by `AppState::resolve_input_context()`, and the active step's commands are surfaced via `active_step_suggestions()` (the step's `suggest()` plus the global verbs).*
 
 `InputContext` has exactly three variants — `Default`, `ConfigEditor`, `EntityEditor(String)`
 (`command-specs/src/lib.rs:112-118`). **None represents "the dungeon wizard is active."** The wizard

@@ -6,7 +6,7 @@
 //! Host-agnostic (no `AppState`).
 
 use runebound_models::output::{
-    InlineNode, OutputBlock, OutputDoc, command_ref, doc, heading, paragraph_text,
+    InlineNode, OutputBlock, OutputDoc, command_ref, doc, heading, list, paragraph_text,
     paragraph_with_inlines, text_node,
 };
 
@@ -15,6 +15,39 @@ use super::wizard::WizardChoice;
 /// A single choice as a clickable inline ref: label shown, token submitted.
 pub fn choice_ref(choice: &WizardChoice) -> InlineNode {
     command_ref(choice.label.clone(), choice.token.clone())
+}
+
+/// Prefix-filter choices by the typed input's lowercased token. The default
+/// `WizardStep::suggest` and the runtime's global-verb pass both use this so
+/// single-token typeahead behaves identically everywhere.
+pub fn filter_choices(choices: &[WizardChoice], input: &str) -> Vec<WizardChoice> {
+    let prefix = input.trim().to_ascii_lowercase();
+    choices
+        .iter()
+        .filter(|choice| choice.token.to_ascii_lowercase().starts_with(&prefix))
+        .cloned()
+        .collect()
+}
+
+/// The `help` body for a step: the summary, then one clickable line per command
+/// (step choices followed by the global verbs) with its description. Callers pass
+/// an already-deduped command list.
+pub fn step_help_doc(summary: &str, commands: &[WizardChoice]) -> OutputDoc {
+    let mut document = doc().with_block(heading(3, "Commands available here"));
+    if !summary.is_empty() {
+        document = document.with_block(paragraph_text(summary.to_string()));
+    }
+    let entries: Vec<Vec<InlineNode>> = commands
+        .iter()
+        .map(|choice| {
+            let mut line = vec![choice_ref(choice)];
+            if let Some(help) = &choice.help {
+                line.push(text_node(format!(" — {help}")));
+            }
+            line
+        })
+        .collect();
+    document.with_block(list(entries))
 }
 
 /// A numbered/option menu: title, intro, then one clickable choice per line.
@@ -94,4 +127,29 @@ fn inlines_text(inlines: &[InlineNode]) -> String {
             InlineNode::Code { text } => text.as_str(),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn filter_choices_matches_token_prefix_case_insensitively() {
+        let choices = vec![
+            WizardChoice::new("continue", "continue"),
+            WizardChoice::new("cancel", "cancel"),
+            WizardChoice::new("reroll", "reroll"),
+        ];
+        let tokens: Vec<String> = filter_choices(&choices, "C")
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        assert_eq!(tokens, vec!["continue".to_string(), "cancel".to_string()]);
+    }
+
+    #[test]
+    fn filter_choices_empty_prefix_keeps_all() {
+        let choices = vec![WizardChoice::new("generate", "generate")];
+        assert_eq!(filter_choices(&choices, "").len(), 1);
+    }
 }

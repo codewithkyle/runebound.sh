@@ -81,11 +81,11 @@ Key behavior:
 - suggestions stay live as user edits
 - suggestions are filtered by **input context** (`InputContext`: `Default`, `ConfigEditor`, `EntityEditor(kind)`, `Wizard(id)`), resolved by `AppState::resolve_input_context()` (the one canonical resolver)
 - visibility comes only from `command_availability(name)` in `command-specs/src/lib.rs` — the single source of truth shared with the help index. Do not hard-code per-command filters here; add/adjust the availability arm instead
-- **inside a wizard**, the nav verbs (`continue`/`back`/`cancel`) come from the manifest via that availability filter, and the active step's tokens (`generate`, `1`, `reroll`, …) come from `active_step_choices()` fed through `wizard_step_suggestions()` — a wizard author adds neither a filter nor a bespoke branch here
+- **inside a wizard**, the active step owns the surface: the suggestion service early-returns `active_step_suggestions()`, which combines the step's `suggest()` (per-step tokens plus staged args like `set room <room> <type>`) with the always-available global verbs (`back`/`cancel`/`help`). Only the commands valid at the current step are offered — a wizard author adds neither a filter nor a bespoke branch here
 - **Help mirrors autocomplete.** The `help` index uses the same context + `command_availability`, so a visibility change updates both. Verify both surfaces when you change availability (full model: `docs/command-contexts.md`)
 - Global system commands (`save`, `reroll`, `cancel`) must stay visible whenever any draft is active; only hide them when `active_kind` is `None`
 - `entity_kind_for_root()` in `services/suggestions.rs` must map every supported root to its `EntityKind` so field completions work
-- `build_entity_field_argument_suggestions()` pulls directly from `settable_fields`/`rerollable_fields`; add schema entries before exposing new fields
+- `build_entity_field_argument_suggestions()` pulls directly from `settable_fields`/`rerollable_fields`; add schema entries before exposing new fields. Both the entity-root form (`<kind> reroll <field>`) and the bare active-kind system command (`reroll <field>`, e.g. `reroll setback` in the dungeon editor) complete through the shared `build_field_suggestions()` — the bare form keys off `active_kind`, not an entity root
 - Every autocomplete change requires a matching unit test in `services/suggestions.rs` (`cargo test suggestions`)
 
 Current active kinds:

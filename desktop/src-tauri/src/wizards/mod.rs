@@ -13,6 +13,6 @@ pub mod session;
 pub mod wizard;
 
 pub use registry::{build_default_wizard_registry, WizardRegistry};
-pub use runtime::{active_step_choices, start_wizard, try_execute_active_wizard};
+pub use runtime::{active_step_suggestions, start_wizard, try_execute_active_wizard};
 pub use session::WizardSession;
 pub use wizard::WizardChoice;

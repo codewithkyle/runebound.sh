@@ -56,6 +56,21 @@ impl SuggestionService {
             }
         }
 
+        // Resolve the input context once (entity editor wins over an active wizard,
+        // which wins over onboarding). Shared with the desktop `help` handler via
+        // AppState::resolve_input_context so the two cannot drift.
+        let context = state.resolve_input_context().await;
+
+        // In a wizard the active step owns the entire command surface: its own
+        // tokens, staged args (`set room <room> <type>`, `reroll <room>`), and the
+        // global verbs (back/cancel/help). Skip the manifest/entity passes so no
+        // off-context command leaks in. (@-reference completion above still runs,
+        // so the context step's @vault refs keep working.)
+        if matches!(context, InputContext::Wizard(_)) {
+            let choices = crate::wizards::active_step_suggestions(state, &input).await;
+            return Ok(wizard_choices_to_suggestions(choices));
+        }
+
         let manifest = command_manifest::command_manifest();
         let parsed = command_parse::parse_command_input(&input);
         let mut suggestions = build_command_suggestions(&manifest, &parsed, &input);
@@ -65,12 +80,6 @@ impl SuggestionService {
             editor.active_kind()
         };
         let is_npc = matches!(active_kind, Some(EntityKind::Npc));
-
-        // Resolve the current input context (entity editor takes precedence over an
-        // in-progress setup wizard) and keep only commands the manifest declares
-        // visible there. Shared with the desktop `help` handler via
-        // AppState::resolve_input_context so the two cannot drift.
-        let context = state.resolve_input_context().await;
 
         suggestions.retain(|suggestion| {
             let root = suggestion
@@ -195,14 +204,19 @@ impl SuggestionService {
             }
         }
 
-        // Wizard step tokens: when a wizard is active, offer the current step's
-        // declared `choices()` (`1`, `generate`, `reroll`, …). The nav verbs
-        // (continue/back/cancel) already come from the manifest via the
-        // availability filter above; this is the per-step counterpart the manifest
-        // can't know — generalized from the bespoke onboarding `continue` branch.
-        if matches!(context, InputContext::Wizard(_)) {
-            let choices = crate::wizards::active_step_choices(state).await;
-            suggestions.extend(wizard_step_suggestions(&choices, trimmed));
+        // Bare `reroll <field/beat>` is the active-kind system command (e.g.
+        // `reroll setback` inside the dungeon editor). Its argument has no entity
+        // root, so it isn't completed by build_command_suggestions; finish it here
+        // from the active draft's rerollable fields. (`<kind> reroll <field>` is
+        // already handled via the entity root.)
+        if let Some(kind) = active_kind {
+            if lowered.starts_with("reroll ") {
+                if let Some(field_suggestions) =
+                    build_active_reroll_suggestions(kind, &parsed, &input)
+                {
+                    suggestions.extend(field_suggestions);
+                }
+            }
         }
 
         let mut seen = HashSet::new();
@@ -555,8 +569,36 @@ fn build_entity_field_argument_suggestions(
     if subcommand != "set" && subcommand != "reroll" {
         return None;
     }
+    // `<kind> verb <field>`: the field argument is the third token (index 2).
+    let label_prefix = format!("{} {}", command.name, subcommand);
+    build_field_suggestions(kind, subcommand, &label_prefix, 2, parsed, input)
+}
 
-    let args = &parsed.normalized_tokens[2..];
+/// Argument completion for the bare active-kind `reroll <field>` system command
+/// (e.g. `reroll setback` inside the dungeon editor). Unlike `<kind> reroll`, the
+/// bare form has no entity root, so it can't be reached via `entity_kind_for_root`;
+/// the caller supplies the active draft's kind. The field is the second token.
+fn build_active_reroll_suggestions(
+    kind: EntityKind,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    build_field_suggestions(kind, "reroll", "reroll", 1, parsed, input)
+}
+
+/// Shared field/beat completion for `set`/`reroll`, used by both the entity-root
+/// form (`<kind> verb <field>`, `arg_start = 2`) and the bare active-kind
+/// `reroll <field>` system command (`arg_start = 1`). `label_prefix` precedes the
+/// field in the displayed label.
+fn build_field_suggestions(
+    kind: EntityKind,
+    verb: &str,
+    label_prefix: &str,
+    arg_start: usize,
+    parsed: &ParseResult,
+    input: &str,
+) -> Option<Vec<CommandSuggestion>> {
+    let args = parsed.normalized_tokens.get(arg_start..).unwrap_or(&[]);
     let should_suggest_fields =
         args.is_empty() || (args.len() == 1 && !parsed.completion.ends_with_space);
     if !should_suggest_fields {
@@ -565,7 +607,7 @@ fn build_entity_field_argument_suggestions(
 
     let prefix = parsed.completion.current_token.to_ascii_lowercase();
     let base = replace_current_token(input, &parsed.completion.current_token);
-    let mut field_names: Vec<&'static str> = if subcommand == "set" {
+    let mut field_names: Vec<&'static str> = if verb == "set" {
         settable_fields(kind).map(|spec| spec.display_name).collect()
     } else {
         rerollable_fields(kind)
@@ -578,13 +620,12 @@ fn build_entity_field_argument_suggestions(
         field_names.extend(["entrance", "puzzle", "setback", "climax", "resolution"]);
     }
 
-    let prefix_label = format!("{} {}", command.name, subcommand);
     Some(
         field_names
             .into_iter()
             .filter(|field| field.starts_with(&prefix))
             .map(|field| CommandSuggestion {
-                label: format!("{prefix_label} {field}"),
+                label: format!("{label_prefix} {field}"),
                 completion: format!("{base}{field} "),
                 helper_text: Some(SuggestionHelperText::Command),
             })
@@ -592,18 +633,16 @@ fn build_entity_field_argument_suggestions(
     )
 }
 
-/// Turn a wizard step's choices into prefix-filtered suggestions. The completion
-/// is the choice `token` (what gets submitted), the label is the choice `label`
-/// (what the user sees). Matching is by `token` prefix — for numbered choices the
-/// label leads with the same digit, so this covers both ("1: Tragedy" via "1").
-fn wizard_step_suggestions(choices: &[WizardChoice], input: &str) -> Vec<CommandSuggestion> {
-    let prefix = input.trim().to_ascii_lowercase();
+/// Map the active wizard step's suggestions (already prefix-filtered, staged, and
+/// deduped by the engine's `active_step_suggestions`) into `CommandSuggestion`s.
+/// The completion is the choice `token` (what gets submitted), the label is the
+/// choice `label` (what the user sees).
+fn wizard_choices_to_suggestions(choices: Vec<WizardChoice>) -> Vec<CommandSuggestion> {
     choices
-        .iter()
-        .filter(|choice| choice.token.to_ascii_lowercase().starts_with(&prefix))
+        .into_iter()
         .map(|choice| CommandSuggestion {
-            label: choice.label.clone(),
-            completion: choice.token.clone(),
+            label: choice.label,
+            completion: choice.token,
             helper_text: Some(SuggestionHelperText::Command),
         })
         .collect()
@@ -891,10 +930,11 @@ fn npc_travel_location_query(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        build_command_suggestions, build_entity_field_argument_suggestions,
-        build_reference_suggestions_from_entries, entity_kind_for_root, extract_active_reference_query,
-        find_command, npc_travel_location_query, wizard_step_suggestions, ActiveReferenceQuery,
-        VaultReferenceEntry,
+        build_active_reroll_suggestions, build_command_suggestions,
+        build_entity_field_argument_suggestions, build_reference_suggestions_from_entries,
+        entity_kind_for_root, extract_active_reference_query, find_command,
+        npc_travel_location_query, wizard_choices_to_suggestions, ActiveReferenceQuery,
+        SuggestionHelperText, VaultReferenceEntry,
     };
     use crate::entities::EntityKind;
     use crate::wizards::WizardChoice;
@@ -1270,46 +1310,63 @@ mod tests {
     }
 
     #[test]
-    fn wizard_step_suggestions_filter_by_token_prefix() {
+    fn bare_reroll_suggests_dungeon_beats_from_active_kind() {
+        // Inside the dungeon editor the user types the bare system `reroll <beat>`;
+        // it has no entity root, so completion comes from the active kind.
+        let parsed = command_parse::parse_command_input("reroll set");
+        let suggestions =
+            build_active_reroll_suggestions(EntityKind::Dungeon, &parsed, "reroll set")
+                .expect("expected suggestions");
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.completion == "reroll setback "),
+            "missing bare reroll beat suggestion"
+        );
+        // The label is the bare form, not `dungeon reroll …`.
+        assert!(suggestions.iter().all(|item| item.label.starts_with("reroll ")));
+    }
+
+    #[test]
+    fn bare_reroll_suggests_scalar_fields_too() {
+        let parsed = command_parse::parse_command_input("reroll p");
+        let suggestions = build_active_reroll_suggestions(EntityKind::Dungeon, &parsed, "reroll p")
+            .expect("expected suggestions");
+        assert!(
+            suggestions
+                .iter()
+                .any(|item| item.completion == "reroll premise "),
+            "missing bare reroll scalar field suggestion"
+        );
+    }
+
+    #[test]
+    fn bare_reroll_stops_suggesting_after_a_complete_field() {
+        // `reroll setback ` has chosen its field; no further field suggestions.
+        let parsed = command_parse::parse_command_input("reroll setback ");
+        assert!(
+            build_active_reroll_suggestions(EntityKind::Dungeon, &parsed, "reroll setback ")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn wizard_choices_map_label_and_token_to_suggestion() {
+        // The engine has already filtered/staged/deduped; the service only maps
+        // each WizardChoice to a CommandSuggestion (label shown, token submitted).
         let choices = vec![
             WizardChoice::new("1: Tragedy", "1"),
-            WizardChoice::new("2: Comedy", "2"),
+            WizardChoice::new("set room entrance combat", "set room entrance combat"),
         ];
-        // A digit prefix narrows to the matching numbered choice; the completion is
-        // the bare token (`1`), the label is the human-facing menu entry.
-        let suggestions = wizard_step_suggestions(&choices, "1");
-        assert_eq!(suggestions.len(), 1);
+        let suggestions = wizard_choices_to_suggestions(choices);
+        assert_eq!(suggestions.len(), 2);
         assert_eq!(suggestions[0].label, "1: Tragedy");
         assert_eq!(suggestions[0].completion, "1");
-    }
-
-    #[test]
-    fn wizard_step_suggestions_match_word_tokens() {
-        // Review-screen verbs the manifest can't surface in a wizard (e.g. `reroll`
-        // is entity-editor-scoped) come from the active step instead.
-        let choices = vec![
-            WizardChoice::new("continue", "continue"),
-            WizardChoice::new("reroll", "reroll"),
-            WizardChoice::new("cancel", "cancel"),
-        ];
-        let suggestions = wizard_step_suggestions(&choices, "r");
-        let completions: Vec<&str> = suggestions
-            .iter()
-            .map(|item| item.completion.as_str())
-            .collect();
-        assert_eq!(completions, vec!["reroll"]);
-    }
-
-    #[test]
-    fn wizard_step_suggestions_empty_input_offers_all_choices() {
-        let choices = vec![
-            WizardChoice::new("generate", "generate"),
-        ];
-        // The call site never passes empty input (it returns early), but an empty
-        // prefix should still match everything rather than panic or drop choices.
-        let suggestions = wizard_step_suggestions(&choices, "");
-        assert_eq!(suggestions.len(), 1);
-        assert_eq!(suggestions[0].completion, "generate");
+        assert_eq!(suggestions[1].completion, "set room entrance combat");
+        assert!(matches!(
+            suggestions[1].helper_text,
+            Some(SuggestionHelperText::Command)
+        ));
     }
 
     #[test]

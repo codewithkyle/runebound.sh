@@ -114,7 +114,7 @@ When you touch command visibility, parsing, help, or onboarding:
 - [ ] Autocomplete filtered correctly for the same contexts (`cargo test suggestions`, run from `desktop/src-tauri`).
 - [ ] If a command needs entity-editor state, it is dispatched (or overridden) in the desktop layer, not core-only.
 - [ ] Onboarding entry points seed shown fields identically; `cancel` exits the wizard.
-- [ ] New wizards register a `Wizard` (no bespoke interceptor); nav verbs resolve via `command_availability` and step tokens via `active_step_choices` — no per-command filter added.
+- [ ] New wizards register a `Wizard` (no bespoke interceptor); the in-wizard command surface comes from the active step's `suggest()` + the global verbs via `active_step_suggestions` — no per-command filter added.
 - [ ] Parser change covered by a `command_parse` unit test (argument-vs-subcommand cases).
 
 ---

@@ -91,6 +91,10 @@ impl WizardStep for PremiseStep {
         "premise"
     }
 
+    fn summary(&self) -> &'static str {
+        "Enter a one-line premise as free text, or use a command below."
+    }
+
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         doc()
             .with_block(heading(2, "Create Dungeon — Step 1 of 6 — Premise"))
@@ -102,7 +106,8 @@ impl WizardStep for PremiseStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![WizardChoice::new("generate", "generate")]
+        vec![WizardChoice::new("generate", "generate")
+            .with_help("Have the oracle invent a premise for you")]
     }
 
     async fn accept(
@@ -130,6 +135,10 @@ struct ToneStep;
 impl WizardStep for ToneStep {
     fn id(&self) -> &'static str {
         "tone"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Pick the dungeon's overall emotional polarity."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -169,6 +178,10 @@ struct TwistStep;
 impl WizardStep for TwistStep {
     fn id(&self) -> &'static str {
         "twist"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Pick the shape of the middle beats."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -212,6 +225,10 @@ impl WizardStep for ContextStep {
         "context"
     }
 
+    fn summary(&self) -> &'static str {
+        "Add optional references/constraints as free text (including @vault refs), or skip."
+    }
+
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         doc()
             .with_block(heading(2, "Create Dungeon — Step 4 of 6 — Context"))
@@ -223,7 +240,7 @@ impl WizardStep for ContextStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![WizardChoice::new("skip", "skip")]
+        vec![WizardChoice::new("skip", "skip").with_help("Add no extra context")]
     }
 
     async fn accept(
@@ -247,6 +264,10 @@ struct TopologyStep;
 impl WizardStep for TopologyStep {
     fn id(&self) -> &'static str {
         "topology"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Pick the dungeon's spatial form (0 lays it out freely)."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -301,6 +322,11 @@ impl WizardStep for PlanReviewStep {
         Some("generating story")
     }
 
+    fn summary(&self) -> &'static str {
+        "Review the rolled rooms. Re-roll one with `reroll <room>` or pin one with \
+         `set room <room> <type>` (room by number or name), then continue to write the story."
+    }
+
     fn prompt(&self, data: &WizardData) -> OutputDoc {
         let d = dungeon_data(data);
         let Some(plan) = &d.plan else {
@@ -318,7 +344,9 @@ impl WizardStep for PlanReviewStep {
             .with_block(paragraph_text("The dice rolled these rooms for your dungeon:"))
             .with_block(list(items))
             .with_block(paragraph_with_inlines(vec![
-                text_node("Pin a room with "),
+                text_node("Re-roll one with "),
+                code("reroll <room>"),
+                text_node(" or pin one with "),
                 code("set room <room> <type>"),
                 text_node(" (by number or name)."),
             ]))
@@ -327,10 +355,14 @@ impl WizardStep for PlanReviewStep {
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
         vec![
-            WizardChoice::new("continue", "continue"),
-            WizardChoice::new("reroll", "reroll"),
-            WizardChoice::new("cancel", "cancel"),
+            WizardChoice::new("continue", "continue").with_help("Write the story from these rooms"),
+            WizardChoice::new("reroll", "reroll").with_help("Re-roll the whole set of rooms"),
+            WizardChoice::new("cancel", "cancel").with_help("Discard this dungeon and exit"),
         ]
+    }
+
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        suggest_plan_review(input, &self.choices(data))
     }
 
     async fn accept(
@@ -352,7 +384,12 @@ impl WizardStep for PlanReviewStep {
                 Ok(WizardTransition::Next)
             }
             "reroll" | "redo" => {
-                roll_plan_into(dungeon_data_mut(d));
+                // Bare `reroll` re-rolls every room; `reroll <room>` re-rolls just one.
+                if rest.is_empty() {
+                    roll_plan_into(dungeon_data_mut(d));
+                } else if let Err(usage) = reroll_room(dungeon_data_mut(d), rest) {
+                    dungeon_data_mut(d).notice = Some(usage);
+                }
                 Ok(WizardTransition::Stay)
             }
             "set" => {
@@ -376,6 +413,10 @@ impl WizardStep for StoryReviewStep {
 
     fn awaiting_llm_label(&self) -> Option<&'static str> {
         Some("generating dungeon")
+    }
+
+    fn summary(&self) -> &'static str {
+        "Review the story. Continue to build the dungeon, or `reroll <hint>` to steer a new one."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -402,9 +443,10 @@ impl WizardStep for StoryReviewStep {
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
         vec![
-            WizardChoice::new("continue", "continue"),
-            WizardChoice::new("reroll", "reroll"),
-            WizardChoice::new("cancel", "cancel"),
+            WizardChoice::new("continue", "continue").with_help("Build the dungeon cards"),
+            WizardChoice::new("reroll", "reroll")
+                .with_help("Rewrite the story (optionally `reroll <hint>`)"),
+            WizardChoice::new("cancel", "cancel").with_help("Discard this dungeon and exit"),
         ]
     }
 
@@ -665,6 +707,162 @@ fn set_room_usage() -> String {
     )
 }
 
+/// `reroll <room>`: re-roll a single beat's content type to a fresh random
+/// settable type. Returns `Err(usage)` on a bad room. Bare `reroll` (no room)
+/// re-rolls the whole plan and is handled separately.
+fn reroll_room(d: &mut DungeonWizardData, rest: &str) -> Result<(), String> {
+    let room = rest.split_whitespace().next().unwrap_or("");
+    let Some(index) = resolve_room_index(room) else {
+        return Err(reroll_room_usage());
+    };
+    let Some(plan) = d.plan.as_mut() else {
+        return Err("no content plan to edit".to_string());
+    };
+    let pick = SETTABLE_ROOM_TYPES[(plan_seed() as usize) % SETTABLE_ROOM_TYPES.len()];
+    plan.anchors[index] = pick.to_string();
+    Ok(())
+}
+
+fn reroll_room_usage() -> String {
+    let rooms = DUNGEON_FUNCTIONS
+        .iter()
+        .enumerate()
+        .map(|(i, name)| format!("{} {name}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("Usage: reroll <room>. Rooms: {rooms}. (Or reroll for all, continue, cancel.)")
+}
+
+// ---------------------------------------------------------------------------
+// Plan-review typeahead (staged: `set room <room> <type>` and `reroll <room>`)
+// ---------------------------------------------------------------------------
+
+/// The room targets for typeahead: the beat function names, lowercased so the
+/// completion reads naturally on the command line (`set room entrance combat`).
+/// `resolve_room_index` still accepts a 1-5 number too.
+fn room_targets() -> Vec<String> {
+    DUNGEON_FUNCTIONS
+        .iter()
+        .map(|name| name.to_ascii_lowercase())
+        .collect()
+}
+
+/// A typeahead entry whose label and completion are the (possibly partial)
+/// command string; a trailing space signals that another argument follows.
+fn staged(command: &str, ends: bool) -> WizardChoice {
+    let completion = if ends {
+        format!("{command} ")
+    } else {
+        command.to_string()
+    };
+    WizardChoice::new(command.to_string(), completion)
+}
+
+/// Staged typeahead for the room-plan review: routes `set …` and `reroll …` to
+/// their argument stages, otherwise prefix-filters the base verbs and offers the
+/// `set room` starter.
+fn suggest_plan_review(input: &str, base_choices: &[WizardChoice]) -> Vec<WizardChoice> {
+    let ends_space = input.ends_with(char::is_whitespace);
+    let lowered = input.trim().to_ascii_lowercase();
+    let tokens: Vec<&str> = lowered.split_whitespace().collect();
+    let first = tokens.first().copied().unwrap_or("");
+
+    if first == "set" {
+        return suggest_set_room(&tokens, ends_space);
+    }
+    if first == "reroll" {
+        return suggest_reroll(&tokens, ends_space);
+    }
+
+    let mut out = super::prompt::filter_choices(base_choices, input);
+    if !lowered.is_empty() && "set".starts_with(&lowered) {
+        out.push(staged("set room", true));
+    }
+    out
+}
+
+/// `set room <room> <type>` completion stages.
+fn suggest_set_room(tokens: &[&str], ends_space: bool) -> Vec<WizardChoice> {
+    let rooms = room_targets();
+    match tokens.len() {
+        // `set` / `set ` -> the `room` keyword.
+        1 => vec![staged("set room", true)],
+        // `set <kw>` -> finish the `room` keyword; `set room ` -> the room arg.
+        2 => {
+            if !ends_space {
+                if "room".starts_with(tokens[1]) {
+                    vec![staged("set room", true)]
+                } else {
+                    Vec::new()
+                }
+            } else if tokens[1] == "room" {
+                rooms
+                    .iter()
+                    .map(|room| staged(&format!("set room {room}"), true))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        // `set room <room?>` -> filter rooms; `set room <room> ` -> the type arg.
+        3 if tokens[1] == "room" => {
+            let room = tokens[2];
+            if !ends_space {
+                rooms
+                    .iter()
+                    .filter(|name| name.starts_with(room))
+                    .map(|name| staged(&format!("set room {name}"), true))
+                    .collect()
+            } else if resolve_room_index(room).is_some() {
+                SETTABLE_ROOM_TYPES
+                    .iter()
+                    .map(|ty| staged(&format!("set room {room} {ty}"), false))
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        }
+        // `set room <room> <type?>` -> filter types.
+        4 if tokens[1] == "room" && !ends_space => {
+            let (room, prefix) = (tokens[2], tokens[3]);
+            SETTABLE_ROOM_TYPES
+                .iter()
+                .filter(|ty| ty.starts_with(prefix))
+                .map(|ty| staged(&format!("set room {room} {ty}"), false))
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// `reroll` (whole plan) / `reroll <room>` (one room) completion stages.
+fn suggest_reroll(tokens: &[&str], ends_space: bool) -> Vec<WizardChoice> {
+    let rooms = room_targets();
+    match tokens.len() {
+        // `reroll` -> offer the bare verb plus every per-room form;
+        // `reroll ` -> just the per-room forms.
+        1 => {
+            let mut out = Vec::new();
+            if !ends_space {
+                out.push(staged("reroll", false));
+            }
+            out.extend(
+                rooms
+                    .iter()
+                    .map(|room| staged(&format!("reroll {room}"), false)),
+            );
+            out
+        }
+        // `reroll <room?>` -> filter rooms.
+        2 if !ends_space => rooms
+            .iter()
+            .filter(|name| name.starts_with(tokens[1]))
+            .map(|name| staged(&format!("reroll {name}"), false))
+            .collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Title-case a snake_case content type: "ability_check" -> "Ability Check".
 fn content_label(content_type: &str) -> String {
     content_type
@@ -744,5 +942,85 @@ mod tests {
         assert_eq!(resolve_room_index("6"), None);
         assert_eq!(resolve_room_index(""), None);
         assert_eq!(resolve_room_index("dungeon"), None);
+    }
+
+    fn base_choices() -> Vec<WizardChoice> {
+        vec![
+            WizardChoice::new("continue", "continue"),
+            WizardChoice::new("reroll", "reroll"),
+            WizardChoice::new("cancel", "cancel"),
+        ]
+    }
+
+    fn completions(input: &str) -> Vec<String> {
+        suggest_plan_review(input, &base_choices())
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect()
+    }
+
+    #[test]
+    fn plan_review_offers_set_room_starter() {
+        // Typing toward `set` offers the staged starter (with a trailing space so
+        // the next keystroke lands in the room-arg stage).
+        assert!(completions("s").contains(&"set room ".to_string()));
+        assert!(completions("set").contains(&"set room ".to_string()));
+    }
+
+    #[test]
+    fn plan_review_stages_set_room_room_then_type() {
+        // After `set room `, the room targets; after a room, the content types.
+        let rooms = completions("set room ");
+        assert!(rooms.contains(&"set room entrance ".to_string()));
+        assert!(rooms.contains(&"set room resolution ".to_string()));
+
+        let filtered = completions("set room ent");
+        assert_eq!(filtered, vec!["set room entrance ".to_string()]);
+
+        let types = completions("set room entrance ");
+        assert!(types.contains(&"set room entrance combat".to_string()));
+        assert!(types.contains(&"set room entrance ability_check".to_string()));
+
+        let typed = completions("set room entrance ca");
+        assert_eq!(typed, vec!["set room entrance cache".to_string()]);
+    }
+
+    #[test]
+    fn plan_review_stages_per_room_reroll() {
+        // `reroll` offers both whole-plan and per-room; `reroll ` only per-room.
+        let all = completions("reroll");
+        assert!(all.contains(&"reroll".to_string()));
+        assert!(all.contains(&"reroll setback".to_string()));
+
+        let per_room = completions("reroll ");
+        assert!(!per_room.contains(&"reroll".to_string()));
+        assert!(per_room.contains(&"reroll climax".to_string()));
+
+        assert_eq!(
+            completions("reroll cl"),
+            vec!["reroll climax".to_string()]
+        );
+    }
+
+    #[test]
+    fn plan_review_plain_verb_prefix_filters_base_choices() {
+        // A non-`set`/`reroll` prefix just filters the base verbs.
+        assert_eq!(completions("co"), vec!["continue".to_string()]);
+    }
+
+    #[test]
+    fn reroll_room_sets_a_settable_type_and_rejects_bad_room() {
+        let mut data = WizardData::new(DungeonWizardData {
+            plan: Some(roll_dungeon_content_plan(42)),
+            ..Default::default()
+        });
+        reroll_room(dungeon_data_mut(&mut data), "entrance").expect("entrance is valid");
+        let anchor = &dungeon_data(&data).plan.as_ref().unwrap().anchors[0];
+        assert!(
+            SETTABLE_ROOM_TYPES.contains(&anchor.as_str()),
+            "rerolled anchor {anchor} is not a settable type"
+        );
+
+        assert!(reroll_room(dungeon_data_mut(&mut data), "nope").is_err());
     }
 }

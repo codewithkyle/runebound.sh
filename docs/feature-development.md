@@ -152,7 +152,7 @@ A *wizard* is a guided multi-step flow (ask a sequence of questions, then build 
 
 4. Register the wizard with one line in `build_default_wizard_registry()` (`wizards/registry.rs`).
 5. Point the entry command at `start_wizard("<id>", state)` (mirror `create dungeon` in `commands/create_commands.rs`).
-6. **No plumbing edits.** Dispatch, `InputContext::Wizard`, the nav-verb availability arms (`continue`/`back` = `AnyWizard`, `cancel` = `AnyEditorOrWizard`), step-token autocomplete (`active_step_choices`), and the `WizardView` spinner signal all work unchanged. If a wizard needs a brand-new *capability*, that is a shared engine change in `wizards/`, not per-wizard code (`docs/onboarding-wizard-port.md` tracks the planned extensions).
+6. **No plumbing edits.** Dispatch, `InputContext::Wizard`, the global verbs (`continue`/`back`/`cancel` + the in-wizard `help`), step typeahead (`active_step_suggestions` = the step's `suggest()` + globals), and the `WizardView` spinner signal all work unchanged. Give each step a `summary()` (for `help`) and `with_help(...)` on its choices; override `suggest()` only for staged multi-token args. If a wizard needs a brand-new *capability*, that is a shared engine change in `wizards/`, not per-wizard code (`docs/onboarding-wizard-port.md` tracks the planned extensions).
 
 ### Verify
 
