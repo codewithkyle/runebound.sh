@@ -112,7 +112,7 @@ pub fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceE
                 key.push('/');
                 entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
                     key: key.clone(),
-                    key_lower: key.to_lowercase(),
+                    key_lower: key.to_ascii_lowercase(),
                     markdown_path: None,
                     is_dir: true,
                 });
@@ -125,7 +125,7 @@ pub fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceE
             };
             entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
                 key: key.clone(),
-                key_lower: key.to_lowercase(),
+                key_lower: key.to_ascii_lowercase(),
                 markdown_path: Some(relative),
                 is_dir: false,
             });
@@ -146,7 +146,10 @@ pub fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntr
         .collect();
     candidates.sort_by(|left, right| right.key_lower.len().cmp(&left.key_lower.len()));
 
-    let prompt_lower = prompt.to_lowercase();
+    // ASCII-lowercase is byte-length-preserving, so offsets computed from the
+    // original `prompt`/`key` stay valid when indexing `prompt_lower`. A Unicode
+    // `to_lowercase()` here would desync those offsets and could slice mid-codepoint.
+    let prompt_lower = prompt.to_ascii_lowercase();
     let mut cursor = 0;
     let mut matched = Vec::new();
 
@@ -192,10 +195,48 @@ pub fn extract_prompt_reference_keys(prompt: &str, entries: &[VaultReferenceEntr
     let mut unique = Vec::new();
     let mut seen = HashSet::new();
     for key in matched {
-        let lowered = key.to_lowercase();
+        let lowered = key.to_ascii_lowercase();
         if seen.insert(lowered) {
             unique.push(key);
         }
     }
     unique
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn file_entry(key: &str) -> VaultReferenceEntry {
+        VaultReferenceEntry {
+            key: key.to_string(),
+            key_lower: key.to_ascii_lowercase(),
+            markdown_path: Some(format!("{key}.md")),
+            is_dir: false,
+        }
+    }
+
+    #[test]
+    fn matches_ascii_reference_after_length_changing_unicode() {
+        // 'İ' (U+0130) Unicode-lowercases to a *longer* byte sequence ("i̇").
+        // A Unicode-lowered haystack would desync the byte offsets computed from
+        // the original prompt and either drop this match or slice mid-codepoint.
+        let entries = vec![file_entry("npcs/foo")];
+        let keys = extract_prompt_reference_keys("İ @npcs/foo", &entries);
+        assert_eq!(keys, vec!["npcs/foo".to_string()]);
+    }
+
+    #[test]
+    fn matches_reference_with_accented_key() {
+        let entries = vec![file_entry("npcs/Élodie")];
+        let keys = extract_prompt_reference_keys("talk to @npcs/Élodie now", &entries);
+        assert_eq!(keys, vec!["npcs/Élodie".to_string()]);
+    }
+
+    #[test]
+    fn longest_matching_key_wins() {
+        let entries = vec![file_entry("npcs"), file_entry("npcs/Lirael Drake")];
+        let keys = extract_prompt_reference_keys("@npcs/Lirael Drake", &entries);
+        assert_eq!(keys, vec!["npcs/Lirael Drake".to_string()]);
+    }
 }

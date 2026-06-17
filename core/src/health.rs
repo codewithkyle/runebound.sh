@@ -350,8 +350,10 @@ fn check_vault_structure(config: &AppConfig) -> CheckItem {
         Ok(()) => CheckItem {
             name: "vault directories".to_string(),
             ok: true,
-            detail: "npcs, locations, items, factions, .trash/npcs, .trash/locations, .trash/factions ensured"
-                .to_string(),
+            detail: format!(
+                "{} (+ matching .trash) ensured",
+                crate::vault::ENTITY_DIRS.join(", ")
+            ),
         },
         Err(err) => CheckItem {
             name: "vault directories".to_string(),

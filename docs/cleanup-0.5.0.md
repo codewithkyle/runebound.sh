@@ -107,39 +107,40 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 1 — Correctness & data-safety
+## Phase 1 — Correctness & data-safety — **DONE ✅ (2026-06-17)**
 
 *Goal: eliminate the verified user-facing bugs and data-loss paths. Smallest, highest-value changes first.*
 
-- [ ] **P1.1 — `vault_ref` Unicode slice panic** · Blocker · ✅
+> **Outcome:** All items resolved. P1.7 was a false positive (`anchors` is `[String; 5]`, statically bounded — no change). P1.6 downgraded from Medium→Low after confirming `move_vault_file` creates the trash parent dir (`vault_sync.rs:693`), so the stale dir list never caused a runtime failure — fixed for skeleton/health consistency anyway. Verified: `cargo test -p dnd-core` (90 passed, incl. 6 new calendar tests) + `cargo test --manifest-path desktop/src-tauri/Cargo.toml` (**117 passed**, incl. 3 new `vault_ref` tests). No new clippy warnings introduced (full clippy sweep is Phase 2).
+
+- [x] **P1.1 — `vault_ref` Unicode slice panic** · Blocker · ✅ — *fixed: `to_ascii_lowercase` at vault_ref.rs:115/128/149/198 + 3 regression tests*
   `services/vault_ref.rs:149–185`. `prompt.to_lowercase()` (Unicode, **not** byte-length-preserving) is sliced using byte offsets derived from the original string: `tail_start = next_at + 1` (used on `prompt_lower`, line 164) and `boundary_index = tail_start + candidate.key.len()` (the *original-cased* key length, line 171–172). A non-ASCII char before an `@` (e.g. `Élodie`) can make a slice land mid-codepoint → **panic** on the AI-context and per-keystroke autocomplete paths.
   **Fix:** use `to_ascii_lowercase()` consistently at lines **115, 128, 149** (and anywhere `key_lower` is built), matching `publish.rs`'s documented invariant. Add a test with an accented prompt + accented key.
 
-- [ ] **P1.2 — Calendar weekday ignores the year** · Blocker · ✅
+- [x] **P1.2 — Calendar weekday ignores the year** · Blocker · ✅ — *fixed: `weekday_index` now derives from `total_days_since_epoch` (+ guards underflow/OOB); cross-year + malformed-state tests added*
   `core/src/calendar.rs:700–708`. `weekday_index` accumulates month lengths *within the current year* + `day-1` but never folds in `state.year`. For a 365-day / 7-day calendar the weekday must advance 1 per year; it doesn't, so it's wrong for any multi-year campaign and disagrees with the moon math (which counts years via `total_days_since_epoch`).
   **Fix:** derive from the absolute day count, e.g. `((def.first_day as i64 + total_days_since_epoch(state, def)).rem_euclid(week_len as i64)) as usize`. While here, harden the same fn: `state.day.saturating_sub(1)` (avoid underflow at line 706) and `def.months.get(i)` (avoid OOB at line 703). Collapse its inner loop into the existing `days_before_month` helper. Add tests: weekday advances across a year boundary; malformed `day=0` state degrades instead of panicking.
 
-- [ ] **P1.3 — Soft-delete writes its undo record last** · Blocker · ✅
+- [x] **P1.3 — Soft-delete writes its undo record last** · Blocker · ✅ — *fixed: all 7 arms now insert the `SoftDeleteRow` before the destructive move/delete; `undo` audited (marks-undone-last is already the safe order)*
   `services/entity_admin.rs:766–812`. Order is: move file to trash → `delete_by_id` → `delete_by_vault_path` → **then** insert `SoftDeleteRow`. If that final insert fails, the entity is destroyed with **no undo record**. The publish path (`soft_delete_for_publish`, ~line 1760) already does it in the safe order and comments on why.
   **Fix:** write the recovery `SoftDeleteRow` **before** the destructive move/delete, mirroring `soft_delete_for_publish`. (Full transactional integrity is P6.1; this reorder is the cheap, high-value mitigation.) Apply the same audit to `undo_last_soft_delete` ordering.
 
-- [ ] **P1.4 — `lunar_shf` signedness mismatch** · High · ✅ type / ❓ impact
+- [x] **P1.4 — `lunar_shf` signedness mismatch** · High · ✅ — *fixed: import struct field is now `HashMap<String, i32>`; negative-shift import test added*
   `core/src/calendar.rs:607` imports `lunar_shf: HashMap<String, u32>`; `lunar_shifts` (`:557`) reads it back as `HashMap<String, i32>`. Round-trips fine for non-negative values. **If** donjon ever emits a negative shift, import (`:616`) hard-fails with "invalid lunar_shf data".
   **Fix:** change the import struct field to `HashMap<String, i32>` so both ends agree and negatives survive. ❓ First confirm whether donjon actually emits negative shifts (check a real export) — either way the unified type is correct and safer.
 
-- [ ] **P1.5 — Moon phase floor-bucketing** · Medium · ✅
+- [x] **P1.5 — Moon phase floor-bucketing** · Medium · ✅ — *fixed: `round` (not `floor`) centers the principal phases; `phase_from_age` centering test added. Chose option (b) — centered phases.*
   `core/src/calendar.rs:573–589`. `bucket = (fraction * 8.0).floor()` puts named phases at bucket **starts**, not centers — "Full" spans `[0.5, 0.625)` of the cycle instead of centering on the midpoint. Defensible as "8 equal eighths," but undocumented and untested at `age == cycle/2`.
   **Fix (decide):** either (a) document it as 8 equal eighths from new moon and add a test pinning the labels, or (b) center the principal phases (round to nearest eighth) so `age 0 = New`, `age cycle/2 = Full`. Add a `phase_from_age(cycle/2) == Full` test regardless.
 
-- [ ] **P1.6 — `vault.rs` required-dirs are stale** · Medium · 🔶
+- [x] **P1.6 — `vault.rs` required-dirs are stale** · ~~Medium~~ → Low · ✅ — *fixed: `ensure_structure` now derives from one `pub const ENTITY_DIRS` (all 7 kinds + matching `.trash`); `health.rs` detail message derives from the same list. No runtime bug existed (move_vault_file creates parents).*
   `core/src/vault.rs:6–14` `REQUIRED_TOP_LEVEL_DIRS` ensures dirs for only 4 kinds (+ partial `.trash`, no `.trash/items`); the app has 7 (`EntityStore`, `entity_store.rs:12–18`). Events/gods/dungeons dirs and `.trash/items` are never ensured.
   **Fix:** confirm whether soft-delete of items/events/gods/dungeons targets an un-ensured trash dir (does `move_vault_file` create parents?). Derive the dir list from one source (the entity-kind list) so it can't drift again. Folds naturally into P5 once the kind list is centralized.
 
-- [ ] **P1.7 — Unchecked `plan.anchors[i]` index** · Low · 🔶
-  `services/ai_generation.rs:1004/1015` (and `pass1`/`pass2` blocks ~`:1330`/`:1359`). Beat count is validated against `DUNGEON_FUNCTIONS.len()` but `content_type` indexes `plan.anchors[i]` without checking `anchors.len()`. Internal/deterministic today, but it's an unguarded slice index.
-  **Fix:** assert the plan invariant once at entry, or use `.get(i)` with a graceful error.
+- [x] **P1.7 — Unchecked `plan.anchors[i]` index** · ~~Low~~ → **Not a bug** · ✅ verified
+  **Resolution (no change):** `DungeonContentPlan.anchors` is `[String; 5]` (`runebound-models/src/dungeon_plan.rs:110`), a fixed-size array — not a `Vec`. The beat count is checked `== DUNGEON_FUNCTIONS.len()` (5), and every `i` ranges over the 5-element beats or `anchors.iter()`, indexing into `[_; 5]` arrays (`LABELS`/`ROLES`/`LOOT_RULES`). All indexes are statically bounded; no panic is reachable. False positive from the review (assumed `Vec`); the type already enforces the invariant.
 
-- [ ] **P1.8 — `ordinal_suffix` wrong for day ≥ 100** · Low · ✅
+- [x] **P1.8 — `ordinal_suffix` wrong for day ≥ 100** · Low · ✅ — *fixed: now computes on `day % 100` / `day % 10`; large-day test added*
   `core/src/calendar.rs:710–717`. Custom months can exceed 100 days; day 121 returns "th" (should be "st").
   **Fix:** compute on `day % 100` (11/12/13 exception) then `day % 10`.
 

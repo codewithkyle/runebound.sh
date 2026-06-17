@@ -764,14 +764,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&npc.vault_path);
             let trash_path = unique_trash_path(&vault, "npcs", &npc.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            npc_repo
-                .delete_by_id(database.as_ref(), &npc.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &npc.vault_path)
-                .await?;
 
             let payload = NpcDeletePayload {
                 id: npc.id.clone(),
@@ -811,6 +803,16 @@ impl EntityAdminService {
                 .insert(database.as_ref(), &soft_delete_row)
                 .await?;
 
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            npc_repo
+                .delete_by_id(database.as_ref(), &npc.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &npc.vault_path)
+                .await?;
+
             return Ok(SoftDeleteEntityResult {
                 entity_type: EntityType::Npc,
                 id: npc.id,
@@ -826,14 +828,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&location.vault_path);
             let trash_path = unique_trash_path(&vault, "locations", &location.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            location_repo
-                .delete_by_id(database.as_ref(), &location.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &location.vault_path)
-                .await?;
 
             let payload = LocationDeletePayload {
                 id: location.id.clone(),
@@ -871,6 +865,16 @@ impl EntityAdminService {
                 .insert(database.as_ref(), &soft_delete_row)
                 .await?;
 
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            location_repo
+                .delete_by_id(database.as_ref(), &location.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &location.vault_path)
+                .await?;
+
             return Ok(SoftDeleteEntityResult {
                 entity_type: EntityType::Location,
                 id: location.id,
@@ -886,14 +890,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&faction.vault_path);
             let trash_path = unique_trash_path(&vault, "factions", &faction.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            faction_repo
-                .delete_by_id(database.as_ref(), &faction.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &faction.vault_path)
-                .await?;
 
             let payload = FactionDeletePayload {
                 id: faction.id.clone(),
@@ -938,6 +934,16 @@ impl EntityAdminService {
                 .insert(database.as_ref(), &soft_delete_row)
                 .await?;
 
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            faction_repo
+                .delete_by_id(database.as_ref(), &faction.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &faction.vault_path)
+                .await?;
+
             return Ok(SoftDeleteEntityResult {
                 entity_type: EntityType::Faction,
                 id: faction.id,
@@ -953,14 +959,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&item.vault_path);
             let trash_path = unique_trash_path(&vault, "items", &item.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            item_repo
-                .delete_by_id(database.as_ref(), &item.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &item.vault_path)
-                .await?;
 
             let payload = ItemDeletePayload {
                 id: item.id.clone(),
@@ -999,6 +997,16 @@ impl EntityAdminService {
                 .insert(database.as_ref(), &soft_delete_row)
                 .await?;
 
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            item_repo
+                .delete_by_id(database.as_ref(), &item.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &item.vault_path)
+                .await?;
+
             return Ok(SoftDeleteEntityResult {
                 entity_type: EntityType::Item,
                 id: item.id,
@@ -1014,14 +1022,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&event.vault_path);
             let trash_path = unique_trash_path(&vault, "events", &event.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            event_repo
-                .delete_by_id(database.as_ref(), &event.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &event.vault_path)
-                .await?;
 
             let payload = EventDeletePayload {
                 id: event.id.clone(),
@@ -1051,6 +1051,16 @@ impl EntityAdminService {
                 .insert(database.as_ref(), &soft_delete_row)
                 .await?;
 
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            event_repo
+                .delete_by_id(database.as_ref(), &event.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &event.vault_path)
+                .await?;
+
             return Ok(SoftDeleteEntityResult {
                 entity_type: EntityType::Event,
                 id: event.id,
@@ -1066,14 +1076,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&god.vault_path);
             let trash_path = unique_trash_path(&vault, "gods", &god.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            god_repo
-                .delete_by_id(database.as_ref(), &god.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &god.vault_path)
-                .await?;
 
             let payload = GodDeletePayload {
                 id: god.id.clone(),
@@ -1115,6 +1117,16 @@ impl EntityAdminService {
                 .insert(database.as_ref(), &soft_delete_row)
                 .await?;
 
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            god_repo
+                .delete_by_id(database.as_ref(), &god.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &god.vault_path)
+                .await?;
+
             return Ok(SoftDeleteEntityResult {
                 entity_type: EntityType::God,
                 id: god.id,
@@ -1130,14 +1142,6 @@ impl EntityAdminService {
         {
             let normalized_vault_path = normalize_relative_path_for_storage(&dungeon.vault_path);
             let trash_path = unique_trash_path(&vault, "dungeons", &dungeon.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            dungeon_repo
-                .delete_by_id(database.as_ref(), &dungeon.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &dungeon.vault_path)
-                .await?;
 
             let payload = DungeonDeletePayload {
                 id: dungeon.id.clone(),
@@ -1171,6 +1175,16 @@ impl EntityAdminService {
             };
             soft_delete_repo
                 .insert(database.as_ref(), &soft_delete_row)
+                .await?;
+
+            // The recovery row is committed before any destructive step, so a
+            // failure below leaves a restorable entity, not an unrecoverable one.
+            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
+            dungeon_repo
+                .delete_by_id(database.as_ref(), &dungeon.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &dungeon.vault_path)
                 .await?;
 
             return Ok(SoftDeleteEntityResult {

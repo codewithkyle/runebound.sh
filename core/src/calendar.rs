@@ -575,7 +575,11 @@ fn phase_from_age(age: u32, cycle_length: u32) -> MoonPhaseKind {
         return MoonPhaseKind::New;
     }
     let fraction = age as f64 / cycle_length as f64;
-    let bucket = (fraction * 8.0).floor() as u32 % 8;
+    // Round (not floor) so the four principal phases are *centered* on their points:
+    // New on age 0, First Quarter on cycle/4, Full on cycle/2, Last Quarter on 3*cycle/4.
+    // The crescent/gibbous phases fill the eighths between them. (`% 8` folds the
+    // end-of-cycle bucket 8 back onto New.)
+    let bucket = (fraction * 8.0).round() as u32 % 8;
     match bucket {
         0 => MoonPhaseKind::New,
         1 => MoonPhaseKind::WaxingCrescent,
@@ -603,8 +607,10 @@ struct DonjonCalendarJson {
     moons: Vec<String>,
     #[serde(default)]
     lunar_cyc: HashMap<String, u32>,
+    // Signed: a lunar shift is a phase offset that can be negative. Must match the
+    // `i32` type read back in `lunar_shifts`, or a negative shift fails to import.
     #[serde(default)]
-    lunar_shf: HashMap<String, u32>,
+    lunar_shf: HashMap<String, i32>,
     #[serde(default)]
     year: i64,
     first_day: u32,
@@ -698,20 +704,26 @@ pub fn calendar_toml_path() -> Result<PathBuf> {
 }
 
 pub fn weekday_index(state: &CalendarState, def: &CalendarDefinition) -> usize {
-    let mut total_days: u32 = 0;
-    for i in 0..state.month_index {
-        let month_name = &def.months[i];
-        total_days += def.month_len.get(month_name).copied().unwrap_or(0);
+    if def.week_len == 0 {
+        return 0;
     }
-    total_days += state.day - 1;
-    ((def.first_day + total_days) % def.week_len) as usize
+    // Derive from the absolute day count so the weekday advances across year
+    // boundaries (when `year_len % week_len != 0`) and stays consistent with the
+    // moon-phase math. `total_days_since_epoch` already folds in the year and uses
+    // saturating day arithmetic, so this also avoids the previous `day - 1`
+    // underflow and the unchecked `def.months[i]` index.
+    let total_days = total_days_since_epoch(state, def);
+    (i64::from(def.first_day) + total_days).rem_euclid(i64::from(def.week_len)) as usize
 }
 
 pub fn ordinal_suffix(day: u32) -> &'static str {
-    match day {
-        1 | 21 | 31 => "st",
-        2 | 22 => "nd",
-        3 | 23 => "rd",
+    // Custom calendars allow months longer than 100 days, so derive the suffix
+    // from the last two digits (11/12/13 are always "th") rather than enumerating.
+    match (day % 100, day % 10) {
+        (11..=13, _) => "th",
+        (_, 1) => "st",
+        (_, 2) => "nd",
+        (_, 3) => "rd",
         _ => "th",
     }
 }
@@ -1277,5 +1289,115 @@ mod tests {
         let info = moon_phase_info(&calendar).expect("phase info");
         assert_eq!(info[0].cycle_length, 20);
         assert_eq!(info[0].age, ((9 + 3) % 20) as u32);
+    }
+
+    #[test]
+    fn weekday_advances_across_year_boundary() {
+        // year_len (10) is not a multiple of week_len (7), so New Year's Day must
+        // land on a different weekday each year. Regression for weekday_index
+        // ignoring state.year.
+        let json = r#"{
+            "year_len": 10,
+            "n_months": 1,
+            "months": ["M"],
+            "month_len": {"M": 10},
+            "week_len": 7,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5", "D6", "D7"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+
+        let new_years = |year: i32| CalendarState {
+            year,
+            month_index: 0,
+            day: 1,
+            hour_24: 0,
+            minute: 0,
+        };
+        let y0 = weekday_index(&new_years(0), &calendar.definition);
+        let y1 = weekday_index(&new_years(1), &calendar.definition);
+        let y2 = weekday_index(&new_years(2), &calendar.definition);
+        assert_eq!(y0, 0);
+        assert_eq!(y1, 3); // 10 days later, 10 % 7 == 3
+        assert_eq!(y2, 6); // 20 days later, 20 % 7 == 6
+        assert_ne!(y0, y1, "weekday must advance across the year boundary");
+    }
+
+    #[test]
+    fn weekday_index_tolerates_malformed_state() {
+        // day == 0 must not panic (was `state.day - 1`).
+        let json = r#"{
+            "year_len": 14,
+            "n_months": 2,
+            "months": ["Jan", "Feb"],
+            "month_len": {"Jan": 7, "Feb": 7},
+            "week_len": 7,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5", "D6", "D7"],
+            "n_moons": 0,
+            "moons": [],
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("import should succeed");
+        let state = CalendarState {
+            year: 0,
+            month_index: 0,
+            day: 0,
+            hour_24: 0,
+            minute: 0,
+        };
+        // Must not panic; value is unspecified for malformed input but bounded.
+        let _ = weekday_index(&state, &calendar.definition);
+    }
+
+    #[test]
+    fn phase_from_age_centers_principal_phases() {
+        let cycle = 28;
+        assert_eq!(phase_from_age(0, cycle), MoonPhaseKind::New);
+        assert_eq!(phase_from_age(cycle / 4, cycle), MoonPhaseKind::FirstQuarter);
+        assert_eq!(phase_from_age(cycle / 2, cycle), MoonPhaseKind::Full);
+        assert_eq!(
+            phase_from_age(3 * cycle / 4, cycle),
+            MoonPhaseKind::LastQuarter
+        );
+    }
+
+    #[test]
+    fn import_accepts_negative_lunar_shift() {
+        // donjon shifts can be negative; the import struct must read them as i32.
+        let json = r#"{
+            "year_len": 28,
+            "n_months": 1,
+            "months": ["Luna"],
+            "month_len": {"Luna": 28},
+            "week_len": 7,
+            "weekdays": ["D1", "D2", "D3", "D4", "D5", "D6", "D7"],
+            "n_moons": 1,
+            "moons": ["Selene"],
+            "lunar_cyc": {"Selene": 28},
+            "lunar_shf": {"Selene": -3},
+            "first_day": 0,
+            "notes": {}
+        }"#;
+        let calendar = import_donjon_json(json).expect("negative shift should import");
+        let info = moon_phase_info(&calendar).expect("phase info");
+        // total_days == 0 at day 1, shift -3 → age = (-3).rem_euclid(28) == 25
+        assert_eq!(info[0].age, 25);
+    }
+
+    #[test]
+    fn ordinal_suffix_large_days() {
+        assert_eq!(ordinal_suffix(101), "st");
+        assert_eq!(ordinal_suffix(102), "nd");
+        assert_eq!(ordinal_suffix(103), "rd");
+        assert_eq!(ordinal_suffix(111), "th");
+        assert_eq!(ordinal_suffix(112), "th");
+        assert_eq!(ordinal_suffix(113), "th");
+        assert_eq!(ordinal_suffix(121), "st");
+        assert_eq!(ordinal_suffix(122), "nd");
+        assert_eq!(ordinal_suffix(123), "rd");
     }
 }
