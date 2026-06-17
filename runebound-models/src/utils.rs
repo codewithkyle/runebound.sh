@@ -129,6 +129,95 @@ pub const GOD_ALIGNMENTS: [&str; 9] = [
     "LG", "NG", "CG", "LN", "TN", "CN", "LE", "NE", "CE",
 ];
 
+pub const DUNGEON_FUNCTIONS: [&str; 5] =
+    ["Entrance", "Puzzle", "Setback", "Climax", "Resolution"];
+
+pub const DUNGEON_CONTENT_TYPES: [&str; 12] = [
+    "combat",
+    "cache",
+    "sidekick",
+    "offshoot",
+    "foreshadowing",
+    "history",
+    "oddity",
+    "forge",
+    "factions",
+    "map",
+    "puzzle",
+    "ability_check",
+];
+
+pub const DUNGEON_TONES: [&str; 2] = ["tragedy", "comedy"];
+
+pub const DUNGEON_TWISTS: [&str; 3] = ["false_victory", "false_defeat", "neither"];
+
+// "none" is a first-class choice = no topology imposed (feature-dungeons.md §6, step E).
+// Order 1..=9 mirrors the topology illustration (topology.png) left-to-right,
+// top row then bottom row, so the menu numbering matches the picture.
+pub const DUNGEON_TOPOLOGIES: [&str; 10] = [
+    "none",
+    "The Railroad",
+    "The Fauchard Fork",
+    "The Paw",
+    "Foglio's Snail",
+    "The Evil Mule",
+    "The V for Vendetta",
+    "The Arrow",
+    "The Cross",
+    "The Moose",
+];
+
+pub fn normalize_dungeon_content_type(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
+    if DUNGEON_CONTENT_TYPES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "content_type must be one of: {}",
+            DUNGEON_CONTENT_TYPES.join(", ")
+        ))
+    }
+}
+
+pub fn normalize_dungeon_tone(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if DUNGEON_TONES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!("tone must be one of: {}", DUNGEON_TONES.join(", ")))
+    }
+}
+
+pub fn normalize_dungeon_twist(value: &str) -> Result<String, String> {
+    let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    if DUNGEON_TWISTS.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "twist must be one of: {}",
+            DUNGEON_TWISTS.join(", ")
+        ))
+    }
+}
+
+/// Resolve a topology to its canonical name. Accepts the exact name
+/// (case-insensitive) or `none`; returns an error otherwise.
+pub fn normalize_dungeon_topology(value: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("none") {
+        return Ok("none".to_string());
+    }
+    for canonical in DUNGEON_TOPOLOGIES {
+        if canonical.eq_ignore_ascii_case(trimmed) {
+            return Ok(canonical.to_string());
+        }
+    }
+    Err(format!(
+        "topology must be one of: {}",
+        DUNGEON_TOPOLOGIES.join(", ")
+    ))
+}
+
 pub fn now_timestamp() -> String {
     Utc::now().to_rfc3339()
 }

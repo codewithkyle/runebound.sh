@@ -6,9 +6,9 @@ use crate::app_state::AppState;
 use crate::repositories::db;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
-    event_row_from_frontmatter, faction_row_from_frontmatter, god_row_from_frontmatter,
-    item_row_from_frontmatter, location_row_from_frontmatter, move_vault_file,
-    npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
+    dungeon_row_from_frontmatter, event_row_from_frontmatter, faction_row_from_frontmatter,
+    god_row_from_frontmatter, item_row_from_frontmatter, location_row_from_frontmatter,
+    move_vault_file, npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
 };
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
@@ -21,6 +21,7 @@ use dnd_core::serialization::{
     carrying_from_db_text, exports_from_db_text, faction_list_from_db_text,
 };
 use dnd_core::vault::Vault;
+use runebound_models::DungeonBeat;
 
 pub struct EntityAdminService;
 
@@ -206,6 +207,7 @@ impl EntityAdminService {
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
         let god_repo = state.god_repo();
+        let dungeon_repo = state.dungeon_repo();
 
         if let Some(npc) = npc_repo
             .find_by_name_or_slug(database.as_ref(), trimmed)
@@ -272,6 +274,11 @@ impl EntityAdminService {
                 clergy: None,
                 rivals: None,
                 created_at: Some(npc.created_at),
+                premise: None,
+                topology: None,
+                twist: None,
+                beats: None,
+                story: None,
             }));
         }
 
@@ -340,6 +347,11 @@ impl EntityAdminService {
                 clergy: None,
                 rivals: None,
                 created_at: Some(location.created_at),
+                premise: None,
+                topology: None,
+                twist: None,
+                beats: None,
+                story: None,
             }));
         }
 
@@ -408,6 +420,11 @@ impl EntityAdminService {
                 clergy: None,
                 rivals: None,
                 created_at: Some(faction.created_at),
+                premise: None,
+                topology: None,
+                twist: None,
+                beats: None,
+                story: None,
             }));
         }
 
@@ -476,6 +493,11 @@ impl EntityAdminService {
                 clergy: None,
                 rivals: None,
                 created_at: Some(item.created_at),
+                premise: None,
+                topology: None,
+                twist: None,
+                beats: None,
+                story: None,
             }));
         }
 
@@ -544,6 +566,11 @@ impl EntityAdminService {
                 clergy: None,
                 rivals: None,
                 created_at: Some(event.created_at),
+                premise: None,
+                topology: None,
+                twist: None,
+                beats: None,
+                story: None,
             }));
         }
 
@@ -612,6 +639,86 @@ impl EntityAdminService {
                 clergy: Some(god.clergy),
                 rivals: Some(faction_list_from_db_text(&god.rivals)),
                 created_at: Some(god.created_at),
+                premise: None,
+                topology: None,
+                twist: None,
+                beats: None,
+                story: None,
+            }));
+        }
+
+        if let Some(dungeon) = dungeon_repo
+            .find_by_name_or_slug(database.as_ref(), trimmed)
+            .await?
+        {
+            let beats: Vec<DungeonBeat> =
+                serde_json::from_str(&dungeon.beats_json).unwrap_or_default();
+            return Ok(Some(EntityDetails {
+                id: dungeon.id,
+                entity_type: EntityType::Dungeon,
+                name: dungeon.name,
+                slug: dungeon.slug,
+                race: None,
+                occupation: None,
+                sex: None,
+                age: None,
+                height: None,
+                weight_lbs: None,
+                background: None,
+                want_need: None,
+                secret_obstacle: None,
+                carrying: None,
+                location: Some(dungeon.location.clone()),
+                vault_path: normalize_relative_path_for_storage(&dungeon.vault_path),
+                kind_type: None,
+                kind_custom: None,
+                visual_description: None,
+                history_background: None,
+                exports: None,
+                tone: Some(dungeon.tone),
+                authority: None,
+                danger_level: None,
+                current_tension: None,
+                public_description: None,
+                true_agenda: None,
+                methods: None,
+                leadership: None,
+                headquarters: None,
+                sphere_of_influence: None,
+                resources_assets: None,
+                allies: None,
+                rivals_enemies: None,
+                reputation: None,
+                goals_short_term: None,
+                goals_long_term: None,
+                symbol_description: None,
+                category: None,
+                rarity: None,
+                attunement: None,
+                materials: None,
+                appearance: None,
+                abilities: None,
+                drawbacks: None,
+                history: None,
+                value: None,
+                body: None,
+                epithet: None,
+                rank: None,
+                rank_custom: None,
+                alignment: None,
+                domains: None,
+                symbol: None,
+                dogma: None,
+                realm: None,
+                worshippers: None,
+                clergy: None,
+                rivals: None,
+                created_at: Some(dungeon.created_at),
+                premise: Some(dungeon.premise),
+                topology: Some(dungeon.topology),
+                twist: Some(dungeon.twist),
+                beats: Some(beats),
+                story: Some(dungeon.story),
             }));
         }
 
@@ -646,6 +753,7 @@ impl EntityAdminService {
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
         let god_repo = state.god_repo();
+        let dungeon_repo = state.dungeon_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
         let now = now_timestamp();
@@ -1016,8 +1124,66 @@ impl EntityAdminService {
             });
         }
 
+        if let Some(dungeon) = dungeon_repo
+            .find_by_name_or_slug(database.as_ref(), target)
+            .await?
+        {
+            let normalized_vault_path = normalize_relative_path_for_storage(&dungeon.vault_path);
+            let trash_path = unique_trash_path(&vault, "dungeons", &dungeon.slug, &now)?;
+            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
+
+            dungeon_repo
+                .delete_by_id(database.as_ref(), &dungeon.id)
+                .await?;
+            document_repo
+                .delete_by_vault_path(database.as_ref(), &dungeon.vault_path)
+                .await?;
+
+            let payload = DungeonDeletePayload {
+                id: dungeon.id.clone(),
+                slug: dungeon.slug.clone(),
+                name: dungeon.name.clone(),
+                vault_path: normalized_vault_path.clone(),
+                location: dungeon.location,
+                story: dungeon.story,
+                premise: dungeon.premise,
+                topology: dungeon.topology,
+                tone: dungeon.tone,
+                twist: dungeon.twist,
+                beats_json: dungeon.beats_json,
+                created_at: dungeon.created_at,
+                updated_at: dungeon.updated_at,
+            };
+
+            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
+            let soft_delete_row = db::SoftDeleteRow {
+                id: 0,
+                entity_type: "dungeon".to_string(),
+                entity_id: dungeon.id.clone(),
+                name: dungeon.name.clone(),
+                slug: dungeon.slug.clone(),
+                original_vault_path: normalized_vault_path,
+                trash_vault_path: trash_path.clone(),
+                payload_json,
+                created_at: now.clone(),
+                undone_at: None,
+                operation: "delete".to_string(),
+            };
+            soft_delete_repo
+                .insert(database.as_ref(), &soft_delete_row)
+                .await?;
+
+            return Ok(SoftDeleteEntityResult {
+                entity_type: EntityType::Dungeon,
+                id: dungeon.id,
+                name: dungeon.name,
+                slug: dungeon.slug,
+                trash_vault_path: trash_path,
+            });
+        }
+
         Err(format!(
-            "no npc, location, faction, item, event, or god found for: {target}"
+            "no npc, location, faction, item, event, god, or dungeon found for: {target}"
         ))
     }
 
@@ -1043,6 +1209,7 @@ impl EntityAdminService {
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
         let god_repo = state.god_repo();
+        let dungeon_repo = state.dungeon_repo();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
@@ -1444,6 +1611,66 @@ impl EntityAdminService {
             });
         }
 
+        if soft_delete.entity_type == "dungeon" {
+            let payload: DungeonDeletePayload =
+                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+
+            let mut restored_slug = payload.slug.clone();
+            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
+            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let preferred_full = vault
+                .resolve_relative(&PathBuf::from(&restored_vault_path))
+                .map_err(|err| err.to_string())?;
+            if preferred_full.exists() {
+                restored_slug = unique_slug_for_dir(vault.root(), "dungeons", &restored_slug);
+                restored_vault_path =
+                    unique_markdown_path_for_name(&vault, "dungeons", &payload.name, None)?;
+            }
+
+            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
+
+            let dungeon_row = db::DungeonRow {
+                id: payload.id.clone(),
+                slug: restored_slug.clone(),
+                name: payload.name.clone(),
+                vault_path: restored_vault_path.clone(),
+                location: payload.location,
+                story: payload.story,
+                premise: payload.premise,
+                topology: payload.topology,
+                tone: payload.tone,
+                twist: payload.twist,
+                beats_json: payload.beats_json,
+                created_at: payload.created_at,
+                updated_at: now.clone(),
+            };
+
+            dungeon_repo.upsert(database.as_ref(), &dungeon_row).await?;
+            document_repo
+                .upsert_index(
+                    database.as_ref(),
+                    "dungeon",
+                    &dungeon_row.slug,
+                    Some(&dungeon_row.name),
+                    &dungeon_row.vault_path,
+                    &dungeon_row.created_at,
+                    &dungeon_row.updated_at,
+                )
+                .await?;
+
+            soft_delete_repo
+                .mark_undone(database.as_ref(), soft_delete.id, &now)
+                .await?;
+
+            return Ok(UndoSoftDeleteResult {
+                entity_type: EntityType::Dungeon,
+                id: payload.id,
+                name: payload.name,
+                slug: restored_slug,
+                vault_path: restored_vault_path,
+            });
+        }
+
         Err(format!(
             "unsupported soft delete entity type: {}",
             soft_delete.entity_type
@@ -1498,6 +1725,11 @@ impl EntityAdminService {
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
+            EntityType::Dungeon => state
+                .dungeon_repo()
+                .find_by_name_or_slug(database.as_ref(), slug)
+                .await?
+                .map(|row| (row.id, row.name, row.vault_path)),
         }) else {
             // Already gone from the DB (e.g. double publish) — nothing to retire.
             return Ok(());
@@ -1536,6 +1768,7 @@ impl EntityAdminService {
             EntityType::Item => state.item_repo().delete_by_id(database.as_ref(), &id).await?,
             EntityType::Event => state.event_repo().delete_by_id(database.as_ref(), &id).await?,
             EntityType::God => state.god_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::Dungeon => state.dungeon_repo().delete_by_id(database.as_ref(), &id).await?,
         }
         document_repo
             .delete_by_vault_path(database.as_ref(), &normalized)
@@ -1632,6 +1865,18 @@ impl EntityAdminService {
                 soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
                 Ok(UndoSoftDeleteResult { entity_type: EntityType::God, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
             }
+            "dungeon" => {
+                let mut frontmatter = store.load_dungeon(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                frontmatter.published_at = None;
+                store.save_dungeon(&frontmatter).map_err(|err| err.to_string())?;
+                let row = dungeon_row_from_frontmatter(&frontmatter)?;
+                state.dungeon_repo().upsert(database.as_ref(), &row).await?;
+                document_repo
+                    .upsert_index(database.as_ref(), "dungeon", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .await?;
+                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
+                Ok(UndoSoftDeleteResult { entity_type: EntityType::Dungeon, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+            }
             other => Err(format!("cannot undo publish for unknown entity type: {other}")),
         }
     }
@@ -1683,6 +1928,7 @@ pub enum EntityType {
     Item,
     Event,
     God,
+    Dungeon,
 }
 
 impl EntityType {
@@ -1694,6 +1940,7 @@ impl EntityType {
             EntityType::Item => "item",
             EntityType::Event => "event",
             EntityType::God => "god",
+            EntityType::Dungeon => "dungeon",
         }
     }
 }
@@ -1762,6 +2009,12 @@ pub struct EntityDetails {
     pub clergy: Option<String>,
     pub rivals: Option<Vec<String>>,
     pub created_at: Option<String>,
+    // Dungeon-specific fields.
+    pub premise: Option<String>,
+    pub topology: Option<String>,
+    pub twist: Option<String>,
+    pub beats: Option<Vec<DungeonBeat>>,
+    pub story: Option<String>,
 }
 
 /// Recovery record for a `publish` soft-delete. The full entity data is restored
@@ -1890,6 +2143,25 @@ struct GodDeletePayload {
     clergy: String,
     allies: String,
     rivals: String,
+    created_at: String,
+    updated_at: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DungeonDeletePayload {
+    id: String,
+    slug: String,
+    name: String,
+    vault_path: String,
+    #[serde(default)]
+    location: String,
+    #[serde(default)]
+    story: String,
+    premise: String,
+    topology: String,
+    tone: String,
+    twist: String,
+    beats_json: String,
     created_at: String,
     updated_at: String,
 }

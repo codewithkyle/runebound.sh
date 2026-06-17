@@ -5,14 +5,14 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use dnd_core::config::load_effective;
 use dnd_core::entity_store::EntityStore;
-use dnd_core::npc::{EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
+use dnd_core::npc::{DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
 use dnd_core::serialization::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 use dnd_core::vault::Vault;
 
 use crate::app_state::AppState;
 use crate::repositories::{
-    db, DocumentRepository, EventRepository, FactionRepository, GodRepository, ItemRepository,
-    LocationRepository, NpcRepository,
+    db, DocumentRepository, DungeonRepository, EventRepository, FactionRepository, GodRepository,
+    ItemRepository, LocationRepository, NpcRepository,
 };
 use crate::utils::normalize_relative_path_for_storage;
 
@@ -40,6 +40,7 @@ impl VaultSyncService {
         let item_repo = state.item_repo();
         let event_repo = state.event_repo();
         let god_repo = state.god_repo();
+        let dungeon_repo = state.dungeon_repo();
         let document_repo = state.document_repo();
 
         // Any publish that survived to a restart is permanent: finalize its pending
@@ -57,6 +58,7 @@ impl VaultSyncService {
         sync_entities(&ItemSync(item_repo.as_ref()), &store, database, document_repo).await?;
         sync_entities(&EventSync(event_repo.as_ref()), &store, database, document_repo).await?;
         sync_entities(&GodSync(god_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(&DungeonSync(dungeon_repo.as_ref()), &store, database, document_repo).await?;
 
         Ok(())
     }
@@ -438,6 +440,74 @@ impl SyncRepository for GodSync<'_> {
     async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
         self.0.delete_by_id(database, id).await
     }
+}
+
+struct DungeonSync<'a>(&'a dyn DungeonRepository);
+
+#[async_trait]
+impl SyncRepository for DungeonSync<'_> {
+    type Frontmatter = DungeonFrontmatter;
+    type Row = db::DungeonRow;
+    const KIND: &'static str = "dungeon";
+
+    fn list_store(&self, store: &EntityStore) -> Result<Vec<Self::Frontmatter>, String> {
+        store.list_dungeons().map_err(|err| err.to_string())
+    }
+    fn delete_from_store(&self, store: &EntityStore, slug: &str) -> Result<(), String> {
+        store.delete_dungeon(slug).map_err(|err| err.to_string())
+    }
+    fn row_from_frontmatter(frontmatter: &Self::Frontmatter) -> Result<Self::Row, String> {
+        dungeon_row_from_frontmatter(frontmatter)
+    }
+    fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_> {
+        StoreView {
+            id: &frontmatter.id,
+            slug: &frontmatter.slug,
+            vault_path: &frontmatter.vault_path,
+            published: frontmatter.published_at.is_some(),
+        }
+    }
+    fn row_view(row: &Self::Row) -> RowView<'_> {
+        RowView {
+            id: &row.id,
+            slug: &row.slug,
+            name: &row.name,
+            vault_path: &row.vault_path,
+            created_at: &row.created_at,
+            updated_at: &row.updated_at,
+        }
+    }
+    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert(database, row).await
+    }
+    async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
+        self.0.list_all(database).await
+    }
+    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
+        self.0.delete_by_id(database, id).await
+    }
+}
+
+pub(crate) fn dungeon_row_from_frontmatter(
+    frontmatter: &DungeonFrontmatter,
+) -> Result<db::DungeonRow, String> {
+    let beats_json = serde_json::to_string(&frontmatter.beats)
+        .map_err(|err| format!("failed to encode dungeon beats: {err}"))?;
+    Ok(db::DungeonRow {
+        id: frontmatter.id.clone(),
+        slug: frontmatter.slug.clone(),
+        name: frontmatter.name.clone(),
+        vault_path: frontmatter.vault_path.clone(),
+        location: frontmatter.location.clone(),
+        story: frontmatter.story.clone(),
+        premise: frontmatter.premise.clone(),
+        topology: frontmatter.topology.clone(),
+        tone: frontmatter.tone.clone(),
+        twist: frontmatter.twist.clone(),
+        beats_json,
+        created_at: frontmatter.created_at.clone(),
+        updated_at: frontmatter.updated_at.clone(),
+    })
 }
 
 pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<db::NpcRow, String> {

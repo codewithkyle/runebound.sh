@@ -159,6 +159,7 @@ impl SuggestionService {
                         EntityType::Item => SuggestionHelperText::Item,
                         EntityType::Event => SuggestionHelperText::Event,
                         EntityType::God => SuggestionHelperText::God,
+                        EntityType::Dungeon => SuggestionHelperText::Dungeon,
                     }),
                 });
             }
@@ -229,6 +230,7 @@ pub enum SuggestionHelperText {
     Item,
     Event,
     God,
+    Dungeon,
     Reference,
 }
 
@@ -264,6 +266,7 @@ async fn search_entities(
     let item_repo = state.item_repo();
     let event_repo = state.event_repo();
     let god_repo = state.god_repo();
+    let dungeon_repo = state.dungeon_repo();
 
     let npcs = npc_repo
         .search_by_name(database.as_ref(), trimmed, limit)
@@ -281,6 +284,9 @@ async fn search_entities(
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
     let gods = god_repo
+        .search_by_name(database.as_ref(), trimmed, limit)
+        .await?;
+    let dungeons = dungeon_repo
         .search_by_name(database.as_ref(), trimmed, limit)
         .await?;
 
@@ -315,6 +321,11 @@ async fn search_entities(
             entity_type: EntityType::God,
             name: god.name,
             slug: god.slug,
+        }))
+        .chain(dungeons.into_iter().map(|dungeon| EntitySuggestion {
+            entity_type: EntityType::Dungeon,
+            name: dungeon.name,
+            slug: dungeon.slug,
         }))
         .collect();
 
@@ -553,13 +564,18 @@ fn build_entity_field_argument_suggestions(
 
     let prefix = parsed.completion.current_token.to_ascii_lowercase();
     let base = replace_current_token(input, &parsed.completion.current_token);
-    let field_names: Vec<&'static str> = if subcommand == "set" {
+    let mut field_names: Vec<&'static str> = if subcommand == "set" {
         settable_fields(kind).map(|spec| spec.display_name).collect()
     } else {
         rerollable_fields(kind)
             .map(|spec| spec.display_name)
             .collect()
     };
+    // Dungeon beats are addressed by their function name (a beat target), which
+    // the flat schema can't supply: `dungeon reroll setback`, `dungeon set climax`.
+    if kind == EntityKind::Dungeon {
+        field_names.extend(["entrance", "puzzle", "setback", "climax", "resolution"]);
+    }
 
     let prefix_label = format!("{} {}", command.name, subcommand);
     Some(
@@ -582,6 +598,7 @@ fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
         "faction" => Some(EntityKind::Faction),
         "item" => Some(EntityKind::Item),
         "god" => Some(EntityKind::God),
+        "dungeon" => Some(EntityKind::Dungeon),
         _ => None,
     }
 }
@@ -1179,6 +1196,78 @@ mod tests {
                 .iter()
                 .any(|suggestion| suggestion.completion == "god reroll domains "),
             "missing domains suggestion"
+        );
+    }
+
+    #[test]
+    fn entity_kind_for_dungeon_root_maps_to_dungeon_kind() {
+        assert_eq!(entity_kind_for_root("dungeon"), Some(EntityKind::Dungeon));
+    }
+
+    #[test]
+    fn dungeon_set_field_suggestions_include_premise() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "dungeon").expect("missing dungeon command");
+        let parsed = command_parse::parse_command_input("dungeon set p");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::Dungeon,
+            command,
+            Some("set"),
+            &parsed,
+            "dungeon set p",
+        )
+        .expect("expected suggestions");
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "dungeon set premise "),
+            "missing premise suggestion"
+        );
+    }
+
+    #[test]
+    fn dungeon_reroll_suggestions_include_beat_names() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "dungeon").expect("missing dungeon command");
+        let parsed = command_parse::parse_command_input("dungeon reroll s");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::Dungeon,
+            command,
+            Some("reroll"),
+            &parsed,
+            "dungeon reroll s",
+        )
+        .expect("expected suggestions");
+
+        // Beat names are addressable targets the flat schema can't supply.
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "dungeon reroll setback "),
+            "missing setback beat suggestion"
+        );
+    }
+
+    #[test]
+    fn dungeon_reroll_suggestions_include_premise_scalar() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "dungeon").expect("missing dungeon command");
+        let parsed = command_parse::parse_command_input("dungeon reroll p");
+        let suggestions = build_entity_field_argument_suggestions(
+            EntityKind::Dungeon,
+            command,
+            Some("reroll"),
+            &parsed,
+            "dungeon reroll p",
+        )
+        .expect("expected suggestions");
+
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.completion == "dungeon reroll premise "),
+            "missing premise scalar reroll suggestion"
         );
     }
 }

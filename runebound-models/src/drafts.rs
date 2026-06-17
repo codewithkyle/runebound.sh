@@ -1,5 +1,36 @@
 use serde::{Deserialize, Serialize};
 
+use crate::dungeon_plan::{DungeonContentPlan, PlannedOverlay};
+
+/// Stamp a content plan's overlay + faction tint onto freshly-built beats so they
+/// persist with the dungeon. The overlay marks the single beat it layers onto; the
+/// dungeon-wide faction tint is mirrored on every beat. Call after `into_beats`.
+pub fn apply_plan_meta_to_beats(beats: &mut [DungeonBeat], plan: &DungeonContentPlan) {
+    for beat in beats.iter_mut() {
+        beat.overlay = None;
+        beat.factions = plan.factions;
+    }
+    if let Some(overlay) = &plan.overlay {
+        if let Some(beat) = beats.get_mut(overlay.beat_index) {
+            beat.overlay = Some(overlay.overlay_type.clone());
+        }
+    }
+}
+
+/// Recover the overlay + faction tint a dungeon's beats were stamped with, so a
+/// whole-dungeon reroll can rebuild a plan that honors them (inverse of
+/// [`apply_plan_meta_to_beats`]).
+pub fn plan_meta_from_beats(beats: &[DungeonBeat]) -> (Option<PlannedOverlay>, bool) {
+    let overlay = beats.iter().enumerate().find_map(|(index, beat)| {
+        beat.overlay.as_ref().map(|overlay_type| PlannedOverlay {
+            beat_index: index,
+            overlay_type: overlay_type.clone(),
+        })
+    });
+    let factions = beats.iter().any(|beat| beat.factions);
+    (overlay, factions)
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NpcDraft {
     pub id: String,
@@ -131,6 +162,48 @@ pub struct GodDraft {
     pub allies: Vec<String>,
     #[serde(default)]
     pub rivals: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DungeonBeat {
+    pub function: String, // fixed skeleton: Entrance|Puzzle|Setback|Climax|Resolution
+    pub content_type: String, // one of DUNGEON_CONTENT_TYPES (the 11)
+    pub idea: String,     // 1-2 lines: what happens here
+    #[serde(default)]
+    pub player_goals: String, // what players should learn/do/achieve by completing this beat
+    pub lever: String,    // one complication/question/hook
+    #[serde(default)]
+    pub loot: Option<String>, // conditional — None where the beat doesn't earn it
+    #[serde(default)]
+    pub design_note: String, // how this beat fits the overall dungeon and story
+    // The rolled content plan's overlay + faction tint, persisted with the beat so
+    // they survive save/load (they ride `beats_json`) and a whole-dungeon reroll can
+    // honor them. `overlay` is set only on the single beat it layers onto; `factions`
+    // is the dungeon-wide tint, mirrored on every beat.
+    #[serde(default)]
+    pub overlay: Option<String>, // foreshadowing | history | map, layered on this beat
+    #[serde(default)]
+    pub factions: bool, // dungeon-wide faction tint
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DungeonDraft {
+    pub id: String,
+    #[serde(default)]
+    pub seed_prompt: Option<String>, // premise+context bias, reused by reroll
+    pub name: String,
+    pub slug: String,
+    pub vault_path: String,
+    #[serde(default)]
+    pub location: String, // the single bounded place all five beats sit inside
+    #[serde(default)]
+    pub story: String, // the Pass-1 micro-story the dungeon was generated from
+    pub premise: String, // the spine / top-line (feature-dungeons.md §6)
+    pub topology: String, // one of DUNGEON_TOPOLOGIES, or "none"
+    pub tone: String,    // "tragedy" | "comedy"
+    pub twist: String,   // "false_victory" | "false_defeat" | "neither"
+    #[serde(default)]
+    pub beats: Vec<DungeonBeat>, // exactly 5, fixed order
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -280,9 +353,32 @@ pub struct GodFrontmatter {
     pub published_at: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DungeonFrontmatter {
+    #[serde(rename = "type")]
+    pub doc_type: String, // "dungeon"
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub vault_path: String,
+    #[serde(default)]
+    pub location: String,
+    #[serde(default)]
+    pub story: String,
+    pub premise: String,
+    pub topology: String,
+    pub tone: String,
+    pub twist: String,
+    pub beats: Vec<DungeonBeat>,
+    pub created_at: String,
+    pub updated_at: String,
+    #[serde(default)]
+    pub published_at: Option<String>,
+}
+
 use super::output::{
-    OutputDoc, command_ref, doc, entity_card, entity_row, paragraph_text, paragraph_with_inlines,
-    text_node,
+    OutputDoc, StatusTone, command_ref, doc, entity_card, entity_row, heading, paragraph_text,
+    paragraph_with_inlines, status, text_node,
 };
 use super::utils::{normalize_unknown_list, normalize_unknown_text};
 
@@ -541,4 +637,84 @@ pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
         text_node(" to regenerate the narrative."),
     ]));
     output
+}
+
+pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
+    let mut out = doc();
+    // 1. spine / premise top-line (feature-dungeons.md §6)
+    out.push(heading(
+        2,
+        format!(
+            "{} — {}",
+            normalize_unknown_text(&draft.name),
+            normalize_unknown_text(&draft.premise)
+        ),
+    ));
+    // 2. location line — the single bounded place all five beats sit inside
+    let location = normalize_unknown_text(&draft.location);
+    if location != "Unknown" {
+        out.push(status(StatusTone::Info, format!("Location: {location}")));
+    }
+    // 3. topology line
+    let topo = if draft.topology.is_empty() || draft.topology == "none" {
+        "Topology: none (lay it out freely)".to_string()
+    } else {
+        format!("Topology: {}", draft.topology)
+    };
+    out.push(status(StatusTone::Info, topo));
+    // 3b. the rolled overlay + faction tint, recovered from the beats.
+    let (overlay, factions) = plan_meta_from_beats(&draft.beats);
+    if let Some(overlay) = overlay {
+        out.push(status(
+            StatusTone::Info,
+            format!(
+                "Overlay: {} (on the {})",
+                overlay.overlay_type, draft.beats[overlay.beat_index].function
+            ),
+        ));
+    }
+    if factions {
+        out.push(status(
+            StatusTone::Info,
+            "Faction tint: a faction presence colors the whole dungeon".to_string(),
+        ));
+    }
+    // 4. five beat cards, each followed by its own reroll Paragraph
+    for (i, beat) in draft.beats.iter().enumerate() {
+        let mut rows = vec![
+            entity_row("Type:", normalize_unknown_text(&beat.content_type)),
+            entity_row("Idea:", normalize_unknown_text(&beat.idea)),
+            entity_row("Player Goals:", normalize_unknown_text(&beat.player_goals)),
+            entity_row("Lever:", normalize_unknown_text(&beat.lever)),
+        ];
+        if let Some(loot) = &beat.loot {
+            if !loot.trim().is_empty() {
+                rows.push(entity_row("Loot:", loot.clone()));
+            }
+        }
+        rows.push(entity_row("Design:", normalize_unknown_text(&beat.design_note)));
+        out.push(entity_card(
+            format!("{}. {}", i + 1, beat.function),
+            rows,
+        ));
+        let key = beat.function.to_lowercase();
+        out.push(paragraph_with_inlines(vec![
+            text_node("Reroll this beat: "),
+            command_ref(
+                format!("reroll {key}"),
+                format!("dungeon reroll {key}"),
+            ),
+        ]));
+    }
+    // 4. footer actions
+    out.push(paragraph_with_inlines(vec![
+        text_node("Use "),
+        command_ref("save", "save"),
+        text_node(", "),
+        command_ref("reroll", "reroll"),
+        text_node(" for a whole new dungeon, or "),
+        command_ref("cancel", "cancel"),
+        text_node(" to discard."),
+    ]));
+    out
 }

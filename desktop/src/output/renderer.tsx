@@ -1,6 +1,13 @@
 import { For, type JSX } from "solid-js";
 import { commandRefClass, spinnerClass, spinnerTextClass, statusClass } from "./theme";
 import type { InlineNode, OutputBlock, OutputDoc, SpinnerState } from "../generated/models";
+import topologyImage from "../assets/topology.png";
+
+// Logical asset keys (sent by the backend as Image.src) -> bundled, hashed URLs.
+// Keeps the backend free of build-output paths.
+const DOC_IMAGES: Record<string, string> = {
+  topology: topologyImage,
+};
 
 type OutputRendererProps = {
   doc: OutputDoc;
@@ -38,6 +45,11 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
 
   if (block.kind === "status") {
     return <div class={statusClass(block.tone)}>{block.text}</div>;
+  }
+
+  if (block.kind === "image") {
+    const src = DOC_IMAGES[block.src] ?? block.src;
+    return <img class="rb-doc-image" src={src} alt={block.alt} />;
   }
 
   if (block.kind === "entity_card") {

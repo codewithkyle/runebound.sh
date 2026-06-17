@@ -6,6 +6,7 @@ pub enum EntityKind {
     Item,
     Event,
     God,
+    Dungeon,
 }
 
 #[allow(dead_code)]
@@ -18,6 +19,7 @@ impl EntityKind {
             EntityKind::Item => "item",
             EntityKind::Event => "event",
             EntityKind::God => "god",
+            EntityKind::Dungeon => "dungeon",
         }
     }
 
@@ -33,16 +35,18 @@ impl EntityKind {
             EntityKind::Item => "Item",
             EntityKind::Event => "Event",
             EntityKind::God => "God",
+            EntityKind::Dungeon => "Dungeon",
         }
     }
 }
 
 #[allow(dead_code)]
-pub const ALL_ENTITY_KINDS: [EntityKind; 6] = [
+pub const ALL_ENTITY_KINDS: [EntityKind; 7] = [
     EntityKind::Npc,
     EntityKind::Location,
     EntityKind::Faction,
     EntityKind::Item,
     EntityKind::Event,
     EntityKind::God,
+    EntityKind::Dungeon,
 ];

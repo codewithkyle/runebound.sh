@@ -14,6 +14,7 @@ import type {
   ItemDraft,
   EventDraft,
   GodDraft,
+  DungeonDraft,
 } from "./generated/models";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
@@ -38,7 +39,7 @@ type CommandSpecMeta = {
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "reference";
+  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon" | "reference";
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -89,13 +90,17 @@ export default function App() {
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god">("none");
+  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon">("none");
   const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
   const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
   const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
   const [itemDraft, setItemDraft] = createSignal<ItemDraft | null>(null);
   const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
   const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
+  const [dungeonDraft, setDungeonDraft] = createSignal<DungeonDraft | null>(null);
+  // Which dungeon-flow review screen the backend last rendered, so the next
+  // `continue`/`reroll` shows the right generation spinner. null = not on one.
+  const [dungeonFlowScreen, setDungeonFlowScreen] = createSignal<DungeonFlowScreen>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
 
@@ -352,7 +357,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt());
+    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), dungeonFlowScreen());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -374,6 +379,10 @@ export default function App() {
         // shows the connection-test spinner. Only update on success; on error we
         // keep the prior context so a retry still shows the spinner.
         setOllamaPrompt(detectOllamaPrompt(rendered.text));
+        // Track which dungeon-flow review screen was just rendered so the next
+        // `continue`/`reroll` shows the right spinner (story vs. cards). Cleared
+        // once the flow leaves the review screens (any other rendered output).
+        setDungeonFlowScreen(detectDungeonFlowScreen(rendered.text));
         applyClientEvent(response.client_event);
         const outputDocOverride = outputDocFromClientEvent(response.client_event);
         const suppressOutput =
@@ -527,6 +536,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("npc");
         return;
       case "load_location_draft_with_card":
@@ -536,6 +546,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("location");
         return;
       case "load_faction_draft_with_card":
@@ -545,6 +556,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("faction");
         return;
       case "load_item_draft_with_card":
@@ -554,6 +566,7 @@ export default function App() {
         setFactionDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("item");
         return;
       case "load_event_draft_with_card":
@@ -563,6 +576,7 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("event");
         return;
       case "load_god_draft_with_card":
@@ -572,7 +586,18 @@ export default function App() {
         setFactionDraft(null);
         setItemDraft(null);
         setEventDraft(null);
+        setDungeonDraft(null);
         setEditorMode("god");
+        return;
+      case "load_dungeon_draft_with_card":
+        setDungeonDraft(event.draft);
+        setNpcDraft(null);
+        setLocationDraft(null);
+        setFactionDraft(null);
+        setItemDraft(null);
+        setEventDraft(null);
+        setGodDraft(null);
+        setEditorMode("dungeon");
         return;
       case "clear_drafts":
         setNpcDraft(null);
@@ -581,6 +606,7 @@ export default function App() {
         setItemDraft(null);
         setEventDraft(null);
         setGodDraft(null);
+        setDungeonDraft(null);
         setEditorMode("none");
         return;
       case "clear_terminal":
@@ -612,6 +638,7 @@ export default function App() {
       case "load_item_draft_with_card":
       case "load_event_draft_with_card":
       case "load_god_draft_with_card":
+      case "load_dungeon_draft_with_card":
         return event.entity_card;
       case "clear_drafts":
       case "clear_terminal":
@@ -1041,8 +1068,46 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
   return null;
 }
 
-function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): string | null {
+// Which dungeon-flow review screen the backend just rendered. The completing
+// inputs (`continue`/`reroll`) are generic words, so — like the Ollama heuristic —
+// we recognize the prompt rather than the input to pick the spinner.
+type DungeonFlowScreen = "plan" | "story" | null;
+
+function detectDungeonFlowScreen(text: string): DungeonFlowScreen {
+  if (text.includes("Step 6 of 6 — Room Plan")) {
+    return "plan";
+  }
+  if (text.includes("Create Dungeon — Story")) {
+    return "story";
+  }
+  return null;
+}
+
+function commandSpinnerLabel(
+  raw: string,
+  ollamaPrompt: "menu" | "url" | null,
+  dungeonFlowScreen: DungeonFlowScreen,
+): string | null {
   const lowered = raw.trim().toLowerCase();
+  // Dungeon flow review screens. The room-plan screen rolls/sets locally (no
+  // spinner); only `continue` there spends an LLM call (Pass 1 = the story). At
+  // the story screen, `continue` builds the cards (Pass 2) and `reroll` rewrites
+  // the story (Pass 1 again).
+  if (dungeonFlowScreen === "plan") {
+    if (lowered === "continue" || lowered === "accept") {
+      return "generating story";
+    }
+    // `reroll` and `set` re-roll/pin locally and return instantly — no spinner.
+    return null;
+  }
+  if (dungeonFlowScreen === "story") {
+    if (lowered === "continue" || lowered === "accept") {
+      return "generating dungeon";
+    }
+    if (lowered === "reroll" || lowered === "redo" || lowered.startsWith("reroll ") || lowered.startsWith("redo ")) {
+      return "generating story";
+    }
+  }
   // Commands that always probe the Ollama server.
   if (lowered === "test ollama") {
     return OLLAMA_TEST_LABEL;
@@ -1082,6 +1147,11 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
     return "generating god";
   }
   if (lowered === "reroll" || lowered.startsWith("reroll ")) {
+    // `reroll <beat>` on a dungeon regenerates a single card, not the whole draft.
+    const arg = lowered.slice("reroll".length).trim().split(/\s+/)[0];
+    if (["entrance", "puzzle", "setback", "climax", "resolution", "1", "2", "3", "4", "5"].includes(arg)) {
+      return "rerolling beat";
+    }
     return "rerolling draft";
   }
   if (lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
@@ -1102,12 +1172,18 @@ function commandSpinnerLabel(raw: string, ollamaPrompt: "menu" | "url" | null): 
   if (lowered === "god reroll" || lowered.startsWith("god reroll ")) {
     return "rerolling god";
   }
+  // A per-beat reroll regenerates one beat. (Whole-dungeon `reroll` is covered by
+  // the generic "rerolling draft" branch above.)
+  if (lowered === "dungeon reroll" || lowered.startsWith("dungeon reroll ")) {
+    return "rerolling beat";
+  }
   if (
     lowered.startsWith("npc save") ||
     lowered.startsWith("location save") ||
     lowered.startsWith("item save") ||
     lowered.startsWith("event save") ||
     lowered.startsWith("god save") ||
+    lowered.startsWith("dungeon save") ||
     lowered === "save"
   ) {
     return "saving draft";

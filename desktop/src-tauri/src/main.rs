@@ -26,9 +26,9 @@ use crate::entities::build_default_registry;
 use crate::repositories::{
     DocumentRepository, EventRepository, FactionRepository, GenerationRepository, GodRepository,
     ItemRepository, LocationRepository, NpcRepository, ProdDocumentRepository, ProdEventRepository,
-    ProdFactionRepository, ProdGenerationRepository, ProdGodRepository, ProdItemRepository,
-    ProdLocationRepository, ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository,
-    SoftDeleteRepository, VaultRepository,
+    DungeonRepository, ProdDungeonRepository, ProdFactionRepository, ProdGenerationRepository,
+    ProdGodRepository, ProdItemRepository, ProdLocationRepository, ProdNpcRepository,
+    ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository, VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
 
@@ -93,6 +93,26 @@ async fn run_command(
         return Ok(service.execute_line(&line).await);
     }
 
+    // Guided dungeon-creation flow: while active, route the raw line to the flow
+    // state machine and bypass registry dispatch (exactly how onboarding does),
+    // so step answers like `"2"` or a free-text premise aren't parsed as commands.
+    let dungeon_flow_active = {
+        let flow = state.dungeon_flow.lock().await;
+        flow.active
+    };
+    if dungeon_flow_active {
+        if let Some(response) =
+            crate::commands::dungeon_flow::try_execute_dungeon_flow(&normalized_input, state.inner()).await?
+        {
+            let trimmed = normalized_input.trim();
+            if !trimmed.is_empty() {
+                let mut service = state.command_service.lock().await;
+                service.session_mut().push_history(trimmed, 50);
+            }
+            return Ok(response);
+        }
+    }
+
     // Reject `-h`/`--help` uniformly for desktop dispatch and the core fallthrough,
     // mirroring core's own guard (onboarding above forwards to the guarded `execute_line`).
     if let Some(message) = reject_help_flags(&parsed.normalized_tokens) {
@@ -153,6 +173,7 @@ fn main() {
     let item_repo: Arc<dyn ItemRepository> = Arc::new(ProdItemRepository);
     let event_repo: Arc<dyn EventRepository> = Arc::new(ProdEventRepository);
     let god_repo: Arc<dyn GodRepository> = Arc::new(ProdGodRepository);
+    let dungeon_repo: Arc<dyn DungeonRepository> = Arc::new(ProdDungeonRepository);
     let document_repo: Arc<dyn DocumentRepository> = Arc::new(ProdDocumentRepository);
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
@@ -173,10 +194,12 @@ fn main() {
         item_repo: item_repo.clone(),
         event_repo: event_repo.clone(),
         god_repo: god_repo.clone(),
+        dungeon_repo: dungeon_repo.clone(),
         document_repo: document_repo.clone(),
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
         domains,
+        dungeon_flow: Mutex::new(crate::app_state::DungeonCreationFlow::default()),
         boot_ollama_health: Mutex::new(None),
     };
 

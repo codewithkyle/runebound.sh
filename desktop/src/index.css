@@ -149,6 +149,18 @@ body {
   white-space: pre-wrap;
 }
 
+.rb-doc-image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 6px 0;
+  padding: 8px;
+  /* The illustration is black line art on white; keep the padding white too so it
+     stays legible regardless of the active terminal theme. */
+  background: #ffffff;
+  border: 1px solid var(--color-border);
+}
+
 .rb-entity-card {
   width: 100%;
   max-width: 100%;

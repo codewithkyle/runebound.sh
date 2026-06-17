@@ -631,6 +631,67 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
     },
 ];
 
+// Dungeon-level scalar fields only. Beat fields are addressed compositionally
+// by the domain (`dungeon set <beat> <field>`), not through this flat schema.
+// topology/tone/twist are structural dials chosen in the creation flow: they are
+// settable (re-pick) but not rerollable (the LLM does not invent them).
+const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
+    EntityFieldSpec {
+        canonical: "name",
+        display_name: "name",
+        aliases: &["name"],
+        description: "Name of the dungeon.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "location",
+        display_name: "location",
+        aliases: &["location", "place"],
+        description: "The single bounded place all five beats sit inside.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "premise",
+        display_name: "premise",
+        aliases: &["premise", "spine"],
+        description: "One-line spine summarizing the whole dungeon.",
+        value_kind: ValueKind::Text,
+        settable: true,
+        rerollable: true,
+    },
+    EntityFieldSpec {
+        canonical: "topology",
+        display_name: "topology",
+        aliases: &["topology", "form", "shape"],
+        description: "Spatial flow shape (one of the nine forms, or none).",
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: false,
+    },
+    EntityFieldSpec {
+        canonical: "tone",
+        display_name: "tone",
+        aliases: &["tone"],
+        description: "Emotional polarity: tragedy or comedy.",
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: false,
+    },
+    EntityFieldSpec {
+        canonical: "twist",
+        display_name: "twist",
+        aliases: &["twist"],
+        description: "Middle-beat shape: false_victory, false_defeat, or neither.",
+        value_kind: ValueKind::Enum,
+        settable: true,
+        rerollable: false,
+    },
+];
+
 pub static NPC_SCHEMA: EntitySchema = EntitySchema {
     kind: EntityKind::Npc,
     fields: &NPC_FIELDS,
@@ -665,6 +726,11 @@ pub static GOD_SCHEMA: EntitySchema = EntitySchema {
     fields: &GOD_FIELDS,
 };
 
+pub static DUNGEON_SCHEMA: EntitySchema = EntitySchema {
+    kind: EntityKind::Dungeon,
+    fields: &DUNGEON_FIELDS,
+};
+
 pub fn schema_for_kind(kind: EntityKind) -> &'static EntitySchema {
     match kind {
         EntityKind::Npc => &NPC_SCHEMA,
@@ -673,6 +739,7 @@ pub fn schema_for_kind(kind: EntityKind) -> &'static EntitySchema {
         EntityKind::Item => &ITEM_SCHEMA,
         EntityKind::Event => &EVENT_SCHEMA,
         EntityKind::God => &GOD_SCHEMA,
+        EntityKind::Dungeon => &DUNGEON_SCHEMA,
     }
 }
 
@@ -869,54 +936,56 @@ mod tests {
     #[test]
     fn field_access_gates_resolution() {
         // canonical_field_spec only resolves a field when the requested access
-        // is allowed. Locks the invariant: a non-settable field must not be
-        // reachable via FieldAccess::Set (and likewise for reroll). All fields
-        // are currently both settable and rerollable — assert that contract too.
+        // is allowed. Locks the invariant: a field is reachable via an access
+        // mode exactly when its flag for that mode is set. Most entities mark
+        // every field both settable and rerollable; the dungeon deliberately
+        // diverges (topology/tone/twist are settable dials, not rerollable).
         for kind in ALL_ENTITY_KINDS {
             for spec in schema_for_kind(kind).fields {
-                assert!(
-                    spec.settable && spec.rerollable,
-                    "{:?} field {} is expected to be both settable and rerollable",
+                assert_eq!(
+                    canonical_field_spec(kind, spec.canonical, FieldAccess::Set).is_some(),
+                    spec.settable,
+                    "{:?} field {} Set-reachability should match settable flag",
                     kind,
                     spec.canonical,
                 );
-                if spec.settable {
-                    assert!(
-                        canonical_field_spec(kind, spec.canonical, FieldAccess::Set).is_some()
-                    );
-                }
-                if spec.rerollable {
-                    assert!(
-                        canonical_field_spec(kind, spec.canonical, FieldAccess::Reroll).is_some()
-                    );
-                }
+                assert_eq!(
+                    canonical_field_spec(kind, spec.canonical, FieldAccess::Reroll).is_some(),
+                    spec.rerollable,
+                    "{:?} field {} Reroll-reachability should match rerollable flag",
+                    kind,
+                    spec.canonical,
+                );
             }
         }
     }
 
     #[test]
     fn settable_and_rerollable_field_counts_are_locked() {
-        // Snapshot the editable surface per entity. Adding/removing a field is
-        // a deliberate change that should update this assertion.
+        // Snapshot the editable surface per entity as (settable, rerollable).
+        // Adding/removing a field is a deliberate change that should update this
+        // assertion. The dungeon's settable and rerollable counts differ on
+        // purpose: topology/tone/twist are settable dials but not rerollable.
         let expected = [
-            (EntityKind::Npc, 11usize),
-            (EntityKind::Location, 10),
-            (EntityKind::Faction, 17),
-            (EntityKind::Item, 11),
+            (EntityKind::Npc, 11usize, 11usize),
+            (EntityKind::Location, 10, 10),
+            (EntityKind::Faction, 17, 17),
+            (EntityKind::Item, 11, 11),
             // Events are narrative-only: no settable or rerollable fields.
-            (EntityKind::Event, 0),
-            (EntityKind::God, 14),
+            (EntityKind::Event, 0, 0),
+            (EntityKind::God, 14, 14),
+            (EntityKind::Dungeon, 6, 3),
         ];
-        for (kind, count) in expected {
+        for (kind, settable, rerollable) in expected {
             assert_eq!(
                 settable_fields(kind).count(),
-                count,
+                settable,
                 "{:?} settable field count changed",
                 kind
             );
             assert_eq!(
                 rerollable_fields(kind).count(),
-                count,
+                rerollable,
                 "{:?} rerollable field count changed",
                 kind
             );

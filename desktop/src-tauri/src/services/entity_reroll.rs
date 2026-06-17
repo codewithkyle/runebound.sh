@@ -1,5 +1,6 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
+    anchor_mechanic,
     build_reference_context,
     describe_recent_npc_occupation_anchors,
     occupation_anchor,
@@ -22,7 +23,8 @@ use crate::utils::{
     normalize_unknown_list,
     normalize_unknown_text,
 };
-use runebound_models::utils::{GOD_ALIGNMENTS, GOD_RANKS};
+use runebound_models::DungeonBeat;
+use runebound_models::utils::{DUNGEON_FUNCTIONS, GOD_ALIGNMENTS, GOD_RANKS};
 use dnd_core::config::AppConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -799,6 +801,274 @@ impl EntityRerollService {
         Err(format!("failed to reroll god field: {}", field))
     }
 
+    /// Regenerate a single beat against the frozen rest of the dungeon. The other
+    /// four beats are sent verbatim as context; only `beats[beat_index]` is
+    /// rerolled. Both its `function` AND its rolled `content_type` stay fixed — the
+    /// content type was deterministically assigned (see `dungeon_plan`) and the
+    /// model is no good at picking it, so the reroll only rewrites the prose
+    /// (idea, player_goals, lever, loot, design_note) for that same room type.
+    pub async fn reroll_dungeon_beat(
+        &self,
+        input: RerollDungeonBeatInput,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<RerollDungeonBeatResult, String> {
+        let beat_index = input.beat_index;
+        if beat_index >= DUNGEON_FUNCTIONS.len() {
+            return Err("beat index out of range".to_string());
+        }
+        let current = input
+            .dungeon
+            .beats
+            .get(beat_index)
+            .cloned()
+            .ok_or_else(|| "dungeon is missing the beat to reroll".to_string())?;
+        let function = DUNGEON_FUNCTIONS[beat_index];
+
+        let (config, model) = load_generation_config(workspace_root)?;
+        let extra_prompt = input
+            .prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+
+        let prev = if beat_index > 0 {
+            DUNGEON_FUNCTIONS[beat_index - 1]
+        } else {
+            "the dungeon opening"
+        };
+        let next = if beat_index + 1 < DUNGEON_FUNCTIONS.len() {
+            DUNGEON_FUNCTIONS[beat_index + 1]
+        } else {
+            "the payoff"
+        };
+
+        let frozen = dungeon_context_summary(&input.dungeon, Some(beat_index));
+
+        // The rolled content type is authoritative — it is NOT regenerated. The
+        // model only rewrites the prose for that same room type.
+        let content_type = current.content_type.trim().to_string();
+        let mechanic = anchor_mechanic(&content_type);
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["idea", "player_goals", "lever", "design_note"],
+            "additionalProperties": false,
+            "properties": {
+                "idea": { "type": "string", "minLength": 1 },
+                "player_goals": { "type": "string", "minLength": 1 },
+                "lever": { "type": "string", "minLength": 1 },
+                "loot": { "type": ["string", "null"] },
+                "design_note": { "type": "string", "minLength": 1 }
+            }
+        });
+
+        // A cache room always pays out, regardless of where it sits; otherwise the
+        // function decides whether loot belongs here.
+        let loot_rule = if content_type.eq_ignore_ascii_case("cache") {
+            "Loot REQUIRED — name a concrete reward the party claims here."
+        } else if function == "Resolution" || function == "Climax" {
+            "This beat may carry loot (the payoff/boss hoard)."
+        } else if function == "Setback" {
+            "Set loot to null — the Setback is where players pay, not collect."
+        } else {
+            "Set loot to null."
+        };
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..4 {
+            let run_seed = attempt_seed(attempt);
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": {
+                    "temperature": 1.05,
+                    "top_p": 0.92,
+                    "repeat_penalty": 1.12,
+                    "seed": run_seed,
+                    "num_ctx": config.ollama.num_ctx
+                },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": format!(
+                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field tight and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 1-2 sentences (for combat: tactics/behavior, never creature names). player_goals is one sentence — the clear, concrete goal for the players here (what they must learn, do, reach, or overcome). lever is one hook/question in 1-2 sentences. design_note is one sentence to the GM, out of fiction, on how this beat fits the overall dungeon and story. This beat is a room or area INSIDE the dungeon's single location (shown below) — keep it there; do not move the party to a new region, town, or building. {loot_rule} This beat's room type is FIXED as `{content_type}` ({mechanic}). Do NOT change the type — keep the idea squarely a {content_type} room; only the wording changes.{reference_suffix}",
+                            loot_rule = loot_rule,
+                            content_type = content_type,
+                            mechanic = mechanic,
+                            reference_suffix = reference_suffix
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": format!(
+                            "Dungeon so far (the other four beats are frozen — stay coherent with them):\n{frozen}\n\nRegenerate ONLY beat {n} (function = {function}, type = {content_type} — keep this type). It must follow the {prev} beat and feed the {next} beat. Optional shaping prompt: {shape}",
+                            frozen = frozen,
+                            n = beat_index + 1,
+                            function = function,
+                            content_type = content_type,
+                            prev = prev,
+                            next = next,
+                            shape = if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                        )
+                    }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+
+            let Some(idea) = parsed.get("idea").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(player_goals) = parsed.get("player_goals").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(lever) = parsed.get("lever").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let Some(design_note) = parsed.get("design_note").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let loot = parsed
+                .get("loot")
+                .and_then(|v| v.as_str())
+                .map(|value| value.trim().to_string())
+                .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"));
+
+            return Ok(RerollDungeonBeatResult {
+                beat: DungeonBeat {
+                    function: function.to_string(),
+                    content_type: content_type.clone(),
+                    idea: normalize_unknown_text(idea),
+                    player_goals: normalize_unknown_text(player_goals),
+                    lever: normalize_unknown_text(lever),
+                    loot,
+                    design_note: normalize_unknown_text(design_note),
+                    // Preserve the rolled overlay/faction tint across a single-beat
+                    // reroll — only the prose changes, not the plan metadata.
+                    overlay: current.overlay.clone(),
+                    factions: current.factions,
+                },
+            });
+        }
+
+        Err(format!("failed to reroll dungeon beat {}", beat_index + 1))
+    }
+
+    /// Scalar reroll for the dungeon-level `premise` or `name` line, against the
+    /// frozen rest of the dungeon (mirrors the item/god scalar reroll).
+    pub async fn reroll_dungeon_field(
+        &self,
+        input: RerollDungeonFieldInput,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<RerollDungeonFieldResult, String> {
+        let field = match input.field.trim().to_ascii_lowercase().as_str() {
+            "premise" | "spine" => "premise",
+            "location" | "place" => "location",
+            "name" => "name",
+            other => {
+                return Err(format!(
+                    "unknown dungeon reroll field: {}. rerollable fields: name, location, premise (or a beat name)",
+                    other
+                ))
+            }
+        };
+
+        let (config, model) = load_generation_config(workspace_root)?;
+        let extra_prompt = input
+            .prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .unwrap_or("");
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let frozen = dungeon_context_summary(&input.dungeon, None);
+
+        let instruction = match field {
+            "premise" => "Generate a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).",
+            "location" => "Generate the single bounded place all five beats sit inside — one short phrase naming one explorable location the party moves deeper into (e.g. 'a drowned bell-foundry'), never a region or a journey.",
+            _ => "Generate a concise, evocative name for the dungeon.",
+        };
+        let current = match field {
+            "premise" => input.dungeon.premise.clone(),
+            "location" => input.dungeon.location.clone(),
+            _ => input.dungeon.name.clone(),
+        };
+
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "additionalProperties": false,
+            "properties": { "value": { "type": "string", "minLength": 1 } }
+        });
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..4 {
+            let run_seed = attempt_seed(attempt);
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed },
+                "messages": [
+                    {
+                        "role": "system",
+                        "content": format!(
+                            "You update one dungeon field for a game master. Return only JSON matching schema. Keep it coherent with the dungeon below.{reference_suffix}",
+                            reference_suffix = reference_suffix
+                        )
+                    },
+                    {
+                        "role": "user",
+                        "content": format!(
+                            "Dungeon: {frozen}\nField to reroll: {field}\nInstruction: {instruction}\nOptional shaping prompt: {shape}",
+                            frozen = frozen,
+                            field = field,
+                            instruction = instruction,
+                            shape = if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
+                        )
+                    }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+            let parsed: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let Some(raw_value) = parsed.get("value").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let normalized = normalize_unknown_text(raw_value);
+            if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
+                continue;
+            }
+            return Ok(RerollDungeonFieldResult {
+                field: field.to_string(),
+                value: Some(normalized),
+            });
+        }
+
+        Err(format!("failed to reroll dungeon field: {}", field))
+    }
+
     pub async fn reroll_item_field(
         &self,
         input: RerollItemFieldInput,
@@ -1088,6 +1358,56 @@ pub struct RerollGodFieldResult {
     pub list_value: Option<Vec<String>>,
 }
 
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DungeonRerollContext {
+    pub name: String,
+    pub location: String,
+    pub premise: String,
+    pub topology: String,
+    pub tone: String,
+    pub twist: String,
+    pub beats: Vec<DungeonBeat>,
+}
+
+impl DungeonRerollContext {
+    pub fn from_draft(draft: &runebound_models::DungeonDraft) -> Self {
+        Self {
+            name: draft.name.clone(),
+            location: draft.location.clone(),
+            premise: draft.premise.clone(),
+            topology: draft.topology.clone(),
+            tone: draft.tone.clone(),
+            twist: draft.twist.clone(),
+            beats: draft.beats.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollDungeonBeatInput {
+    pub beat_index: usize,
+    pub prompt: Option<String>,
+    pub dungeon: DungeonRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollDungeonBeatResult {
+    pub beat: DungeonBeat,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct RerollDungeonFieldInput {
+    pub field: String,
+    pub prompt: Option<String>,
+    pub dungeon: DungeonRerollContext,
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RerollDungeonFieldResult {
+    pub field: String,
+    pub value: Option<String>,
+}
+
 #[derive(Debug, Clone, serde::Deserialize)]
 pub struct RerollItemFieldInput {
     pub field: String,
@@ -1302,6 +1622,45 @@ fn god_context_summary(context: &GodRerollContext) -> String {
         context.allies.join(", "),
         context.rivals.join(", "),
     )
+}
+
+/// Serialize the spine, dials, topology, and the dungeon's beats for frozen
+/// reroll context. When `skip_index` is `Some(i)`, beat `i` is marked as the one
+/// being regenerated (its body is omitted) so the model rewrites only that beat
+/// while staying coherent with the others.
+fn dungeon_context_summary(
+    context: &DungeonRerollContext,
+    skip_index: Option<usize>,
+) -> String {
+    let mut lines = vec![
+        format!("location (all beats are rooms/areas inside this one place): {}", context.location),
+        format!("premise (spine): {}", context.premise),
+        format!("tone: {}", context.tone),
+        format!("twist: {}", context.twist),
+        format!("topology: {}", context.topology),
+    ];
+    for (i, beat) in context.beats.iter().enumerate() {
+        let function = DUNGEON_FUNCTIONS.get(i).copied().unwrap_or("Beat");
+        if skip_index == Some(i) {
+            lines.push(format!(
+                "beat {} [{}] (THIS IS THE BEAT TO REGENERATE)",
+                i + 1,
+                function
+            ));
+        } else {
+            lines.push(format!(
+                "beat {} [{}] type={} | idea={} | player_goals={} | lever={} | loot={}",
+                i + 1,
+                function,
+                beat.content_type,
+                beat.idea,
+                beat.player_goals,
+                beat.lever,
+                beat.loot.as_deref().unwrap_or("none"),
+            ));
+        }
+    }
+    lines.join("\n")
 }
 
 fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {

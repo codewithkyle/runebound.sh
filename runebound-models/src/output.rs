@@ -49,6 +49,13 @@ pub enum OutputBlock {
         title: String,
         rows: Vec<EntityCardRow>,
     },
+    /// A bundled illustration. `src` is a logical asset key the frontend maps to
+    /// an imported (hashed) asset URL — not a path — so the backend never needs to
+    /// know where the build placed the file.
+    Image {
+        src: String,
+        alt: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -125,6 +132,13 @@ pub fn spinner(state: SpinnerState, text: impl Into<String>) -> OutputBlock {
     OutputBlock::Spinner {
         state,
         text: text.into(),
+    }
+}
+
+pub fn image(src: impl Into<String>, alt: impl Into<String>) -> OutputBlock {
+    OutputBlock::Image {
+        src: src.into(),
+        alt: alt.into(),
     }
 }
 

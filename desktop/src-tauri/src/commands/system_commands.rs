@@ -9,6 +9,7 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt,
 };
 use crate::commands::ok_response_with_doc;
+use crate::entities::domains::dungeon_domain::beat_index_from_token;
 use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text, prepend_notice};
@@ -16,6 +17,8 @@ use dnd_core::command::render_help_overview;
 use dnd_core::command_manifest::InputContext;
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
+use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
+use runebound_models::{apply_plan_meta_to_beats, plan_meta_from_beats};
 
 
 pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
@@ -97,8 +100,119 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
         Some(EntityKind::Item) => reroll_current_item(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::Event) => reroll_current_event(invocation.state.clone(), reroll_prompt).await,
         Some(EntityKind::God) => reroll_current_god(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Dungeon) => reroll_current_dungeon(invocation.state.clone(), reroll_prompt).await,
         None => command_message_response("no active draft to reroll."),
     }
+}
+
+async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+    use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
+
+    // `reroll <beat>` (e.g. `reroll entrance` or `reroll 1`) regenerates just that
+    // one card, mirroring `dungeon reroll <beat>` — only a bare `reroll` or a
+    // free-text hint re-rolls all five. Split off the leading token and, if it
+    // names a beat, hand the per-beat reroll to the dungeon domain.
+    if let Some(args) = reroll_prompt.as_deref() {
+        let mut parts = args.splitn(2, char::is_whitespace);
+        let field = parts.next().unwrap_or("").trim();
+        let rest = parts
+            .next()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(str::to_string);
+        if beat_index_from_token(field).is_some() {
+            let domain = state
+                .domains()
+                .domain(EntityKind::Dungeon)
+                .expect("dungeon domain not registered");
+            return domain.reroll_field(field, rest, state.inner()).await;
+        }
+    }
+
+    let draft = {
+        let editor = state.editor_session.lock().await;
+        editor.get_dungeon().cloned()
+    };
+    let Some(mut draft) = draft else {
+        return entity_message_response("no active dungeon draft.");
+    };
+
+    // Whole-dungeon regen re-runs the two-pass generator from the stored seed +
+    // the dials, replacing all five beats while keeping tone/twist/topology
+    // authoritative. The room types the user locked in are authoritative too, so we
+    // REUSE the draft's existing beat types rather than rolling a fresh plan — a
+    // whole reroll rewrites the story and prose, never which type fills each beat.
+    let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+
+    let plan = if draft.beats.len() == 5 {
+        let anchors: [String; 5] =
+            std::array::from_fn(|i| draft.beats[i].content_type.trim().to_string());
+        // Honor everything the user locked in: the anchor types AND the overlay +
+        // faction tint recovered from the beats.
+        let (overlay, factions) = plan_meta_from_beats(&draft.beats);
+        DungeonContentPlan {
+            anchors,
+            overlay,
+            factions,
+        }
+    } else {
+        // Defensive: a malformed draft without its five beats falls back to a fresh
+        // roll so the reroll can still rebuild a complete dungeon.
+        roll_dungeon_content_plan(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_nanos() as u64)
+                .unwrap_or(0),
+        )
+    };
+    let SeedGeneration { seed: story, .. } = ai
+        .generate_dungeon_story(
+            &plan,
+            merged_prompt,
+            "",
+            &draft.tone,
+            &draft.twist,
+            &draft.topology,
+            None,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+    let SeedGeneration { seed, notice } = ai
+        .structure_dungeon_story(
+            &plan,
+            &story,
+            &draft.tone,
+            &draft.twist,
+            &draft.topology,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+    draft.slug = slugify(seed.name.trim());
+    draft.name = seed.name.trim().to_string();
+    draft.location = normalize_unknown_text(&seed.location);
+    draft.story = story.story.clone();
+    draft.premise = normalize_unknown_text(&seed.premise);
+    let mut beats = seed.into_beats();
+    // Re-stamp the overlay + faction tint so they persist on the regenerated beats.
+    apply_plan_meta_to_beats(&mut beats, &plan);
+    draft.beats = beats;
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_dungeon(draft.clone());
+    }
+
+    entity_response_with_event(
+        prepend_notice(notice, dungeon_summary_text(&draft)),
+        dungeon_event_from_draft(&draft),
+    )
 }
 
 pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
