@@ -199,31 +199,48 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 3 — De-couple: kill the string/markdown heuristics
+## Phase 3 — De-couple: kill the string/markdown heuristics — **DONE ✅ (2026-06-17)**
 
 *Goal: close the `docs/architecture.md` §9 anti-patterns where behavior is coupled to rendered prose. Make the backend the authority and emit structured nodes.*
 
-- [ ] **P3.1 — Entity text responses must carry `OutputDoc` + `command_ref`** · High · ✅
-  `commands/mod.rs:108` `ok_response` hard-codes `output_doc: None`, so `entity_message_response`/`entity_response_with_event` (`entities/common.rs:183–199`) arrive doc-less. `App.tsx:921` then falls back to `parseOutputEntry` → `output/markdown.ts` (`parseFreeText`, `tryBuildSingleCommandInline`, `parseMarkdownInspiredBlocks`) which **regex-guesses** which words are clickable commands. Direct §9 violation ("never markdown heuristics; parser authority is backend-first"). *(Cards are fine — they ride `entity_card` structurally.)*
-  **Fix:** build backend `OutputDoc`s with explicit `command_ref` nodes for entity summary/help/set/reroll responses (helpers exist: `command_action_response` at `commands/mod.rs:136`, `entity_help_doc`, `runebound_models::output::*`). Once those responses carry docs, **delete** `parseFreeText`/`tryBuildSingleCommandInline`/`parseMarkdownInspiredBlocks` and keep `renderer.tsx`'s `command_ref` rendering as the only clickability mechanism. This is the largest §9 cleanup.
+> **Outcome:** The frontend no longer interprets rendered prose at all — it renders
+> backend `OutputDoc`s, and clickability comes exclusively from backend-authored
+> `command_ref` nodes. Two decisions taken with the user: (1) **thorough /
+> backend-authoritative** — every response carries a doc and the *entire* frontend
+> parser (`output/markdown.ts`, 250 lines) was deleted; (2) the **setup gate stays
+> `ok:false`** (a non-zero exit for scripting) but is built from typed data and
+> styled by the doc's own `Status` tone.
+>
+> Patterns established (each a single source of truth, mirroring the existing
+> `command_availability(name)` idiom rather than touching the 107 manifest
+> literals): `command_argument_kind(name)` (P3.3), the `SetupRequired` typed error
+> (P3.2), and `spinner_hints()` + the serialized `CommandManifest.spinner_hints`
+> (P3.5). Findings: `detectOllamaPrompt` + the `ollamaPrompt` signal were already
+> **dead** (the onboarding *wizard* owns those steps via `awaiting_llm_label`, and
+> the wizard path short-circuits the spinner) → deleted, not converted; the old
+> spinner ladder's `"test ollama"` entry referenced no real command → dropped.
+>
+> Verified: command-specs 22 + dnd-core 92 + desktop 120 tests green; `make lint`
+> (clippy `-D warnings` + `cargo fmt --check`, both targets) exit 0; `tsc --noEmit`
+> + `vite build` clean (frontend bundle shrank); grep gates for parser refs,
+> rendered-English branching, and magic byte-offsets all return nothing. *Remaining
+> manual check (left to the user): launch the app and confirm entity/help/setup/
+> history clickables are real command_refs, the setup gate renders friendly (not
+> error-red), and spinners still appear on create/reroll/save/publish + the Ollama
+> probes and onboarding wizard.*
 
-- [ ] **P3.2 — `output_doc_from_error_text` string-sniffs the setup error** · Medium · ✅
-  `core/src/command.rs:883` does `message.to_lowercase().contains("first-time setup required")` and re-parses `- ` bullets that `execute_status` (`:715`) formatted, to rebuild a structured doc.
-  **Fix:** model "setup required" as typed data (a variant / structured `CommandOutput`) built directly from `required_issues(&config)`; don't reconstruct it from prose.
+- [x] **P3.1 — Entity text responses must carry `OutputDoc` + `command_ref`** · High · ✅ — *done: `ok_response` (desktop) + the core `execute_line` Ok arm auto-wrap a bare message in a paragraph doc; `no_active_draft_doc` (clickable `create <root>`) and `render_history_doc` (clickable history lines) supply explicit command_refs. Deleted `output/markdown.ts` entirely + the clickability-guessing infra (`resolveClickableCommandTarget`/`isValidCommandLike`/`buildCommandMeta`/`commandMeta`); the new `output/entry-doc.ts::buildEntryDoc` is a non-parsing fallback for frontend-origin entries; the banner is now a structured `BANNER_DOC`.*
+  `commands/mod.rs` `ok_response` hard-coded `output_doc: None`; the frontend regex-guessed clickable commands via `parseFreeText`/`tryBuildSingleCommandInline`/`parseMarkdownInspiredBlocks`. The largest §9 cleanup.
 
-- [ ] **P3.3 — `suggestions.rs` hard-codes argument byte-offsets** · High · ✅
-  `services/suggestions.rs:100–165`: an `is_load/delete/show/preview/publish_context` ladder strips args with magic offsets (`trimmed[4..]`, `[6..]`, `[7..]`). Visibility is correctly manifest-driven; *argument shape* regressed to hand-maintained offsets that break silently on rename/add. Also `:457–471` (`npc travel to` literal) and `:588–594` (dungeon beat names duplicated from `DUNGEON_FUNCTIONS`, lowercased).
-  **Fix:** add an `argument_kind` (e.g. `EntitySearch`) to `CommandSpec` and derive the query by stripping the parsed root token, not a literal offset. Derive dungeon beat completions from the shared `DUNGEON_FUNCTIONS` constant.
+- [x] **P3.2 — `output_doc_from_error_text` string-sniffs the setup error** · Medium · ✅ — *done: `execute_status` returns a typed `SetupRequired { issues, global_config_path }` error; `output_doc_from_error(&err)` downcasts it and builds a Warning-toned doc from `issues` directly (with a clickable `start setup`). Deleted `extract_missing_values`. `Display` still says "First-time setup required" for the plain-text `error` field / CLI. Kept `ok:false` by decision.*
 
-- [ ] **P3.4 — Frontend branches on rendered English** · Medium · ✅
-  `App.tsx:1055` `isBootstrapSetupMessage` (`includes("first-time setup required")`), `:1063` `detectOllamaPrompt` (`includes("## Step 2: Ollama server")`).
-  **Fix:** ride a structured signal on the response (mirror the wizard's `WizardView` approach) instead of substring-matching copy.
+- [x] **P3.3 — `suggestions.rs` hard-codes argument byte-offsets** · High · ✅ — *done: added `command_argument_kind(name)` (SSOT, like `command_availability`); the suggestion query is derived by stripping the parsed root token (`trimmed[root.len()..]`) instead of `[4..]`/`[6..]`/`[7..]`; `npc_travel_location_query` strips `"npc travel to ".len()`; dungeon beat completions come from `DUNGEON_FUNCTIONS`.*
 
-- [ ] **P3.5 — `commandSpinnerLabel` re-encodes the command taxonomy** · Medium · ✅
-  `App.tsx:1101–1205`: ~100-line string ladder mirroring backend command structure (incl. hardcoded beat names `:1153`).
-  **Fix:** surface a spinner/latency hint from the manifest or on `CommandResponse` (the wizard path already does this via `awaiting_llm_label`) so the frontend stops re-deriving command knowledge by string-match.
+- [x] **P3.4 — Frontend branches on rendered English** · Medium · ✅ — *done: deleted `isBootstrapSetupMessage` (the error branch styles by the response doc's leading `Status` tone — a Warning lead = soft gate → rendered as output, not red). Deleted `detectOllamaPrompt` + the `ollamaPrompt` signal + branches — a **dead-code finding**: their trigger strings come only from the onboarding wizard, whose Ollama steps declare `awaiting_llm_label`, so the wizard spinner path already owned them.*
 
-**Phase 3 verify:** both test suites green; in-app, confirm every clickable command in entity/help/setup output is a real `command_ref` (not a regex guess), the Ollama/setup prompts still branch correctly, and spinners still appear on LLM steps. Grep the frontend for `includes("`/`startsWith("` on rendered text — should be gone.
+- [x] **P3.5 — `commandSpinnerLabel` re-encodes the command taxonomy** · Medium · ✅ — *done: `spinner_hints()` + `CommandManifest.spinner_hints` carry the taxonomy; `commandSpinnerLabel` (~100 → ~20 lines) keeps the wizard short-circuit, skips `help`, then matches the longest spinner-hint prefix of the user input. The bare-`reroll <beat>` nuance collapses to "rerolling draft" (`dungeon reroll` still → "rerolling beat"); `create dungeon` is wizard-driven and intentionally absent.*
+
+**Phase 3 verify:** both test suites green; `make lint` exit 0; `tsc`/`vite build` clean; grep gates (parser refs, rendered-English branching, magic offsets) all empty. Manual in-app smoke left to the user (clickables, setup gate styling, spinners).
 
 ---
 
@@ -234,6 +251,7 @@ The core architecture is sound. This plan is about **finishing the additive refa
 - [ ] **P4.1 — Replace hand-written TS generation** · High · ✅
   `runebound-models/build.rs` (351 lines of `push_str`) transcribes every struct field by hand, with no test asserting it matches the Rust types. It also writes into a sibling crate's source tree from a build script (non-hermetic — part of why desktop is a separate workspace).
   **Fix:** adopt `ts-rs` or `typeshare` (derive TS from the structs), making the Rust definitions the literal single source. If avoiding a new dep, at minimum add an integration test that serializes a sample of each struct and asserts JSON keys match the emitted TS keys, and anchor the output path on `CARGO_MANIFEST_DIR`. Prefer the derive route.
+  *Phase 3 note:* the `CommandManifest` TS type is **hand-maintained** in `desktop/src/command/parser-client.ts` (not `generated/models.ts`), and Phase 3 added `spinner_hints: SpinnerHint[]` to both the Rust struct and that hand-written TS type. Whatever single-source mechanism P4 adopts should cover the manifest types too (incl. `SpinnerHint`), since the manifest crosses the boundary via `get_command_manifest`.
 
 - [ ] **P4.2 — `slug` required in TS but `#[serde(default)]` in Rust** · High · ✅
   `build.rs:14` (`NpcDraft.slug: string`) and `:86` (`EventDraft.slug: string`) vs `drafts.rs:38`/`:135` (`#[serde(default)] pub slug`). TS contract is stricter than the wire contract.
