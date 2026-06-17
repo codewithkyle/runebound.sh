@@ -1071,12 +1071,13 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
 }
 
 // Pick the spinner label for a submission made inside a wizard, from the
-// structured `WizardView` (no prompt-text matching). `awaiting_llm_label` is the
-// label for the step's primary `continue` action; the story screen's `reroll`
-// re-runs Pass 1 (a new story), which has its own label. Inputs that act locally
-// (the plan screen's `reroll`/`set`) spend no LLM call, so they get no spinner.
+// structured `WizardView` (no prompt-text matching). A step that declares an
+// `awaiting_llm_label` (the dungeon plan/story screens, the onboarding Ollama
+// steps) shows it for any *advancing* submission. Inputs that act locally (a
+// screen's `reroll`/`set`, or `back`/`cancel`/`help`) spend no LLM/probe call,
+// so they get no spinner. The story screen's `reroll` is the one input-dependent
+// case: it re-runs Pass 1 (a new story), with its own label.
 function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null {
-  const isContinue = lowered === "continue" || lowered === "accept";
   const isReroll =
     lowered === "reroll" ||
     lowered === "redo" ||
@@ -1085,10 +1086,16 @@ function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null 
   if (wizard.step_id === "story_review" && isReroll) {
     return "generating story";
   }
-  if (isContinue) {
-    return wizard.awaiting_llm_label ?? null;
+  if (!wizard.awaiting_llm_label) {
+    return null;
   }
-  return null;
+  const isLocalAction =
+    isReroll ||
+    lowered === "back" ||
+    lowered === "cancel" ||
+    lowered === "help" ||
+    lowered.startsWith("set ");
+  return isLocalAction ? null : wizard.awaiting_llm_label;
 }
 
 function commandSpinnerLabel(

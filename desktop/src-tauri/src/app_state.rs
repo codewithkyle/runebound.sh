@@ -492,6 +492,10 @@ pub(crate) struct AppState {
     /// Cached result of the boot LLM health probe, reused to render the MOTD
     /// without re-probing the Ollama server.
     pub(crate) boot_ollama_health: Mutex<Option<dnd_core::health::OllamaHealth>>,
+    /// The Tauri app handle, set once at `setup`. Used by the onboarding wizard's
+    /// native folder picker (`WizardHost::perform_native`). A `std::sync::Mutex`
+    /// (never held across `.await`) so the handle can be set after construction.
+    pub(crate) app_handle: std::sync::Mutex<Option<tauri::AppHandle>>,
 }
 
 impl AppState {

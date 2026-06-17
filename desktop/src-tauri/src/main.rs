@@ -110,6 +110,22 @@ async fn run_command(
         return Ok(response);
     }
 
+    // Onboarding entry commands (start setup / setup vault|llm|model / model) launch
+    // their wizard on *this* host, so the native folder picker is available via
+    // `AppState::perform_native`. Active-onboarding input is consumed by the generic
+    // wizard route above; `setup verbosity`/`setup help` are not entry commands and
+    // fall through to the core handlers.
+    if let Some(id) = dnd_core::onboarding_wizard::onboarding_entry_wizard_id(&normalized_input) {
+        if let Some(response) = crate::wizards::start_wizard(id, state.inner()).await? {
+            let trimmed = normalized_input.trim();
+            if !trimmed.is_empty() {
+                let mut service = state.command_service.lock().await;
+                service.session_mut().push_history(trimmed, 50);
+            }
+            return Ok(response);
+        }
+    }
+
     // Reject `-h`/`--help` uniformly for desktop dispatch and the core fallthrough,
     // mirroring core's own guard (onboarding above forwards to the guarded `execute_line`).
     if let Some(message) = reject_help_flags(&parsed.normalized_tokens) {
@@ -200,6 +216,7 @@ fn main() {
         wizards,
         wizard_session: Mutex::new(crate::wizards::WizardSession::default()),
         boot_ollama_health: Mutex::new(None),
+        app_handle: std::sync::Mutex::new(None),
     };
 
     // Startup cleanup (vault sync / soft-delete reaping) now runs as the
@@ -208,6 +225,14 @@ fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(app_state)
+        .setup(|app| {
+            // Stash the app handle so the onboarding wizard's native folder picker
+            // (AppState::perform_native) can reach the dialog plugin.
+            use tauri::Manager;
+            let state = app.state::<AppState>();
+            *state.app_handle.lock().unwrap() = Some(app.handle().clone());
+            Ok(())
+        })
         .invoke_handler(tauri::generate_handler![
             run_command,
             suggest_command_input,
