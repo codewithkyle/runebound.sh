@@ -302,16 +302,22 @@ async fn handle_step_f_plan(trimmed: &str, state: &AppState) -> CommandResult {
     }
 }
 
-/// `set <room#> <type>`: pin one beat's room type, overriding the roll. Lets the GM
-/// take direct control of a beat the dice didn't land well.
+/// `set room <room> <type>`: pin one beat's room type, overriding the roll. The
+/// room may be given by number (1-5) or by function name (Entrance, Puzzle, …), so
+/// `set room 1 combat` and `set room entrance combat` are equivalent. The `room`
+/// keyword is required.
 async fn set_room_type(state: &AppState, rest: &str) -> CommandResult {
-    let mut args = rest.split_whitespace();
-    let room = args.next().unwrap_or("");
-    let raw_type = args.next().unwrap_or("");
+    let mut tokens = rest.split_whitespace();
+    // Require the explicit `room` keyword: `set room <room> <type>`.
+    if !tokens.next().is_some_and(|t| t.eq_ignore_ascii_case("room")) {
+        return set_room_usage(state).await;
+    }
+    let room = tokens.next().unwrap_or("");
+    // Allow a spelled-out type ("ability check") by joining the remaining tokens.
+    let raw_type = tokens.collect::<Vec<_>>().join("_");
 
-    let index = match room.parse::<usize>() {
-        Ok(n) if (1..=5).contains(&n) => n - 1,
-        _ => return set_room_usage(state).await,
+    let Some(index) = resolve_room_index(room) else {
+        return set_room_usage(state).await;
     };
     let normalized = raw_type.trim().to_ascii_lowercase().replace('-', "_");
     if !SETTABLE_ROOM_TYPES.contains(&normalized.as_str()) {
@@ -329,10 +335,28 @@ async fn set_room_type(state: &AppState, rest: &str) -> CommandResult {
     command_message_response_with_doc(plan_review_text_plain(&plan), plan_review_doc(&plan))
 }
 
+/// Resolve a room argument to a beat index: a 1-5 number, or a function name
+/// (case-insensitive) like "entrance" or "climax".
+fn resolve_room_index(room: &str) -> Option<usize> {
+    if let Ok(n) = room.parse::<usize>() {
+        return if (1..=5).contains(&n) { Some(n - 1) } else { None };
+    }
+    DUNGEON_FUNCTIONS
+        .iter()
+        .position(|name| name.eq_ignore_ascii_case(room))
+}
+
 async fn set_room_usage(state: &AppState) -> CommandResult {
+    let rooms = DUNGEON_FUNCTIONS
+        .iter()
+        .enumerate()
+        .map(|(i, name)| format!("{} {name}", i + 1))
+        .collect::<Vec<_>>()
+        .join(", ");
     let types = SETTABLE_ROOM_TYPES.join(", ");
-    let message =
-        format!("Usage: set <room 1-5> <type>. Types: {types}. (Type `continue`, `reroll`, or `cancel`.)");
+    let message = format!(
+        "Usage: set room <room> <type>. Rooms: {rooms}. Types: {types}. (Or `continue`, `reroll`, `cancel`.)"
+    );
     match current_plan(state).await {
         Some(plan) => command_message_response_with_doc(
             format!("{message}\n\n{}", plan_review_text_plain(&plan)),
@@ -612,7 +636,7 @@ fn plan_room_lines(plan: &DungeonContentPlan) -> Vec<String> {
 
 fn plan_review_text_plain(plan: &DungeonContentPlan) -> String {
     format!(
-        "{PLAN_REVIEW_MARKER}\n\n{}\n\nType `continue` to write the story, `reroll` for a new roll, `set <room 1-5> <type>` to pin one, or `cancel`.",
+        "{PLAN_REVIEW_MARKER}\n\n{}\n\nType `continue` to write the story, `reroll` for a new roll, `set room <room> <type>` to pin one (by number or name), or `cancel`.",
         plan_room_lines(plan).join("\n")
     )
 }
@@ -629,7 +653,7 @@ fn plan_review_doc(plan: &DungeonContentPlan) -> OutputDoc {
         ))
         .with_block(list(items))
         .with_block(paragraph_text(
-            "Type `continue` to write the story, `reroll` for a new roll, `set <room 1-5> <type>` to pin one, or `cancel` to stop.",
+            "Type `continue` to write the story, `reroll` for a new roll, `set room <room> <type>` to pin one (by number or name), or `cancel` to stop.",
         ))
 }
 
@@ -663,4 +687,27 @@ fn menu_doc(title: &str, intro: &str, options: &[&str]) -> OutputDoc {
         .with_block(heading(2, title.to_string()))
         .with_block(paragraph_text(intro.to_string()))
         .with_block(paragraph_text(options.join("\n")))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resolve_room_index_accepts_numbers_and_names() {
+        // Numbers are 1-based; names match DUNGEON_FUNCTIONS case-insensitively.
+        assert_eq!(resolve_room_index("1"), Some(0));
+        assert_eq!(resolve_room_index("5"), Some(4));
+        assert_eq!(resolve_room_index("entrance"), Some(0));
+        assert_eq!(resolve_room_index("Climax"), Some(3));
+        assert_eq!(resolve_room_index("RESOLUTION"), Some(4));
+    }
+
+    #[test]
+    fn resolve_room_index_rejects_out_of_range_and_unknown() {
+        assert_eq!(resolve_room_index("0"), None);
+        assert_eq!(resolve_room_index("6"), None);
+        assert_eq!(resolve_room_index(""), None);
+        assert_eq!(resolve_room_index("dungeon"), None);
+    }
 }
