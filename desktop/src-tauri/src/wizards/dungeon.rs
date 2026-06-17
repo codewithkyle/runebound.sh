@@ -22,7 +22,6 @@ use runebound_models::utils::{DUNGEON_FUNCTIONS, DUNGEON_TOPOLOGIES, make_entity
 
 use crate::app_state::{AppState, DungeonDraftSession};
 use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
-use crate::entities::EntityKind;
 use crate::entities::common::{
     CommandResult, command_message_response_with_doc, command_response_with_event,
 };
@@ -587,12 +586,6 @@ impl Wizard<AppState> for DungeonWizard {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_dungeon(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            editor.clear_kind(EntityKind::Faction);
-            editor.clear_kind(EntityKind::Item);
-            editor.clear_kind(EntityKind::Event);
-            editor.clear_kind(EntityKind::God);
         }
 
         command_response_with_event(

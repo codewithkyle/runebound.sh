@@ -292,7 +292,6 @@ async fn reroll_current_npc(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_npc(draft.clone());
-        editor.clear_kind(EntityKind::Location);
     }
 
     entity_response_with_event(
@@ -342,7 +341,6 @@ async fn reroll_current_location(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_location(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
     }
 
     entity_response_with_event(
@@ -397,8 +395,6 @@ async fn reroll_current_faction(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_faction(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
     }
 
     entity_response_with_event(
@@ -452,8 +448,6 @@ async fn reroll_current_god(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_god(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
     }
 
     entity_response_with_event(

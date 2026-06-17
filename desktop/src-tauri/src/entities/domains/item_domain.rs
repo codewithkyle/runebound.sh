@@ -77,9 +77,7 @@ impl EntityDomain for ItemDomain {
                 .ok_or_else(|| no_active_draft_message(EntityKind::Item))?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Item);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(item_summary_text(&updated), item_event_from_draft(&updated))
@@ -126,9 +124,7 @@ impl EntityDomain for ItemDomain {
                 _ => {}
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Item);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(item_summary_text(&updated), item_event_from_draft(&updated))

@@ -128,7 +128,6 @@ async fn npc_travel(trimmed: &str, state: tauri::State<'_, AppState>) -> Command
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_npc(draft.clone());
-        editor.clear_kind(EntityKind::Location);
     }
 
     command_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))

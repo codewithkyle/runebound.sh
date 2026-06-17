@@ -75,11 +75,7 @@ impl EntityDomain for GodDomain {
                 .ok_or_else(|| "no active god draft. run create god or load <name>.".to_string())?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::God);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(god_summary_text(&updated), god_event_from_draft(&updated))
@@ -146,11 +142,7 @@ impl EntityDomain for GodDomain {
                 draft.rank_custom = None;
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::God);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(god_summary_text(&updated), god_event_from_draft(&updated))
@@ -291,8 +283,6 @@ impl EntityDomain for GodDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_god(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
         }
 
         entity_response_with_event(god_summary_text(&draft), god_event_from_draft(&draft))

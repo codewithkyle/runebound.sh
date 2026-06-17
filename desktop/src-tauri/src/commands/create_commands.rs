@@ -5,7 +5,6 @@ use crate::commands::{
     item_event_from_draft, item_summary_text, location_event_from_draft, location_summary_text,
     npc_event_from_draft, npc_summary_text,
 };
-use crate::entities::EntityKind;
 use crate::entities::common::{
     CommandResult, command_message_response, command_response_with_event,
 };
@@ -138,7 +137,6 @@ async fn create_npc(trimmed: &str, state: tauri::State<'_, AppState>) -> Command
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_npc(draft.clone());
-        editor.clear_kind(EntityKind::Location);
     }
 
     command_response_with_event(
@@ -195,7 +193,6 @@ async fn create_location(trimmed: &str, state: tauri::State<'_, AppState>) -> Co
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_location(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
     }
 
     command_response_with_event(
@@ -259,8 +256,6 @@ async fn create_faction(trimmed: &str, state: tauri::State<'_, AppState>) -> Com
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_faction(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
     }
 
     command_response_with_event(
@@ -319,9 +314,6 @@ async fn create_item(trimmed: &str, state: tauri::State<'_, AppState>) -> Comman
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_item(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
-        editor.clear_kind(EntityKind::Faction);
     }
 
     command_response_with_event(
@@ -371,10 +363,6 @@ async fn create_event(trimmed: &str, state: tauri::State<'_, AppState>) -> Comma
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_event(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
-        editor.clear_kind(EntityKind::Faction);
-        editor.clear_kind(EntityKind::Item);
     }
 
     command_response_with_event(
@@ -436,11 +424,6 @@ async fn create_god(trimmed: &str, state: tauri::State<'_, AppState>) -> Command
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_god(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
-        editor.clear_kind(EntityKind::Faction);
-        editor.clear_kind(EntityKind::Item);
-        editor.clear_kind(EntityKind::Event);
     }
 
     command_response_with_event(

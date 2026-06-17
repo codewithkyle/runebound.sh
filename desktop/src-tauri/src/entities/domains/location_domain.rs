@@ -78,10 +78,7 @@ impl EntityDomain for LocationDomain {
             })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Location);
-            editor.clear_kind(EntityKind::Npc);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -149,10 +146,7 @@ impl EntityDomain for LocationDomain {
                 draft.kind_custom = None;
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Location);
-            editor.clear_kind(EntityKind::Npc);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -272,7 +266,6 @@ impl EntityDomain for LocationDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_location(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
         }
 
         entity_response_with_event(

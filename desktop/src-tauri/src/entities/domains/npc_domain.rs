@@ -75,10 +75,7 @@ impl EntityDomain for NpcDomain {
                 .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(npc_summary_text(&updated), npc_event_from_draft(&updated))
@@ -122,10 +119,7 @@ impl EntityDomain for NpcDomain {
                 _ => {}
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(npc_summary_text(&updated), npc_event_from_draft(&updated))
@@ -242,7 +236,6 @@ impl EntityDomain for NpcDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_npc(draft.clone());
-            editor.clear_kind(EntityKind::Location);
         }
 
         entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))

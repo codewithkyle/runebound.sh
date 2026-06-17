@@ -243,7 +243,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_npc(draft.clone());
-                editor.clear_kind(EntityKind::Location);
             }
             (
                 build_entity_card_text(&entity),
@@ -291,7 +290,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_location(draft.clone());
-                editor.clear_kind(EntityKind::Npc);
             }
             (
                 build_entity_card_text(&entity),
@@ -370,8 +368,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_faction(draft.clone());
-                editor.clear_kind(EntityKind::Npc);
-                editor.clear_kind(EntityKind::Location);
             }
             (
                 build_entity_card_text(&entity),
@@ -429,9 +425,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_item(draft.clone());
-                editor.clear_kind(EntityKind::Npc);
-                editor.clear_kind(EntityKind::Location);
-                editor.clear_kind(EntityKind::Faction);
             }
             (
                 build_entity_card_text(&entity),
@@ -449,10 +442,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_event(draft.clone());
-                editor.clear_kind(EntityKind::Npc);
-                editor.clear_kind(EntityKind::Location);
-                editor.clear_kind(EntityKind::Faction);
-                editor.clear_kind(EntityKind::Item);
             }
             (
                 build_entity_card_text(&entity),
@@ -513,11 +502,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_god(draft.clone());
-                editor.clear_kind(EntityKind::Npc);
-                editor.clear_kind(EntityKind::Location);
-                editor.clear_kind(EntityKind::Faction);
-                editor.clear_kind(EntityKind::Item);
-                editor.clear_kind(EntityKind::Event);
             }
             (
                 build_entity_card_text(&entity),
@@ -551,12 +535,6 @@ pub(crate) async fn build_load_response(
             {
                 let mut editor = state.editor_session.lock().await;
                 editor.set_dungeon(draft.clone());
-                editor.clear_kind(EntityKind::Npc);
-                editor.clear_kind(EntityKind::Location);
-                editor.clear_kind(EntityKind::Faction);
-                editor.clear_kind(EntityKind::Item);
-                editor.clear_kind(EntityKind::Event);
-                editor.clear_kind(EntityKind::God);
             }
             (
                 build_entity_card_text(&entity),

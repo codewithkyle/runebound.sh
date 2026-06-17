@@ -122,9 +122,7 @@ impl EntityDomain for DungeonDomain {
             })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Dungeon);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -181,9 +179,7 @@ impl EntityDomain for DungeonDomain {
                     "design_note" => beat.design_note = beat_value.to_string(),
                     _ => {}
                 }
-                let snapshot = draft.clone();
-                editor.activate(EntityKind::Dungeon);
-                snapshot
+                draft.clone()
             };
 
             return entity_response_with_event(
@@ -224,9 +220,7 @@ impl EntityDomain for DungeonDomain {
                 _ => {}
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Dungeon);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(

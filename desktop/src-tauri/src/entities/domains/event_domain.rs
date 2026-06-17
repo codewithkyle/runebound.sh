@@ -70,9 +70,7 @@ impl EntityDomain for EventDomain {
                 .ok_or_else(|| no_active_draft_message(EntityKind::Event))?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Event);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(

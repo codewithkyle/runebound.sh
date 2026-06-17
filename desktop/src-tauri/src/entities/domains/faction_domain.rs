@@ -78,11 +78,7 @@ impl EntityDomain for FactionDomain {
             })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Faction);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -161,11 +157,7 @@ impl EntityDomain for FactionDomain {
                 draft.kind_custom = None;
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Faction);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -327,8 +319,6 @@ impl EntityDomain for FactionDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_faction(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
         }
 
         entity_response_with_event(
