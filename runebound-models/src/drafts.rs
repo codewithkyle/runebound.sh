@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::dungeon_plan::{DungeonContentPlan, PlannedOverlay};
 
@@ -31,12 +32,15 @@ pub fn plan_meta_from_beats(beats: &[DungeonBeat]) -> (Option<PlannedOverlay>, b
     (overlay, factions)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct NpcDraft {
     pub id: String,
     #[serde(default)]
     pub seed_prompt: Option<String>,
     pub name: String,
+    // `#[serde(default)]` only tolerates pre-slug TOML on *read*; a `String` is
+    // always serialized, so a draft crossing to the frontend always carries a
+    // slug. The generated TS therefore keeps `slug` required (not optional).
     #[serde(default)]
     pub slug: String,
     pub race: String,
@@ -53,7 +57,7 @@ pub struct NpcDraft {
     pub location: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LocationDraft {
     pub id: String,
     #[serde(default)]
@@ -74,7 +78,7 @@ pub struct LocationDraft {
     pub current_tension: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct FactionDraft {
     pub id: String,
     #[serde(default)]
@@ -105,7 +109,7 @@ pub struct FactionDraft {
     pub symbol_description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ItemDraft {
     pub id: String,
     #[serde(default)]
@@ -126,18 +130,19 @@ pub struct ItemDraft {
     pub location: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct EventDraft {
     pub id: String,
     #[serde(default)]
     pub seed_prompt: Option<String>,
     pub name: String,
+    // See `NpcDraft::slug`: lenient on read, always present on the wire.
     #[serde(default)]
     pub slug: String,
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GodDraft {
     pub id: String,
     #[serde(default)]
@@ -164,7 +169,7 @@ pub struct GodDraft {
     pub rivals: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DungeonBeat {
     pub function: String, // fixed skeleton: Entrance|Puzzle|Setback|Climax|Resolution
     pub content_type: String, // one of DUNGEON_CONTENT_TYPES (the 11)
@@ -186,7 +191,7 @@ pub struct DungeonBeat {
     pub factions: bool, // dungeon-wide faction tint
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DungeonDraft {
     pub id: String,
     #[serde(default)]
