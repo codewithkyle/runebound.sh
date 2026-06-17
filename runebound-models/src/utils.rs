@@ -151,18 +151,20 @@ pub const DUNGEON_TONES: [&str; 2] = ["tragedy", "comedy"];
 
 pub const DUNGEON_TWISTS: [&str; 3] = ["false_victory", "false_defeat", "neither"];
 
-// "none" is a first-class choice = no topology imposed (feature-dungeons.md §6, step E)
+// "none" is a first-class choice = no topology imposed (feature-dungeons.md §6, step E).
+// Order 1..=9 mirrors the topology illustration (topology.png) left-to-right,
+// top row then bottom row, so the menu numbering matches the picture.
 pub const DUNGEON_TOPOLOGIES: [&str; 10] = [
     "none",
     "The Railroad",
-    "The Moose",
+    "The Fauchard Fork",
+    "The Paw",
+    "Foglio's Snail",
+    "The Evil Mule",
     "The V for Vendetta",
     "The Arrow",
-    "The Fauchard Fork",
-    "The Evil Mule",
-    "Foglio's Snail",
-    "The Paw",
     "The Cross",
+    "The Moose",
 ];
 
 pub fn normalize_dungeon_content_type(value: &str) -> Result<String, String> {

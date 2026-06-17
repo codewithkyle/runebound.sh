@@ -21,10 +21,10 @@ use crate::utils::{normalize_unknown_text, prepend_notice};
 
 /// Marker line in the Step E (topology) prompt. Also the logical key the frontend
 /// renderer maps to the bundled topology illustration.
-pub const STEP_E_MARKER: &str = "Step 5 of 5 — Topology";
+pub const STEP_E_MARKER: &str = "Step 5 of 6 — Topology";
 /// Marker in the Room Plan review prompt. The frontend spinner heuristic keys off
 /// this so `continue` here shows a "generating story" spinner.
-pub const PLAN_REVIEW_MARKER: &str = "Create Dungeon — Room Plan";
+pub const PLAN_REVIEW_MARKER: &str = "Create Dungeon — Step 6 of 6 — Room Plan";
 /// Marker in the Story review prompt. `continue` here shows "generating dungeon"
 /// (Pass 2 / cards); `reroll` shows "generating story" (Pass 1 again).
 pub const STORY_REVIEW_MARKER: &str = "Create Dungeon — Story";
@@ -108,14 +108,14 @@ pub async fn reset_dungeon_flow(state: &AppState) {
 
 fn step_a_doc() -> OutputDoc {
     doc()
-        .with_block(heading(2, "Create Dungeon — Step 1 of 5 — Premise"))
+        .with_block(heading(2, "Create Dungeon — Step 1 of 6 — Premise"))
         .with_block(paragraph_text(
             "Enter a one-line premise, or type `generate` to have the oracle invent one.",
         ))
 }
 
 fn step_a_text_plain() -> String {
-    "Step 1 of 5 — Premise: enter a one-line premise, or type `generate`.".to_string()
+    "Step 1 of 6 — Premise: enter a one-line premise, or type `generate`.".to_string()
 }
 
 async fn handle_step_a(trimmed: &str, state: &AppState) -> CommandResult {
@@ -140,14 +140,14 @@ async fn handle_step_a(trimmed: &str, state: &AppState) -> CommandResult {
 
 fn step_b_doc() -> OutputDoc {
     menu_doc(
-        "Create Dungeon — Step 2 of 5 — Tone",
+        "Create Dungeon — Step 2 of 6 — Tone",
         "Choose the overall emotional polarity:",
         &["1: Tragedy", "2: Comedy"],
     )
 }
 
 fn step_b_text_plain() -> String {
-    "Step 2 of 5 — Tone: 1: Tragedy   2: Comedy".to_string()
+    "Step 2 of 6 — Tone: 1: Tragedy   2: Comedy".to_string()
 }
 
 async fn handle_step_b(trimmed: &str, state: &AppState) -> CommandResult {
@@ -171,14 +171,14 @@ async fn handle_step_b(trimmed: &str, state: &AppState) -> CommandResult {
 
 fn step_c_doc() -> OutputDoc {
     menu_doc(
-        "Create Dungeon — Step 3 of 5 — Twist",
+        "Create Dungeon — Step 3 of 6 — Twist",
         "Choose the shape of the middle beats:",
         &["1: False victory", "2: False defeat", "3: Neither"],
     )
 }
 
 fn step_c_text_plain() -> String {
-    "Step 3 of 5 — Twist: 1: False victory   2: False defeat   3: Neither".to_string()
+    "Step 3 of 6 — Twist: 1: False victory   2: False defeat   3: Neither".to_string()
 }
 
 async fn handle_step_c(trimmed: &str, state: &AppState) -> CommandResult {
@@ -203,14 +203,14 @@ async fn handle_step_c(trimmed: &str, state: &AppState) -> CommandResult {
 
 fn step_d_doc() -> OutputDoc {
     doc()
-        .with_block(heading(2, "Create Dungeon — Step 4 of 5 — Context"))
+        .with_block(heading(2, "Create Dungeon — Step 4 of 6 — Context"))
         .with_block(paragraph_text(
             "Add references/constraints to seed the oracle (or type `skip`). You may include @references to vault documents.",
         ))
 }
 
 fn step_d_text_plain() -> String {
-    "Step 4 of 5 — Context: add references/constraints, or `skip`.".to_string()
+    "Step 4 of 6 — Context: add references/constraints, or `skip`.".to_string()
 }
 
 async fn handle_step_d(trimmed: &str, state: &AppState) -> CommandResult {
@@ -236,10 +236,6 @@ fn step_e_doc() -> OutputDoc {
     for (i, name) in DUNGEON_TOPOLOGIES.iter().enumerate().skip(1) {
         options.push(format!("{i}: {name}"));
     }
-    let items: Vec<Vec<_>> = options
-        .iter()
-        .map(|option| vec![text_node(option.clone())])
-        .collect();
     // Heading, then the topology illustration, then the prompt + options — the
     // image sits "below the Step 5 header but above where we ask the user to pick".
     doc()
@@ -249,11 +245,11 @@ fn step_e_doc() -> OutputDoc {
             "The nine dungeon topologies — each named form with its entrance (E) marked",
         ))
         .with_block(paragraph_text("Pick one of the nine forms, or 0 for none:"))
-        .with_block(list(items))
+        .with_block(paragraph_text(options.join("\n")))
 }
 
 fn step_e_text_plain() -> String {
-    format!("{STEP_E_MARKER}: 0: None  1: The Railroad … 9: The Cross")
+    format!("{STEP_E_MARKER}: 0: None  1: The Railroad … 9: The Moose")
 }
 
 async fn handle_step_e(trimmed: &str, state: &AppState) -> CommandResult {
@@ -660,12 +656,11 @@ fn build_seed_prompt(premise: Option<&str>, context: &str) -> Option<String> {
 }
 
 fn menu_doc(title: &str, intro: &str, options: &[&str]) -> OutputDoc {
-    let items: Vec<Vec<_>> = options
-        .iter()
-        .map(|option| vec![text_node(option.to_string())])
-        .collect();
+    // Options go in a single newline-joined paragraph (rendered pre-wrap), not a
+    // `list` block — so they read as "1: Tragedy", matching the setup-wizard menus
+    // rather than getting a leading "- " bullet.
     doc()
         .with_block(heading(2, title.to_string()))
         .with_block(paragraph_text(intro.to_string()))
-        .with_block(list(items))
+        .with_block(paragraph_text(options.join("\n")))
 }

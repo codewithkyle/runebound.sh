@@ -1074,7 +1074,7 @@ function detectOllamaPrompt(text: string): "menu" | "url" | null {
 type DungeonFlowScreen = "plan" | "story" | null;
 
 function detectDungeonFlowScreen(text: string): DungeonFlowScreen {
-  if (text.includes("Create Dungeon — Room Plan")) {
+  if (text.includes("Step 6 of 6 — Room Plan")) {
     return "plan";
   }
   if (text.includes("Create Dungeon — Story")) {
