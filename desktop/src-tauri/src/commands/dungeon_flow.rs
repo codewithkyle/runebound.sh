@@ -7,6 +7,7 @@ use dnd_core::npc::slugify;
 use runebound_models::output::{
     OutputDoc, doc, heading, list, paragraph_text, text_node,
 };
+use runebound_models::dungeon_plan::roll_dungeon_content_plan;
 use runebound_models::utils::{DUNGEON_TONES, DUNGEON_TOPOLOGIES, DUNGEON_TWISTS, make_entity_id};
 
 use crate::app_state::{AppState, DungeonCreationFlow, DungeonDraftSession};
@@ -15,7 +16,7 @@ use crate::entities::EntityKind;
 use crate::entities::common::{
     command_message_response_with_doc, command_response_with_event, CommandResult,
 };
-use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
+use crate::services::ai_generation::{AiGenerationService, DungeonStory, SeedGeneration};
 use crate::utils::{normalize_unknown_text, prepend_notice};
 
 /// Marker line in the Step E prompt. The frontend spinner heuristic
@@ -63,6 +64,7 @@ pub async fn try_execute_dungeon_flow(line: &str, state: &AppState) -> CommandRe
         3 => handle_step_c(trimmed, state).await,
         4 => handle_step_d(trimmed, state).await,
         5 => handle_step_e(trimmed, state).await,
+        6 => handle_step_f(trimmed, state).await,
         _ => {
             // Defensive: an unknown step shouldn't happen, but never trap the user.
             reset_dungeon_flow(state).await;
@@ -232,7 +234,7 @@ async fn handle_step_e(trimmed: &str, state: &AppState) -> CommandResult {
     };
     let topology = DUNGEON_TOPOLOGIES[index].to_string();
 
-    // Snapshot the collected answers, then generate.
+    // Snapshot the collected answers, store topology, then roll + write the story.
     let (premise, context, tone, twist) = {
         let mut flow = state.dungeon_flow.lock().await;
         flow.topology = Some(topology.clone());
@@ -244,13 +246,146 @@ async fn handle_step_e(trimmed: &str, state: &AppState) -> CommandResult {
         )
     };
 
+    generate_and_review_story(state, premise, &context, &tone, &twist, &topology, None).await
+}
+
+/// Roll a fresh content plan, run Pass 1, stash it on the flow, and show the story
+/// for review (the `continue` / `reroll` screen). Shared by Step E and `reroll`.
+async fn generate_and_review_story(
+    state: &AppState,
+    premise: Option<String>,
+    context: &str,
+    tone: &str,
+    twist: &str,
+    topology: &str,
+    extra_prompt: Option<&str>,
+) -> CommandResult {
+    let plan = roll_dungeon_content_plan(plan_seed());
+
+    let ai = AiGenerationService;
+    let database = state.database();
+    let generation_repo = state.generation_repo();
+    let SeedGeneration {
+        seed: story,
+        notice,
+    } = ai
+        .generate_dungeon_story(
+            &plan,
+            premise,
+            context,
+            tone,
+            twist,
+            topology,
+            extra_prompt,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+
+    {
+        let mut flow = state.dungeon_flow.lock().await;
+        flow.plan = Some(plan);
+        flow.story_name = Some(story.name.clone());
+        flow.story_location = Some(story.location.clone());
+        flow.story_text = Some(story.story.clone());
+        flow.step = 6;
+    }
+
+    command_message_response_with_doc(
+        prepend_notice(notice.clone(), review_text_plain(&story)),
+        review_doc(&story, &notice),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Step F — Story review (continue / reroll)
+// ---------------------------------------------------------------------------
+
+async fn handle_step_f(trimmed: &str, state: &AppState) -> CommandResult {
+    let mut parts = trimmed.splitn(2, char::is_whitespace);
+    let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
+    let rest = parts.next().unwrap_or("").trim();
+
+    match cmd.as_str() {
+        "continue" | "accept" => finalize_dungeon(state).await,
+        "reroll" | "redo" => {
+            reroll_story(state, (!rest.is_empty()).then_some(rest)).await
+        }
+        _ => match current_review_story(state).await {
+            Some(story) => command_message_response_with_doc(
+                review_text_plain(&story),
+                review_doc(&story, &None),
+            ),
+            None => {
+                reset_dungeon_flow(state).await;
+                command_message_response_with_doc(
+                    "dungeon flow reset.",
+                    doc().with_block(paragraph_text(
+                        "Dungeon flow reset; run create dungeon again.",
+                    )),
+                )
+            }
+        },
+    }
+}
+
+/// `reroll [hint]` at the review screen: roll a brand-new plan and story (variety
+/// across rerolls comes from re-rolling which type fills which beat), optionally
+/// steered by the GM's hint.
+async fn reroll_story(state: &AppState, extra: Option<&str>) -> CommandResult {
+    let (premise, context, tone, twist, topology) = {
+        let flow = state.dungeon_flow.lock().await;
+        (
+            flow.premise.clone(),
+            flow.context.clone(),
+            flow.tone.clone().unwrap_or_else(|| "tragedy".to_string()),
+            flow.twist.clone().unwrap_or_else(|| "neither".to_string()),
+            flow.topology.clone().unwrap_or_else(|| "none".to_string()),
+        )
+    };
+    generate_and_review_story(state, premise, &context, &tone, &twist, &topology, extra).await
+}
+
+/// `continue` at the review screen: structure the locked story (Pass 2), assemble
+/// the seed, and open the editable draft — the same hand-off Step E used to do.
+async fn finalize_dungeon(state: &AppState) -> CommandResult {
+    let (plan, story, premise, context, tone, twist, topology) = {
+        let flow = state.dungeon_flow.lock().await;
+        let story = match (flow.story_name.clone(), flow.story_text.clone()) {
+            (Some(name), Some(text)) => Some(DungeonStory {
+                name,
+                location: flow.story_location.clone().unwrap_or_default(),
+                story: text,
+            }),
+            _ => None,
+        };
+        (
+            flow.plan.clone(),
+            story,
+            flow.premise.clone(),
+            flow.context.clone(),
+            flow.tone.clone().unwrap_or_else(|| "tragedy".to_string()),
+            flow.twist.clone().unwrap_or_else(|| "neither".to_string()),
+            flow.topology.clone().unwrap_or_else(|| "none".to_string()),
+        )
+    };
+
+    let (Some(plan), Some(story)) = (plan, story) else {
+        reset_dungeon_flow(state).await;
+        return command_message_response_with_doc(
+            "dungeon flow reset.",
+            doc().with_block(paragraph_text("Dungeon flow reset; run create dungeon again.")),
+        );
+    };
+
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_dungeon_seed(
-            premise.clone(),
-            &context,
+        .structure_dungeon_story(
+            &plan,
+            &story,
             &tone,
             &twist,
             &topology,
@@ -293,6 +428,43 @@ async fn handle_step_e(trimmed: &str, state: &AppState) -> CommandResult {
         prepend_notice(notice, dungeon_summary_text(&draft)),
         dungeon_event_from_draft(&draft),
     )
+}
+
+async fn current_review_story(state: &AppState) -> Option<DungeonStory> {
+    let flow = state.dungeon_flow.lock().await;
+    Some(DungeonStory {
+        name: flow.story_name.clone()?,
+        location: flow.story_location.clone().unwrap_or_default(),
+        story: flow.story_text.clone()?,
+    })
+}
+
+fn review_text_plain(story: &DungeonStory) -> String {
+    format!(
+        "{} — {}\n\n{}\n\nType `continue` to build the cards, `reroll [hint]` for a new story, or `cancel`.",
+        story.name, story.location, story.story
+    )
+}
+
+fn review_doc(story: &DungeonStory, notice: &Option<String>) -> OutputDoc {
+    let mut out = doc();
+    if let Some(note) = notice {
+        out = out.with_block(paragraph_text(note.clone()));
+    }
+    out.with_block(heading(2, format!("{} — {}", story.name, story.location)))
+        .with_block(paragraph_text(story.story.clone()))
+        .with_block(paragraph_text(
+            "Type `continue` to build the five cards, `reroll [hint]` for a new story, or `cancel` to stop.",
+        ))
+}
+
+/// Wall-clock seed for the content-plan roll, mirroring how ollama retry seeds are
+/// derived (the plan PRNG is otherwise deterministic for testing).
+fn plan_seed() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_nanos() as u64)
+        .unwrap_or(0)
 }
 
 fn build_seed_prompt(premise: Option<&str>, context: &str) -> Option<String> {

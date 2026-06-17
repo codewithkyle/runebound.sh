@@ -15,9 +15,10 @@ use dnd_core::config::AppConfig;
 use dnd_core::entity_store::EntityStore;
 use dnd_core::vault::Vault;
 use runebound_models::DungeonBeat;
+use runebound_models::dungeon_plan::DungeonContentPlan;
 use runebound_models::utils::{
-    DUNGEON_CONTENT_TYPES, DUNGEON_FUNCTIONS, FACTION_KIND_TYPES, GOD_ALIGNMENTS, GOD_RANKS,
-    ITEM_CATEGORIES, ITEM_RARITIES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
+    DUNGEON_FUNCTIONS, FACTION_KIND_TYPES, GOD_ALIGNMENTS, GOD_RANKS, ITEM_CATEGORIES,
+    ITEM_RARITIES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -711,22 +712,24 @@ impl AiGenerationService {
         Err("failed to generate valid structured event output from ollama".to_string())
     }
 
-    /// Generate a whole 5-beat dungeon oracle in one call. tone/twist/topology are
-    /// authoritative from the creation flow and passed as prompt constraints (not
-    /// part of the output schema); `function` is assigned by us after parse so the
-    /// fixed Entrance→Resolution skeleton holds regardless of model behavior.
+    /// Pass 1 of dungeon generation: write the short story the GM reviews. The
+    /// rolled content `plan` is fed in as plain-language story ingredients (never
+    /// jargon), and the single-location anchor lives here because the story is
+    /// where sprawl happens. `extra_prompt` carries the GM's optional reroll steer.
     #[allow(clippy::too_many_arguments)]
-    pub async fn generate_dungeon_seed(
+    pub async fn generate_dungeon_story(
         &self,
+        plan: &DungeonContentPlan,
         premise: Option<String>,
         context: &str,
         tone: &str,
         twist: &str,
         topology: &str,
+        extra_prompt: Option<&str>,
         workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
-    ) -> Result<SeedGeneration<DungeonSeed>, String> {
+    ) -> Result<SeedGeneration<DungeonStory>, String> {
         let (config, model) = load_generation_config(workspace_root)?;
 
         let premise = premise
@@ -734,17 +737,18 @@ impl AiGenerationService {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty());
         let context = context.trim();
+        let extra = extra_prompt
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty());
 
-        // The reference prompt scans premise + context for @references.
         let reference_probe = format!("{} {}", premise.unwrap_or(""), context);
         let reference_context =
             build_reference_context(&config, reference_probe.trim(), workspace_root);
 
         let recent_payloads = generation_repo
-            .recent_prompts(database, "dungeon_seed", 20)
+            .recent_prompts(database, "dungeon_story", 12)
             .await?;
-        let recent_seeds = parse_recent_dungeon_seeds(recent_payloads);
-        let recent_context = describe_recent_dungeon_seeds(&recent_seeds);
+        let recent_context = describe_recent_dungeon_stories(recent_payloads);
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
             + estimate_tokens(&reference_context.system_context)
@@ -752,74 +756,68 @@ impl AiGenerationService {
             + estimate_tokens(&reference_probe);
         let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
 
-        let beat_schema = serde_json::json!({
-            "type": "object",
-            "required": ["content_type", "idea", "lever", "read_aloud"],
-            "additionalProperties": false,
-            "properties": {
-                "content_type": { "type": "string", "enum": DUNGEON_CONTENT_TYPES },
-                "idea": { "type": "string", "minLength": 1 },
-                "lever": { "type": "string", "minLength": 1 },
-                "loot": { "type": ["string", "null"] },
-                "read_aloud": { "type": "string", "minLength": 1 }
-            }
-        });
         let schema = serde_json::json!({
             "type": "object",
-            "required": ["name", "location", "premise", "beats"],
+            "required": ["name", "location", "story"],
             "additionalProperties": false,
             "properties": {
                 "name": { "type": "string", "minLength": 1 },
                 "location": { "type": "string", "minLength": 1 },
-                "premise": { "type": "string", "minLength": 1 },
-                "beats": {
-                    "type": "array",
-                    "minItems": 5,
-                    "maxItems": 5,
-                    "items": beat_schema
-                }
+                "story": { "type": "string", "minLength": 1 }
             }
         });
 
         let premise_directive = match premise {
-            Some(value) => format!(
-                "The GM supplied this premise; treat it as authoritative and express it through the five beats: \"{}\".",
-                value
-            ),
-            None => "No premise was supplied; invent a small, self-contained dungeon that fills space without depending on outside content.".to_string(),
+            Some(value) => format!("Build the story to honor this premise: \"{value}\"."),
+            None => "Invent a small, self-contained story that needs nothing outside this one place.".to_string(),
         };
-        let topology_directive = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
-            "Topology: none — the GM will draw the floorplan; still keep all five beats inside the one location, connected as a single explorable space.".to_string()
-        } else {
-            format!(
-                "Topology: {topology} — this is how the rooms WITHIN the one location connect; let it inform the beats, especially the Setback (a middle-entrance or looping form means a Setback that dumps players back toward the Entrance)."
-            )
-        };
-        let linkage_directive = if context.is_empty() {
+        let context_directive = if context.is_empty() {
             String::new()
         } else {
-            format!(
-                "\n\nGM context (references/constraints): {context}. If this points the dungeon at outside content, concentrate those hooks in the Resolution and the connective content types (map/foreshadowing/oddity); keep the body self-contained and runnable."
-            )
+            format!("Weave in these GM-supplied details where natural: {context}.")
+        };
+        let faction_directive = if plan.factions {
+            "Rival factions contest this place; thread their conflict through the story, and make the peak a confrontation between forces rather than a lone monster. ".to_string()
+        } else {
+            String::new()
+        };
+        let overlay_directive = match &plan.overlay {
+            Some(overlay) => format!(
+                "In movement {}, also plant {}, lightly — a layer on the scene, not its center. ",
+                overlay.beat_index + 1,
+                overlay_phrase(&overlay.overlay_type)
+            ),
+            None => String::new(),
+        };
+        let topology_directive = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
+            String::new()
+        } else {
+            format!("The place is laid out as \"{topology}\"; let that shape how the party moves deeper. ")
+        };
+        let steer_directive = match extra {
+            Some(value) => format!("The GM asked for this in the retold version: {value}. "),
+            None => String::new(),
         };
 
+        let elements = pass1_elements_block(plan);
+
         let system_prompt = format!(
-            "You are a 5-room-dungeon ORACLE for a D&D game master. You emit a tight, index-card skeleton the GM will tweak — never finished boxed text. The north star is SPECIFIC BUT UNRESOLVED: each field throws a concrete spark but never states the answer; plant questions, not conclusions.\n\n\
-Return only JSON: name, location, premise (one-line spine summarizing the whole dungeon), and exactly five beats in order.\n\n\
-ONE LOCATION. First commit to a single bounded place the party physically occupies and moves DEEPER into — e.g. \"a drowned bell-foundry\", \"a hijacked customs house\", \"the flooded undercroft of a collapsed cathedral\". Return it as `location`. ALL FIVE BEATS ARE ROOMS OR AREAS INSIDE THIS ONE LOCATION. The party advances through it; they never travel to another region, town, or building. If a beat moves the party somewhere new, you are writing a quest, not a dungeon — pull it back inside the location. Keep monsters, factions, and props consistent across all five beats (the same creatures named in beat 1 are still the threat in beat 4).\n\n\
-The five beats are fixed dramatic FUNCTIONS — beat 1 Entrance (setup: what stops a random NPC from getting in? hidden, gated by a check, or guarded?), beat 2 Puzzle (the opposite of the entrance: roleplay, a locked-door→key chain, or a trap — avoid Simon-Says/logic puzzles), beat 3 Setback (the meat: a twist/trap/one-way exit that halts progress; this is where players PAY), beat 4 Climax (the PEAK: the dungeon's central tension breaks in a confrontation, reversal, or revelation — a boss fight is the most common staging but NOT required; never a beat where the party merely keeps moving or the decisive moment happens offstage), beat 5 Resolution (payoff: reward, plot twist, or humble pie). Do not output the function names; just order the beats correctly.\n\n\
-CONTENT TYPES — give each beat the one that genuinely fits, matching the MEANING below, not just the word:\n\
-Rooms (can anchor a whole beat): combat (a fight; carry tactics, behavior, terrain — NEVER name creatures, GMs slot their own); cache (a stash of loot or rewards); forge (a place to CRAFT or repair magic items — use only when crafting actually happens here); puzzle (a locked-door→key chain of one or more steps, reskinned — never a riddle/logic/Simon-Says); offshoot (an optional side passage or dead end off the main path); sidekick (where a dungeon-only ally is met and may join for this dungeon, then leaves after); oddity (the world-significant artifact that is the very reason this dungeon exists); factions (a rivalry/alliance dynamic running across the dungeon — who wants what, who hates whom).\n\
-Overlays (a LAYER on a beat, never the entire beat — the beat still needs a concrete room, obstacle, or confrontation underneath): foreshadowing (a hint of something later in this dungeon or the wider campaign); history (lore of the place, its people, or its monsters); map (reveals world/hexcrawl context — connective tissue to other dungeons).\n\n\
-Each beat has: content_type (one of the names above), idea (2-3 sentences of what happens here, inside the location; for combat carry tactics/behavior, NEVER creature names — GMs slot their own monsters), lever (ONE complication, question, or hook the GM can pull, in 1-2 sentences), loot (a conditional reward line OR null), and read_aloud (2-3 sentences of STATIC VISUAL only — shape, scale, materials, light, one or two notable objects; no action, no NPC behavior; this doubles as a map-making seed, so keep it sensory and concrete). Favor one-object-triple-duty: the notable object in read_aloud is also the loot's hiding place and the lever's hook.\n\n\
-LOOT IS CONDITIONAL: weight it to the payoff. Put loot on the Resolution, sometimes the Climax (the boss's hoard) or a Cache offshoot. Set loot to null everywhere else, ESPECIALLY the Setback (that beat is the cost, not the collection).\n\n\
-Tone: {tone}. Twist (shape of the middle beats): {twist}. {premise_directive} {topology_directive}{linkage}\n\n\
-Keep every field tight — 2-3 sentences at most; a full paragraph of boxed text is over-generating. Avoid repeating these recent dungeons: {recent}.{reference}",
+            "You are a master storyteller seeding a dungeon for a tabletop game master. Write a SHORT story — one to two tight paragraphs, no more — that a GM can read in fifteen seconds and immediately see the shape of an adventure. The north star is SPECIFIC BUT UNRESOLVED: concrete, evocative sparks that raise questions and never spell out every answer.\n\n\
+ONE LOCATION. The whole story happens inside a single bounded place the party enters and moves DEEPER into — e.g. \"a drowned bell-foundry\", \"a hijacked customs house\". Name that place. They never travel to another region, town, or building; they go further in, not elsewhere. Keep the cast and threats consistent from first line to last.\n\n\
+Tell it with the classic shape — a setup, an inciting turn, rising tension, a peak, and a resolution — but write it as flowing prose; do NOT label the parts. The five movements, in order, must each be built around the element given here, connected causally into one escalating descent:\n\n{elements}\n\
+Tone: {tone} — let it color the whole arc. Twist: {twist}. {faction_directive}{overlay_directive}{topology_directive}{steer_directive}\n\n\
+{premise_directive} {context_directive}\n\n\
+Avoid retelling these recent stories: {recent}.{reference}\n\n\
+Return only JSON: name (a short evocative title), location (the one place, a short phrase), and story (the one-to-two-paragraph tale).",
+            elements = elements,
             tone = tone,
-            twist = twist,
-            premise_directive = premise_directive,
+            twist = twist_directive(twist),
+            faction_directive = faction_directive,
+            overlay_directive = overlay_directive,
             topology_directive = topology_directive,
-            linkage = linkage_directive,
+            steer_directive = steer_directive,
+            premise_directive = premise_directive,
+            context_directive = context_directive,
             recent = recent_context,
             reference = if reference_context.system_context.is_empty() {
                 String::new()
@@ -830,8 +828,131 @@ Keep every field tight — 2-3 sentences at most; a full paragraph of boxed text
 
         let user_prompt = match premise {
             Some(value) => value.to_string(),
-            None => "Generate one self-contained 5-room dungeon.".to_string(),
+            None => "Write the story.".to_string(),
         };
+
+        let (client, url) = build_chat_client(&config)?;
+
+        for attempt in 0..5 {
+            let run_seed = attempt_seed(attempt);
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid. Return only valid JSON matching the schema."
+            };
+
+            let payload = serde_json::json!({
+                "model": model,
+                "stream": false,
+                "format": schema,
+                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
+                "messages": [
+                    { "role": "system", "content": format!("{system_prompt}{repair_note}") },
+                    { "role": "user", "content": user_prompt }
+                ]
+            });
+
+            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
+                continue;
+            };
+
+            let parsed: Result<DungeonStory, _> = serde_json::from_str(&content);
+            let Ok(mut story) = parsed else { continue };
+            story.normalize();
+            if story.name.is_empty() || story.location == "Unknown" || story.story.is_empty() {
+                continue;
+            }
+
+            let serialized = serde_json::to_string(&story).map_err(|err| err.to_string())?;
+            generation_repo
+                .insert(database, "dungeon_story", None, &serialized)
+                .await?;
+
+            return Ok(SeedGeneration { seed: story, notice });
+        }
+
+        Err("failed to generate a valid dungeon story from ollama".to_string())
+    }
+
+    /// Pass 2 of dungeon generation: structure the LOCKED story into the five beat
+    /// cards. Extractive — the model maps the story it is given, applies the field
+    /// leashes, and writes a one-line spine. The per-beat `content_type` is NOT
+    /// requested; it is injected from the deterministic `plan` so the tag can never
+    /// disagree with the content. `function` is assigned by position in `into_beats`.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn structure_dungeon_story(
+        &self,
+        plan: &DungeonContentPlan,
+        story: &DungeonStory,
+        tone: &str,
+        twist: &str,
+        topology: &str,
+        workspace_root: &PathBuf,
+        _database: &Database,
+        _generation_repo: &dyn GenerationRepository,
+    ) -> Result<SeedGeneration<DungeonSeed>, String> {
+        let (config, model) = load_generation_config(workspace_root)?;
+
+        let beat_schema = serde_json::json!({
+            "type": "object",
+            "required": ["idea", "lever", "read_aloud"],
+            "additionalProperties": false,
+            "properties": {
+                "idea": { "type": "string", "minLength": 1 },
+                "lever": { "type": "string", "minLength": 1 },
+                "loot": { "type": ["string", "null"] },
+                "read_aloud": { "type": "string", "minLength": 1 }
+            }
+        });
+        let schema = serde_json::json!({
+            "type": "object",
+            "required": ["premise", "beats"],
+            "additionalProperties": false,
+            "properties": {
+                "premise": { "type": "string", "minLength": 1 },
+                "beats": { "type": "array", "minItems": 5, "maxItems": 5, "items": beat_schema }
+            }
+        });
+
+        let assignment = pass2_assignment_block(plan);
+        let faction_note = if plan.factions {
+            "These beats sit inside a faction struggle; let it tint the relevant beats and render the peak as a confrontation between forces. ".to_string()
+        } else {
+            String::new()
+        };
+        let topology_note = if topology.eq_ignore_ascii_case("none") || topology.is_empty() {
+            String::new()
+        } else {
+            format!("Spatial layout follows \"{topology}\"; let it inform the read_aloud — how rooms connect and what is glimpsed beyond. ")
+        };
+
+        let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
+            + estimate_tokens(&assignment)
+            + estimate_tokens(&story.story);
+        let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
+
+        let system_prompt = format!(
+            "You are structuring a finished story into a game master's index cards. The story below is LOCKED — do not invent new events, places, characters, or items; only express what is already there. The north star is SPECIFIC BUT UNRESOLVED: each field is a concrete spark that never states the final answer.\n\n\
+The story has five movements in order. Produce exactly five beats in the same order; beat N renders movement N. For each beat write four fields:\n\
+- idea: 1-2 sentences — what happens in this beat.\n\
+- lever: ONE complication, question, or hook the GM can pull, in 1-2 sentences.\n\
+- loot: a conditional reward line, OR null (see each beat's rule below).\n\
+- read_aloud: 1-2 sentences of STATIC VISUAL only — shape, scale, materials, light, one or two notable objects. No action, no NPC behavior; it doubles as a map-making seed. Favor one-object-triple-duty: the notable object is also where the loot hides and what the lever hooks on.\n\n\
+Each beat has a fixed role and content type, written here. Honor them exactly; do not change them, and make the idea actually deliver that content type's mechanic:\n\n{assignment}\n\
+{faction_note}{topology_note}Tone: {tone}. Twist shape: {twist}.\n\n\
+Also produce premise: a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).\n\n\
+Keep every field tight — 1-2 sentences; a paragraph of boxed text is over-generating. Return only JSON: premise, and the five beats (idea, lever, loot, read_aloud) in order.",
+            assignment = assignment,
+            faction_note = faction_note,
+            topology_note = topology_note,
+            tone = tone,
+            twist = twist,
+        );
+
+        let user_prompt = format!(
+            "Title: {}\nLocation: {}\n\nStory:\n{}",
+            story.name, story.location, story.story
+        );
 
         let (client, url) = build_chat_client(&config)?;
 
@@ -847,7 +968,7 @@ Keep every field tight — 2-3 sentences at most; a full paragraph of boxed text
                 "model": model,
                 "stream": false,
                 "format": schema,
-                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
+                "options": { "temperature": 0.7, "top_p": 0.9, "repeat_penalty": 1.1, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
                 "messages": [
                     { "role": "system", "content": format!("{system_prompt}{repair_note}") },
                     { "role": "user", "content": user_prompt }
@@ -858,26 +979,38 @@ Keep every field tight — 2-3 sentences at most; a full paragraph of boxed text
                 continue;
             };
 
-            let parsed: Result<DungeonSeed, _> = serde_json::from_str(&content);
-            let Ok(mut seed) = parsed else { continue };
-
-            if seed.beats.len() != DUNGEON_FUNCTIONS.len() {
+            let parsed: Result<DungeonStructured, _> = serde_json::from_str(&content);
+            let Ok(structured) = parsed else { continue };
+            if structured.beats.len() != DUNGEON_FUNCTIONS.len() {
                 continue;
             }
+
+            // Inject content_type per beat from the deterministic plan; carry
+            // name/location from Pass 1; take the spine from Pass 2.
+            let beats = structured
+                .beats
+                .into_iter()
+                .enumerate()
+                .map(|(i, beat)| DungeonBeatSeed {
+                    content_type: plan.anchors[i].clone(),
+                    idea: beat.idea,
+                    lever: beat.lever,
+                    loot: beat.loot,
+                    read_aloud: beat.read_aloud,
+                })
+                .collect();
+            let mut seed = DungeonSeed {
+                name: story.name.clone(),
+                location: story.location.clone(),
+                premise: structured.premise,
+                beats,
+            };
             seed.normalize();
 
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "dungeon_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration {
-                seed,
-                notice: notice.clone(),
-            });
+            return Ok(SeedGeneration { seed, notice });
         }
 
-        Err("failed to generate valid structured dungeon output from ollama".to_string())
+        Err("failed to structure the dungeon story into cards from ollama".to_string())
     }
 }
 
@@ -1032,23 +1165,164 @@ impl DungeonSeed {
     }
 }
 
-fn parse_recent_dungeon_seeds(payloads: Vec<String>) -> Vec<DungeonSeed> {
-    payloads
-        .into_iter()
-        .filter_map(|payload| serde_json::from_str::<DungeonSeed>(&payload).ok())
-        .collect()
+/// Pass 1 output: the prose the GM reviews before structuring (name + the one
+/// bounded location + the one-to-two-paragraph story).
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct DungeonStory {
+    pub name: String,
+    #[serde(default)]
+    pub location: String,
+    pub story: String,
 }
 
-fn describe_recent_dungeon_seeds(seeds: &[DungeonSeed]) -> String {
-    if seeds.is_empty() {
-        return "none".to_string();
+impl DungeonStory {
+    fn normalize(&mut self) {
+        self.name = self.name.trim().to_string();
+        self.location = normalize_unknown_text(&self.location);
+        self.story = self.story.trim().to_string();
     }
-    seeds
+}
+
+/// Pass 2 raw output: the spine plus five beats, each MISSING `content_type` —
+/// that is injected from the plan, never requested from the model.
+#[derive(Debug, Clone, serde::Deserialize)]
+struct DungeonStructured {
+    premise: String,
+    beats: Vec<DungeonStructuredBeat>,
+}
+
+#[derive(Debug, Clone, serde::Deserialize)]
+struct DungeonStructuredBeat {
+    idea: String,
+    lever: String,
+    #[serde(default)]
+    loot: Option<String>,
+    read_aloud: String,
+}
+
+fn describe_recent_dungeon_stories(payloads: Vec<String>) -> String {
+    let names: Vec<String> = payloads
         .iter()
+        .filter_map(|payload| serde_json::from_str::<DungeonStory>(payload).ok())
+        .map(|story| story.name)
+        .filter(|name| !name.trim().is_empty())
         .take(10)
-        .map(|seed| format!("{} | {}", seed.name, seed.premise))
-        .collect::<Vec<_>>()
-        .join("; ")
+        .collect();
+    if names.is_empty() {
+        "none".to_string()
+    } else {
+        names.join("; ")
+    }
+}
+
+/// Plain-language phrase for an anchor type, woven into the Pass-1 story so the
+/// rolled content arrives without leaking the internal jargon.
+fn anchor_story_phrase(content_type: &str) -> &'static str {
+    match content_type {
+        "combat" => "a hostile force or dangerous creature that must be fought or slipped past",
+        "cache" => "a cache of treasure or reward waiting to be found",
+        "forge" => "a forge, crucible, or workshop where something can be made or repaired",
+        "puzzle" => "a sealed way forward — a barred door or mechanism — that opens only once the party finds the right key or condition",
+        "offshoot" => "an optional branching path: a side chamber, a hidden room, or a tempting dead end",
+        "sidekick" => "a lone ally met here who can join the party for as long as they stay in this place",
+        "oddity" => "a strange and significant object that is the very reason this place exists",
+        _ => "something noteworthy",
+    }
+}
+
+/// Mechanical meaning of an anchor type, given to Pass 2 so the card's idea
+/// actually delivers that type's function.
+fn anchor_mechanic(content_type: &str) -> &'static str {
+    match content_type {
+        "combat" => "a fight; convey the enemy's tactics, behavior, and use of terrain, and NEVER name specific creatures (the GM picks them)",
+        "cache" => "a stash of loot or rewards",
+        "forge" => "a place to craft or repair magic items; the idea must involve that crafting or repair",
+        "puzzle" => "a locked-door->key obstacle of one or more steps; never a riddle or logic puzzle",
+        "offshoot" => "an optional side passage, hidden room, or dead end off the main path",
+        "sidekick" => "a dungeon-only ally met and possibly recruited here, who leaves when the dungeon ends",
+        "oddity" => "the world-significant object that is the reason this dungeon exists",
+        _ => "a noteworthy room",
+    }
+}
+
+fn overlay_phrase(overlay_type: &str) -> &'static str {
+    match overlay_type {
+        "foreshadowing" => "a hint of something still to come, here or out in the wider campaign",
+        "history" => "a piece of lore about this place, its people, or its makers",
+        "map" => "a glimpse of the surrounding world — a route, a landmark, or a link to somewhere else",
+        _ => "a telling detail",
+    }
+}
+
+fn twist_directive(twist: &str) -> &'static str {
+    match twist {
+        "false_victory" => "in the middle, hand the party an apparent win that then curdles — they think they've succeeded, then lose it",
+        "false_defeat" => "in the middle, stage an apparent loss the party then claws back from",
+        _ => "play the arc straight — no fake-out in the middle",
+    }
+}
+
+/// The numbered movement list for Pass 1: each beat's rolled anchor rendered as a
+/// story ingredient, tied to its place in the arc.
+fn pass1_elements_block(plan: &DungeonContentPlan) -> String {
+    const LABELS: [&str; 5] = [
+        "the way in",
+        "the first turn inside",
+        "where it costs them",
+        "the peak",
+        "the payoff",
+    ];
+    let mut out = String::new();
+    for (i, anchor) in plan.anchors.iter().enumerate() {
+        out.push_str(&format!(
+            "  {}. ({}): {}\n",
+            i + 1,
+            LABELS[i],
+            anchor_story_phrase(anchor)
+        ));
+    }
+    out
+}
+
+/// The per-beat assignment block for Pass 2: fixed role + the GIVEN content type
+/// and its mechanic + the loot rule, plus any overlay layer to fold in.
+fn pass2_assignment_block(plan: &DungeonContentPlan) -> String {
+    const ROLES: [&str; 5] = [
+        "the way in (what stops a stray wanderer from getting through)",
+        "the first obstacle inside (roleplay, a sealed way, or a trap)",
+        "the cost, where the party PAYS",
+        "the peak: a real confrontation, reversal, or revelation",
+        "the payoff",
+    ];
+    const LOOT_RULES: [&str; 5] = [
+        "Loot: null.",
+        "Loot: null.",
+        "Loot: null.",
+        "Loot: only if it reads as the boss's hoard.",
+        "Loot: the reward goes here (unless the story already handed it over).",
+    ];
+    let mut out = String::new();
+    for (i, anchor) in plan.anchors.iter().enumerate() {
+        out.push_str(&format!(
+            "Beat {} — {}. Type: {} — {}. {}",
+            i + 1,
+            ROLES[i],
+            anchor.to_uppercase(),
+            anchor_mechanic(anchor),
+            LOOT_RULES[i],
+        ));
+        if let Some(overlay) = &plan.overlay {
+            if overlay.beat_index == i {
+                out.push_str(&format!(
+                    " Also layer in {}: {}.",
+                    overlay.overlay_type,
+                    overlay_phrase(&overlay.overlay_type)
+                ));
+            }
+        }
+        out.push('\n');
+    }
+    out
 }
 
 #[derive(Debug, Clone, Default)]

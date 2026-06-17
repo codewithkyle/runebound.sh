@@ -16,6 +16,7 @@ use dnd_core::command::render_help_overview;
 use dnd_core::command_manifest::InputContext;
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
+use runebound_models::dungeon_plan::roll_dungeon_content_plan;
 
 
 pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
@@ -113,17 +114,38 @@ async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt
         return entity_message_response("no active dungeon draft.");
     };
 
-    // Whole-dungeon regen re-runs generation from the stored seed + the dials,
+    // Whole-dungeon regen re-runs the two-pass generator from the stored seed +
+    // the dials, rolling a fresh content plan (variety across rerolls) and
     // replacing all five beats while keeping tone/twist/topology authoritative.
     let merged_prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, reroll_prompt);
-    let premise = merged_prompt.clone();
     let ai = AiGenerationService;
     let database = state.database();
     let generation_repo = state.generation_repo();
-    let SeedGeneration { seed, notice } = ai
-        .generate_dungeon_seed(
-            premise,
+
+    let plan = roll_dungeon_content_plan(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|duration| duration.as_nanos() as u64)
+            .unwrap_or(0),
+    );
+    let SeedGeneration { seed: story, .. } = ai
+        .generate_dungeon_story(
+            &plan,
+            merged_prompt,
             "",
+            &draft.tone,
+            &draft.twist,
+            &draft.topology,
+            None,
+            &state.workspace_root,
+            database.as_ref(),
+            generation_repo.as_ref(),
+        )
+        .await?;
+    let SeedGeneration { seed, notice } = ai
+        .structure_dungeon_story(
+            &plan,
+            &story,
             &draft.tone,
             &draft.twist,
             &draft.topology,
@@ -134,6 +156,7 @@ async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt
         .await?;
     draft.slug = slugify(seed.name.trim());
     draft.name = seed.name.trim().to_string();
+    draft.location = normalize_unknown_text(&seed.location);
     draft.premise = normalize_unknown_text(&seed.premise);
     draft.beats = seed.into_beats();
 

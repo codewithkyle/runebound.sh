@@ -5,7 +5,8 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 use runebound_models::{
-    DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft, NpcDraft,
+    DungeonContentPlan, DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft,
+    NpcDraft,
 };
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
@@ -29,12 +30,18 @@ pub type DungeonDraftSession = DungeonDraft;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct DungeonCreationFlow {
     pub active: bool,
-    pub step: u8,                 // 1..=5 (A..E)
+    pub step: u8,                 // 1..=5 (A..E), 6 = story review
     pub premise: Option<String>,  // None = "generate one"
     pub tone: Option<String>,     // DUNGEON_TONES
     pub twist: Option<String>,    // DUNGEON_TWISTS
     pub context: String,          // step D free-text (references/constraints); "" = skipped
     pub topology: Option<String>, // DUNGEON_TOPOLOGIES incl. "none"
+    // Step 6 (review) carries the rolled content plan and the Pass-1 story the GM
+    // is reviewing, so `continue` can structure it and `reroll` can replace it.
+    pub plan: Option<DungeonContentPlan>,
+    pub story_name: Option<String>,
+    pub story_location: Option<String>,
+    pub story_text: Option<String>,
 }
 
 #[derive(Debug, Clone)]
