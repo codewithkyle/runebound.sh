@@ -47,6 +47,22 @@ pub fn no_active_draft_message(kind: EntityKind) -> String {
     )
 }
 
+/// Structured form of [`no_active_draft_message`]: the prose plus a clickable
+/// `create <root>` and a `load <name>` placeholder, so the suggested next actions
+/// are backend-authored `command_ref`s rather than words the frontend guesses at.
+pub fn no_active_draft_doc(kind: EntityKind) -> OutputDoc {
+    let root = kind.command_root();
+    doc()
+        .with_block(paragraph_text(format!("No active {root} draft.")))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Start one with "),
+            command_ref(format!("create {root}"), format!("create {root}")),
+            text_node(" or "),
+            code("load <name>"),
+            text_node("."),
+        ]))
+}
+
 pub fn command_message_response(message: impl Into<String>) -> CommandResult {
     Ok(Some(ok_response(message.into(), None)))
 }
@@ -71,7 +87,11 @@ pub fn command_response_with_event(
 }
 
 pub fn command_no_active_draft(kind: EntityKind) -> CommandResult {
-    command_message_response(no_active_draft_message(kind))
+    Ok(Some(ok_response_with_doc(
+        no_active_draft_message(kind),
+        Some(no_active_draft_doc(kind)),
+        None,
+    )))
 }
 
 /// Help for `<entity> set` listing the settable fields and their descriptions.
@@ -196,6 +216,16 @@ pub fn entity_ok_response(
 
 pub fn entity_message_response(message: impl Into<String>) -> EntityDomainResult {
     entity_ok_response(message, None)
+}
+
+/// `<entity> show`/`set`/etc. with no draft open: the structured no-active-draft
+/// doc (clickable `create <root>`) plus its plain-text fallback.
+pub fn entity_no_active_draft(kind: EntityKind) -> EntityDomainResult {
+    Ok(Some(ok_response_with_doc(
+        no_active_draft_message(kind),
+        Some(no_active_draft_doc(kind)),
+        None,
+    )))
 }
 
 pub fn entity_response_with_event(

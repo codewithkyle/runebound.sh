@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::app_state::{AppState, NpcDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message, normalize_unknown_list, normalize_unknown_text,
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
@@ -56,7 +56,7 @@ impl EntityDomain for NpcDomain {
         };
 
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Npc));
+            return entity_no_active_draft(EntityKind::Npc);
         };
 
         entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
@@ -301,7 +301,7 @@ impl EntityDomain for NpcDomain {
         };
 
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Npc));
+            return entity_no_active_draft(EntityKind::Npc);
         }
 
         entity_response_with_event("npc draft discarded.", CommandClientEvent::ClearDrafts)

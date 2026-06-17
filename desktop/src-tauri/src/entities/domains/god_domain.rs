@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::app_state::{AppState, GodDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
@@ -56,7 +56,7 @@ impl EntityDomain for GodDomain {
             editor.get_god().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::God));
+            return entity_no_active_draft(EntityKind::God);
         };
 
         entity_response_with_event(god_summary_text(&draft), god_event_from_draft(&draft))
@@ -353,7 +353,7 @@ impl EntityDomain for GodDomain {
             editor.take_god()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::God));
+            return entity_no_active_draft(EntityKind::God);
         }
 
         entity_response_with_event("god draft discarded.", CommandClientEvent::ClearDrafts)

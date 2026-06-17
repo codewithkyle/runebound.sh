@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::app_state::{AppState, LocationDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
@@ -56,7 +56,7 @@ impl EntityDomain for LocationDomain {
             editor.get_location().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Location));
+            return entity_no_active_draft(EntityKind::Location);
         };
 
         entity_response_with_event(
@@ -334,7 +334,7 @@ impl EntityDomain for LocationDomain {
             editor.take_location()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Location));
+            return entity_no_active_draft(EntityKind::Location);
         }
 
         entity_response_with_event("location draft discarded.", CommandClientEvent::ClearDrafts)

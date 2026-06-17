@@ -20,7 +20,9 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 
 use command_handler::{HandlerBridge, HandlerEntry, HandlerMetadata, HandlerRegistry};
-use runebound_models::output::{command_ref, doc, paragraph_with_inlines, text_node};
+use runebound_models::output::{
+    InlineNode, command_ref, doc, list, paragraph_text, paragraph_with_inlines, text_node,
+};
 use runebound_models::{
     CommandClientEvent, CommandResponse, OutputDoc, OutputSegment, OutputSegmentKind,
 };
@@ -114,7 +116,12 @@ fn metadata_for(name: &str) -> HandlerMetadata {
 }
 
 pub fn ok_response(output: String, client_event: Option<CommandClientEvent>) -> CommandResponse {
-    ok_response_with_doc(output, None, client_event)
+    // Every plain-text response still carries a structured doc (a single
+    // paragraph) so the frontend renders backend nodes and never parses prose.
+    // Responses needing headings, lists, or clickable command_refs build an
+    // explicit doc via ok_response_with_doc / command_action_response instead.
+    let document = doc().with_block(paragraph_text(output.clone()));
+    ok_response_with_doc(output, Some(document), client_event)
 }
 
 pub fn ok_response_with_doc(
@@ -250,8 +257,9 @@ pub fn history_handler_entry() -> HandlerEntry<DesktopHandler> {
                     let service = state.command_service.lock().await;
                     service.session().command_history.clone()
                 };
-                Ok(Some(ok_response(
+                Ok(Some(ok_response_with_doc(
                     render_history_output(&history, limit),
+                    Some(render_history_doc(&history, limit)),
                     None,
                 )))
             })
@@ -493,6 +501,28 @@ fn render_history_output(history: &[String], limit: usize) -> String {
         .join("\n")
 }
 
+/// The structured form of `render_history_output`: each entry is a clickable
+/// `command_ref` so the recorded command re-runs on click — the backend supplies
+/// the clickability, the frontend never guesses it from the rendered text.
+fn render_history_doc(history: &[String], limit: usize) -> OutputDoc {
+    if history.is_empty() {
+        return doc().with_block(paragraph_text("(no history)"));
+    }
+    let safe_limit = limit.clamp(1, 50);
+    let start = history.len().saturating_sub(safe_limit);
+    let items: Vec<Vec<InlineNode>> = history[start..]
+        .iter()
+        .enumerate()
+        .map(|(index, value)| {
+            vec![
+                text_node(format!("{}: ", start + index + 1)),
+                command_ref(value.clone(), value.clone()),
+            ]
+        })
+        .collect();
+    doc().with_block(list(items))
+}
+
 pub use crate::entities::domains::{
     dungeon_event_from_draft, dungeon_summary_text, event_event_from_draft, event_summary_text,
     faction_event_from_draft, faction_summary_text, god_event_from_draft, god_summary_text,
@@ -566,6 +596,60 @@ mod tests {
         assert!(
             registry.get("exit").is_some(),
             "missing desktop exit override"
+        );
+    }
+
+    #[test]
+    fn ok_response_always_carries_a_structured_doc() {
+        // The chokepoint guarantee behind deleting the frontend parser: a plain
+        // message still arrives as a structured doc, never raw prose to parse.
+        let response = super::ok_response("hello".to_string(), None);
+        assert!(
+            response.output_doc.is_some(),
+            "plain responses must carry a doc so the frontend never parses prose",
+        );
+    }
+
+    #[test]
+    fn history_doc_makes_each_entry_a_clickable_command() {
+        use runebound_models::output::{InlineNode, OutputBlock};
+
+        let history = vec!["create npc".to_string(), "calendar".to_string()];
+        let document = super::render_history_doc(&history, 20);
+        let command_refs = document
+            .blocks
+            .iter()
+            .flat_map(|block| match block {
+                OutputBlock::List { items } => items.clone(),
+                _ => Vec::new(),
+            })
+            .flatten()
+            .filter_map(|node| match node {
+                InlineNode::CommandRef { command, .. } => Some(command),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(command_refs, vec!["create npc", "calendar"]);
+    }
+
+    #[test]
+    fn no_active_draft_doc_offers_a_clickable_create() {
+        use crate::entities::EntityKind;
+        use crate::entities::common::no_active_draft_doc;
+        use runebound_models::output::{InlineNode, OutputBlock};
+
+        let document = no_active_draft_doc(EntityKind::Npc);
+        let has_create = document.blocks.iter().any(|block| {
+            match block {
+            OutputBlock::Paragraph { inlines } => inlines.iter().any(|node| {
+                matches!(node, InlineNode::CommandRef { command, .. } if command == "create npc")
+            }),
+            _ => false,
+        }
+        });
+        assert!(
+            has_create,
+            "no-active-draft doc must offer a clickable create"
         );
     }
 }

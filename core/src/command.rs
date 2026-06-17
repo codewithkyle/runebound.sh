@@ -287,6 +287,12 @@ pub async fn execute_line_with_session(
     match execute_line_internal(workspace_root, input, session).await {
         Ok(output) => {
             let output_text = output.output.clone();
+            // Every successful response carries a structured doc — the command's
+            // own if it built one, else a single paragraph of its text — so the
+            // frontend renders backend nodes and never has to parse prose.
+            let document = output
+                .output_doc
+                .unwrap_or_else(|| doc().with_block(paragraph_text(output_text.clone())));
             CommandResponse {
                 ok: true,
                 output: output.output,
@@ -297,7 +303,7 @@ pub async fn execute_line_with_session(
                     text: output_text,
                     command_ref: None,
                 }],
-                output_doc: output.output_doc,
+                output_doc: Some(document),
                 client_event: None,
                 wizard: None,
             }

@@ -3,8 +3,8 @@ use async_trait::async_trait;
 use crate::app_state::{AppState, DungeonDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message,
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
@@ -100,7 +100,7 @@ impl EntityDomain for DungeonDomain {
             editor.get_dungeon().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Dungeon));
+            return entity_no_active_draft(EntityKind::Dungeon);
         };
 
         entity_response_with_event(
@@ -387,7 +387,7 @@ impl EntityDomain for DungeonDomain {
             editor.take_dungeon()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Dungeon));
+            return entity_no_active_draft(EntityKind::Dungeon);
         }
 
         entity_response_with_event("dungeon draft discarded.", CommandClientEvent::ClearDrafts)

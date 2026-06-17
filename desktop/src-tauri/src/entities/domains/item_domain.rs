@@ -3,8 +3,9 @@ use async_trait::async_trait;
 use crate::app_state::{AppState, ItemDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, no_active_draft_message, normalize_unknown_list,
+    normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
@@ -57,7 +58,7 @@ impl EntityDomain for ItemDomain {
         };
 
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Item));
+            return entity_no_active_draft(EntityKind::Item);
         };
 
         entity_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
@@ -298,7 +299,7 @@ impl EntityDomain for ItemDomain {
         };
 
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Item));
+            return entity_no_active_draft(EntityKind::Item);
         }
 
         entity_response_with_event("item draft discarded.", CommandClientEvent::ClearDrafts)
