@@ -14,7 +14,7 @@ use crate::entities::common::{command_message_response_with_doc, CommandResult};
 
 use super::prompt::doc_to_plain_text;
 use super::session::{WizardData, WizardSession};
-use super::wizard::{Wizard, WizardStep, WizardTransition};
+use super::wizard::{Wizard, WizardChoice, WizardStep, WizardTransition};
 
 /// `create dungeon` and friends call this to launch a wizard and return its first
 /// prompt. Resets any prior session.
@@ -35,6 +35,27 @@ pub async fn start_wizard(id: &'static str, state: &AppState) -> CommandResult {
     };
     let data = session.data.as_ref().expect("seeded wizard data");
     Ok(Some(render_step(wizard.as_ref(), step.as_ref(), data)))
+}
+
+/// The active step's declared `choices()`, for autocomplete typeahead. Returns
+/// empty when no wizard is active. Read-only snapshot — the suggestion service
+/// calls this to offer the current step's tokens (`1`, `generate`, `reroll`, …),
+/// the per-step counterpart to the manifest's generic nav verbs.
+pub async fn active_step_choices(state: &AppState) -> Vec<WizardChoice> {
+    let session = state.wizard_session.lock().await;
+    let Some(id) = session.active_id else {
+        return Vec::new();
+    };
+    let Some(wizard) = state.wizards().get(id) else {
+        return Vec::new();
+    };
+    let Some(step) = wizard.steps().get(session.cursor) else {
+        return Vec::new();
+    };
+    let Some(data) = session.data.as_ref() else {
+        return Vec::new();
+    };
+    step.choices(data)
 }
 
 /// Intercepted before registry dispatch while a wizard is active. Returns

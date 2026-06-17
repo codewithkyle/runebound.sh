@@ -7,9 +7,12 @@ use dnd_core::session::{OllamaStepState, OnboardingFlow, VaultStepState};
 use dnd_core::vault::Vault;
 use serde::Serialize;
 
+use dnd_core::command_manifest::InputContext;
+
 use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
 use crate::services::entity_admin::EntityType;
+use crate::wizards::WizardChoice;
 use crate::services::vault_ref::{
     VaultReferenceEntry, can_start_reference_at, load_vault_reference_entries,
 };
@@ -190,6 +193,16 @@ impl SuggestionService {
                     },
                 );
             }
+        }
+
+        // Wizard step tokens: when a wizard is active, offer the current step's
+        // declared `choices()` (`1`, `generate`, `reroll`, …). The nav verbs
+        // (continue/back/cancel) already come from the manifest via the
+        // availability filter above; this is the per-step counterpart the manifest
+        // can't know — generalized from the bespoke onboarding `continue` branch.
+        if matches!(context, InputContext::Wizard(_)) {
+            let choices = crate::wizards::active_step_choices(state).await;
+            suggestions.extend(wizard_step_suggestions(&choices, trimmed));
         }
 
         let mut seen = HashSet::new();
@@ -579,6 +592,23 @@ fn build_entity_field_argument_suggestions(
     )
 }
 
+/// Turn a wizard step's choices into prefix-filtered suggestions. The completion
+/// is the choice `token` (what gets submitted), the label is the choice `label`
+/// (what the user sees). Matching is by `token` prefix — for numbered choices the
+/// label leads with the same digit, so this covers both ("1: Tragedy" via "1").
+fn wizard_step_suggestions(choices: &[WizardChoice], input: &str) -> Vec<CommandSuggestion> {
+    let prefix = input.trim().to_ascii_lowercase();
+    choices
+        .iter()
+        .filter(|choice| choice.token.to_ascii_lowercase().starts_with(&prefix))
+        .map(|choice| CommandSuggestion {
+            label: choice.label.clone(),
+            completion: choice.token.clone(),
+            helper_text: Some(SuggestionHelperText::Command),
+        })
+        .collect()
+}
+
 fn entity_kind_for_root(root: &str) -> Option<EntityKind> {
     match root {
         "npc" => Some(EntityKind::Npc),
@@ -863,9 +893,11 @@ mod tests {
     use super::{
         build_command_suggestions, build_entity_field_argument_suggestions,
         build_reference_suggestions_from_entries, entity_kind_for_root, extract_active_reference_query,
-        find_command, npc_travel_location_query, ActiveReferenceQuery, VaultReferenceEntry,
+        find_command, npc_travel_location_query, wizard_step_suggestions, ActiveReferenceQuery,
+        VaultReferenceEntry,
     };
     use crate::entities::EntityKind;
+    use crate::wizards::WizardChoice;
     use crate::services::vault_ref::extract_prompt_reference_keys;
     use dnd_core::{command_manifest, command_parse};
 
@@ -1235,6 +1267,49 @@ mod tests {
                 .any(|suggestion| suggestion.completion == "dungeon reroll setback "),
             "missing setback beat suggestion"
         );
+    }
+
+    #[test]
+    fn wizard_step_suggestions_filter_by_token_prefix() {
+        let choices = vec![
+            WizardChoice::new("1: Tragedy", "1"),
+            WizardChoice::new("2: Comedy", "2"),
+        ];
+        // A digit prefix narrows to the matching numbered choice; the completion is
+        // the bare token (`1`), the label is the human-facing menu entry.
+        let suggestions = wizard_step_suggestions(&choices, "1");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].label, "1: Tragedy");
+        assert_eq!(suggestions[0].completion, "1");
+    }
+
+    #[test]
+    fn wizard_step_suggestions_match_word_tokens() {
+        // Review-screen verbs the manifest can't surface in a wizard (e.g. `reroll`
+        // is entity-editor-scoped) come from the active step instead.
+        let choices = vec![
+            WizardChoice::new("continue", "continue"),
+            WizardChoice::new("reroll", "reroll"),
+            WizardChoice::new("cancel", "cancel"),
+        ];
+        let suggestions = wizard_step_suggestions(&choices, "r");
+        let completions: Vec<&str> = suggestions
+            .iter()
+            .map(|item| item.completion.as_str())
+            .collect();
+        assert_eq!(completions, vec!["reroll"]);
+    }
+
+    #[test]
+    fn wizard_step_suggestions_empty_input_offers_all_choices() {
+        let choices = vec![
+            WizardChoice::new("generate", "generate"),
+        ];
+        // The call site never passes empty input (it returns early), but an empty
+        // prefix should still match everything rather than panic or drop choices.
+        let suggestions = wizard_step_suggestions(&choices, "");
+        assert_eq!(suggestions.len(), 1);
+        assert_eq!(suggestions[0].completion, "generate");
     }
 
     #[test]

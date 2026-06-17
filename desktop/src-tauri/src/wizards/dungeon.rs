@@ -4,9 +4,11 @@
 //! (`AiGenerationService`, `roll_dungeon_content_plan`) and the `finalize` hand-off
 //! into the dungeon editor are reused verbatim.
 //!
-//! Marker headings (`Step 6 of 6 — Room Plan`, `Create Dungeon — Story`) are kept
-//! identical so the legacy frontend spinner detection keeps working until Phase 3
-//! switches it to the structured `WizardView` signal.
+//! The step headings (`Step 6 of 6 — Room Plan`, `Create Dungeon — Story`) are now
+//! display text only: the frontend spinner keys off the structured `WizardView`
+//! signal (step id + `awaiting_llm_label`), not the heading strings. The marker
+//! constants survive as the bare heading text and are slated for inlining in
+//! Phase 4.
 
 use std::sync::Arc;
 
