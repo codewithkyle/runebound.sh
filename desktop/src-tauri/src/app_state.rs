@@ -6,8 +6,7 @@ use tokio::sync::Mutex;
 
 use dnd_core::command_manifest::InputContext;
 use runebound_models::{
-    DungeonContentPlan, DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft,
-    NpcDraft,
+    DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft, NpcDraft,
 };
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
@@ -25,27 +24,6 @@ pub type ItemDraftSession = ItemDraft;
 pub type EventDraftSession = EventDraft;
 pub type GodDraftSession = GodDraft;
 pub type DungeonDraftSession = DungeonDraft;
-
-/// In-memory state machine for the guided `create dungeon` flow (steps A–E).
-/// Like `OnboardingSession`, nothing here persists mid-flow; it lives on
-/// `AppState` and is intercepted before registry dispatch in `main.rs`.
-#[derive(Debug, Clone, Default)]
-pub(crate) struct DungeonCreationFlow {
-    pub active: bool,
-    pub step: u8,                 // 1..=5 (A..E), 6 = room plan review, 7 = story review
-    pub premise: Option<String>,  // None = "generate one"
-    pub tone: Option<String>,     // DUNGEON_TONES
-    pub twist: Option<String>,    // DUNGEON_TWISTS
-    pub context: String,          // step D free-text (references/constraints); "" = skipped
-    pub topology: Option<String>, // DUNGEON_TOPOLOGIES incl. "none"
-    // Step 6 locks in the rolled content plan (which type fills each beat); step 7
-    // carries the Pass-1 story reviewed against it, so `continue` can structure it
-    // (Pass 2) and `reroll` can rewrite the prose without re-rolling the plan.
-    pub plan: Option<DungeonContentPlan>,
-    pub story_name: Option<String>,
-    pub story_location: Option<String>,
-    pub story_text: Option<String>,
-}
 
 #[derive(Debug, Clone)]
 pub(crate) enum DraftEnvelope {
@@ -511,9 +489,6 @@ pub(crate) struct AppState {
     pub(crate) wizards: Arc<WizardRegistry>,
     /// Live state of the active wizard (cursor, history, accumulator).
     pub(crate) wizard_session: Mutex<WizardSession>,
-    /// In-memory state for the guided `create dungeon` flow (steps A–E).
-    /// Superseded by the wizard engine; retained until Phase 4 removes it.
-    pub(crate) dungeon_flow: Mutex<DungeonCreationFlow>,
     /// Cached result of the boot LLM health probe, reused to render the MOTD
     /// without re-probing the Ollama server.
     pub(crate) boot_ollama_health: Mutex<Option<dnd_core::health::OllamaHealth>>,

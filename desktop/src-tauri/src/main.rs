@@ -98,7 +98,7 @@ async fn run_command(
     // Generic wizard dispatch: while a wizard is active, route the raw line to the
     // wizard engine before registry dispatch, so step answers like `"2"` or a
     // free-text premise aren't parsed as commands. This is the single, first-class
-    // generalization of the bespoke dungeon-flow interception below.
+    // dispatch route for every multi-step wizard.
     if let Some(response) =
         crate::wizards::try_execute_active_wizard(&normalized_input, state.inner()).await?
     {
@@ -108,27 +108,6 @@ async fn run_command(
             service.session_mut().push_history(trimmed, 50);
         }
         return Ok(response);
-    }
-
-    // Guided dungeon-creation flow: while active, route the raw line to the flow
-    // state machine and bypass registry dispatch (exactly how onboarding does),
-    // so step answers like `"2"` or a free-text premise aren't parsed as commands.
-    // Superseded by the wizard engine above; retained (dead) until Phase 4.
-    let dungeon_flow_active = {
-        let flow = state.dungeon_flow.lock().await;
-        flow.active
-    };
-    if dungeon_flow_active {
-        if let Some(response) =
-            crate::commands::dungeon_flow::try_execute_dungeon_flow(&normalized_input, state.inner()).await?
-        {
-            let trimmed = normalized_input.trim();
-            if !trimmed.is_empty() {
-                let mut service = state.command_service.lock().await;
-                service.session_mut().push_history(trimmed, 50);
-            }
-            return Ok(response);
-        }
     }
 
     // Reject `-h`/`--help` uniformly for desktop dispatch and the core fallthrough,
@@ -220,7 +199,6 @@ fn main() {
         domains,
         wizards,
         wizard_session: Mutex::new(crate::wizards::WizardSession::default()),
-        dungeon_flow: Mutex::new(crate::app_state::DungeonCreationFlow::default()),
         boot_ollama_health: Mutex::new(None),
     };
 

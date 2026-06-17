@@ -9,7 +9,6 @@ pub mod item_commands;
 pub mod event_commands;
 pub mod god_commands;
 pub mod dungeon_commands;
-pub mod dungeon_flow;
 pub mod entity_commands;
 pub mod system_commands;
 pub mod create_commands;
@@ -431,6 +430,13 @@ mod tests {
     /// See docs/command-contexts.md §4.
     const ONBOARDING_INTERCEPTED: &[&str] = &["start", "model"];
 
+    /// Wizard nav verbs handled by the generic wizard route
+    /// (`try_execute_active_wizard`) *before* registry lookup, so they have no
+    /// registry handler. `cancel` is excluded: it keeps a real editor handler and
+    /// is only additionally intercepted while a wizard is active. See
+    /// docs/command-contexts.md §4 (route 4).
+    const WIZARD_INTERCEPTED: &[&str] = &["continue", "back"];
+
     #[test]
     fn every_desktop_command_has_a_registered_handler() {
         let registry = build_desktop_handler_registry();
@@ -438,7 +444,9 @@ mod tests {
             if !matches!(command.execution, CommandExecution::Desktop) {
                 continue;
             }
-            if ONBOARDING_INTERCEPTED.contains(&command.name.as_str()) {
+            if ONBOARDING_INTERCEPTED.contains(&command.name.as_str())
+                || WIZARD_INTERCEPTED.contains(&command.name.as_str())
+            {
                 continue;
             }
             assert!(

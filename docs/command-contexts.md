@@ -4,19 +4,20 @@
 
 ---
 
-## 1. The three input contexts
+## 1. The input contexts
 
 Every command surface (autocomplete and help) is gated by an **input context**, defined by `InputContext` in `command-specs/src/lib.rs`:
 
 | Context | When active | Detected from |
 |---|---|---|
-| `Default` | No editor open — the normal command surface | neither editor below is active |
+| `Default` | No editor open — the normal command surface | none of the contexts below is active |
 | `ConfigEditor` | The setup/onboarding wizard is running | `session.onboarding.active` (core `SessionState`) |
 | `EntityEditor(kind)` | An entity draft is open; tag is the command root (`"npc"`, `"location"`, …) | `EditorSession::active_kind()` (desktop `AppState`) |
+| `Wizard(id)` | A multi-step wizard is running; tag is the wizard id (`"dungeon"`, …) | `wizard_session.active_id` (desktop `AppState`) |
 
-`EntityEditor` takes precedence over `ConfigEditor` when resolving the live context (an open draft wins over an in-progress wizard).
+Precedence when resolving the live context (in `AppState::resolve_input_context`): an open entity draft (`EntityEditor`) wins, then an active wizard (`Wizard`), then onboarding (`ConfigEditor`), else `Default`. A wizard and the entity editor it finalizes into are never active at once.
 
-> **Where context is resolved:** entity-editor state lives in the **desktop** `EditorSession`, not core's `SessionState`. Core alone can only distinguish `Default` vs. `ConfigEditor`. Anything that must know about an open entity editor (the suggestion service, the context-aware `help`) is therefore computed in the desktop layer. See `services/suggestions.rs` and the desktop `help` handler in `commands/system_commands.rs` for the canonical resolution snippet — copy it rather than re-deriving context ad hoc.
+> **Where context is resolved:** entity-editor and wizard state live in the **desktop** `AppState`, not core's `SessionState`. Core alone can only distinguish `Default` vs. `ConfigEditor`. Anything that must know about an open entity editor or active wizard (the suggestion service, the context-aware `help`) is therefore computed in the desktop layer. **`AppState::resolve_input_context()` is the one canonical resolver** — call it (the suggestion service and the desktop `help` handler both do) rather than re-deriving context ad hoc.
 
 ---
 
@@ -33,6 +34,8 @@ pub enum CommandAvailability {
     DefaultOrEntityEditor,   // default surface + any entity draft (publish)
     EntityEditorOnly,        // any entity draft (reroll)
     EntityScoped(&'static str), // only the matching entity kind's editor (npc, location, …)
+    AnyWizard,               // any active wizard (continue, back)
+    AnyEditorOrWizard,       // any editor (config/entity) or wizard (cancel)
 }
 ```
 
@@ -72,9 +75,9 @@ publish The Brotherhood -> "The" is an argument, dispatched to the publish handl
 
 ---
 
-## 4. Dispatch routes (there are three, not one)
+## 4. Dispatch routes (there are four, not one)
 
-Most commands follow the registry path, but two routes bypass it. Know all three:
+Most commands follow the registry path, but three routes bypass it. Know all four:
 
 1. **Registry dispatch (the common path).** Desktop registry (`desktop/src-tauri/src/commands/mod.rs`) is tried first; on a miss it falls through to the core registry (`core/src/command.rs`), then to free-form entity resolution in `router.rs`.
 
@@ -83,6 +86,12 @@ Most commands follow the registry path, but two routes bypass it. Know all three
 3. **Onboarding interception (setup wizard).** When `onboarding.active`, input is routed to `try_execute_onboarding` *before* registry dispatch (in core's `execute_line`, and in desktop `run_command`). The desktop registry is bypassed entirely during setup. Consequences:
    - Setup verbs (`continue`, menu numbers `1`/`2`/`3`, `set vault`, `set ollama`, `test ollama`, `use model`, `cancel`) are handled inside `try_execute_onboarding` — **not** by desktop handlers. The desktop `cancel` handler does not run during setup, so `cancel` is accepted explicitly there (both `cancel` and `cancel setup` exit the wizard).
    - `model` / `setup model` are also handled on this path (before the `active` guard), so they work outside an active wizard too.
+   - Onboarding is itself a multi-step wizard but predates the generic engine (route 4); it lives in core and keeps its own route until the port in `docs/onboarding-wizard-port.md`.
+
+4. **Generic wizard route.** When `wizard_session.active_id` is set, input is routed to `try_execute_active_wizard` (`wizards/runtime.rs`) *before* registry dispatch in desktop `run_command`. Unlike onboarding, this is **one** route shared by every registered wizard — the dungeon flow's former bespoke interceptor was deleted in favor of it. Consequences:
+   - The active step's `accept()` consumes the raw line, so step answers (`2`, a free-text premise, `reroll`) are never parsed as commands. The nav verbs `continue`/`back`/`cancel` are real manifest commands gated to wizard contexts (`AnyWizard` / `AnyEditorOrWizard`) — handled by the route, not by desktop handlers.
+   - The response carries a structured `WizardView { id, step_id, awaiting_llm_label }` so the frontend spinner needs no prompt-text matching.
+   - Adding a wizard adds **no** dispatch code — register a `Wizard` and point a launch command at `start_wizard`. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
 
 ---
 
@@ -105,6 +114,7 @@ When you touch command visibility, parsing, help, or onboarding:
 - [ ] Autocomplete filtered correctly for the same contexts (`cargo test suggestions`, run from `desktop/src-tauri`).
 - [ ] If a command needs entity-editor state, it is dispatched (or overridden) in the desktop layer, not core-only.
 - [ ] Onboarding entry points seed shown fields identically; `cancel` exits the wizard.
+- [ ] New wizards register a `Wizard` (no bespoke interceptor); nav verbs resolve via `command_availability` and step tokens via `active_step_choices` — no per-command filter added.
 - [ ] Parser change covered by a `command_parse` unit test (argument-vs-subcommand cases).
 
 ---

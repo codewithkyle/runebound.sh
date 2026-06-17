@@ -79,8 +79,9 @@ Key behavior:
 
 - `Tab` completes current suggestion
 - suggestions stay live as user edits
-- suggestions are filtered by **input context** (`InputContext`: `Default`, `ConfigEditor`, `EntityEditor(kind)`), resolved from `EditorSession::active_kind()` and `onboarding.active`
+- suggestions are filtered by **input context** (`InputContext`: `Default`, `ConfigEditor`, `EntityEditor(kind)`, `Wizard(id)`), resolved by `AppState::resolve_input_context()` (the one canonical resolver)
 - visibility comes only from `command_availability(name)` in `command-specs/src/lib.rs` — the single source of truth shared with the help index. Do not hard-code per-command filters here; add/adjust the availability arm instead
+- **inside a wizard**, the nav verbs (`continue`/`back`/`cancel`) come from the manifest via that availability filter, and the active step's tokens (`generate`, `1`, `reroll`, …) come from `active_step_choices()` fed through `wizard_step_suggestions()` — a wizard author adds neither a filter nor a bespoke branch here
 - **Help mirrors autocomplete.** The `help` index uses the same context + `command_availability`, so a visibility change updates both. Verify both surfaces when you change availability (full model: `docs/command-contexts.md`)
 - Global system commands (`save`, `reroll`, `cancel`) must stay visible whenever any draft is active; only hide them when `active_kind` is `None`
 - `entity_kind_for_root()` in `services/suggestions.rs` must map every supported root to its `EntityKind` so field completions work
@@ -109,6 +110,7 @@ When adding a new entity, update `EntityKind`, schemas, command handlers, and su
 - Actionable command text should be clickable.
 - Preferred path: backend emits `InlineNode::CommandRef`.
 - Fallback path: `markdown.ts` heuristics.
+- **Wizard prompts get clickability by construction:** build every step prompt with the `wizards/prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`), which render each `WizardChoice` as a `command_ref`. Never hand-build a wizard prompt with back-tick text — that was the dungeon-flow clickability regression.
 
 For any new command, ensure at least one explicit `command_ref` path exists in guidance output.
 

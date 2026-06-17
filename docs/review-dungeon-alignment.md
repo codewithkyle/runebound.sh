@@ -6,6 +6,13 @@
 > and `docs/feature-development.md`. Written on the `feature/dungeons` branch before merge so the
 > drift can be paid down deliberately rather than shipped.
 
+> **✅ Resolved (2026-06-17).** Findings 1–5 were paid down by the wizard-framework refactor
+> (`docs/create-wizard-refactor.md`, Option B): `create dungeon`'s intake half now runs on the generic
+> wizard engine (`desktop/src-tauri/src/wizards/`). The bespoke `commands/dungeon_flow.rs`,
+> `DungeonCreationFlow`, and the `main.rs` interceptor are deleted. The framework itself is documented in
+> `docs/architecture.md` §4 (Wizard Framework) + §8D, `docs/command-contexts.md` §1/§4, `docs/cli.md`
+> §4/§5, `docs/feature-development.md` §7, and `docs/render.md` §3. Per-finding status is noted inline below.
+
 ---
 
 ## TL;DR
@@ -88,7 +95,8 @@ if lowered == "create dungeon" || lowered.starts_with("create dungeon ") {
 > (`core::command::try_execute_onboarding`): a small step counter with typed answer fields,
 > intercepted before registry dispatch while active."*
 
-### Finding 1 — Step prompts emit back-tick text, not `command_ref` (the clickability regression)
+### Finding 1 — Step prompts emit back-tick text, not `command_ref` (the clickability regression) — ✅ Resolved
+*Fixed by construction: step prompts are built with `wizards/prompt.rs` (`wizard_menu`/`action_row`), which render every `WizardChoice` as a `command_ref`.*
 
 Every step prompt builds its `OutputDoc` from `heading` / `paragraph_text` / `image` /
 `list(text_node)` only — never `command_ref`. The actionable verbs are literal back-ticks inside
@@ -110,12 +118,13 @@ clickable; the plain-text linkifier in `App.tsx` only recognizes real command ro
   exists in guidance output."*
 - `docs/render.md §3` (CommandRef Rule) and `docs/render.md §8` / `docs/architecture.md §9`
   anti-patterns: *"Depending on markdown heuristics for command links → Emit explicit `command_ref` nodes."*
-- `docs/feature-development.md §7`: *"Use `command_ref` for actionable text."*
+- `docs/feature-development.md §8`: *"Use `command_ref` for actionable text."*
 
 > Note: the dungeon **card** (post-finalize) *does* use `command_ref` correctly
 > (`drafts.rs:710-718`), which is why the editor half feels right and only the wizard feels broken.
 
-### Finding 2 — The wizard has no `InputContext`; autocomplete is blind to it (the typeahead regression)
+### Finding 2 — The wizard has no `InputContext`; autocomplete is blind to it (the typeahead regression) — ✅ Resolved
+*Fixed: `InputContext::Wizard(id)` is resolved by `AppState::resolve_input_context()`, and the active step's tokens are surfaced via `active_step_choices()` / `wizard_step_suggestions()`.*
 
 `InputContext` has exactly three variants — `Default`, `ConfigEditor`, `EntityEditor(String)`
 (`command-specs/src/lib.rs:112-118`). **None represents "the dungeon wizard is active."** The wizard
@@ -132,7 +141,8 @@ against the normal command manifest. There is no typeahead for the menu options 
 - This is *strictly worse than the wizard it copied*: `start setup` at least gets the `ConfigEditor`
   context and surfaces `continue` in suggestions (`suggestions.rs:181-191`). The dungeon flow gets none.
 
-### Finding 3 — Flow verbs live outside the manifest (no help, no completion, no clickability fallback)
+### Finding 3 — Flow verbs live outside the manifest (no help, no completion, no clickability fallback) — ✅ Resolved
+*Fixed: `continue`/`back` are manifest commands (`AnyWizard`), `cancel` is `AnyEditorOrWizard`; per-step tokens come from the active step's `choices()`.*
 
 The wizard verbs (`generate`, `skip`, `1`/`2`/`3`, topology `0`-`9`, `continue`, `accept`,
 `reroll [hint]`, `set room <room> <type>`, `redo`) are raw-string matches inside `dungeon_flow.rs`
@@ -147,7 +157,8 @@ machinery the editor half already uses.
 **Rule violated:** `docs/architecture.md §5` / `docs/cli.md §2`: *"all command metadata lives in
 `command-specs/src/lib.rs`"* (single source of truth for names, subcommands, availability, help).
 
-### Finding 4 — A third, undocumented dispatch route inlined into `main.rs`
+### Finding 4 — A third, undocumented dispatch route inlined into `main.rs` — ✅ Resolved
+*Fixed: replaced by the single generic `try_execute_active_wizard` route (`wizards/runtime.rs`), documented in `docs/command-contexts.md` §4 (route 4). One route serves all wizards.*
 
 `docs/architecture.md §2` and `docs/command-contexts.md §4` enumerate exactly **two** intentional
 divergences from registry dispatch (desktop-override; onboarding interception) and the latter doc
@@ -157,11 +168,12 @@ literally titles the section *"Dispatch routes (there are three, not one)."* The
 doc was updated to reflect it.
 
 It also pushes command logic (the active-check, the flow call, and history-push) into `main.rs`,
-brushing against `docs/cli.md §7` / `docs/feature-development.md §8`: *"Do not add command business
+brushing against `docs/cli.md §7` / `docs/feature-development.md §9`: *"Do not add command business
 logic to `main.rs` or `router.rs`."* (Onboarding's equivalent logic lives in core's
 `execute_line`/`try_execute_onboarding`, `core/src/command.rs:261,333` — `main.rs` only forwards to it.)
 
-### Finding 5 — Fragile cross-language string coupling for the spinner
+### Finding 5 — Fragile cross-language string coupling for the spinner — ✅ Resolved
+*Fixed: the spinner reads the structured `CommandResponse.wizard: WizardView { step_id, awaiting_llm_label }`; `detectDungeonFlowScreen` and the marker-string matching are deleted.*
 
 The frontend infers which wizard screen it's on by substring-matching the *rendered prompt text*
 (`App.tsx:1076-1084` → drives `commandSpinnerLabel` `:1096-1110`). The matched literals duplicate the
@@ -170,7 +182,7 @@ Rust marker constants (`dungeon_flow.rs:25-31`) by hand and are already inconsis
 suffix `"Step 6 of 6 — Room Plan"`. Renumbering a step silently breaks the spinner with no
 compile-time error, and the em-dash must byte-match across both languages.
 
-A spinner *does* exist (so `docs/feature-development.md §7` "LLM commands must show a spinner" is
+A spinner *does* exist (so `docs/feature-development.md §8` "LLM commands must show a spinner" is
 nominally met), but it's wired through exactly the *"markdown/heuristic dependence"* the rendering docs
 warn against (`docs/render.md §8`) instead of keying off a structured signal or a real command name.
 
@@ -237,14 +249,16 @@ the staged intake; never stop at Option C.
 
 ## 5. Checklist mapping (against the docs' own gates)
 
-| Doc checklist item | `create faction` | `create dungeon` (intake) |
-|---|---|---|
-| Output uses `output_doc` + explicit `command_ref` for actions (`cli.md §8`, `feature-development.md §9`) | ✅ | ❌ back-tick text only |
-| Help + autocomplete verified in every context (`architecture.md §11`) | ✅ via `EntityEditor` | ❌ no context exists |
-| Manifest updated for all command-surface changes (`cli.md §8`) | ✅ | ❌ verbs absent from manifest |
-| No command business logic in `main.rs`/`router.rs` (`cli.md §7`) | ✅ | ⚠️ interceptor in `main.rs` |
-| Dispatch routes documented (`command-contexts.md §4`) | ✅ | ❌ third route undocumented |
-| Clickability via `command_ref`, not heuristics (`render.md §8`) | ✅ | ❌ + spinner text-sniffing |
+The third column is the original (pre-refactor) verdict; the fourth is after the wizard-framework refactor.
+
+| Doc checklist item | `create faction` | `create dungeon` (intake, before) | `create dungeon` (intake, now) |
+|---|---|---|---|
+| Output uses `output_doc` + explicit `command_ref` for actions (`cli.md §8`, `feature-development.md §10`) | ✅ | ❌ back-tick text only | ✅ via `wizards/prompt.rs` |
+| Help + autocomplete verified in every context (`architecture.md §11`) | ✅ via `EntityEditor` | ❌ no context exists | ✅ via `InputContext::Wizard` |
+| Manifest updated for all command-surface changes (`cli.md §8`) | ✅ | ❌ verbs absent from manifest | ✅ `continue`/`back`/`cancel` |
+| No command business logic in `main.rs`/`router.rs` (`cli.md §7`) | ✅ | ⚠️ interceptor in `main.rs` | ✅ one generic route in `wizards/runtime.rs` |
+| Dispatch routes documented (`command-contexts.md §4`) | ✅ | ❌ third route undocumented | ✅ route 4 documented |
+| Clickability via `command_ref`, not heuristics (`render.md §8`) | ✅ | ❌ + spinner text-sniffing | ✅ + structured `WizardView` spinner |
 
 ---
 

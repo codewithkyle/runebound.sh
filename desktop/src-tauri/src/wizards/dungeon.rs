@@ -1,14 +1,11 @@
 //! The dungeon wizard: the guided `create dungeon` flow expressed as declarative
-//! `WizardStep`s on the engine. Ported step-for-step from the former
-//! `commands/dungeon_flow.rs` (see docs/create-wizard-refactor.md §5). The services
-//! (`AiGenerationService`, `roll_dungeon_content_plan`) and the `finalize` hand-off
-//! into the dungeon editor are reused verbatim.
+//! `WizardStep`s on the engine (see docs/create-wizard-refactor.md §5 for the
+//! step map). The services (`AiGenerationService`, `roll_dungeon_content_plan`)
+//! and the `finalize` hand-off into the dungeon editor are reused verbatim.
 //!
-//! The step headings (`Step 6 of 6 — Room Plan`, `Create Dungeon — Story`) are now
-//! display text only: the frontend spinner keys off the structured `WizardView`
-//! signal (step id + `awaiting_llm_label`), not the heading strings. The marker
-//! constants survive as the bare heading text and are slated for inlining in
-//! Phase 4.
+//! The step headings are plain display text: the frontend spinner keys off the
+//! structured `WizardView` signal (step id + `awaiting_llm_label`), not the
+//! heading strings, so they carry no marker coupling.
 
 use std::sync::Arc;
 
@@ -35,14 +32,6 @@ use super::prompt::{action_row, wizard_menu};
 use super::session::WizardData;
 use super::wizard::{Wizard, WizardChoice, WizardStep, WizardTransition};
 
-/// Heading marker for the topology step; also the logical key the frontend maps to
-/// the bundled topology illustration.
-const STEP_E_MARKER: &str = "Create Dungeon — Step 5 of 6 — Topology";
-/// Heading marker for the room-plan review (legacy spinner keys off this).
-const PLAN_REVIEW_MARKER: &str = "Create Dungeon — Step 6 of 6 — Room Plan";
-/// Heading marker for the story review (legacy spinner keys off this).
-const STORY_REVIEW_MARKER: &str = "Create Dungeon — Story";
-
 /// Anchor (room) content types the GM may pin with `set room`. Excludes the
 /// overlay/tint types, which are never a room on their own.
 const SETTABLE_ROOM_TYPES: [&str; 8] = [
@@ -60,8 +49,8 @@ const SETTABLE_ROOM_TYPES: [&str; 8] = [
 // Accumulator
 // ---------------------------------------------------------------------------
 
-/// The dungeon wizard's accumulator — the fields the former `DungeonCreationFlow`
-/// held, minus the engine-owned `active`/`step`. `notice`/`story_notice` are
+/// The dungeon wizard's accumulator — the per-flow answers, with the cursor and
+/// history owned by the engine's `WizardSession`. `notice`/`story_notice` are
 /// transient (shown once on the next render, not persisted into the draft).
 #[derive(Debug, Clone, Default)]
 struct DungeonWizardData {
@@ -263,7 +252,7 @@ impl WizardStep for TopologyStep {
     fn prompt(&self, data: &WizardData) -> OutputDoc {
         // Heading, the topology illustration, then the prompt + clickable options.
         doc()
-            .with_block(heading(2, STEP_E_MARKER))
+            .with_block(heading(2, "Create Dungeon — Step 5 of 6 — Topology"))
             .with_block(image(
                 "topology",
                 "The nine dungeon topologies — each named form with its entrance (E) marked",
@@ -321,7 +310,7 @@ impl WizardStep for PlanReviewStep {
             .into_iter()
             .map(|line| vec![text_node(line)])
             .collect();
-        let mut document = doc().with_block(heading(2, PLAN_REVIEW_MARKER));
+        let mut document = doc().with_block(heading(2, "Create Dungeon — Step 6 of 6 — Room Plan"));
         if let Some(notice) = &d.notice {
             document = document.with_block(paragraph_text(notice.clone()));
         }
@@ -400,7 +389,7 @@ impl WizardStep for StoryReviewStep {
             document = document.with_block(paragraph_text(notice.clone()));
         }
         document
-            .with_block(heading(2, STORY_REVIEW_MARKER))
+            .with_block(heading(2, "Create Dungeon — Story"))
             .with_block(heading(3, format!("{name} — {location}")))
             .with_block(paragraph_text(story.clone()))
             .with_block(action_row(&self.choices(data)))
@@ -568,7 +557,7 @@ impl Wizard for DungeonWizard {
 }
 
 // ---------------------------------------------------------------------------
-// Shared helpers (ported from dungeon_flow.rs)
+// Shared helpers
 // ---------------------------------------------------------------------------
 
 /// Roll a fresh content plan into the accumulator. A new plan invalidates any story

@@ -52,9 +52,9 @@ pub fn action_row(choices: &[WizardChoice]) -> OutputBlock {
     paragraph_with_inlines(inlines)
 }
 
-/// Flatten a doc to plain text for the `output` fallback field. Keeps headings
-/// (so legacy spinner detection that reads the plain text still works) and
-/// renders command refs as their label. Images are skipped.
+/// Flatten a doc to plain text for the `output` fallback field (terminal history
+/// and the no-`output_doc` render path). Keeps headings, renders command refs as
+/// their label, and skips images.
 pub fn doc_to_plain_text(document: &OutputDoc) -> String {
     let mut out = String::new();
     for block in &document.blocks {
