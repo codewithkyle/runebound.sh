@@ -137,7 +137,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 ## 7. Playbook F: Add a New Wizard
 
-A *wizard* is a guided multi-step flow (ask a sequence of questions, then build an artifact) — `create dungeon` is the reference. The engine in `desktop/src-tauri/src/wizards/` owns dispatch, the nav verbs, clickable prompts, autocomplete, and the spinner signal; a new wizard is additive data + one trait impl. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
+A *wizard* is a guided multi-step flow (ask a sequence of questions, then build an artifact) — `create dungeon` is the reference. The host-agnostic engine is the standalone `wizard` crate (dispatch, the nav verbs, clickable prompts, autocomplete, and the spinner signal); `desktop/src-tauri/src/wizards/` only *binds* that engine to `AppState`. A new wizard is additive data + one trait impl. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
 
 ### Steps + wizard
 
@@ -152,7 +152,7 @@ A *wizard* is a guided multi-step flow (ask a sequence of questions, then build 
 
 4. Register the wizard with one line in `build_default_wizard_registry()` (`wizards/mod.rs`).
 5. Point the entry command at `start_wizard("<id>", state)` (mirror `create dungeon` in `commands/create_commands.rs`).
-6. **No plumbing edits.** Dispatch, `InputContext::Wizard`, the global verbs (`continue`/`back`/`cancel` + the in-wizard `help`), step typeahead (`active_step_suggestions` = the step's `suggest()` + globals), and the `WizardView` spinner signal all work unchanged. Give each step a `summary()` (for `help`) and `with_help(...)` on its choices; override `suggest()` only for staged multi-token args. If a wizard needs a brand-new *capability*, that is a shared engine change in `wizards/`, not per-wizard code (`docs/onboarding-wizard-port.md` tracks the planned extensions).
+6. **No plumbing edits.** Dispatch, `InputContext::Wizard`, the global verbs (`continue`/`back`/`cancel` + the in-wizard `help`), step typeahead (`active_step_suggestions` = the step's `suggest()` + globals), and the `WizardView` spinner signal all work unchanged. Give each step a `summary()` (for `help`) and `with_help(...)` on its choices; override `suggest()` only for staged multi-token args. If a wizard needs a brand-new *capability*, that is a shared engine change in the `wizard` crate, not per-wizard code (the onboarding wizards in `core/src/onboarding_wizard.rs` are the reference for engine-level seed/native extensions).
 
 ### Verify
 
@@ -238,4 +238,4 @@ Then manually test the affected command flows in desktop UI:
 
 ---
 
-*Last updated: 2026-06-15*
+*Last updated: 2026-06-17*

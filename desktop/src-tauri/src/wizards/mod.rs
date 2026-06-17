@@ -6,7 +6,8 @@
 //! Adding a wizard is additive: implement it under this module and register it in
 //! `build_default_wizard_registry()`. The plumbing never changes per wizard.
 //!
-//! See docs/create-wizard-refactor.md for the design and the entity↔wizard parallel.
+//! See docs/architecture.md §4 (Wizard Framework) and §8D for the design and the
+//! entity↔wizard parallel.
 
 use std::path::Path;
 use std::sync::Arc;

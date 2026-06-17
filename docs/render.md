@@ -112,7 +112,7 @@ For a new entity type (example: `quest`):
 5. Handle event branch in `desktop/src/App.tsx`
 6. Reuse generic `entity_card` renderer unless a genuinely new block type is required
 
-Existing cards live next to their drafts: `npc_entity_card`, `location_entity_card`, `faction_entity_card`, and `item_entity_card`.
+Existing cards live next to their drafts: `npc_entity_card`, `location_entity_card`, `faction_entity_card`, `item_entity_card`, `god_entity_card`, `event_entity_card`, and `dungeon_entity_card`.
 
 Recommended card composition:
 
@@ -171,5 +171,5 @@ Before merging rendering changes:
 
 ---
 
-*Last updated: 2026-06-15*  
+*Last updated: 2026-06-17*  
 *Keep this document aligned with rendering contract changes in the same PR.*

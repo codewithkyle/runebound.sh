@@ -8,7 +8,8 @@
 //! (which degrades the picker gracefully). The four entry points are four `Wizard`
 //! registrations that share those step values; each wizard's `seed` sets its flow
 //! + pre-fills from effective config, and its `finalize` writes the right config
-//! section — see docs/onboarding-wizard-port.md §3.2-§3.3.
+//! section — see docs/command-contexts.md §4-§5 and docs/config.md for the
+//! dispatch route, seed invariants, and config keys.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

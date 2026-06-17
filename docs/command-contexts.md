@@ -96,7 +96,7 @@ Most commands follow the registry path, but two routes bypass it. Know all three
 
 Each onboarding wizard seeds its accumulator from effective config on entry (`Wizard::seed(host)` → `seed_data` in `core/src/onboarding_wizard.rs`):
 
-- **Seed parity.** Every flow seeds `ollama_base_url` **unconditionally** from `load_effective(...)`, so the Ollama menu renders `2: Continue with <configured server>` rather than the `127.0.0.1` default. Seeding "only when empty" never picks up the configured server — this was the `start setup` "continue with 127.0.0.1" regression. (Locked by a test; see `docs/onboarding-wizard-port.md` §3.5.)
+- **Seed parity.** Every flow seeds `ollama_base_url` **unconditionally** from `load_effective(...)`, so the Ollama menu renders `2: Continue with <configured server>` rather than the `127.0.0.1` default. Seeding "only when empty" never picks up the configured server — this was the `start setup` "continue with 127.0.0.1" regression. (Enforced by `seed_data` in `core/src/onboarding_wizard.rs`, which seeds `ollama_base_url` unconditionally from `load_effective(...)`.)
 - **No config write until `finalize`.** Cancelling resets the wizard session (`active_id`/cursor/data) and writes nothing. Config is written only by each wizard's `finalize` (`finalize_full`/`finalize_vault`/`finalize_llm`/`finalize_model`).
 
 ---
@@ -123,7 +123,7 @@ When you touch command visibility, parsing, help, or onboarding:
 
 ---
 
-*Last updated: 2026-06-15*
+*Last updated: 2026-06-17*
 *Keep this aligned with `command-specs/src/lib.rs`, `core/src/command_parse.rs`, and the setup flow in the same PR as any change to those.*
 </content>
 </invoke>

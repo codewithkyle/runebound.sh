@@ -78,36 +78,54 @@ CommandSpec (command-specs)
 
 ```text
 desktop/src-tauri/src/
-|- main.rs                 # Tauri command wiring and app startup
-|- router.rs               # registry dispatch + fallback entity resolution
-|- app_state.rs            # AppState, EditorSession map-backed DraftEnvelope store
+|- main.rs                  # Tauri command wiring and app startup
+|- boot.rs                  # ordered startup tasks (spinner per task) before MOTD
+|- router.rs                # registry dispatch + fallback entity resolution
+|- app_state.rs             # AppState, EditorSession map-backed DraftEnvelope store
+|- utils.rs                 # shared desktop helpers (tone/topology normalization, …)
 |- commands/
-|  |- mod.rs               # registry construction + shared response helpers
-|  |- create_commands.rs   # create npc|location|faction|item
-|  |- npc_commands.rs      # npc show|rename|set|travel|reroll|save|cancel
-|  |- location_commands.rs # location show|rename|set|reroll|save|cancel
-|  |- faction_commands.rs  # faction show|rename|set|reroll|save|cancel
-|  |- item_commands.rs     # item show|rename|set|reroll|save|cancel
-|  |- entity_commands.rs   # load|show|preview|delete|undo
-|  `- system_commands.rs   # active-kind save|reroll|cancel
+|  |- mod.rs                # registry construction + shared response helpers
+|  |- create_commands.rs    # create npc|location|faction|item|event|god|dungeon
+|  |- npc_commands.rs       # npc show|rename|set|travel|reroll|save|cancel
+|  |- location_commands.rs  # location show|rename|set|reroll|save|cancel
+|  |- faction_commands.rs   # faction show|rename|set|reroll|save|cancel
+|  |- item_commands.rs      # item show|rename|set|reroll|save|cancel
+|  |- event_commands.rs     # event show|reroll|save|cancel
+|  |- god_commands.rs       # god show|rename|set|reroll|save|cancel
+|  |- dungeon_commands.rs   # dungeon show|rename|set|reroll|save|cancel
+|  |- entity_commands.rs    # load|show|preview|delete|undo
+|  |- system_commands.rs    # active-kind save|reroll|cancel
+|  |- calendar_commands.rs  # calendar import
+|  |- date_commands.rs      # date / date set
+|  |- time_delta_commands.rs# +/- relative time deltas
+|  |- moon_commands.rs      # moon phases
+|  |- publish_commands.rs   # publish entity markdown to the vault
+|  `- setup_commands.rs     # setup verbosity/help + native vault folder picker
 |- entities/
-|  |- kind.rs              # EntityKind + helpers
-|  |- schema.rs            # EntityFieldSpec + EntitySchema
-|  |- domain.rs            # EntityDomain trait + result helpers
-|  |- registry.rs          # EntityDomainRegistry builder
-|  `- domains/             # npc|location|faction|item domain adapters
-|- wizards/                # binds the `wizard` engine crate to AppState
-|  |- mod.rs               # impl WizardHost for AppState + build_default_wizard_registry() + re-exports
-|  `- dungeon.rs           # the dungeon wizard (declarative steps, impl Wizard<AppState>)
+|  |- mod.rs                # module exports
+|  |- kind.rs               # EntityKind + helpers
+|  |- schema.rs             # EntityFieldSpec + EntitySchema
+|  |- domain.rs             # EntityDomain trait + result helpers
+|  |- common.rs             # shared domain helpers/messaging
+|  |- registry.rs           # EntityDomainRegistry builder
+|  `- domains/              # npc|location|faction|item|event|god|dungeon domain adapters
+|- wizards/                 # binds the `wizard` engine crate to AppState
+|  |- mod.rs                # impl WizardHost for AppState + build_default_wizard_registry() + re-exports
+|  `- dungeon.rs            # the dungeon wizard (declarative steps, impl Wizard<AppState>)
 |- repositories/
-|  `- mod.rs               # repository traits + Prod* implementations
+|  `- mod.rs                # repository traits + Prod* implementations
 `- services/
-   |- ai_generation.rs     # seed generation
-   |- entity_reroll.rs     # field reroll generation
-   |- entity_persistence.rs# save workflows
-   |- entity_admin.rs      # resolve/load/delete/undo/ensure helpers
-   |- suggestions.rs       # autocomplete and reference suggestions
-   `- vault_sync.rs        # startup vault -> db sync
+   |- mod.rs                # module exports
+   |- ai_generation.rs      # seed generation
+   |- entity_reroll.rs      # field reroll generation
+   |- entity_persistence.rs # save workflows
+   |- entity_admin.rs       # resolve/load/delete/undo/ensure helpers
+   |- suggestions.rs        # autocomplete and reference suggestions
+   |- vault_sync.rs         # startup vault -> db sync
+   |- publish.rs            # entity frontmatter -> Obsidian markdown rendering
+   |- ollama_chat.rs        # shared Ollama /api/chat plumbing (generation + reroll)
+   |- mention_extraction.rs # Tier-2 LLM link generation for unknown entities
+   `- vault_ref.rs          # shared @reference index (AI context + autocomplete)
 ```
 
 `main.rs` is now thin application wiring, not a command business logic sink.
@@ -130,7 +148,7 @@ This setup keeps command modules small and makes onboarding new entity types a m
 
 Multi-step *wizards* (guided flows like `create dungeon` that ask a sequence of questions before producing an artifact) use the same additive, registry-backed pattern as entities — deliberately mirrored so the two read the same way. A wizard is **declarative data plus one trait impl**; the plumbing (dispatch, navigation verbs, clickable prompts, autocomplete context, the spinner signal) lives once and never changes per wizard.
 
-The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs` is the concrete wizard. This split is what lets core/CLI reuse the same engine (see `docs/onboarding-wizard-port.md`).
+The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs` is the concrete wizard. This split is what lets core/CLI reuse the same engine — onboarding runs on it via `core/src/onboarding_wizard.rs`.
 
 | Entity domain (one-shot create) | Wizard (multi-step flow) |
 |---|---|
@@ -153,6 +171,22 @@ Key pieces (all in the `wizard` crate unless noted):
 - **Autocomplete for free**: `resolve_input_context` returns `InputContext::Wizard(id)` while a wizard is active; the suggestion service then early-returns `active_step_suggestions`, which combines the step's `suggest()` (per-step tokens + staged args) with the always-available global verbs (`back`/`cancel`/`help`). The step owns the whole command surface, so only the commands valid *here* are offered.
 
 The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the reference implementation. See §8D for the "Add a New Wizard" playbook.
+
+### Combining the two: a kind can be wizard-created *and* entity-edited
+
+The wizard and entity-domain patterns are **complementary, not mutually exclusive** — and a single entity kind can use both. A wizard's `finalize()` can hand its artifact straight into an entity draft, so the kind is *created* through a guided multi-step flow and then *edited* with the ordinary one-shot entity commands.
+
+**Dungeon is the live example of both at once.** `create dungeon` launches `DungeonWizard` (registered in `build_default_wizard_registry()`); its `finalize()` generates the dungeon and then calls `editor.set_dungeon(draft)` — the exact hand-off a one-shot create handler performs. From that moment the kind behaves like any other entity: the live context flips from `InputContext::Wizard("dungeon")` to `InputContext::EntityEditor("dungeon")` (the entity editor wins precedence — see `docs/command-contexts.md` §1; the wizard session resets on `Complete`), and the full `DungeonDomain` takes over — `dungeon show|rename|set|reroll|save|cancel`. So `EntityKind::Dungeon`, `DungeonDraft` + `dungeon_entity_card` (`drafts.rs`), and the `dungeon` command module coexist with `DungeonWizard`; the two halves meet at `finalize()`.
+
+**Which to reach for:**
+
+| Need | Pattern |
+|---|---|
+| Creation needs a guided sequence (several questions, LLM steps, branching), result is *not* further edited | Wizard only (e.g. onboarding — `finalize` writes config, no entity draft) |
+| Creation is a single prompt, result is editable afterward | Entity domain only (e.g. `create npc`) |
+| Creation needs a guided sequence **and** the result stays editable | **Both** — a `Wizard` for the create path whose `finalize()` opens an `EntityDomain` draft for the edit path (the dungeon model) |
+
+If you build a kind that needs both, follow §8D for the wizard and §8C for the entity domain, and have the wizard's `finalize()` call the same `editor.set_<kind>(draft)` hand-off the create handler would.
 
 ## 5. Command Manifest and Metadata Rules
 
@@ -197,6 +231,8 @@ Handlers orchestrate; services implement workflows.
 - `EntityAdminService` handles entity resolve/load/delete/undo and ensure-location flows
 - `SuggestionService` handles autocomplete and reference suggestions
 - `VaultSyncService` handles startup scan and reconciliation
+
+Alongside these orchestrating `*Service` types, `services/` also holds shared support modules (free functions, not `Service` structs): `publish.rs` (entity frontmatter → Obsidian markdown), `ollama_chat.rs` (shared Ollama `/api/chat` plumbing for generation + reroll), `vault_ref.rs` (the `@reference` index used by AI context + autocomplete), and `mention_extraction.rs` (Tier-2 LLM link generation for not-yet-known entities).
 
 Use command modules for command syntax and user-facing response behavior. Use services for heavy domain logic.
 
@@ -265,7 +301,7 @@ Mirrors C, but for a sequence of prompts rather than a one-shot create. The plum
 5. **No plumbing edits**: dispatch (`try_execute_active_wizard`), the nav verbs, `InputContext::Wizard`, the spinner signal, and step-token autocomplete all work without changes. The nav verbs already have `command_availability` arms (`continue`/`back` = `AnyWizard`, `cancel` = `AnyEditorOrWizard`).
 6. **Verify**: `cargo test suggestions` (step-token typeahead), then manually walk the flow — every step's choices clickable, `back`/`cancel` at each step, spinner on LLM steps, `finalize` produces the artifact.
 
-The only edits outside `wizards/<name>.rs` are the one registry line and the launch call. If a wizard needs a new step *capability* (a new `WizardTransition`, a config seed), that is an engine change in the `wizard` crate shared by all wizards — see `docs/onboarding-wizard-port.md` for the planned extensions.
+The only edits outside `wizards/<name>.rs` are the one registry line and the launch call. If a wizard needs a new step *capability* (a new `WizardTransition`, a config seed), that is an engine change in the `wizard` crate shared by all wizards (the onboarding wizards in `core/src/onboarding_wizard.rs` are the reference for engine-level seed/native extensions).
 
 ---
 
@@ -323,5 +359,5 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-*Last updated: 2026-06-15*  
+*Last updated: 2026-06-17*  
 *If this document drifts from the codebase, update it in the same PR as the architecture change.*

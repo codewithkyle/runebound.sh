@@ -9,8 +9,8 @@
 - No global prefix. Users type direct commands (`status`, `config show`, `create npc`).
 - Structured output (`output_doc`) is preferred; plain text (`output`) is compatibility fallback.
 - Commands are split by execution target (the authoritative list is each `CommandSpec`'s `execution` field in `command-specs/src/lib.rs` — treat the lists below as a guide, not a source of truth):
-  - Core: `status`, `config`, `help`, `exit`, `setup`, `ping`
-  - Desktop: `create`, `npc`, `location`, `faction`, `item`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `publish`, `clear`, `history`, `calendar`, `date`, `moon`, `+`, `-`
+  - Core: `status`, `config`, `help`, `exit`, `setup`, `model`, `ping`
+  - Desktop: `create`, `start`, `npc`, `location`, `faction`, `item`, `event`, `god`, `dungeon`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `continue`, `back`, `publish`, `clear`, `history`, `calendar`, `date`, `moon`, `+`, `-`
 - `help` is registered in **both** registries: the desktop entry overrides core so the help index can reflect the open entity editor (see `docs/command-contexts.md`).
 - Router remains dispatch-only (`desktop/src-tauri/src/router.rs`).
 
@@ -90,7 +90,7 @@ Key behavior:
 
 Current active kinds:
 
-- `None`, `Npc`, `Location`, `Faction`, `Item`
+- `None`, `Npc`, `Location`, `Faction`, `Item`, `Event`, `God`, `Dungeon`
 
 When adding a new entity, update `EntityKind`, schemas, command handlers, and suggestion filters together.
 
@@ -144,10 +144,10 @@ For any new command, ensure at least one explicit `command_ref` path exists in g
 
 ### Entity Command Rules
 
-- Entity roots (`npc`, `location`, `faction`, `item`, future kinds) must delegate to their `EntityDomain` implementations.
+- Entity roots (`npc`, `location`, `faction`, `item`, `event`, `god`, `dungeon`, future kinds) must delegate to their `EntityDomain` implementations.
 - `system save|reroll|cancel` rely on `EditorSession::active_kind`; keep drafts synchronized whenever commands mutate state.
 - `entity_commands.rs` (load/show/preview/delete/undo) must hydrate drafts and emit client events using the shared builders in `entities/domains/*`.
-- Register every entity domain with `EntityDomainRegistry` in `main.rs` so registry lookups succeed inside command modules.
+- Register every entity domain in `build_default_registry()` (`entities/registry.rs`), which `main.rs` wires into `AppState`, so registry lookups succeed inside command modules.
 
 ---
 
@@ -355,5 +355,5 @@ publish help
 
 ---
 
-*Last updated: 2026-06-15*  
+*Last updated: 2026-06-17*  
 *Update this doc whenever command UX contracts or command flow rules change.*

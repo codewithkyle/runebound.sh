@@ -1,7 +1,8 @@
 //! The dungeon wizard: the guided `create dungeon` flow expressed as declarative
-//! `WizardStep`s on the engine (see docs/create-wizard-refactor.md §5 for the
-//! step map). The services (`AiGenerationService`, `roll_dungeon_content_plan`)
-//! and the `finalize` hand-off into the dungeon editor are reused verbatim.
+//! `WizardStep`s on the engine (see docs/architecture.md §4 for the wizard
+//! framework and §8D for the "add a wizard" playbook). The services
+//! (`AiGenerationService`, `roll_dungeon_content_plan`) and the `finalize`
+//! hand-off into the dungeon editor are reused verbatim.
 //!
 //! The step headings are plain display text: the frontend spinner keys off the
 //! structured `WizardView` signal (step id + `awaiting_llm_label`), not the

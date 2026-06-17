@@ -5,8 +5,9 @@
 //!
 //! The engine is host-agnostic: it is generic over a host type `H` (the
 //! `WizardHost`) so the same engine drives the desktop app (`H = AppState`) and,
-//! after the onboarding port, core/CLI. See docs/create-wizard-refactor.md for the
-//! design and docs/onboarding-wizard-port.md for the cross-layer port.
+//! after the onboarding port, core/CLI. See docs/architecture.md §4 (Wizard
+//! Framework) and §8D for the design and the entity↔wizard parallel; the
+//! onboarding wizards live in core/src/onboarding_wizard.rs.
 
 pub mod prompt;
 pub mod registry;
