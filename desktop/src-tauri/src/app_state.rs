@@ -11,6 +11,7 @@ use runebound_models::{
 };
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
+use crate::wizards::{WizardRegistry, WizardSession};
 use crate::repositories::{
     Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
     GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
@@ -505,7 +506,13 @@ pub(crate) struct AppState {
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
     pub(crate) domains: Arc<EntityDomainRegistry>,
+    /// Registry of multi-step wizards, mirroring `domains`. Adding a wizard is one
+    /// line in `build_default_wizard_registry()`.
+    pub(crate) wizards: Arc<WizardRegistry>,
+    /// Live state of the active wizard (cursor, history, accumulator).
+    pub(crate) wizard_session: Mutex<WizardSession>,
     /// In-memory state for the guided `create dungeon` flow (steps A–E).
+    /// Superseded by the wizard engine; retained until Phase 4 removes it.
     pub(crate) dungeon_flow: Mutex<DungeonCreationFlow>,
     /// Cached result of the boot LLM health probe, reused to render the MOTD
     /// without re-probing the Ollama server.
@@ -565,31 +572,34 @@ impl AppState {
         self.domains.clone()
     }
 
-    /// Resolve the current input context that gates autocomplete + help. An open
-    /// entity draft takes precedence over an in-progress setup wizard. This is the
-    /// single resolution point shared by the suggestion service and the desktop
-    /// `help` handler so the two cannot drift (see docs/command-contexts.md).
-    ///
-    /// Phase 2 will add an `InputContext::Wizard(id)` arm here once `AppState`
-    /// owns a `WizardSession`; for now an active wizard does not exist.
+    pub(crate) fn wizards(&self) -> Arc<WizardRegistry> {
+        self.wizards.clone()
+    }
+
+    /// Resolve the current input context that gates autocomplete + help. Precedence:
+    /// an open entity draft, then an active wizard, then the setup/config wizard,
+    /// else the default surface. This is the single resolution point shared by the
+    /// suggestion service and the desktop `help` handler so the two cannot drift
+    /// (see docs/command-contexts.md).
     pub(crate) async fn resolve_input_context(&self) -> InputContext {
         let active_kind = {
             let editor = self.editor_session.lock().await;
             editor.active_kind()
         };
-        match active_kind {
-            Some(kind) => InputContext::EntityEditor(kind.as_str().to_string()),
-            None => {
-                let onboarding_active = {
-                    let service = self.command_service.lock().await;
-                    service.session().onboarding.active
-                };
-                if onboarding_active {
-                    InputContext::ConfigEditor
-                } else {
-                    InputContext::Default
-                }
-            }
+        if let Some(kind) = active_kind {
+            return InputContext::EntityEditor(kind.as_str().to_string());
+        }
+        if let Some(id) = self.wizard_session.lock().await.active_id {
+            return InputContext::Wizard(id.to_string());
+        }
+        let onboarding_active = {
+            let service = self.command_service.lock().await;
+            service.session().onboarding.active
+        };
+        if onboarding_active {
+            InputContext::ConfigEditor
+        } else {
+            InputContext::Default
         }
     }
 }

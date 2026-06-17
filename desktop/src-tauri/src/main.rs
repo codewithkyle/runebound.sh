@@ -8,6 +8,7 @@ mod repositories;
 mod router;
 mod services;
 mod utils;
+mod wizards;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ use crate::commands::setup_commands::{self, FolderPick};
 
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
+use crate::wizards::build_default_wizard_registry;
 use crate::repositories::{
     DocumentRepository, EventRepository, FactionRepository, GenerationRepository, GodRepository,
     ItemRepository, LocationRepository, NpcRepository, ProdDocumentRepository, ProdEventRepository,
@@ -93,9 +95,25 @@ async fn run_command(
         return Ok(service.execute_line(&line).await);
     }
 
+    // Generic wizard dispatch: while a wizard is active, route the raw line to the
+    // wizard engine before registry dispatch, so step answers like `"2"` or a
+    // free-text premise aren't parsed as commands. This is the single, first-class
+    // generalization of the bespoke dungeon-flow interception below.
+    if let Some(response) =
+        crate::wizards::try_execute_active_wizard(&normalized_input, state.inner()).await?
+    {
+        let trimmed = normalized_input.trim();
+        if !trimmed.is_empty() {
+            let mut service = state.command_service.lock().await;
+            service.session_mut().push_history(trimmed, 50);
+        }
+        return Ok(response);
+    }
+
     // Guided dungeon-creation flow: while active, route the raw line to the flow
     // state machine and bypass registry dispatch (exactly how onboarding does),
     // so step answers like `"2"` or a free-text premise aren't parsed as commands.
+    // Superseded by the wizard engine above; retained (dead) until Phase 4.
     let dungeon_flow_active = {
         let flow = state.dungeon_flow.lock().await;
         flow.active
@@ -181,6 +199,7 @@ fn main() {
     let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
 
     let domains = Arc::new(build_default_registry());
+    let wizards = Arc::new(build_default_wizard_registry());
 
     let app_state = AppState {
         workspace_root,
@@ -199,6 +218,8 @@ fn main() {
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
         domains,
+        wizards,
+        wizard_session: Mutex::new(crate::wizards::WizardSession::default()),
         dungeon_flow: Mutex::new(crate::app_state::DungeonCreationFlow::default()),
         boot_ollama_health: Mutex::new(None),
     };
