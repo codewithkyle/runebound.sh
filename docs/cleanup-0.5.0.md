@@ -148,26 +148,50 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 2 — Tooling & dead-code sweep
+## Phase 2 — Tooling & dead-code sweep — **DONE ✅ (2026-06-17)**
 
 *Goal: cheap, low-risk wins that make every later phase safer to verify.*
 
-- [ ] **P2.1 — Clippy clean + gated** · High · ✅
+> **Outcome:** Clippy is clean across the workspace and the desktop crate under
+> `-D warnings`, and `make build` now gates on it (plus `cargo fmt --check`) via a
+> new `make lint` target. Decisions taken with the user: (1) the gate is a **hard
+> fail** (`-D warnings`); (2) the whole tree was `cargo fmt`'d first — it carried
+> ~63 pre-existing rustfmt deviations — as a **separate commit**, so the clippy
+> diff stays focused; (3) **P2.5 deferred → P5.2** (the LLM sampling literals live
+> in the `ai_generation`/`entity_reroll` fan-out P5.2 collapses).
+>
+> The live clippy counts were higher than the stale baseline (~11 workspace lib +
+> 59 desktop). Most cleared via `cargo clippy --fix`; the rest hand-fixed. A few
+> are **allowed-with-note**, each tagged for removal when its owning phase lands:
+> command-handler `into_iter` (`should_implement_trait`) → **P7.5**;
+> `ai_generation`/`entity_reroll` `ptr_arg` + `wrong_self_convention` → **P5.2**;
+> `entities/common` `result_large_err` → **P5.2**; `repositories::upsert_index`
+> `too_many_arguments` → **P6**. New finding (not in the original review): 6 dead
+> `render_*_markdown` thin wrappers in `publish.rs` — deleted god/event
+> (unreferenced) and `#[cfg(test)]`-gated the other four (test-only).
+>
+> Verified: both clippy targets exit 0 under `-D warnings`; dnd-core 90 + desktop
+> 117 tests; `tsc --noEmit` + `vite build` clean; `make lint` exits 0 on a clean
+> tree and **non-zero** on a reintroduced warning (smoke-tested); `make build`
+> exits 0. *Remaining manual check (left to the user): launch the app and confirm
+> entity create/show/save/cancel still render after the App.tsx deletion.*
+
+- [x] **P2.1 — Clippy clean + gated** · High · ✅ — *done: clean on both targets under `-D warnings`; new `make lint` target gates `make build` on clippy + `cargo fmt --check`. Whole tree `cargo fmt`'d first (separate commit). Allow-with-note items tagged for P5.2/P6/P7.5 (see Outcome).*
   7 warnings in `dnd-core`, 59 in `dnd-desktop`; `make build` runs `cargo check`, so they never gate.
   **Fix:** clear the warnings (`cargo clippy --fix` for the mechanical ones — `identity_op`, `needless_return`, etc. — hand-fix the rest), then add a clippy step to `make build` / CI, ideally `-D warnings` once clean.
 
-- [ ] **P2.2 — Delete App.tsx dead draft state** · High · ✅
+- [x] **P2.2 — Delete App.tsx dead draft state** · High · ✅ — *done: deleted the 8 write-only signals + their `applyClientEvent` cases + 7 draft imports (net −97 lines); `outputDocFromClientEvent`/`entity_card` render path unchanged; `tsc` + build clean.*
   `desktop/src/App.tsx:94–101` declares `editorMode` + 7 `*Draft` signals that are **set** in `applyClientEvent` (`:533–613`) but **never read** (zero getter call sites). The visible card renders from `client_event.entity_card` (`:644`).
   **Fix:** delete the 8 signals and collapse `applyClientEvent` to just `clear_terminal` / `exit_requested` (+ no-op default). Removes ~115 lines and the frontend's accidental mirror of the backend per-entity branching. Drop the now-unused `*Draft` type imports.
 
-- [ ] **P2.3 — Doubled `#[cfg(test)]`** · Low · ✅
+- [x] **P2.3 — Doubled `#[cfg(test)]`** · Low · ✅ — *done: removed the duplicate attribute in `suggestions.rs` (now :897 after fmt).*
   `services/suggestions.rs:902–903`. Delete the duplicate attribute line.
 
-- [ ] **P2.4 — Audit `#[allow(dead_code)]`** · Low · 🔶
+- [x] **P2.4 — Audit `#[allow(dead_code)]`** · Low · 🔶 — *done: the P5-groundwork allows (schema/registry/`ALL_ENTITY_KINDS`/wizard variants/`DonjonCalendarJson`/etc.) are intentional and kept (re-audit after P5/P7). The one the audit flagged as "genuinely dead" — `DesktopHandlerInvocation::tokens` — was a **false positive**: it's used by the date/time-delta handlers (which need original casing), so only the stale `#[allow(dead_code)]` was removed, not the field.*
   Scattered on `EntityDomain::schema()`, `EntityFieldSpec::value_kind`, `EntitySchema::kind`, `EntityKind::as_str`, `ALL_ENTITY_KINDS`, `WizardTransition`/`NativeAction` variants, `DonjonCalendarJson` fields, etc. Several mark metadata that *should* be live (and will become live in P5).
   **Fix:** for each, either wire it up or delete it. Track which are "becomes-live-in-P5" vs genuinely dead. Re-run after P5/P7 to remove the rest.
 
-- [ ] **P2.5 — Name the magic LLM sampling constants** · Low · 🔶
+- [ ] **P2.5 — Name the magic LLM sampling constants** · Low · 🔶 — **DEFERRED → P5.2** *(by decision: the literals live in the `ai_generation` (8×) + `entity_reroll` (7×) fan-out P5.2 collapses; hoisting now would churn ~15 call sites P5 rewrites. Folds into P5.2's generator/reroll-loop extraction.)*
   `services/ai_generation.rs` repeats `"temperature"/"top_p"/"repeat_penalty"` literals ~8× with small per-kind variations and no rationale.
   **Fix:** hoist to named consts (or per-kind config). Best done alongside the P5 generator-loop extraction so they land in one place.
 
