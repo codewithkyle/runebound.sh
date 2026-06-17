@@ -3,6 +3,12 @@ import { invoke } from "@tauri-apps/api/core";
 export type CommandManifest = {
   commands: CommandSpec[];
   aliases: CommandAlias[];
+  spinner_hints: SpinnerHint[];
+};
+
+export type SpinnerHint = {
+  command: string;
+  label: string;
 };
 
 export type CommandSpec = {

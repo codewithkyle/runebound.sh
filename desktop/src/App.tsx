@@ -357,7 +357,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, wizardView());
+    const spinnerLabel = commandSpinnerLabel(raw, wizardView(), manifest());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -883,8 +883,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
-const OLLAMA_TEST_LABEL = "testing ollama connection";
-
 // Pick the spinner label for a submission made inside a wizard, from the
 // structured `WizardView` (no prompt-text matching). A step that declares an
 // `awaiting_llm_label` (the dungeon plan/story screens, the onboarding Ollama
@@ -913,97 +911,36 @@ function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null 
   return isLocalAction ? null : wizard.awaiting_llm_label;
 }
 
-function commandSpinnerLabel(raw: string, wizard: WizardView | null): string | null {
+function commandSpinnerLabel(
+  raw: string,
+  wizard: WizardView | null,
+  manifest: CommandManifest | null,
+): string | null {
   const lowered = raw.trim().toLowerCase();
   // Inside a wizard, every submission is intercepted by the wizard runtime, so
   // only the wizard's own spinner logic applies (no `create`/`reroll` fallthrough).
   if (wizard) {
     return wizardSpinnerLabel(wizard, lowered);
   }
-  // Commands that always probe the Ollama server.
-  if (lowered === "test ollama") {
-    return OLLAMA_TEST_LABEL;
+  const tokens = lowered.split(/\s+/).filter(Boolean);
+  // Help/usage invocations spend no LLM or server call, so they get no spinner.
+  if (tokens.includes("help")) {
+    return null;
   }
-  if (lowered === "ping" || lowered === "reconnect") {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (lowered === "config test") {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (lowered === "model" || lowered === "setup model") {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (lowered === "create npc" || lowered.startsWith("create npc ")) {
-    return "generating npc";
-  }
-  if (lowered === "create location" || lowered.startsWith("create location ")) {
-    return "generating location";
-  }
-  if (lowered === "create faction" || lowered.startsWith("create faction ")) {
-    return "generating faction";
-  }
-  if (lowered === "create item" || lowered.startsWith("create item ")) {
-    return "generating item";
-  }
-  if (lowered === "create event" || lowered.startsWith("create event ")) {
-    return "generating event";
-  }
-  if (lowered === "create god" || lowered.startsWith("create god ")) {
-    return "generating god";
-  }
-  if (lowered === "reroll" || lowered.startsWith("reroll ")) {
-    // `reroll <beat>` on a dungeon regenerates a single card, not the whole draft.
-    const arg = lowered.slice("reroll".length).trim().split(/\s+/)[0];
-    if (["entrance", "puzzle", "setback", "climax", "resolution", "1", "2", "3", "4", "5"].includes(arg)) {
-      return "rerolling beat";
+  // The spinner taxonomy (which commands generate, and their labels) lives in the
+  // manifest; the frontend just matches the longest command prefix. No command
+  // names or labels are re-encoded here.
+  let best: { length: number; label: string } | null = null;
+  for (const hint of manifest?.spinner_hints ?? []) {
+    const hintTokens = hint.command.split(" ");
+    if (hintTokens.length > tokens.length) {
+      continue;
     }
-    return "rerolling draft";
+    if (hintTokens.every((token, index) => token === tokens[index])) {
+      if (!best || hintTokens.length > best.length) {
+        best = { length: hintTokens.length, label: hint.label };
+      }
+    }
   }
-  if (lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
-    return "rerolling npc";
-  }
-  if (lowered === "location reroll" || lowered.startsWith("location reroll ")) {
-    return "rerolling location";
-  }
-  if (lowered === "faction reroll" || lowered.startsWith("faction reroll ")) {
-    return "rerolling faction";
-  }
-  if (lowered === "item reroll" || lowered.startsWith("item reroll ")) {
-    return "rerolling item";
-  }
-  if (lowered === "event reroll" || lowered.startsWith("event reroll ")) {
-    return "rerolling event";
-  }
-  if (lowered === "god reroll" || lowered.startsWith("god reroll ")) {
-    return "rerolling god";
-  }
-  // A per-beat reroll regenerates one beat. (Whole-dungeon `reroll` is covered by
-  // the generic "rerolling draft" branch above.)
-  if (lowered === "dungeon reroll" || lowered.startsWith("dungeon reroll ")) {
-    return "rerolling beat";
-  }
-  if (
-    lowered.startsWith("npc save") ||
-    lowered.startsWith("location save") ||
-    lowered.startsWith("item save") ||
-    lowered.startsWith("event save") ||
-    lowered.startsWith("god save") ||
-    lowered.startsWith("dungeon save") ||
-    lowered === "save"
-  ) {
-    return "saving draft";
-  }
-  if (lowered.startsWith("faction save")) {
-    return "saving draft";
-  }
-  // `publish` writes to the vault and runs LLM-assisted entity linking, which
-  // can take a few seconds. `publish help` is just text, so exclude it.
-  if (
-    (lowered === "publish" || lowered.startsWith("publish ")) &&
-    lowered !== "publish help" &&
-    !lowered.startsWith("publish help ")
-  ) {
-    return "publishing document";
-  }
-  return null;
+  return best?.label ?? null;
 }

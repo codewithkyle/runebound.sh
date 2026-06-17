@@ -31,6 +31,20 @@ impl From<HandlerMetadataDescriptor> for HandlerMetadata {
 pub struct CommandManifest {
     pub commands: Vec<CommandSpec>,
     pub aliases: Vec<CommandAlias>,
+    /// Spinner/latency hints, so the frontend picks a progress label by looking up
+    /// the typed command instead of re-deriving the command taxonomy from input
+    /// strings. See [`spinner_hints`].
+    pub spinner_hints: Vec<SpinnerHint>,
+}
+
+/// A spinner label for a command, keyed by its space-joined normalized command
+/// prefix (`"create npc"`, `"npc reroll"`, `"publish"`, …). The frontend matches
+/// the longest prefix of the user's input and shows `label` while the command
+/// runs. Single source of truth so the spinner taxonomy lives with the manifest.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SpinnerHint {
+    pub command: String,
+    pub label: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -213,6 +227,56 @@ pub fn command_argument_kind(name: &str) -> Option<ArgumentKind> {
         "load" | "delete" | "show" | "preview" | "publish" => Some(ArgumentKind::EntitySearch),
         _ => None,
     }
+}
+
+/// The spinner labels for commands that run an LLM/server call, keyed by command
+/// prefix. The frontend matches the longest prefix of the user's input. Commands
+/// driven by a wizard (e.g. `create dungeon`) are absent — the wizard supplies its
+/// own `awaiting_llm_label`. Single source of truth: changing a label or adding a
+/// generating command happens here, not in the frontend.
+pub fn spinner_hints() -> Vec<SpinnerHint> {
+    const HINTS: &[(&str, &str)] = &[
+        // `create <kind>` generation (dungeon is wizard-driven, so it is omitted).
+        ("create npc", "generating npc"),
+        ("create location", "generating location"),
+        ("create faction", "generating faction"),
+        ("create item", "generating item"),
+        ("create event", "generating event"),
+        ("create god", "generating god"),
+        // `<kind> reroll` regeneration (dungeon reroll targets a single beat).
+        ("npc reroll", "rerolling npc"),
+        ("location reroll", "rerolling location"),
+        ("faction reroll", "rerolling faction"),
+        ("item reroll", "rerolling item"),
+        ("event reroll", "rerolling event"),
+        ("god reroll", "rerolling god"),
+        ("dungeon reroll", "rerolling beat"),
+        // Bare `reroll` is the active-kind regenerate; a single label covers it.
+        ("reroll", "rerolling draft"),
+        // Saving any draft writes to the vault + runs entity linking.
+        ("save", "saving draft"),
+        ("npc save", "saving draft"),
+        ("location save", "saving draft"),
+        ("faction save", "saving draft"),
+        ("item save", "saving draft"),
+        ("event save", "saving draft"),
+        ("god save", "saving draft"),
+        ("dungeon save", "saving draft"),
+        ("publish", "publishing document"),
+        // Commands that probe the Ollama server (`reconnect` is the `ping` alias).
+        ("ping", "testing ollama connection"),
+        ("reconnect", "testing ollama connection"),
+        ("config test", "testing ollama connection"),
+        ("model", "testing ollama connection"),
+        ("setup model", "testing ollama connection"),
+    ];
+    HINTS
+        .iter()
+        .map(|(command, label)| SpinnerHint {
+            command: (*command).to_string(),
+            label: (*label).to_string(),
+        })
+        .collect()
 }
 
 pub fn handler_metadata_for(root: &str) -> Option<HandlerMetadataDescriptor> {
@@ -1249,6 +1313,7 @@ pub fn command_manifest() -> CommandManifest {
                 summary: "setup start alias".to_string(),
             },
         ],
+        spinner_hints: spinner_hints(),
     }
 }
 
@@ -1528,6 +1593,42 @@ mod tests {
                 "{root} must not be an entity-search argument context",
             );
         }
+    }
+
+    #[test]
+    fn spinner_hints_reference_real_commands() {
+        let manifest = command_manifest();
+        let mut known: HashSet<String> = manifest.commands.iter().map(|c| c.name.clone()).collect();
+        for alias in &manifest.aliases {
+            if let Some(first) = alias.from.first() {
+                known.insert(first.clone());
+            }
+        }
+
+        assert!(!manifest.spinner_hints.is_empty());
+        for hint in &manifest.spinner_hints {
+            let root = hint.command.split(' ').next().unwrap_or("");
+            assert!(
+                known.contains(root),
+                "spinner hint `{}` has root `{root}` that is not a command or alias",
+                hint.command,
+            );
+            assert!(
+                !hint.label.is_empty(),
+                "spinner hint `{}` has no label",
+                hint.command
+            );
+        }
+
+        // `create dungeon` is wizard-driven (its spinner comes from the wizard's
+        // awaiting_llm_label), so it must not carry a manifest spinner hint.
+        assert!(
+            !manifest
+                .spinner_hints
+                .iter()
+                .any(|hint| hint.command == "create dungeon"),
+            "create dungeon is wizard-driven and must not have a manifest spinner hint",
+        );
     }
 
     // ----------------------------------------------------------------------
