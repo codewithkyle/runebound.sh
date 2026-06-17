@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
 import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
-import { parseOutputEntry } from "./output/markdown";
+import { buildEntryDoc } from "./output/entry-doc";
 import { OutputRenderer } from "./output/renderer";
 import type {
   OutputDoc,
@@ -18,16 +18,6 @@ type HistoryEntry = {
   kind: EntryKind;
   text: string;
   outputDoc?: OutputDoc | null;
-};
-
-type InlineCommandMeta = {
-  commandMap: Map<string, CommandSpecMeta>;
-};
-
-type CommandSpecMeta = {
-  subcommands: Set<string>;
-  requiresSubcommand: boolean;
-  canonicalHelpCommand: string | null;
 };
 
 type SuggestionViewItem = {
@@ -52,8 +42,37 @@ const BANNER_TEXT =
   "\n" +
   "Type help to see available commands.\n";
 
-const bannerResolver = (candidate: string): string | null =>
-  candidate.trim().toLowerCase() === "help" ? "help" : null;
+// The banner is authored as a structured doc (not parsed from BANNER_TEXT): the
+// ASCII art is a code block, and `help` is a real command_ref. Clickability never
+// comes from guessing the rendered text.
+const BANNER_DOC: OutputDoc = {
+  blocks: [
+    {
+      kind: "code",
+      text:
+        "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
+        "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
+        "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝"
+    },
+    {
+      kind: "paragraph",
+      inlines: [
+        {
+          kind: "text",
+          text: "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders."
+        }
+      ]
+    },
+    {
+      kind: "paragraph",
+      inlines: [
+        { kind: "text", text: "Type " },
+        { kind: "command_ref", label: "help", command: "help" },
+        { kind: "text", text: " to see available commands." }
+      ]
+    }
+  ]
+};
 
 type BootTaskInfo = { id: string; label: string };
 type BootPlan = { needs_setup: boolean; tasks: BootTaskInfo[] };
@@ -70,14 +89,11 @@ export default function App() {
       id: 1,
       kind: "banner",
       text: BANNER_TEXT,
-      outputDoc: parseOutputEntry("banner", BANNER_TEXT, bannerResolver)
+      outputDoc: BANNER_DOC
     }
   ]);
   const [command, setCommand] = createSignal("");
   const [running, setRunning] = createSignal(false);
-  // Tracks which Ollama setup prompt is currently shown so we can show a
-  // "testing connection" spinner when the next input triggers a server probe.
-  const [ollamaPrompt, setOllamaPrompt] = createSignal<"menu" | "url" | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
   const [commandHistory, setCommandHistory] = createSignal<string[]>([]);
@@ -89,8 +105,6 @@ export default function App() {
   const [wizardView, setWizardView] = createSignal<WizardView | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
-
-  const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
   const suggestionList = createMemo(() => suggestions());
 
@@ -210,7 +224,7 @@ export default function App() {
         outputDoc:
           kind === "input"
             ? null
-            : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
+            : outputDoc ?? buildEntryDoc(kind, text)
       }
     ]);
     queueMicrotask(() => {
@@ -236,7 +250,7 @@ export default function App() {
           outputDoc:
             kind === "input"
               ? null
-              : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
+              : outputDoc ?? buildEntryDoc(kind, text)
         }
       ];
     });
@@ -264,7 +278,7 @@ export default function App() {
           outputDoc:
             kind === "input"
               ? null
-              : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
+              : outputDoc ?? buildEntryDoc(kind, text)
         };
       })
     );
@@ -343,7 +357,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), wizardView());
+    const spinnerLabel = commandSpinnerLabel(raw, wizardView());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -356,15 +370,11 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
-      const rendered = responseToRenderableModel(response, commandMeta());
+      const rendered = responseToRenderableModel(response);
       if (response.ok) {
         if (spinnerId !== null) {
           updateEntry(spinnerId, "spinner", `OK ${spinnerLabel}`);
         }
-        // Track the Ollama prompt context so the next probe-triggering input
-        // shows the connection-test spinner. Only update on success; on error we
-        // keep the prior context so a retry still shows the spinner.
-        setOllamaPrompt(detectOllamaPrompt(rendered.text));
         // Track the active wizard step from the structured signal so the next
         // `continue`/`reroll` shows the right spinner (story vs. dungeon). Clears
         // itself when the response carries no wizard (the flow finalized/cancelled
@@ -383,11 +393,13 @@ export default function App() {
           updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
         }
         const errorText = response.error || rendered.text || "command failed";
-        if (isBootstrapSetupMessage(errorText)) {
-          appendEntry("output", errorText, rendered.outputDoc);
-        } else {
-          appendEntry("error", errorText, rendered.outputDoc);
-        }
+        // A response can carry a soft gate (the first-time-setup doc leads with a
+        // Warning status) rather than a hard failure. Style by the doc's own tone
+        // — a structured signal — instead of matching the rendered English.
+        const leadBlock = rendered.outputDoc?.blocks[0];
+        const leadTone = leadBlock?.kind === "status" ? leadBlock.tone : null;
+        const entryKind = leadTone && leadTone !== "error" ? "output" : "error";
+        appendEntry(entryKind, errorText, rendered.outputDoc);
       }
     } catch (error) {
       if (spinnerId !== null) {
@@ -456,7 +468,7 @@ export default function App() {
 
       if (plan.needs_setup) {
         const response = await invoke<CommandResponse>("run_command", { input: "status" });
-        const rendered = responseToRenderableModel(response, commandMeta());
+        const rendered = responseToRenderableModel(response);
         const text = response.error || rendered.text || "first-time setup required";
         appendEntry("output", text, rendered.outputDoc);
         return;
@@ -496,9 +508,9 @@ export default function App() {
       // Clear the boot spinners and show the welcome banner + accurate status,
       // then re-surface any failures that the MOTD doesn't already cover.
       setEntries([]);
-      appendEntry("banner", BANNER_TEXT);
+      appendEntry("banner", BANNER_TEXT, BANNER_DOC);
       const motd = await invoke<CommandResponse>("boot_motd");
-      const rendered = responseToRenderableModel(motd, commandMeta());
+      const rendered = responseToRenderableModel(motd);
       appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
       for (const notice of failureNotices) {
         appendEntry("error", notice);
@@ -817,11 +829,13 @@ function segmentsToText(segments: OutputSegment[] | undefined, fallback: string)
   return segments.map((segment) => segment.text).join("\n");
 }
 
-function responseToRenderableModel(response: CommandResponse, meta: InlineCommandMeta): { text: string; outputDoc: OutputDoc | null } {
+function responseToRenderableModel(response: CommandResponse): { text: string; outputDoc: OutputDoc | null } {
   const text = segmentsToText(response.segments, response.output);
   return {
     text,
-    outputDoc: response.output_doc ?? parseOutputEntry(response.ok ? "output" : "error", text, (candidate) => resolveClickableCommandTarget(candidate, meta))
+    // Backend responses always carry a doc now; the fallback is purely defensive
+    // (and non-parsing) for the rare case one doesn't.
+    outputDoc: response.output_doc ?? buildEntryDoc(response.ok ? "output" : "error", text)
   };
 }
 
@@ -845,72 +859,6 @@ function entryClass(kind: EntryKind): string {
   return `${base} text-text`;
 }
 
-function resolveClickableCommandTarget(candidate: string, meta: InlineCommandMeta): string | null {
-  const trimmed = candidate.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (isValidCommandLike(trimmed, meta)) {
-    return trimmed;
-  }
-
-  const lowered = trimmed.toLowerCase();
-  const command = meta.commandMap.get(lowered);
-  if (command && command.requiresSubcommand && command.canonicalHelpCommand) {
-    return command.canonicalHelpCommand;
-  }
-
-  return null;
-}
-
-function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  const tokens = trimmed.split(/\s+/);
-  const lowered = tokens.map((token) => token.toLowerCase());
-  const root = lowered[0];
-  const command = meta.commandMap.get(root);
-  if (!command) {
-    return false;
-  }
-
-  if (lowered.length === 1 && !command.requiresSubcommand) {
-    return true;
-  }
-
-  if (root === "history") {
-    if (lowered.length === 2 && lowered[1] === "clear") {
-      return true;
-    }
-
-    if (lowered.length === 2 && /^\d+$/.test(lowered[1])) {
-      return true;
-    }
-  }
-
-  if (root === "setup") {
-    return lowered.length === 2 && lowered[1] === "help";
-  }
-
-  if (lowered.length >= 2 && command.subcommands.has(lowered[1])) {
-    return true;
-  }
-
-  if (lowered.length >= 2 && lowered[1] === "--help") {
-    return true;
-  }
-
-  if (root === "clear") {
-    return lowered.length === 2 && lowered[1] === "--history";
-  }
-
-  return false;
-}
-
 function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem {
   return {
     label: suggestion.label,
@@ -921,26 +869,6 @@ function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem
 
 function normalizeSubmittedCommand(value: string): string {
   return value.replace(/\r?\n/g, " ").trim();
-}
-function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
-  if (!manifest) {
-    return {
-      commandMap: new Map<string, CommandSpecMeta>()
-    };
-  }
-
-  const commandMap = new Map<string, CommandSpecMeta>();
-  for (const command of manifest.commands) {
-    commandMap.set(command.name.toLowerCase(), {
-      subcommands: new Set(command.subcommands.map((subcommand) => subcommand.name.toLowerCase())),
-      requiresSubcommand: command.requires_subcommand,
-      canonicalHelpCommand: command.canonical_help_command ?? null
-    });
-  }
-
-  return {
-    commandMap
-  };
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -955,23 +883,7 @@ function isEditableTarget(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
 }
 
-function isBootstrapSetupMessage(message: string): boolean {
-  return message.toLowerCase().includes("first-time setup required");
-}
-
 const OLLAMA_TEST_LABEL = "testing ollama connection";
-
-// Infer which Ollama setup prompt the backend just rendered so a follow-up
-// input that probes the server can show the connection-test spinner.
-function detectOllamaPrompt(text: string): "menu" | "url" | null {
-  if (text.includes("## Step 2: Ollama server") && text.includes("1: Configure a new server")) {
-    return "menu";
-  }
-  if (text.includes("Enter your Ollama URL")) {
-    return "url";
-  }
-  return null;
-}
 
 // Pick the spinner label for a submission made inside a wizard, from the
 // structured `WizardView` (no prompt-text matching). A step that declares an
@@ -1001,11 +913,7 @@ function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null 
   return isLocalAction ? null : wizard.awaiting_llm_label;
 }
 
-function commandSpinnerLabel(
-  raw: string,
-  ollamaPrompt: "menu" | "url" | null,
-  wizard: WizardView | null,
-): string | null {
+function commandSpinnerLabel(raw: string, wizard: WizardView | null): string | null {
   const lowered = raw.trim().toLowerCase();
   // Inside a wizard, every submission is intercepted by the wizard runtime, so
   // only the wizard's own spinner logic applies (no `create`/`reroll` fallthrough).
@@ -1023,13 +931,6 @@ function commandSpinnerLabel(
     return OLLAMA_TEST_LABEL;
   }
   if (lowered === "model" || lowered === "setup model") {
-    return OLLAMA_TEST_LABEL;
-  }
-  // In-flow probes: typing a URL, or continuing with the current server.
-  if (ollamaPrompt === "url" && lowered.length > 0) {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (ollamaPrompt === "menu" && (lowered === "2" || lowered === "continue")) {
     return OLLAMA_TEST_LABEL;
   }
   if (lowered === "create npc" || lowered.startsWith("create npc ")) {
