@@ -1,4 +1,4 @@
-use dnd_core::calendar::{self, format_date_conversational, CalendarDelta, StoredCalendar};
+use dnd_core::calendar::{self, CalendarDelta, StoredCalendar, format_date_conversational};
 
 use crate::commands::{DesktopHandlerInvocation, command_action_response, ok_response};
 

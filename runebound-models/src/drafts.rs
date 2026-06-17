@@ -198,10 +198,10 @@ pub struct DungeonDraft {
     pub location: String, // the single bounded place all five beats sit inside
     #[serde(default)]
     pub story: String, // the Pass-1 micro-story the dungeon was generated from
-    pub premise: String, // the spine / top-line (feature-dungeons.md §6)
+    pub premise: String,  // the spine / top-line (feature-dungeons.md §6)
     pub topology: String, // one of DUNGEON_TOPOLOGIES, or "none"
-    pub tone: String,    // "tragedy" | "comedy"
-    pub twist: String,   // "false_victory" | "false_defeat" | "neither"
+    pub tone: String,     // "tragedy" | "comedy"
+    pub twist: String,    // "false_victory" | "false_defeat" | "neither"
     #[serde(default)]
     pub beats: Vec<DungeonBeat>, // exactly 5, fixed order
 }
@@ -692,18 +692,15 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
                 rows.push(entity_row("Loot:", loot.clone()));
             }
         }
-        rows.push(entity_row("Design:", normalize_unknown_text(&beat.design_note)));
-        out.push(entity_card(
-            format!("{}. {}", i + 1, beat.function),
-            rows,
+        rows.push(entity_row(
+            "Design:",
+            normalize_unknown_text(&beat.design_note),
         ));
+        out.push(entity_card(format!("{}. {}", i + 1, beat.function), rows));
         let key = beat.function.to_lowercase();
         out.push(paragraph_with_inlines(vec![
             text_node("Reroll this beat: "),
-            command_ref(
-                format!("reroll {key}"),
-                format!("dungeon reroll {key}"),
-            ),
+            command_ref(format!("reroll {key}"), format!("dungeon reroll {key}")),
         ]));
     }
     // 4. footer actions

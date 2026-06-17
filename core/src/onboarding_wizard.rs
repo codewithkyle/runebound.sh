@@ -72,8 +72,7 @@ fn data(d: &WizardData) -> &OnboardingData {
 }
 
 fn data_mut(d: &mut WizardData) -> &mut OnboardingData {
-    d.downcast_mut::<OnboardingData>()
-        .expect("onboarding data")
+    d.downcast_mut::<OnboardingData>().expect("onboarding data")
 }
 
 // ---------------------------------------------------------------------------
@@ -166,7 +165,9 @@ impl<H: OnboardingHost> WizardStep<H> for VaultMenuStep {
                 resubmit_to: "vault_path",
             })),
             "2" => Ok(WizardTransition::Next),
-            "3" | "continue" if !data(d).vault_path.trim().is_empty() => Ok(vault_done(data(d).flow)),
+            "3" | "continue" if !data(d).vault_path.trim().is_empty() => {
+                Ok(vault_done(data(d).flow))
+            }
             other => {
                 data_mut(d).notice = Some(format!("invalid choice: {other}"));
                 Ok(WizardTransition::Stay)
@@ -189,10 +190,12 @@ impl<H: OnboardingHost> WizardStep<H> for VaultPathStep {
     fn prompt(&self, d: &WizardData) -> OutputDoc {
         with_notice(
             data(d),
-            doc().with_block(heading(3, "Vault path")).with_block(list(vec![
-                vec![text_node("Enter the path to your vault and press Enter.")],
-                vec![text_node("Example: /path/to/your/Obsidian/Vault")],
-            ])),
+            doc()
+                .with_block(heading(3, "Vault path"))
+                .with_block(list(vec![
+                    vec![text_node("Enter the path to your vault and press Enter.")],
+                    vec![text_node("Example: /path/to/your/Obsidian/Vault")],
+                ])),
         )
     }
     async fn accept(
@@ -250,7 +253,10 @@ impl<H: OnboardingHost> WizardStep<H> for OllamaMenuStep {
             d,
             doc()
                 .with_block(heading(2, "Step 2: Ollama server"))
-                .with_block(paragraph_text(format!("current server: {}", d.ollama_base_url)))
+                .with_block(paragraph_text(format!(
+                    "current server: {}",
+                    d.ollama_base_url
+                )))
                 .with_block(choice_lines(&ollama_menu_choices(d))),
         )
     }
@@ -295,10 +301,12 @@ impl<H: OnboardingHost> WizardStep<H> for OllamaUrlStep {
     fn prompt(&self, d: &WizardData) -> OutputDoc {
         with_notice(
             data(d),
-            doc().with_block(heading(3, "Ollama server")).with_block(list(vec![
-                vec![text_node("Enter your Ollama URL and press Enter.")],
-                vec![text_node("Example: http://127.0.0.1:11434")],
-            ])),
+            doc()
+                .with_block(heading(3, "Ollama server"))
+                .with_block(list(vec![
+                    vec![text_node("Enter your Ollama URL and press Enter.")],
+                    vec![text_node("Example: http://127.0.0.1:11434")],
+                ])),
         )
     }
     async fn accept(
@@ -344,7 +352,9 @@ fn model_choices(d: &OnboardingData) -> Vec<WizardChoice> {
         .ollama_models
         .iter()
         .enumerate()
-        .map(|(index, model)| WizardChoice::new(format!("{}: {}", index + 1, model), (index + 1).to_string()))
+        .map(|(index, model)| {
+            WizardChoice::new(format!("{}: {}", index + 1, model), (index + 1).to_string())
+        })
         .collect();
     if matches!(d.flow, OnboardingFlow::Llm | OnboardingFlow::Model)
         && !d.selected_model.trim().is_empty()
@@ -376,7 +386,10 @@ impl<H: OnboardingHost> WizardStep<H> for ModelStep {
         if matches!(d.flow, OnboardingFlow::Llm | OnboardingFlow::Model)
             && !d.selected_model.trim().is_empty()
         {
-            blocks.push(paragraph_text(format!("Or type continue to keep {}.", d.selected_model)));
+            blocks.push(paragraph_text(format!(
+                "Or type continue to keep {}.",
+                d.selected_model
+            )));
         }
         if d.ollama_models.is_empty() {
             blocks.push(paragraph_text("(no models returned)".to_string()));
@@ -436,7 +449,10 @@ impl<H: OnboardingHost> WizardStep<H> for SaveStep {
         with_notice(
             d,
             doc()
-                .with_block(paragraph_text(format!("model set to: {}", d.selected_model)))
+                .with_block(paragraph_text(format!(
+                    "model set to: {}",
+                    d.selected_model
+                )))
                 .with_block(heading(2, "Step 4: Save config"))
                 .with_block(paragraph_with_inlines(vec![
                     text_node("Type "),
@@ -518,8 +534,14 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
     let mut document = doc()
         .with_block(heading(2, "Onboarding complete"))
         .with_block(list(vec![
-            vec![text_node(format!("config saved: {}", config_path.display()))],
-            vec![text_node(format!("vault ready: {}", vault.root().display()))],
+            vec![text_node(format!(
+                "config saved: {}",
+                config_path.display()
+            ))],
+            vec![text_node(format!(
+                "vault ready: {}",
+                vault.root().display()
+            ))],
             vec![text_node(format!("database ready: {}", db.path.display()))],
         ]));
     if missing_model {
@@ -536,7 +558,10 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
         document = document
             .with_block(heading(3, "Setup warnings"))
             .with_block(list(
-                warnings.iter().map(|warning| vec![text_node(warning.clone())]).collect(),
+                warnings
+                    .iter()
+                    .map(|warning| vec![text_node(warning.clone())])
+                    .collect(),
             ));
     }
 
@@ -569,8 +594,14 @@ async fn finalize_vault(root: &Path, d: &OnboardingData) -> Result<CommandRespon
     let document = doc()
         .with_block(heading(2, "Vault updated"))
         .with_block(list(vec![
-            vec![text_node(format!("config saved: {}", config_path.display()))],
-            vec![text_node(format!("vault ready: {}", vault.root().display()))],
+            vec![text_node(format!(
+                "config saved: {}",
+                config_path.display()
+            ))],
+            vec![text_node(format!(
+                "vault ready: {}",
+                vault.root().display()
+            ))],
         ]));
     Ok(ok_response(lines.join("\n"), document))
 }
@@ -595,7 +626,10 @@ async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse
         format!("ollama: {}", config.ollama.base_url),
     ];
     let mut rows = vec![
-        vec![text_node(format!("config saved: {}", config_path.display()))],
+        vec![text_node(format!(
+            "config saved: {}",
+            config_path.display()
+        ))],
         vec![text_node(format!("ollama: {}", config.ollama.base_url))],
     ];
     let mut model_note = None;
@@ -611,7 +645,9 @@ async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse
         rows.push(vec![text_node(format!("model: {}", d.selected_model))]);
     }
 
-    let mut document = doc().with_block(heading(2, "LLM updated")).with_block(list(rows));
+    let mut document = doc()
+        .with_block(heading(2, "LLM updated"))
+        .with_block(list(rows));
     if let Some(note) = model_note {
         document = document.with_block(note);
     }
@@ -636,7 +672,10 @@ async fn finalize_model(root: &Path, d: &OnboardingData) -> Result<CommandRespon
     let document = doc()
         .with_block(heading(2, "Model updated"))
         .with_block(list(vec![
-            vec![text_node(format!("config saved: {}", config_path.display()))],
+            vec![text_node(format!(
+                "config saved: {}",
+                config_path.display()
+            ))],
             vec![text_node(format!("model: {}", d.selected_model))],
         ]));
     Ok(ok_response(lines.join("\n"), document))
@@ -716,7 +755,14 @@ onboarding_wizard!(
     "setup",
     "Setup",
     OnboardingFlow::Full,
-    [VaultMenuStep, VaultPathStep, OllamaMenuStep, OllamaUrlStep, ModelStep, SaveStep],
+    [
+        VaultMenuStep,
+        VaultPathStep,
+        OllamaMenuStep,
+        OllamaUrlStep,
+        ModelStep,
+        SaveStep
+    ],
     finalize_full
 );
 onboarding_wizard!(
@@ -845,8 +891,14 @@ mod tests {
 
     #[test]
     fn vault_done_completes_for_vault_flow_else_advances_to_ollama() {
-        assert!(matches!(vault_done(OnboardingFlow::Vault), WizardTransition::Complete));
-        assert!(matches!(vault_done(OnboardingFlow::Full), WizardTransition::Goto("ollama_menu")));
+        assert!(matches!(
+            vault_done(OnboardingFlow::Vault),
+            WizardTransition::Complete
+        ));
+        assert!(matches!(
+            vault_done(OnboardingFlow::Full),
+            WizardTransition::Goto("ollama_menu")
+        ));
     }
 
     #[tokio::test]
@@ -864,7 +916,13 @@ mod tests {
         let mut d = wd(OnboardingData::default());
         let t = VaultMenuStep.accept("9", &mut d, &host()).await.unwrap();
         assert!(matches!(t, WizardTransition::Stay));
-        assert!(data(&d).notice.as_deref().unwrap().contains("invalid choice"));
+        assert!(
+            data(&d)
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("invalid choice")
+        );
     }
 
     #[tokio::test]
@@ -917,14 +975,22 @@ mod tests {
             flow: OnboardingFlow::Llm,
             ..Default::default()
         });
-        assert!(ModelStep.accept("continue", &mut empty, &host()).await.is_err());
+        assert!(
+            ModelStep
+                .accept("continue", &mut empty, &host())
+                .await
+                .is_err()
+        );
         let mut set = wd(OnboardingData {
             flow: OnboardingFlow::Llm,
             selected_model: "x".into(),
             ..Default::default()
         });
         assert!(matches!(
-            ModelStep.accept("continue", &mut set, &host()).await.unwrap(),
+            ModelStep
+                .accept("continue", &mut set, &host())
+                .await
+                .unwrap(),
             WizardTransition::Next
         ));
     }

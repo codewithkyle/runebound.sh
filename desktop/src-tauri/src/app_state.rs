@@ -10,12 +10,12 @@ use runebound_models::{
 };
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
-use crate::wizards::{WizardRegistry, WizardSession};
 use crate::repositories::{
     Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
     GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
     SoftDeleteRepository, VaultRepository,
 };
+use crate::wizards::{WizardRegistry, WizardSession};
 
 pub type NpcDraftSession = NpcDraft;
 pub type LocationDraftSession = LocationDraft;
@@ -314,7 +314,8 @@ impl EditorSession {
     }
 
     pub(crate) fn get_item(&self) -> Option<&ItemDraftSession> {
-        self.draft(EntityKind::Item).and_then(DraftEnvelope::as_item)
+        self.draft(EntityKind::Item)
+            .and_then(DraftEnvelope::as_item)
     }
 
     pub(crate) fn get_item_mut(&mut self) -> Option<&mut ItemDraftSession> {

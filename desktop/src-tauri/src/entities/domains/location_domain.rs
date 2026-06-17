@@ -1,20 +1,19 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, LocationDraftSession};
+use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
+    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
+    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, LOCATION_SCHEMA};
-use crate::entities::EntityKind;
+use crate::entities::schema::{
+    FieldAccess, LOCATION_SCHEMA, canonical_field_name, format_valid_field_list,
+};
 use crate::services::entity_persistence::{EntityPersistenceService, SaveLocationDraftInput};
-use crate::services::entity_reroll::{EntityRerollService, LocationRerollContext, RerollLocationFieldInput};
+use crate::services::entity_reroll::{
+    EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
+};
 use crate::utils::path_for_display;
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
@@ -74,9 +73,9 @@ impl EntityDomain for LocationDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_location_mut()
-                .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            let draft = editor.get_location_mut().ok_or_else(|| {
+                "no active location draft. run create location or load <name>.".to_string()
+            })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
             let snapshot = draft.clone();
@@ -97,7 +96,8 @@ impl EntityDomain for LocationDomain {
             return entity_message_response("location set value cannot be empty.");
         }
 
-        let Some(canonical) = canonical_field_name(EntityKind::Location, field, FieldAccess::Set) else {
+        let Some(canonical) = canonical_field_name(EntityKind::Location, field, FieldAccess::Set)
+        else {
             let valid_fields = format_valid_field_list(EntityKind::Location, FieldAccess::Set);
             return entity_message_response(format!(
                 "unknown location field: {}. valid fields: {}",
@@ -107,9 +107,9 @@ impl EntityDomain for LocationDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_location_mut()
-                .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            let draft = editor.get_location_mut().ok_or_else(|| {
+                "no active location draft. run create location or load <name>.".to_string()
+            })?;
 
             match canonical {
                 "name" => {
@@ -173,10 +173,11 @@ impl EntityDomain for LocationDomain {
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_location()
-                .cloned()
-        }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            editor.get_location().cloned()
+        }
+        .ok_or_else(|| {
+            "no active location draft. run create location or load <name>.".to_string()
+        })?;
 
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
@@ -283,10 +284,11 @@ impl EntityDomain for LocationDomain {
     async fn save(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_location()
-                .cloned()
-        }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            editor.get_location().cloned()
+        }
+        .ok_or_else(|| {
+            "no active location draft. run create location or load <name>.".to_string()
+        })?;
 
         let persistence = EntityPersistenceService;
         let result = persistence

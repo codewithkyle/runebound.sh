@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, EventDraftSession};
+use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
     no_active_draft_message,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::EVENT_SCHEMA;
-use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::services::entity_persistence::{EntityPersistenceService, SaveEventDraftInput};
 use crate::utils::{path_for_display, prepend_notice};
@@ -75,7 +75,10 @@ impl EntityDomain for EventDomain {
             snapshot
         };
 
-        entity_response_with_event(event_summary_text(&updated), event_event_from_draft(&updated))
+        entity_response_with_event(
+            event_summary_text(&updated),
+            event_event_from_draft(&updated),
+        )
     }
 
     async fn set_field(&self, _field: &str, _value: &str, _state: &AppState) -> EntityDomainResult {

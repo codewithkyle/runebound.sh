@@ -8,16 +8,10 @@ use runebound_models::output::{
 use crate::commands::{ok_response, ok_response_with_doc};
 use crate::entities::domain::EntityDomainResult;
 use crate::entities::kind::EntityKind;
-use crate::entities::schema::{
-    FieldAccess, format_field_help, rerollable_fields, settable_fields,
-};
+use crate::entities::schema::{FieldAccess, format_field_help, rerollable_fields, settable_fields};
 use crate::utils::normalize_optional_prompt;
 
-pub use crate::utils::{
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
-};
+pub use crate::utils::{normalize_unknown_list, normalize_unknown_text, parse_list_csv};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
@@ -47,7 +41,10 @@ pub fn merge_seed_and_reroll_prompt(
 
 pub fn no_active_draft_message(kind: EntityKind) -> String {
     let root = kind.command_root();
-    format!("no active {} draft. run create {} or load <name>.", root, root)
+    format!(
+        "no active {} draft. run create {} or load <name>.",
+        root, root
+    )
 }
 
 pub fn command_message_response(message: impl Into<String>) -> CommandResult {
@@ -59,7 +56,11 @@ pub fn command_message_response_with_doc(
     message: impl Into<String>,
     output_doc: OutputDoc,
 ) -> CommandResult {
-    Ok(Some(ok_response_with_doc(message.into(), Some(output_doc), None)))
+    Ok(Some(ok_response_with_doc(
+        message.into(),
+        Some(output_doc),
+        None,
+    )))
 }
 
 pub fn command_response_with_event(
@@ -125,7 +126,10 @@ fn field_help_doc(kind: EntityKind, access: FieldAccess) -> OutputDoc {
                 .filter(|alias| *alias != spec.display_name)
                 .collect();
             if !extra_aliases.is_empty() {
-                inlines.push(text_node(format!(" (aliases: {})", extra_aliases.join(", "))));
+                inlines.push(text_node(format!(
+                    " (aliases: {})",
+                    extra_aliases.join(", ")
+                )));
             }
             inlines
         })
@@ -134,7 +138,10 @@ fn field_help_doc(kind: EntityKind, access: FieldAccess) -> OutputDoc {
     let mut document = doc()
         .with_block(heading(2, title))
         .with_block(paragraph_text(intro))
-        .with_block(paragraph_with_inlines(vec![text_node("Usage: "), code(usage)]));
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Usage: "),
+            code(usage),
+        ]));
     if let Some(note) = note {
         document = document.with_block(paragraph_text(note));
     }

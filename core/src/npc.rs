@@ -1,9 +1,8 @@
 pub use runebound_models::{
     DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
     LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id,
-    normalize_markdown_file_stem,
-    normalize_unknown_list, normalize_unknown_text, now_timestamp, slugify, unique_slug_for_dir,
-    unique_slug_for_dir_with_ext,
+    normalize_markdown_file_stem, normalize_unknown_list, normalize_unknown_text, now_timestamp,
+    slugify, unique_slug_for_dir, unique_slug_for_dir_with_ext,
 };
 
 #[cfg(test)]

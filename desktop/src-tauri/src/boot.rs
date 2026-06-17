@@ -105,8 +105,7 @@ pub async fn run_boot_task(
         }
         "llm" => {
             let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-            let health =
-                check_ollama_health(&loaded.effective, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
+            let health = check_ollama_health(&loaded.effective, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
 
             let tone = if health.reachable && health.model_available {
                 "success"

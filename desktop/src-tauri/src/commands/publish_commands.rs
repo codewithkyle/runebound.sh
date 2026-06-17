@@ -7,7 +7,10 @@ use dnd_core::npc::now_timestamp;
 use dnd_core::vault::Vault;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
-use crate::app_state::{AppState, DungeonDraftSession, EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession, LocationDraftSession, NpcDraftSession};
+use crate::app_state::{
+    AppState, DungeonDraftSession, EventDraftSession, FactionDraftSession, GodDraftSession,
+    ItemDraftSession, LocationDraftSession, NpcDraftSession,
+};
 use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
 use crate::entities::EntityKind;
 use crate::services::entity_admin::{EntityAdminService, EntityDetails, EntityType};
@@ -18,9 +21,7 @@ use crate::services::entity_persistence::{
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::utils::normalize_relative_path_for_storage;
 use crate::services::mention_extraction::extract_unknown_mentions;
-use crate::services::vault_ref::load_vault_reference_entries;
 use crate::services::publish::{
     EntityLinker, dungeon_prose, event_prose, faction_prose, god_prose, item_prose, location_prose,
     npc_prose, render_dungeon_markdown_with_links, render_event_markdown_with_links,
@@ -28,16 +29,16 @@ use crate::services::publish::{
     render_item_markdown_with_links, render_location_markdown_with_links,
     render_npc_markdown_with_links,
 };
-use runebound_models::{CommandClientEvent, CommandResponse};
+use crate::services::vault_ref::load_vault_reference_entries;
+use crate::utils::normalize_relative_path_for_storage;
 use runebound_models::output::{
-    command_ref, doc, paragraph_with_inlines, status, text_node, StatusTone,
+    StatusTone, command_ref, doc, paragraph_with_inlines, status, text_node,
 };
+use runebound_models::{CommandClientEvent, CommandResponse};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
-pub async fn handle_publish(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
@@ -71,10 +72,7 @@ pub async fn handle_publish(
         }
     } else {
         let admin = EntityAdminService;
-        let Some(details) = admin
-            .resolve_entity(args.to_string(), state)
-            .await?
-        else {
+        let Some(details) = admin.resolve_entity(args.to_string(), state).await? else {
             return Ok(Some(ok_response(
                 format!("no npc, location, faction, or item found for '{args}'"),
                 None,
@@ -209,11 +207,7 @@ pub async fn handle_publish(
             .await;
             (
                 render_item_markdown_with_links(&frontmatter, &linker),
-                resolved_publish_path(
-                    EntityType::Item,
-                    &frontmatter.slug,
-                    &frontmatter.vault_path,
-                ),
+                resolved_publish_path(EntityType::Item, &frontmatter.slug, &frontmatter.vault_path),
             )
         }
         EntityType::Event => {
@@ -261,11 +255,7 @@ pub async fn handle_publish(
             .await;
             (
                 render_god_markdown_with_links(&frontmatter, &linker),
-                resolved_publish_path(
-                    EntityType::God,
-                    &frontmatter.slug,
-                    &frontmatter.vault_path,
-                ),
+                resolved_publish_path(EntityType::God, &frontmatter.slug, &frontmatter.vault_path),
             )
         }
         EntityType::Dungeon => {
@@ -310,10 +300,7 @@ pub async fn handle_publish(
         invocation
             .app_handle
             .dialog()
-            .message(format!(
-                "{} already exists. Overwrite?",
-                relative.display()
-            ))
+            .message(format!("{} already exists. Overwrite?", relative.display()))
             .title("Overwrite file?")
             .buttons(MessageDialogButtons::YesNo)
             .blocking_show()
@@ -337,52 +324,87 @@ pub async fn handle_publish(
     let now = now_timestamp();
     match target.entity_type {
         EntityType::Npc => {
-            if let Some(mut frontmatter) = store.load_npc(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_npc(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_npc(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_npc(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
         EntityType::Location => {
-            if let Some(mut frontmatter) = store.load_location(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_location(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_location(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_location(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
         EntityType::Faction => {
-            if let Some(mut frontmatter) = store.load_faction(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_faction(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_faction(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_faction(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
         EntityType::Item => {
-            if let Some(mut frontmatter) = store.load_item(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_item(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_item(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_item(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
         EntityType::Event => {
-            if let Some(mut frontmatter) = store.load_event(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_event(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_event(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_event(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
         EntityType::God => {
-            if let Some(mut frontmatter) = store.load_god(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_god(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_god(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
         EntityType::Dungeon => {
-            if let Some(mut frontmatter) = store.load_dungeon(&target.slug).map_err(|err| err.to_string())? {
+            if let Some(mut frontmatter) = store
+                .load_dungeon(&target.slug)
+                .map_err(|err| err.to_string())?
+            {
                 frontmatter.vault_path = vault_path.clone();
                 frontmatter.published_at = Some(now);
-                store.save_dungeon(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_dungeon(&frontmatter)
+                    .map_err(|err| err.to_string())?;
             }
         }
     }
@@ -401,13 +423,27 @@ pub async fn handle_publish(
     if !args.is_empty() {
         let mut editor = state.editor_session.lock().await;
         let open = match target.entity_type {
-            EntityType::Npc => editor.get_npc().is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Location => editor.get_location().is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Faction => editor.get_faction().is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Item => editor.get_item().is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Event => editor.get_event().is_some_and(|draft| draft.slug == target.slug),
-            EntityType::God => editor.get_god().is_some_and(|draft| draft.slug == target.slug),
-            EntityType::Dungeon => editor.get_dungeon().is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Npc => editor
+                .get_npc()
+                .is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Location => editor
+                .get_location()
+                .is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Faction => editor
+                .get_faction()
+                .is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Item => editor
+                .get_item()
+                .is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Event => editor
+                .get_event()
+                .is_some_and(|draft| draft.slug == target.slug),
+            EntityType::God => editor
+                .get_god()
+                .is_some_and(|draft| draft.slug == target.slug),
+            EntityType::Dungeon => editor
+                .get_dungeon()
+                .is_some_and(|draft| draft.slug == target.slug),
         };
         if open {
             let kind = match target.entity_type {
@@ -628,11 +664,7 @@ mod tests {
 
     #[test]
     fn slug_suffix_is_preserved() {
-        let path = resolved_publish_path(
-            EntityType::Npc,
-            "shadow-clan-2",
-            "npcs/shadow-clan-2.md",
-        );
+        let path = resolved_publish_path(EntityType::Npc, "shadow-clan-2", "npcs/shadow-clan-2.md");
         assert_eq!(path, "npcs/Shadow Clan 2.md");
     }
 

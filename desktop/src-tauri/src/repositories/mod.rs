@@ -33,7 +33,9 @@ pub struct ProdVaultRepository;
 impl VaultRepository for ProdVaultRepository {
     fn read_file(&self, vault: &Vault, path: &str) -> Result<Option<String>, String> {
         let relative = PathBuf::from(normalize_relative_path(path));
-        let full = vault.resolve_relative(&relative).map_err(|e| e.to_string())?;
+        let full = vault
+            .resolve_relative(&relative)
+            .map_err(|e| e.to_string())?;
         if !full.exists() {
             return Ok(None);
         }
@@ -55,7 +57,10 @@ impl VaultRepository for ProdVaultRepository {
             .resolve_relative(&PathBuf::from(&from_normalized))
             .map_err(|e| e.to_string())?;
         if !from_full.exists() {
-            return Err(format!("source file does not exist: {}", from_full.display()));
+            return Err(format!(
+                "source file does not exist: {}",
+                from_full.display()
+            ));
         }
         let to_full = vault
             .resolve_relative(&PathBuf::from(&to_normalized))
@@ -108,7 +113,8 @@ pub trait NpcRepository: Send + Sync {
         database: &Database,
         name_or_slug: &str,
     ) -> Result<Option<db::NpcRow>, String>;
-    async fn find_by_id(&self, database: &Database, id: &str) -> Result<Option<db::NpcRow>, String>;
+    async fn find_by_id(&self, database: &Database, id: &str)
+    -> Result<Option<db::NpcRow>, String>;
     async fn upsert(&self, database: &Database, row: &db::NpcRow) -> Result<(), String>;
     async fn search_by_name(
         &self,
@@ -504,11 +510,8 @@ pub trait GodRepository: Send + Sync {
         database: &Database,
         name_or_slug: &str,
     ) -> Result<Option<db::GodRow>, String>;
-    async fn find_by_id(
-        &self,
-        database: &Database,
-        id: &str,
-    ) -> Result<Option<db::GodRow>, String>;
+    async fn find_by_id(&self, database: &Database, id: &str)
+    -> Result<Option<db::GodRow>, String>;
     async fn upsert(&self, database: &Database, row: &db::GodRow) -> Result<(), String>;
     async fn search_by_name(
         &self,
@@ -699,9 +702,17 @@ impl DocumentRepository for ProdDocumentRepository {
         created_at: &str,
         updated_at: &str,
     ) -> Result<(), String> {
-        core_db::upsert_document_index(&database.pool, entity_type, slug, name, vault_path, created_at, updated_at)
-            .await
-            .map_err(|e| e.to_string())
+        core_db::upsert_document_index(
+            &database.pool,
+            entity_type,
+            slug,
+            name,
+            vault_path,
+            created_at,
+            updated_at,
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 
     async fn delete_by_vault_path(
@@ -763,9 +774,21 @@ impl GenerationRepository for ProdGenerationRepository {
 #[async_trait]
 pub trait SoftDeleteRepository: Send + Sync {
     async fn insert(&self, database: &Database, row: &db::SoftDeleteRow) -> Result<(), String>;
-    async fn latest_pending(&self, database: &Database) -> Result<Option<db::SoftDeleteRow>, String>;
-    async fn mark_undone(&self, database: &Database, id: i64, timestamp: &str) -> Result<(), String>;
-    async fn finalize_pending_publishes(&self, database: &Database, timestamp: &str) -> Result<(), String>;
+    async fn latest_pending(
+        &self,
+        database: &Database,
+    ) -> Result<Option<db::SoftDeleteRow>, String>;
+    async fn mark_undone(
+        &self,
+        database: &Database,
+        id: i64,
+        timestamp: &str,
+    ) -> Result<(), String>;
+    async fn finalize_pending_publishes(
+        &self,
+        database: &Database,
+        timestamp: &str,
+    ) -> Result<(), String>;
 }
 
 pub struct ProdSoftDeleteRepository;
@@ -779,19 +802,31 @@ impl SoftDeleteRepository for ProdSoftDeleteRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn latest_pending(&self, database: &Database) -> Result<Option<db::SoftDeleteRow>, String> {
+    async fn latest_pending(
+        &self,
+        database: &Database,
+    ) -> Result<Option<db::SoftDeleteRow>, String> {
         core_db::latest_pending_soft_delete(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn mark_undone(&self, database: &Database, id: i64, timestamp: &str) -> Result<(), String> {
+    async fn mark_undone(
+        &self,
+        database: &Database,
+        id: i64,
+        timestamp: &str,
+    ) -> Result<(), String> {
         core_db::mark_soft_delete_undone(&database.pool, id, timestamp)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn finalize_pending_publishes(&self, database: &Database, timestamp: &str) -> Result<(), String> {
+    async fn finalize_pending_publishes(
+        &self,
+        database: &Database,
+        timestamp: &str,
+    ) -> Result<(), String> {
         core_db::finalize_pending_publishes(&database.pool, timestamp)
             .await
             .map(|_| ())

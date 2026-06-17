@@ -4,8 +4,8 @@ use runebound_models::CommandResponse;
 use tauri::State;
 
 use crate::app_state::AppState;
-use crate::commands::{desktop_handler_registry, ok_response, DesktopHandlerInvocation};
 use crate::commands::entity_commands::build_load_response;
+use crate::commands::{DesktopHandlerInvocation, desktop_handler_registry, ok_response};
 use crate::services::entity_admin::{EntityAdminService, EntityDetails};
 use crate::services::suggestions::starts_with_known_command_root;
 

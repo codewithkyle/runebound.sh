@@ -60,9 +60,7 @@ impl EntityAdminService {
         let location_repo = state.location_repo();
         let document_repo = state.document_repo();
         let slug = slugify(raw_name);
-        let existing = location_repo
-            .find_by_slug(database.as_ref(), &slug)
-            .await?;
+        let existing = location_repo.find_by_slug(database.as_ref(), &slug).await?;
 
         let mut created_file = false;
         let mut created_record = false;
@@ -166,9 +164,7 @@ impl EntityAdminService {
             updated_at: now.clone(),
         };
 
-        location_repo
-            .upsert(database.as_ref(), &row)
-            .await?;
+        location_repo.upsert(database.as_ref(), &row).await?;
         document_repo
             .upsert_index(
                 database.as_ref(),
@@ -806,9 +802,7 @@ impl EntityAdminService {
             // The recovery row is committed before any destructive step, so a
             // failure below leaves a restorable entity, not an unrecoverable one.
             move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            npc_repo
-                .delete_by_id(database.as_ref(), &npc.id)
-                .await?;
+            npc_repo.delete_by_id(database.as_ref(), &npc.id).await?;
             document_repo
                 .delete_by_vault_path(database.as_ref(), &npc.vault_path)
                 .await?;
@@ -1000,9 +994,7 @@ impl EntityAdminService {
             // The recovery row is committed before any destructive step, so a
             // failure below leaves a restorable entity, not an unrecoverable one.
             move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            item_repo
-                .delete_by_id(database.as_ref(), &item.id)
-                .await?;
+            item_repo.delete_by_id(database.as_ref(), &item.id).await?;
             document_repo
                 .delete_by_vault_path(database.as_ref(), &item.vault_path)
                 .await?;
@@ -1120,9 +1112,7 @@ impl EntityAdminService {
             // The recovery row is committed before any destructive step, so a
             // failure below leaves a restorable entity, not an unrecoverable one.
             move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            god_repo
-                .delete_by_id(database.as_ref(), &god.id)
-                .await?;
+            god_repo.delete_by_id(database.as_ref(), &god.id).await?;
             document_repo
                 .delete_by_vault_path(database.as_ref(), &god.vault_path)
                 .await?;
@@ -1227,10 +1217,7 @@ impl EntityAdminService {
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
-        let Some(soft_delete) = soft_delete_repo
-            .latest_pending(database.as_ref())
-            .await?
-        else {
+        let Some(soft_delete) = soft_delete_repo.latest_pending(database.as_ref()).await? else {
             return Err("nothing to undo".to_string());
         };
 
@@ -1246,7 +1233,8 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug;
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
@@ -1278,9 +1266,7 @@ impl EntityAdminService {
                 updated_at: now.clone(),
             };
 
-            npc_repo
-                .upsert(database.as_ref(), &npc_row)
-                .await?;
+            npc_repo.upsert(database.as_ref(), &npc_row).await?;
             document_repo
                 .upsert_index(
                     database.as_ref(),
@@ -1312,7 +1298,8 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug;
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
@@ -1376,7 +1363,8 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug;
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
@@ -1413,9 +1401,7 @@ impl EntityAdminService {
                 updated_at: now.clone(),
             };
 
-            faction_repo
-                .upsert(database.as_ref(), &faction_row)
-                .await?;
+            faction_repo.upsert(database.as_ref(), &faction_row).await?;
             document_repo
                 .upsert_index(
                     database.as_ref(),
@@ -1447,13 +1433,15 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug.clone();
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
             if preferred_full.exists() {
                 restored_slug = unique_slug_for_dir(vault.root(), "items", &restored_slug);
-                restored_vault_path = unique_markdown_path_for_name(&vault, "items", &payload.name, None)?;
+                restored_vault_path =
+                    unique_markdown_path_for_name(&vault, "items", &payload.name, None)?;
             }
 
             move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
@@ -1477,9 +1465,7 @@ impl EntityAdminService {
                 updated_at: now.clone(),
             };
 
-            item_repo
-                .upsert(database.as_ref(), &item_row)
-                .await?;
+            item_repo.upsert(database.as_ref(), &item_row).await?;
             document_repo
                 .upsert_index(
                     database.as_ref(),
@@ -1511,7 +1497,8 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug.clone();
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
@@ -1565,7 +1552,8 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug.clone();
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
@@ -1631,7 +1619,8 @@ impl EntityAdminService {
 
             let mut restored_slug = payload.slug.clone();
             let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
+            let trash_vault_path =
+                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
             let preferred_full = vault
                 .resolve_relative(&PathBuf::from(&restored_vault_path))
                 .map_err(|err| err.to_string())?;
@@ -1776,13 +1765,48 @@ impl EntityAdminService {
             .await?;
 
         match entity_type {
-            EntityType::Npc => state.npc_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Location => state.location_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Faction => state.faction_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Item => state.item_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Event => state.event_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::God => state.god_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Dungeon => state.dungeon_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityType::Npc => {
+                state
+                    .npc_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
+            EntityType::Location => {
+                state
+                    .location_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
+            EntityType::Faction => {
+                state
+                    .faction_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
+            EntityType::Item => {
+                state
+                    .item_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
+            EntityType::Event => {
+                state
+                    .event_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
+            EntityType::God => {
+                state
+                    .god_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
+            EntityType::Dungeon => {
+                state
+                    .dungeon_repo()
+                    .delete_by_id(database.as_ref(), &id)
+                    .await?
+            }
         }
         document_repo
             .delete_by_vault_path(database.as_ref(), &normalized)
@@ -1804,94 +1828,251 @@ impl EntityAdminService {
         let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
         let now = now_timestamp();
         let slug = soft_delete.slug.as_str();
-        let missing = || format!("cannot undo publish: canonical {} record is missing", soft_delete.entity_type);
+        let missing = || {
+            format!(
+                "cannot undo publish: canonical {} record is missing",
+                soft_delete.entity_type
+            )
+        };
 
         match soft_delete.entity_type.as_str() {
             "npc" => {
-                let mut frontmatter = store.load_npc(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_npc(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_npc(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_npc(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = npc_row_from_frontmatter(&frontmatter)?;
                 state.npc_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "npc", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "npc",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Npc, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::Npc,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "location" => {
-                let mut frontmatter = store.load_location(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_location(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_location(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_location(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = location_row_from_frontmatter(&frontmatter)?;
-                state.location_repo().upsert(database.as_ref(), &row).await?;
-                document_repo
-                    .upsert_index(database.as_ref(), "location", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                state
+                    .location_repo()
+                    .upsert(database.as_ref(), &row)
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Location, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                document_repo
+                    .upsert_index(
+                        database.as_ref(),
+                        "location",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
+                    .await?;
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::Location,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "faction" => {
-                let mut frontmatter = store.load_faction(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_faction(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_faction(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_faction(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = faction_row_from_frontmatter(&frontmatter)?;
                 state.faction_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "faction", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "faction",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Faction, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::Faction,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "item" => {
-                let mut frontmatter = store.load_item(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_item(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_item(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_item(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = item_row_from_frontmatter(&frontmatter)?;
                 state.item_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "item", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "item",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Item, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::Item,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "event" => {
-                let mut frontmatter = store.load_event(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_event(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_event(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_event(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = event_row_from_frontmatter(&frontmatter)?;
                 state.event_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "event", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "event",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Event, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::Event,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "god" => {
-                let mut frontmatter = store.load_god(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_god(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_god(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = god_row_from_frontmatter(&frontmatter)?;
                 state.god_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "god", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "god",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::God, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::God,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "dungeon" => {
-                let mut frontmatter = store.load_dungeon(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_dungeon(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_dungeon(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_dungeon(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = dungeon_row_from_frontmatter(&frontmatter)?;
                 state.dungeon_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "dungeon", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "dungeon",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Dungeon, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityType::Dungeon,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
-            other => Err(format!("cannot undo publish for unknown entity type: {other}")),
+            other => Err(format!(
+                "cannot undo publish for unknown entity type: {other}"
+            )),
         }
     }
 }

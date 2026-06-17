@@ -1,6 +1,7 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ollama_chat::{
-    attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
+    attempt_seed, build_chat_client, detail_directive, load_generation_config,
+    post_chat_for_content,
 };
 use crate::services::vault_ref::{
     VaultReferenceEntry, extract_prompt_reference_keys, load_vault_reference_entries,
@@ -67,7 +68,9 @@ pub(crate) fn build_reference_context(
         return PromptReferenceContext::default();
     }
     match load_vault_reference_entries(&vault) {
-        Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault, workspace_root),
+        Ok(entries) => {
+            build_prompt_reference_context(user_prompt, &entries, &vault, workspace_root)
+        }
         Err(err) => {
             eprintln!("reference context warning: {err}");
             PromptReferenceContext::default()
@@ -87,7 +90,10 @@ impl AiGenerationService {
     ) -> Result<SeedGeneration<NpcSeed>, String> {
         let (config, model) = load_generation_config(workspace_root)?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
         let reference_context = build_reference_context(&config, user_prompt, workspace_root);
@@ -134,7 +140,11 @@ impl AiGenerationService {
 
         for attempt in 0..5 {
             let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations." };
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations."
+            };
 
             let payload = serde_json::json!({
                 "model": model,
@@ -171,12 +181,23 @@ impl AiGenerationService {
             seed.secret_obstacle = normalize_unknown_text(&seed.secret_obstacle);
             seed.carrying = normalize_unknown_list(seed.carrying);
 
-            if seed.name.is_empty() || seed.race.is_empty() { continue; }
+            if seed.name.is_empty() || seed.race.is_empty() {
+                continue;
+            }
 
             let normalized_name = seed.name.to_ascii_lowercase();
-            if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) { continue; }
+            if recent_names.contains(&normalized_name)
+                || seen_attempt_names.contains(&normalized_name)
+            {
+                continue;
+            }
             let occupation_anchor = occupation_anchor(&seed.occupation);
-            if occupation_anchor != "unknown" && (recent_occupation_anchors.contains(&occupation_anchor) || seen_attempt_occupation_anchors.contains(&occupation_anchor)) { continue; }
+            if occupation_anchor != "unknown"
+                && (recent_occupation_anchors.contains(&occupation_anchor)
+                    || seen_attempt_occupation_anchors.contains(&occupation_anchor))
+            {
+                continue;
+            }
             seen_attempt_names.insert(normalized_name);
             seen_attempt_occupation_anchors.insert(occupation_anchor);
 
@@ -185,7 +206,10 @@ impl AiGenerationService {
                 .insert(database, "npc_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
         }
 
         Err("failed to generate valid structured NPC output from ollama".to_string())
@@ -200,7 +224,10 @@ impl AiGenerationService {
     ) -> Result<SeedGeneration<LocationSeed>, String> {
         let (config, model) = load_generation_config(workspace_root)?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
         let reference_context = build_reference_context(&config, user_prompt, workspace_root);
@@ -242,7 +269,11 @@ impl AiGenerationService {
 
         for attempt in 0..5 {
             let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
+            };
 
             let payload = serde_json::json!({
                 "model": model,
@@ -271,10 +302,16 @@ impl AiGenerationService {
                 Ok(seed) => seed,
                 Err(_) => continue,
             };
-            if validate_location_details(&seed).is_err() { continue; }
+            if validate_location_details(&seed).is_err() {
+                continue;
+            }
 
             let normalized_name = seed.name.to_ascii_lowercase();
-            if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) { continue; }
+            if recent_names.contains(&normalized_name)
+                || seen_attempt_names.contains(&normalized_name)
+            {
+                continue;
+            }
             seen_attempt_names.insert(normalized_name);
 
             let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
@@ -282,7 +319,10 @@ impl AiGenerationService {
                 .insert(database, "location_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
         }
 
         Err("failed to generate valid structured location output from ollama".to_string())
@@ -297,7 +337,10 @@ impl AiGenerationService {
     ) -> Result<SeedGeneration<FactionSeed>, String> {
         let (config, model) = load_generation_config(workspace_root)?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
         let reference_context = build_reference_context(&config, user_prompt, workspace_root);
@@ -347,7 +390,11 @@ impl AiGenerationService {
 
         for attempt in 0..5 {
             let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
+            };
 
             let payload = serde_json::json!({
                 "model": model,
@@ -376,18 +423,30 @@ impl AiGenerationService {
                 Ok(seed) => seed,
                 Err(_) => continue,
             };
-            if validate_faction_details(&seed).is_err() { continue; }
+            if validate_faction_details(&seed).is_err() {
+                continue;
+            }
 
             let normalized_name = seed.name.to_ascii_lowercase();
-            if enforce_unique_name && (recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name)) { continue; }
-            if enforce_unique_name { seen_attempt_names.insert(normalized_name); }
+            if enforce_unique_name
+                && (recent_names.contains(&normalized_name)
+                    || seen_attempt_names.contains(&normalized_name))
+            {
+                continue;
+            }
+            if enforce_unique_name {
+                seen_attempt_names.insert(normalized_name);
+            }
 
             let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
             generation_repo
                 .insert(database, "faction_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
         }
 
         Err("failed to generate valid structured faction output from ollama".to_string())
@@ -402,7 +461,10 @@ impl AiGenerationService {
     ) -> Result<SeedGeneration<GodSeed>, String> {
         let (config, model) = load_generation_config(workspace_root)?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy deity for a D&D campaign.");
 
         let reference_context = build_reference_context(&config, user_prompt, workspace_root);
@@ -449,7 +511,11 @@ impl AiGenerationService {
 
         for attempt in 0..5 {
             let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
+            let repair_note = if attempt == 0 {
+                ""
+            } else {
+                " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names."
+            };
 
             let payload = serde_json::json!({
                 "model": model,
@@ -479,18 +545,30 @@ impl AiGenerationService {
                 Ok(seed) => seed,
                 Err(_) => continue,
             };
-            if validate_god_details(&seed).is_err() { continue; }
+            if validate_god_details(&seed).is_err() {
+                continue;
+            }
 
             let normalized_name = seed.name.to_ascii_lowercase();
-            if enforce_unique_name && (recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name)) { continue; }
-            if enforce_unique_name { seen_attempt_names.insert(normalized_name); }
+            if enforce_unique_name
+                && (recent_names.contains(&normalized_name)
+                    || seen_attempt_names.contains(&normalized_name))
+            {
+                continue;
+            }
+            if enforce_unique_name {
+                seen_attempt_names.insert(normalized_name);
+            }
 
             let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
             generation_repo
                 .insert(database, "god_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
         }
 
         Err("failed to generate valid structured god output from ollama".to_string())
@@ -605,7 +683,10 @@ impl AiGenerationService {
                 .insert(database, "item_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
         }
 
         Err("failed to generate valid structured item output from ollama".to_string())
@@ -706,7 +787,10 @@ impl AiGenerationService {
                 .insert(database, "event_seed", None, &serialized_seed)
                 .await?;
 
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
+            return Ok(SeedGeneration {
+                seed,
+                notice: notice.clone(),
+            });
         }
 
         Err("failed to generate valid structured event output from ollama".to_string())
@@ -769,7 +853,10 @@ impl AiGenerationService {
 
         let premise_directive = match premise {
             Some(value) => format!("Build the story to honor this premise: \"{value}\"."),
-            None => "Invent a small, self-contained story that needs nothing outside this one place.".to_string(),
+            None => {
+                "Invent a small, self-contained story that needs nothing outside this one place."
+                    .to_string()
+            }
         };
         let context_directive = if context.is_empty() {
             String::new()
@@ -791,7 +878,9 @@ impl AiGenerationService {
         };
         let topology_directive = match topology_shape(topology) {
             Some(shape) => {
-                format!("The space is shaped like {shape}; let that guide how the party moves deeper. ")
+                format!(
+                    "The space is shaped like {shape}; let that guide how the party moves deeper. "
+                )
             }
             None => String::new(),
         };
@@ -877,7 +966,10 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
                 .insert(database, "dungeon_story", None, &serialized)
                 .await?;
 
-            return Ok(SeedGeneration { seed: story, notice });
+            return Ok(SeedGeneration {
+                seed: story,
+                notice,
+            });
         }
 
         Err("failed to generate a valid dungeon story from ollama".to_string())
@@ -932,7 +1024,9 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
         };
         let topology_note = match topology_shape(topology) {
             Some(shape) => {
-                format!("Spatial layout: {shape}; let it inform how the beats connect (especially whether the Setback loops the party back toward the entrance). ")
+                format!(
+                    "Spatial layout: {shape}; let it inform how the beats connect (especially whether the Setback loops the party back toward the entrance). "
+                )
             }
             None => String::new(),
         };
@@ -1255,11 +1349,19 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
         "combat" => "a hostile force or dangerous creature that must be fought or slipped past",
         "cache" => "a cache of treasure or reward waiting to be found",
         "forge" => "a forge, crucible, or workshop where something can be made or repaired",
-        "puzzle" => "a sealed way forward — a barred door or mechanism — that opens only once the party finds the right key or condition",
-        "offshoot" => "an optional branching path: a side chamber, a hidden room, or a tempting dead end",
-        "sidekick" => "a lone ally met here who joins the party and travels deeper with them through the rest of this place",
+        "puzzle" => {
+            "a sealed way forward — a barred door or mechanism — that opens only once the party finds the right key or condition"
+        }
+        "offshoot" => {
+            "an optional branching path: a side chamber, a hidden room, or a tempting dead end"
+        }
+        "sidekick" => {
+            "a lone ally met here who joins the party and travels deeper with them through the rest of this place"
+        }
         "oddity" => "a strange and significant object that is the very reason this place exists",
-        "ability_check" => "a feat of skill or nerve to get past — a climb, a leap, a steady hand, or a test of will",
+        "ability_check" => {
+            "a feat of skill or nerve to get past — a climb, a leap, a steady hand, or a test of will"
+        }
         _ => "something noteworthy",
     }
 }
@@ -1269,14 +1371,24 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
 /// which holds the rolled type fixed and only regenerates the prose.
 pub(crate) fn anchor_mechanic(content_type: &str) -> &'static str {
     match content_type {
-        "combat" => "a fight; convey the enemy's tactics, behavior, and use of terrain, and NEVER name specific creatures (the GM picks them)",
+        "combat" => {
+            "a fight; convey the enemy's tactics, behavior, and use of terrain, and NEVER name specific creatures (the GM picks them)"
+        }
         "cache" => "a stash of loot or rewards",
-        "forge" => "a place to craft or repair magic items; the idea must involve that crafting or repair",
-        "puzzle" => "a locked-door->key obstacle of one or more steps; never a riddle or logic puzzle",
+        "forge" => {
+            "a place to craft or repair magic items; the idea must involve that crafting or repair"
+        }
+        "puzzle" => {
+            "a locked-door->key obstacle of one or more steps; never a riddle or logic puzzle"
+        }
         "offshoot" => "an optional side passage, hidden room, or dead end off the main path",
-        "sidekick" => "a dungeon-only ally introduced here who joins the party and stays with them through the later beats, leaving only when the dungeon ends",
+        "sidekick" => {
+            "a dungeon-only ally introduced here who joins the party and stays with them through the later beats, leaving only when the dungeon ends"
+        }
         "oddity" => "the world-significant object that is the reason this dungeon exists",
-        "ability_check" => "an ability/skill check the party must pass — name the check (athletics, perception, persuasion, sleight of hand…) and what failure costs; not a riddle",
+        "ability_check" => {
+            "an ability/skill check the party must pass — name the check (athletics, perception, persuasion, sleight of hand…) and what failure costs; not a riddle"
+        }
         _ => "a noteworthy room",
     }
 }
@@ -1285,7 +1397,9 @@ fn overlay_phrase(overlay_type: &str) -> &'static str {
     match overlay_type {
         "foreshadowing" => "a hint of something still to come, here or out in the wider campaign",
         "history" => "a piece of lore about this place, its people, or its makers",
-        "map" => "a glimpse of the surrounding world — a route, a landmark, or a link to somewhere else",
+        "map" => {
+            "a glimpse of the surrounding world — a route, a landmark, or a link to somewhere else"
+        }
         _ => "a telling detail",
     }
 }
@@ -1297,7 +1411,9 @@ fn topology_shape(topology: &str) -> Option<&'static str> {
     match topology {
         "The Railroad" => Some("a straight sequence of rooms, each leading to the next"),
         "The Moose" => Some("a short dead-end branch near the entrance off a longer main passage"),
-        "The V for Vendetta" => Some("two passages branching in opposite directions from the entrance"),
+        "The V for Vendetta" => {
+            Some("two passages branching in opposite directions from the entrance")
+        }
         "The Arrow" => Some("a three-way junction near the entrance"),
         "The Fauchard Fork" => Some("an early fork into one short path and one longer path"),
         "The Evil Mule" => Some("a branch that soon forks again into two"),
@@ -1310,7 +1426,9 @@ fn topology_shape(topology: &str) -> Option<&'static str> {
 
 fn twist_directive(twist: &str) -> &'static str {
     match twist {
-        "false_victory" => "in the middle, hand the party an apparent win that then curdles — they think they've succeeded, then lose it",
+        "false_victory" => {
+            "in the middle, hand the party an apparent win that then curdles — they think they've succeeded, then lose it"
+        }
         "false_defeat" => "in the middle, stage an apparent loss the party then claws back from",
         _ => "play the arc straight — no fake-out in the middle",
     }
@@ -1390,94 +1508,185 @@ pub struct PromptReferenceContext {
     pub system_context: String,
 }
 
-
 pub(crate) fn parse_recent_npc_seeds(payloads: Vec<String>) -> Vec<NpcSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<NpcSeed>(&payload).ok()).collect()
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<NpcSeed>(&payload).ok())
+        .collect()
 }
 
 fn parse_recent_location_seeds(payloads: Vec<String>) -> Vec<LocationSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<LocationSeed>(&payload).ok()).collect()
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<LocationSeed>(&payload).ok())
+        .collect()
 }
 
 fn parse_recent_faction_seeds(payloads: Vec<String>) -> Vec<FactionSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<FactionSeed>(&payload).ok()).collect()
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<FactionSeed>(&payload).ok())
+        .collect()
 }
 
 fn parse_recent_event_seeds(payloads: Vec<String>) -> Vec<EventSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<EventSeed>(&payload).ok()).collect()
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<EventSeed>(&payload).ok())
+        .collect()
 }
 
 fn recent_event_title_set(seeds: &[EventSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.title.trim().to_ascii_lowercase()).filter(|title| !title.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.title.trim().to_ascii_lowercase())
+        .filter(|title| !title.is_empty())
+        .collect()
 }
 
 fn describe_recent_event_seeds(seeds: &[EventSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| seed.title.clone()).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| seed.title.clone())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn recent_faction_name_set(seeds: &[FactionSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn describe_recent_faction_seeds(seeds: &[FactionSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.reputation)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.reputation))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn parse_recent_god_seeds(payloads: Vec<String>) -> Vec<GodSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<GodSeed>(&payload).ok()).collect()
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<GodSeed>(&payload).ok())
+        .collect()
 }
 
 fn recent_god_name_set(seeds: &[GodSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn describe_recent_god_seeds(seeds: &[GodSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {}", seed.name, seed.rank, seed.alignment)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.rank, seed.alignment))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn describe_recent_location_seeds(seeds: &[LocationSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.danger_level)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.danger_level))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn recent_name_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn occupation_tokens(value: &str) -> Vec<String> {
-    const STOP_WORDS: &[&str] = &["a", "an", "and", "as", "at", "by", "deceased", "ex", "for", "former", "from", "in", "of", "on", "retired", "the", "to", "under", "with"];
-    value.chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' }).collect::<String>()
-        .split_whitespace().map(|token| token.trim().to_ascii_lowercase()).filter(|token| !token.is_empty() && !STOP_WORDS.contains(&token.as_str())).collect()
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "as", "at", "by", "deceased", "ex", "for", "former", "from", "in", "of",
+        "on", "retired", "the", "to", "under", "with",
+    ];
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty() && !STOP_WORDS.contains(&token.as_str()))
+        .collect()
 }
 
 pub(crate) fn occupation_anchor(value: &str) -> String {
-    occupation_tokens(value).into_iter().next().unwrap_or_else(|| "unknown".to_string())
+    occupation_tokens(value)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub(crate) fn recent_occupation_anchor_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| occupation_anchor(&seed.occupation)).filter(|anchor| !anchor.is_empty() && anchor != "unknown").collect()
+    seeds
+        .iter()
+        .map(|seed| occupation_anchor(&seed.occupation))
+        .filter(|anchor| !anchor.is_empty() && anchor != "unknown")
+        .collect()
 }
 
 fn recent_location_name_set(seeds: &[LocationSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {} | {}", seed.name, seed.race, seed.sex, seed.occupation)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| {
+            format!(
+                "{} | {} | {} | {}",
+                seed.name, seed.race, seed.sex, seed.occupation
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 pub(crate) fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> String {
     let mut anchors: Vec<String> = recent_occupation_anchor_set(seeds).into_iter().collect();
-    if anchors.is_empty() { return "none".to_string(); }
+    if anchors.is_empty() {
+        return "none".to_string();
+    }
     anchors.sort();
     anchors.truncate(12);
     anchors.join(", ")
 }
-
 
 fn build_prompt_reference_context(
     prompt: &str,
@@ -1486,9 +1695,19 @@ fn build_prompt_reference_context(
     workspace_root: &Path,
 ) -> PromptReferenceContext {
     let keys = extract_prompt_reference_keys(prompt, entries);
-    if keys.is_empty() { return PromptReferenceContext::default(); }
+    if keys.is_empty() {
+        return PromptReferenceContext::default();
+    }
 
-    let path_by_key: std::collections::HashMap<String, String> = entries.iter().filter_map(|entry| entry.markdown_path.as_ref().map(|path| (entry.key.to_lowercase(), path.clone()))).collect();
+    let path_by_key: std::collections::HashMap<String, String> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .markdown_path
+                .as_ref()
+                .map(|path| (entry.key.to_lowercase(), path.clone()))
+        })
+        .collect();
     let mut blocks = Vec::new();
 
     let canonical_metadata = match EntityStore::new(workspace_root) {
@@ -1500,19 +1719,40 @@ fn build_prompt_reference_context(
     };
 
     for key in keys.into_iter() {
-        let Some(path) = path_by_key.get(&key.to_lowercase()) else { continue };
+        let Some(path) = path_by_key.get(&key.to_lowercase()) else {
+            continue;
+        };
         let normalized_path = normalize_relative_path_for_storage(path);
         let metadata = if let Some(canonical) = canonical_metadata.get(&normalized_path) {
             canonical.clone()
         } else {
-            let contents = match vault.read_relative(Path::new(path)) { Ok(value) => value, Err(err) => { eprintln!("reference context warning: failed reading {}: {}", path, err); continue; } };
-            match reference_payload_from_markdown(&contents) { Some(value) => value, None => continue }
+            let contents = match vault.read_relative(Path::new(path)) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!(
+                        "reference context warning: failed reading {}: {}",
+                        path, err
+                    );
+                    continue;
+                }
+            };
+            match reference_payload_from_markdown(&contents) {
+                Some(value) => value,
+                None => continue,
+            }
         };
         blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
     }
 
-    if blocks.is_empty() { return PromptReferenceContext::default(); }
-    PromptReferenceContext { system_context: format!("Referenced vault metadata (treat as authoritative setting context):\n\n{}", blocks.join("\n\n")) }
+    if blocks.is_empty() {
+        return PromptReferenceContext::default();
+    }
+    PromptReferenceContext {
+        system_context: format!(
+            "Referenced vault metadata (treat as authoritative setting context):\n\n{}",
+            blocks.join("\n\n")
+        ),
+    }
 }
 
 fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
@@ -1521,7 +1761,10 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
     if let Ok(npcs) = store.list_npcs() {
         for npc in npcs {
             if let Ok(serialized) = toml::to_string_pretty(&npc) {
-                map.insert(normalize_relative_path_for_storage(&npc.vault_path), serialized);
+                map.insert(
+                    normalize_relative_path_for_storage(&npc.vault_path),
+                    serialized,
+                );
             }
         }
     }
@@ -1551,7 +1794,10 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
     if let Ok(items) = store.list_items() {
         for item in items {
             if let Ok(serialized) = toml::to_string_pretty(&item) {
-                map.insert(normalize_relative_path_for_storage(&item.vault_path), serialized);
+                map.insert(
+                    normalize_relative_path_for_storage(&item.vault_path),
+                    serialized,
+                );
             }
         }
     }
@@ -1573,10 +1819,18 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
 fn extract_runebound_toml(contents: &str) -> Option<String> {
     let start = contents.find("```runebound")?;
     let mut body = &contents[start + "```runebound".len()..];
-    if let Some(rest) = body.strip_prefix("\r\n") { body = rest; } else if let Some(rest) = body.strip_prefix('\n') { body = rest; }
+    if let Some(rest) = body.strip_prefix("\r\n") {
+        body = rest;
+    } else if let Some(rest) = body.strip_prefix('\n') {
+        body = rest;
+    }
     let end = body.find("\n```").or_else(|| body.find("```"))?;
     let block = body[..end].trim();
-    if block.is_empty() { None } else { Some(block.to_string()) }
+    if block.is_empty() {
+        None
+    } else {
+        Some(block.to_string())
+    }
 }
 
 fn reference_payload_from_markdown(contents: &str) -> Option<String> {
@@ -1584,12 +1838,19 @@ fn reference_payload_from_markdown(contents: &str) -> Option<String> {
         return Some(block);
     }
     let trimmed = contents.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity_notice, describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown, NpcSeed, OUTPUT_RESERVE_TOKENS};
+    use super::{
+        NpcSeed, OUTPUT_RESERVE_TOKENS, capacity_notice, describe_recent_npc_occupation_anchors,
+        occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown,
+    };
 
     #[test]
     fn capacity_notice_none_when_comfortably_under_budget() {
@@ -1613,7 +1874,10 @@ mod tests {
             occupation_anchor("former cartographer, current wanderer"),
             "cartographer"
         );
-        assert_eq!(occupation_anchor("Cartographer & explorer (deceased)"), "cartographer");
+        assert_eq!(
+            occupation_anchor("Cartographer & explorer (deceased)"),
+            "cartographer"
+        );
     }
 
     #[test]
@@ -1688,7 +1952,8 @@ mod tests {
     }
     #[test]
     fn reference_payload_prefers_runebound_block() {
-        let markdown = "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Jimmy\"\n```\n\nExtra text";
+        let markdown =
+            "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Jimmy\"\n```\n\nExtra text";
         let payload = reference_payload_from_markdown(markdown).expect("payload");
         assert!(payload.contains("type = \"npc\""));
         assert!(!payload.contains("Extra text"));

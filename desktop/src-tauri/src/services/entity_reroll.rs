@@ -1,31 +1,20 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
-    anchor_mechanic,
-    build_reference_context,
-    describe_recent_npc_occupation_anchors,
-    occupation_anchor,
-    parse_recent_npc_seeds,
-    recent_occupation_anchor_set,
+    anchor_mechanic, build_reference_context, describe_recent_npc_occupation_anchors,
+    occupation_anchor, parse_recent_npc_seeds, recent_occupation_anchor_set,
 };
 use crate::services::ollama_chat::{
-    attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
+    attempt_seed, build_chat_client, detail_directive, load_generation_config,
+    post_chat_for_content,
 };
 use crate::utils::{
-    normalize_exports,
-    normalize_faction_kind_type,
-    normalize_god_alignment,
-    normalize_god_rank,
-    normalize_item_category,
-    normalize_item_rarity,
-    normalize_location_danger_level,
-    normalize_location_kind_type,
-    normalize_sex,
-    normalize_unknown_list,
-    normalize_unknown_text,
+    normalize_exports, normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
+    normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
+    normalize_location_kind_type, normalize_sex, normalize_unknown_list, normalize_unknown_text,
 };
+use dnd_core::config::AppConfig;
 use runebound_models::DungeonBeat;
 use runebound_models::utils::{DUNGEON_FUNCTIONS, GOD_ALIGNMENTS, GOD_RANKS};
-use dnd_core::config::AppConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -277,14 +266,18 @@ impl EntityRerollService {
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise, fitting fantasy location name.",
-            "kind_type" => "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other.",
+            "kind_type" => {
+                "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other."
+            }
             "kind_custom" => "Generate a concise custom kind label for this location.",
             "visual_description" => "Generate a visual description in 1-3 sentences.",
             "history_background" => "Generate a history/background in 2-5 sentences.",
             "exports" => "Generate 1-3 exports as concise industry or specialty item strings.",
             "tone" => "Generate a mood tone in 2-5 words.",
             "authority" => "Generate who controls or governs this location.",
-            "danger_level" => "Generate danger_level as one of: Unknown, safe, guarded, risky, deadly.",
+            "danger_level" => {
+                "Generate danger_level as one of: Unknown, safe, guarded, risky, deadly."
+            }
             "current_tension" => "Generate current_tension in 1-2 sentences.",
             _ => "Generate a concise field value.",
         };
@@ -447,7 +440,9 @@ impl EntityRerollService {
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise fantasy faction name.",
-            "kind_type" => "Generate one kind_type enum value from: guild, cult, military_order, noble_house, criminal_syndicate, mercantile_league, religious_order, arcane_circle, revolutionary_cell, other.",
+            "kind_type" => {
+                "Generate one kind_type enum value from: guild, cult, military_order, noble_house, criminal_syndicate, mercantile_league, religious_order, arcane_circle, revolutionary_cell, other."
+            }
             "kind_custom" => "Generate a concise custom faction kind label.",
             "public_description" => "Generate a public-facing description in 1-3 sentences.",
             "true_agenda" => "Generate the hidden agenda in 1-3 sentences.",
@@ -462,7 +457,9 @@ impl EntityRerollService {
             "current_tension" => "Generate current tension in 1-2 sentences.",
             "goals_short_term" => "Generate 1-5 short-term goals.",
             "goals_long_term" => "Generate 1-5 long-term goals.",
-            "symbol_description" => "Generate exactly 1 sentence describing symbol/sigil/colors/banner/iconography.",
+            "symbol_description" => {
+                "Generate exactly 1 sentence describing symbol/sigil/colors/banner/iconography."
+            }
             _ => "Generate a concise field value.",
         };
 
@@ -640,8 +637,14 @@ impl EntityRerollService {
 
         let context_summary = god_context_summary(&input.god);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
-        let rank_instruction = format!("Generate one rank enum value from: {}.", GOD_RANKS.join(", "));
-        let alignment_instruction = format!("Generate one alignment enum value from: {}.", GOD_ALIGNMENTS.join(", "));
+        let rank_instruction = format!(
+            "Generate one rank enum value from: {}.",
+            GOD_RANKS.join(", ")
+        );
+        let alignment_instruction = format!(
+            "Generate one alignment enum value from: {}.",
+            GOD_ALIGNMENTS.join(", ")
+        );
         let field_instructions: &str = match field {
             "name" => "Generate a concise fantasy deity name.",
             "epithet" => "Generate a short by-name or honorific (e.g. The Stormcaller).",
@@ -984,7 +987,7 @@ impl EntityRerollService {
                 return Err(format!(
                     "unknown dungeon reroll field: {}. rerollable fields: name, location, premise (or a beat name)",
                     other
-                ))
+                ));
             }
         };
 
@@ -999,8 +1002,12 @@ impl EntityRerollService {
         let frozen = dungeon_context_summary(&input.dungeon, None);
 
         let instruction = match field {
-            "premise" => "Generate a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).",
-            "location" => "Generate the single bounded place all five beats sit inside — one short phrase naming one explorable location the party moves deeper into (e.g. 'a drowned bell-foundry'), never a region or a journey.",
+            "premise" => {
+                "Generate a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved)."
+            }
+            "location" => {
+                "Generate the single bounded place all five beats sit inside — one short phrase naming one explorable location the party moves deeper into (e.g. 'a drowned bell-foundry'), never a region or a journey."
+            }
             _ => "Generate a concise, evocative name for the dungeon.",
         };
         let current = match field {
@@ -1090,15 +1097,21 @@ impl EntityRerollService {
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
         let field_instructions = match field {
             "name" => "Generate a concise, evocative item name.",
-            "category" => "Generate one category from: weapon, armor, consumable, wondrous, arcane_focus, tool, trinket, other.",
-            "rarity" => "Generate rarity as one of: unknown, common, uncommon, rare, very_rare, legendary, artifact.",
+            "category" => {
+                "Generate one category from: weapon, armor, consumable, wondrous, arcane_focus, tool, trinket, other."
+            }
+            "rarity" => {
+                "Generate rarity as one of: unknown, common, uncommon, rare, very_rare, legendary, artifact."
+            }
             "attunement" => "Describe attunement requirements in a short phrase (or 'None').",
             "materials" => "List 1-4 notable materials as concise strings.",
             "appearance" => "Describe appearance in 1-2 sentences.",
             "abilities" => "Describe abilities/powers in 1-3 sentences.",
             "drawbacks" => "Describe drawbacks/costs in up to 2 sentences (or 'None').",
             "history" => "Describe history/origin in 1-3 sentences.",
-            "value" => "Provide estimated value in format like '1000gp' or '250sp' or '50cp' (amount + currency suffix).",
+            "value" => {
+                "Provide estimated value in format like '1000gp' or '250sp' or '50cp' (amount + currency suffix)."
+            }
             "location" => "Provide current location or hiding place.",
             _ => "Generate a concise field value.",
         };
@@ -1452,13 +1465,15 @@ fn canonical_npc_reroll_field(raw: &str) -> Result<&'static str, String> {
         "secret" | "obstacle" | "secret_obstacle" => "secret_obstacle",
         "carrying" => "carrying",
         "location" => {
-            return Err("npc reroll location is not supported; use npc travel to <location>".to_string())
+            return Err(
+                "npc reroll location is not supported; use npc travel to <location>".to_string(),
+            );
         }
         _ => {
             return Err(format!(
                 "unknown npc reroll field: {}. valid fields: name, race, occupation, sex, age, height, weight, background, want, secret, carrying",
                 raw
-            ))
+            ));
         }
     };
 
@@ -1500,7 +1515,7 @@ fn canonical_location_reroll_field(raw: &str) -> Result<&'static str, String> {
             return Err(format!(
                 "unknown location reroll field: {}. valid fields: name, kind, kind_custom, visual, history, exports, tone, authority, danger, tension",
                 raw
-            ))
+            ));
         }
     };
     Ok(field)
@@ -1511,7 +1526,10 @@ fn location_context_summary(context: &LocationRerollContext) -> String {
         "name={}, kind_type={}, kind_custom={}, visual_description={}, history_background={}, exports={}, tone={}, authority={}, danger_level={}, current_tension={}",
         context.name,
         context.kind_type,
-        context.kind_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+        context
+            .kind_custom
+            .clone()
+            .unwrap_or_else(|| "(none)".to_string()),
         context.visual_description,
         context.history_background,
         context.exports.join(", "),
@@ -1546,7 +1564,7 @@ fn canonical_faction_reroll_field(raw: &str) -> Result<&'static str, String> {
             return Err(format!(
                 "unknown faction reroll field: {}. valid fields: name, kind, kind_custom, public, agenda, methods, leadership, headquarters, influence, resources, allies, rivals, reputation, tension, goals_short, goals_long, symbol",
                 raw
-            ))
+            ));
         }
     };
 
@@ -1558,7 +1576,10 @@ fn faction_context_summary(context: &FactionRerollContext) -> String {
         "name={}, kind_type={}, kind_custom={}, public_description={}, true_agenda={}, methods={}, leadership={}, headquarters={}, sphere_of_influence={}, resources_assets={}, allies={}, rivals_enemies={}, reputation={}, current_tension={}, goals_short_term={}, goals_long_term={}, symbol_description={}",
         context.name,
         context.kind_type,
-        context.kind_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+        context
+            .kind_custom
+            .clone()
+            .unwrap_or_else(|| "(none)".to_string()),
         context.public_description,
         context.true_agenda,
         context.methods,
@@ -1597,7 +1618,7 @@ fn canonical_god_reroll_field(raw: &str) -> Result<&'static str, String> {
             return Err(format!(
                 "unknown god reroll field: {}. valid fields: name, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals",
                 raw
-            ))
+            ));
         }
     };
 
@@ -1610,7 +1631,10 @@ fn god_context_summary(context: &GodRerollContext) -> String {
         context.name,
         context.epithet,
         context.rank,
-        context.rank_custom.clone().unwrap_or_else(|| "(none)".to_string()),
+        context
+            .rank_custom
+            .clone()
+            .unwrap_or_else(|| "(none)".to_string()),
         context.alignment,
         context.domains.join(", "),
         context.symbol,
@@ -1628,12 +1652,12 @@ fn god_context_summary(context: &GodRerollContext) -> String {
 /// reroll context. When `skip_index` is `Some(i)`, beat `i` is marked as the one
 /// being regenerated (its body is omitted) so the model rewrites only that beat
 /// while staying coherent with the others.
-fn dungeon_context_summary(
-    context: &DungeonRerollContext,
-    skip_index: Option<usize>,
-) -> String {
+fn dungeon_context_summary(context: &DungeonRerollContext, skip_index: Option<usize>) -> String {
     let mut lines = vec![
-        format!("location (all beats are rooms/areas inside this one place): {}", context.location),
+        format!(
+            "location (all beats are rooms/areas inside this one place): {}",
+            context.location
+        ),
         format!("premise (spine): {}", context.premise),
         format!("tone: {}", context.tone),
         format!("twist: {}", context.twist),
@@ -1681,7 +1705,7 @@ fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {
             return Err(format!(
                 "unknown item reroll field: {}. valid fields: name, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location",
                 raw
-            ))
+            ));
         }
     };
     Ok(field)
@@ -1690,6 +1714,16 @@ fn canonical_item_reroll_field(raw: &str) -> Result<&'static str, String> {
 fn item_context_summary(context: &ItemRerollContext) -> String {
     format!(
         "name={}, category={}, rarity={}, attunement={}, materials={}, appearance={}, abilities={}, drawbacks={}, history={}, value={}, location={}",
-        context.name, context.category, context.rarity, context.attunement, context.materials.join(", "), context.appearance, context.abilities, context.drawbacks, context.history, context.value, context.location
+        context.name,
+        context.category,
+        context.rarity,
+        context.attunement,
+        context.materials.join(", "),
+        context.appearance,
+        context.abilities,
+        context.drawbacks,
+        context.history,
+        context.value,
+        context.location
     )
 }

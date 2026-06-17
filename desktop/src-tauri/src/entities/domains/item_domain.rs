@@ -1,25 +1,19 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, ItemDraftSession};
+use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
+    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
+    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
-    canonical_field_name,
-    format_valid_field_list,
-    FieldAccess,
-    ITEM_SCHEMA,
+    FieldAccess, ITEM_SCHEMA, canonical_field_name, format_valid_field_list,
 };
-use crate::entities::EntityKind;
 use crate::services::entity_persistence::{EntityPersistenceService, SaveItemDraftInput};
-use crate::services::entity_reroll::{EntityRerollService, ItemRerollContext, RerollItemFieldInput};
+use crate::services::entity_reroll::{
+    EntityRerollService, ItemRerollContext, RerollItemFieldInput,
+};
 use crate::utils::{normalize_item_category, normalize_item_rarity, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
@@ -96,7 +90,8 @@ impl EntityDomain for ItemDomain {
             return entity_message_response("item set value cannot be empty.");
         }
 
-        let Some(canonical) = canonical_field_name(EntityKind::Item, field, FieldAccess::Set) else {
+        let Some(canonical) = canonical_field_name(EntityKind::Item, field, FieldAccess::Set)
+        else {
             let valid_fields = format_valid_field_list(EntityKind::Item, FieldAccess::Set);
             return entity_message_response(format!(
                 "unknown item field: {}. valid fields: {}",
@@ -118,7 +113,9 @@ impl EntityDomain for ItemDomain {
                 "category" => draft.category = normalize_item_category(trimmed_value)?,
                 "rarity" => draft.rarity = normalize_item_rarity(trimmed_value)?,
                 "attunement" => draft.attunement = normalize_unknown_text(trimmed_value),
-                "materials" => draft.materials = normalize_unknown_list(parse_list_csv(trimmed_value)),
+                "materials" => {
+                    draft.materials = normalize_unknown_list(parse_list_csv(trimmed_value))
+                }
                 "appearance" => draft.appearance = normalize_unknown_text(trimmed_value),
                 "abilities" => draft.abilities = normalize_unknown_text(trimmed_value),
                 "drawbacks" => draft.drawbacks = normalize_unknown_text(trimmed_value),

@@ -337,7 +337,7 @@ fn is_quote_start_boundary(prev: Option<char>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_command_input, parse_command_input, ParseStage};
+    use super::{ParseStage, normalize_command_input, parse_command_input};
 
     #[test]
     fn parses_quoted_arguments() {

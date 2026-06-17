@@ -96,7 +96,10 @@ pub async fn probe_ollama(base_url: &str, timeout_seconds: u64) -> OllamaProbe {
             models
                 .iter()
                 .filter_map(|model| {
-                    model.get("name").and_then(|name| name.as_str()).map(String::from)
+                    model
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        .map(String::from)
                 })
                 .collect::<Vec<_>>()
         })

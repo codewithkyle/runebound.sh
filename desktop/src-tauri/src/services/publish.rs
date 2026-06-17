@@ -56,7 +56,12 @@ pub fn render_location_markdown_with_links(
     );
     write_section(&mut out, "History", &frontmatter.history_background, linker);
     write_list_section(&mut out, "Exports", &frontmatter.exports);
-    write_section(&mut out, "Current Tension", &frontmatter.current_tension, linker);
+    write_section(
+        &mut out,
+        "Current Tension",
+        &frontmatter.current_tension,
+        linker,
+    );
 
     out
 }
@@ -85,14 +90,28 @@ pub fn render_faction_markdown_with_links(
         linker,
     );
     write_section(&mut out, "Reputation", &frontmatter.reputation, linker);
-    write_section(&mut out, "Public Description", &frontmatter.public_description, linker);
+    write_section(
+        &mut out,
+        "Public Description",
+        &frontmatter.public_description,
+        linker,
+    );
     write_section(&mut out, "True Agenda", &frontmatter.true_agenda, linker);
     write_section(&mut out, "Methods", &frontmatter.methods, linker);
     write_section(&mut out, "Leadership", &frontmatter.leadership, linker);
-    write_text_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
+    write_text_list_section(
+        &mut out,
+        "Resources & Assets",
+        &frontmatter.resources_assets,
+    );
     write_linked_list_section(&mut out, "Allies", &frontmatter.allies);
     write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
-    write_section(&mut out, "Current Tension", &frontmatter.current_tension, linker);
+    write_section(
+        &mut out,
+        "Current Tension",
+        &frontmatter.current_tension,
+        linker,
+    );
     write_list_section(&mut out, "Short-Term Goals", &frontmatter.goals_short_term);
     write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
     write_section(&mut out, "Symbol", &frontmatter.symbol_description, linker);
@@ -204,7 +223,12 @@ pub fn render_dungeon_markdown_with_links(
         }
         let player_goals = normalize_unknown_text(&beat.player_goals);
         if player_goals != "Unknown" {
-            writeln!(&mut out, "**Player Goals:** {}", linker.link_prose(&player_goals)).ok();
+            writeln!(
+                &mut out,
+                "**Player Goals:** {}",
+                linker.link_prose(&player_goals)
+            )
+            .ok();
         }
         let lever = normalize_unknown_text(&beat.lever);
         if lever != "Unknown" {
@@ -455,14 +479,20 @@ impl EntityLinker {
 /// A left word boundary exists at byte `i` when the preceding char is absent or
 /// not alphanumeric (so we match whole words, not substrings inside a word).
 fn boundary_before(text: &str, i: usize) -> bool {
-    text[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric())
+    text[..i]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !c.is_alphanumeric())
 }
 
 /// A right word boundary exists at byte `end` when the following char is absent
 /// or not alphanumeric. This keeps possessives working: matching "Waterdeep" in
 /// "Waterdeep's" ends before the apostrophe, yielding `[[Waterdeep]]'s`.
 fn boundary_after(text: &str, end: usize) -> bool {
-    text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric())
+    text[end..]
+        .chars()
+        .next()
+        .is_none_or(|c| !c.is_alphanumeric())
 }
 
 fn write_attr_line(out: &mut String, label: &str, value: &str) {
@@ -730,7 +760,10 @@ mod tests {
     fn wikilink_skips_values_with_link_unsafe_characters() {
         // A `|`, `#`, `^`, or stray bracket would produce a broken link target,
         // so the value is left as-is rather than corrupted.
-        assert_eq!(wikilink("Waterdeep | Sword Coast"), "Waterdeep | Sword Coast");
+        assert_eq!(
+            wikilink("Waterdeep | Sword Coast"),
+            "Waterdeep | Sword Coast"
+        );
         assert_eq!(wikilink("Vault #3"), "Vault #3");
         assert_eq!(wikilink("[redacted]"), "[redacted]");
     }
@@ -954,10 +987,7 @@ mod tests {
     fn prose_link_respects_word_boundaries() {
         // "Ash" must not match inside "ashes"; only the standalone word links.
         let linker = make_linker(&["Ash"], "Branwen");
-        assert_eq!(
-            linker.link_prose("ashes and Ash"),
-            "ashes and [[Ash]]"
-        );
+        assert_eq!(linker.link_prose("ashes and Ash"), "ashes and [[Ash]]");
     }
 
     #[test]
@@ -998,7 +1028,10 @@ mod tests {
     #[test]
     fn empty_linker_leaves_prose_untouched() {
         let linker = EntityLinker::empty();
-        assert_eq!(linker.link_prose("Nothing to link here."), "Nothing to link here.");
+        assert_eq!(
+            linker.link_prose("Nothing to link here."),
+            "Nothing to link here."
+        );
     }
 
     #[test]

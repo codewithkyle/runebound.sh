@@ -248,7 +248,10 @@ async fn complete<H: WizardHost>(
 }
 
 /// Render the step the cursor currently points at.
-fn render_current<H: Send + Sync>(wizard: &dyn Wizard<H>, session: &WizardSession) -> CommandResponse {
+fn render_current<H: Send + Sync>(
+    wizard: &dyn Wizard<H>,
+    session: &WizardSession,
+) -> CommandResponse {
     let step = &wizard.steps()[session.cursor];
     let data = session.data.as_ref().expect("active wizard data");
     render_step(wizard, step.as_ref(), data)
@@ -464,7 +467,10 @@ mod tests {
     #[tokio::test]
     async fn seed_hook_receives_the_host_context() {
         let host = FakeHost::new(NativeOutcome::Cancelled);
-        start_wizard("t", &host).await.expect("start").expect("prompt");
+        start_wizard("t", &host)
+            .await
+            .expect("start")
+            .expect("prompt");
         let session = host.session.lock().await;
         let picked = data(session.data.as_ref().unwrap()).picked.clone();
         assert_eq!(picked.as_deref(), Some("seeded"));
@@ -499,6 +505,9 @@ mod tests {
         assert_eq!(session.active_id, Some("t"));
         assert_eq!(session.cursor, 0);
         // The seeded value is untouched; no path was resubmitted.
-        assert_eq!(data(session.data.as_ref().unwrap()).picked.as_deref(), Some("seeded"));
+        assert_eq!(
+            data(session.data.as_ref().unwrap()).picked.as_deref(),
+            Some("seeded")
+        );
     }
 }

@@ -1357,7 +1357,10 @@ mod tests {
     fn phase_from_age_centers_principal_phases() {
         let cycle = 28;
         assert_eq!(phase_from_age(0, cycle), MoonPhaseKind::New);
-        assert_eq!(phase_from_age(cycle / 4, cycle), MoonPhaseKind::FirstQuarter);
+        assert_eq!(
+            phase_from_age(cycle / 4, cycle),
+            MoonPhaseKind::FirstQuarter
+        );
         assert_eq!(phase_from_age(cycle / 2, cycle), MoonPhaseKind::Full);
         assert_eq!(
             phase_from_age(3 * cycle / 4, cycle),

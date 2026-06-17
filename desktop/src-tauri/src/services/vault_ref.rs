@@ -27,7 +27,11 @@ pub struct VaultReferenceEntry {
 
 /// Characters that terminate an `@reference` token in free text.
 fn is_reference_boundary_char(ch: char) -> bool {
-    ch.is_whitespace() || matches!(ch, '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"')
+    ch.is_whitespace()
+        || matches!(
+            ch,
+            '.' | ',' | ';' | ':' | '!' | '?' | ')' | ']' | '}' | '"'
+        )
 }
 
 /// Whether an `@` at `at_index` can begin a reference (start of input or preceded
@@ -110,12 +114,14 @@ pub fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceE
                     continue;
                 }
                 key.push('/');
-                entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
-                    key: key.clone(),
-                    key_lower: key.to_ascii_lowercase(),
-                    markdown_path: None,
-                    is_dir: true,
-                });
+                entries
+                    .entry(key.clone())
+                    .or_insert_with(|| VaultReferenceEntry {
+                        key: key.clone(),
+                        key_lower: key.to_ascii_lowercase(),
+                        markdown_path: None,
+                        is_dir: true,
+                    });
                 stack.push(PathBuf::from(relative));
                 continue;
             }
@@ -123,12 +129,14 @@ pub fn load_vault_reference_entries(vault: &Vault) -> Result<Vec<VaultReferenceE
             let Some(key) = markdown_reference_key(&relative) else {
                 continue;
             };
-            entries.entry(key.clone()).or_insert_with(|| VaultReferenceEntry {
-                key: key.clone(),
-                key_lower: key.to_ascii_lowercase(),
-                markdown_path: Some(relative),
-                is_dir: false,
-            });
+            entries
+                .entry(key.clone())
+                .or_insert_with(|| VaultReferenceEntry {
+                    key: key.clone(),
+                    key_lower: key.to_ascii_lowercase(),
+                    markdown_path: Some(relative),
+                    is_dir: false,
+                });
         }
     }
 

@@ -3,22 +3,15 @@ use std::sync::Arc;
 use crate::app_state::AppState;
 use crate::commands::{DesktopHandlerInvocation, command_action_response};
 use crate::entities::common::{
-    command_message_response,
-    command_message_response_with_doc,
-    command_no_active_draft,
-    command_response_with_event,
-    entity_help_doc,
-    entity_reroll_field_help,
-    entity_set_field_help,
+    command_message_response, command_message_response_with_doc, command_no_active_draft,
+    command_response_with_event, entity_help_doc, entity_reroll_field_help, entity_set_field_help,
     parse_reroll_field_and_prompt,
 };
 use crate::entities::domains::{npc_event_from_draft, npc_summary_text};
 use crate::entities::{CommandResult, EntityDomain, EntityKind};
-use crate::services::entity_admin::{EntityAdminService, EnsureLocationInput};
+use crate::services::entity_admin::{EnsureLocationInput, EntityAdminService};
 
-pub async fn handle_npc(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_npc(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     let lowered = trimmed.to_ascii_lowercase();
     let state_ref = invocation.state.inner();
@@ -102,10 +95,7 @@ async fn handle_npc_reroll(
     domain.reroll_field(&field, prompt, state).await
 }
 
-async fn npc_travel(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn npc_travel(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     if !trimmed.to_ascii_lowercase().starts_with("npc travel to ") {
         return command_message_response("usage: npc travel to <location>");
     }

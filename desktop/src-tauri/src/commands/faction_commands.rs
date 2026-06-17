@@ -3,18 +3,12 @@ use std::sync::Arc;
 use crate::app_state::AppState;
 use crate::commands::{DesktopHandlerInvocation, command_action_response};
 use crate::entities::common::{
-    command_message_response_with_doc,
-    command_no_active_draft,
-    entity_help_doc,
-    entity_reroll_field_help,
-    entity_set_field_help,
-    parse_reroll_field_and_prompt,
+    command_message_response_with_doc, command_no_active_draft, entity_help_doc,
+    entity_reroll_field_help, entity_set_field_help, parse_reroll_field_and_prompt,
 };
 use crate::entities::{CommandResult, EntityDomain, EntityKind};
 
-pub async fn handle_faction(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_faction(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     let lowered = trimmed.to_ascii_lowercase();
     let state_ref = invocation.state.inner();

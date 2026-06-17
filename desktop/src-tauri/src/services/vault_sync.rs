@@ -5,14 +5,17 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use dnd_core::config::load_effective;
 use dnd_core::entity_store::EntityStore;
-use dnd_core::npc::{DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
+use dnd_core::npc::{
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp,
+};
 use dnd_core::serialization::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 use dnd_core::vault::Vault;
 
 use crate::app_state::AppState;
 use crate::repositories::{
-    db, DocumentRepository, DungeonRepository, EventRepository, FactionRepository, GodRepository,
-    ItemRepository, LocationRepository, NpcRepository,
+    DocumentRepository, DungeonRepository, EventRepository, FactionRepository, GodRepository,
+    ItemRepository, LocationRepository, NpcRepository, db,
 };
 use crate::utils::normalize_relative_path_for_storage;
 
@@ -53,12 +56,42 @@ impl VaultSyncService {
         let database = database.as_ref();
         let document_repo = document_repo.as_ref();
         sync_entities(&NpcSync(npc_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&LocationSync(location_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&FactionSync(faction_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&ItemSync(item_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&EventSync(event_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(
+            &LocationSync(location_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
+        sync_entities(
+            &FactionSync(faction_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
+        sync_entities(
+            &ItemSync(item_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
+        sync_entities(
+            &EventSync(event_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
         sync_entities(&GodSync(god_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&DungeonSync(dungeon_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(
+            &DungeonSync(dungeon_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
 
         Ok(())
     }
@@ -524,8 +557,7 @@ pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<d
         background: frontmatter.background.clone(),
         want_need: frontmatter.want_need.clone(),
         secret_obstacle: frontmatter.secret_obstacle.clone(),
-        carrying: carrying_to_db_text(&frontmatter.carrying)
-            .map_err(|err| err.to_string())?,
+        carrying: carrying_to_db_text(&frontmatter.carrying).map_err(|err| err.to_string())?,
         location: frontmatter.location.clone(),
         vault_path: frontmatter.vault_path.clone(),
         created_at: frontmatter.created_at.clone(),
@@ -587,7 +619,9 @@ pub(crate) fn faction_row_from_frontmatter(
     })
 }
 
-pub(crate) fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result<db::ItemRow, String> {
+pub(crate) fn item_row_from_frontmatter(
+    frontmatter: &ItemFrontmatter,
+) -> Result<db::ItemRow, String> {
     Ok(db::ItemRow {
         id: frontmatter.id.clone(),
         slug: frontmatter.slug.clone(),
@@ -596,7 +630,8 @@ pub(crate) fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result
         category: frontmatter.category.clone(),
         rarity: frontmatter.rarity.clone(),
         attunement: frontmatter.attunement.clone(),
-        materials: faction_list_to_db_text(&frontmatter.materials).map_err(|err| err.to_string())?,
+        materials: faction_list_to_db_text(&frontmatter.materials)
+            .map_err(|err| err.to_string())?,
         appearance: frontmatter.appearance.clone(),
         abilities: frontmatter.abilities.clone(),
         drawbacks: frontmatter.drawbacks.clone(),
@@ -690,8 +725,13 @@ pub fn move_vault_file(
         .resolve_relative(&PathBuf::from(&target_relative))
         .map_err(|err| err.to_string())?;
     if let Some(parent) = target_full.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create trash directory {}: {}", parent.display(), err))?;
+        fs::create_dir_all(parent).map_err(|err| {
+            format!(
+                "failed to create trash directory {}: {}",
+                parent.display(),
+                err
+            )
+        })?;
     }
 
     fs::rename(&source_full, &target_full).map_err(|err| {

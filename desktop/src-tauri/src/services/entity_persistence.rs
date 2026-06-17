@@ -6,9 +6,7 @@ use dnd_core::npc::{
     LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, normalize_markdown_file_stem,
     now_timestamp, slugify, unique_slug_for_dir_with_ext,
 };
-use dnd_core::serialization::{
-    carrying_to_db_text, exports_to_db_text, faction_list_to_db_text,
-};
+use dnd_core::serialization::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
@@ -156,9 +154,7 @@ impl EntityPersistenceService {
             updated_at: now.clone(),
         };
 
-        npc_repo
-            .upsert(database.as_ref(), &npc_row)
-            .await?;
+        npc_repo.upsert(database.as_ref(), &npc_row).await?;
         document_repo
             .upsert_index(
                 database.as_ref(),
@@ -195,7 +191,9 @@ impl EntityPersistenceService {
         }
 
         let kind_type = normalize_location_kind_type(&input.kind_type)?;
-        let mut kind_custom = input.kind_custom.map(|value| normalize_unknown_text(&value));
+        let mut kind_custom = input
+            .kind_custom
+            .map(|value| normalize_unknown_text(&value));
         if kind_type == "other" {
             if kind_custom
                 .as_ref()
@@ -492,9 +490,7 @@ impl EntityPersistenceService {
             updated_at: now.clone(),
         };
 
-        faction_repo
-            .upsert(database.as_ref(), &faction_row)
-            .await?;
+        faction_repo.upsert(database.as_ref(), &faction_row).await?;
         document_repo
             .upsert_index(
                 database.as_ref(),
@@ -619,7 +615,9 @@ impl EntityPersistenceService {
             published_at,
         };
 
-        store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+        store
+            .save_god(&frontmatter)
+            .map_err(|err| err.to_string())?;
         if let Some(current) = existing.as_ref() {
             if current.slug != slug {
                 store
@@ -928,9 +926,7 @@ impl EntityPersistenceService {
             updated_at: now.clone(),
         };
 
-        item_repo
-            .upsert(database.as_ref(), &item_row)
-            .await?;
+        item_repo.upsert(database.as_ref(), &item_row).await?;
         document_repo
             .upsert_index(
                 database.as_ref(),
@@ -1110,14 +1106,9 @@ async fn resolve_vault_path(
 
     match existing {
         Some(current) => {
-            let readable = unique_readable_vault_path(
-                document_repo,
-                database,
-                dir,
-                name,
-                Some(current.slug),
-            )
-            .await?;
+            let readable =
+                unique_readable_vault_path(document_repo, database, dir, name, Some(current.slug))
+                    .await?;
             if normalize_relative_path_for_storage(current.vault_path)
                 == normalize_relative_path_for_storage(&readable)
             {

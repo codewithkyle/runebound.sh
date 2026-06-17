@@ -1,18 +1,20 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, GodDraftSession};
+use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
     no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
-    canonical_field_name, format_valid_field_list, FieldAccess, GOD_SCHEMA,
+    FieldAccess, GOD_SCHEMA, canonical_field_name, format_valid_field_list,
 };
-use crate::entities::EntityKind;
 use crate::services::entity_persistence::{EntityPersistenceService, SaveGodDraftInput};
 use crate::services::entity_reroll::{EntityRerollService, GodRerollContext, RerollGodFieldInput};
-use crate::utils::{normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display};
+use crate::utils::{
+    normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 
@@ -89,8 +91,8 @@ impl EntityDomain for GodDomain {
             return entity_message_response("god set value cannot be empty.");
         }
 
-        let canonical = canonical_field_name(EntityKind::God, field, FieldAccess::Set)
-            .ok_or_else(|| {
+        let canonical =
+            canonical_field_name(EntityKind::God, field, FieldAccess::Set).ok_or_else(|| {
                 let valid_fields = format_valid_field_list(EntityKind::God, FieldAccess::Set);
                 format!(
                     "unknown god set field: {}. valid fields: {}",

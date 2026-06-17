@@ -125,12 +125,9 @@ pub const GOD_RANKS: [&str; 6] = [
     "other",
 ];
 
-pub const GOD_ALIGNMENTS: [&str; 9] = [
-    "LG", "NG", "CG", "LN", "TN", "CN", "LE", "NE", "CE",
-];
+pub const GOD_ALIGNMENTS: [&str; 9] = ["LG", "NG", "CG", "LN", "TN", "CN", "LE", "NE", "CE"];
 
-pub const DUNGEON_FUNCTIONS: [&str; 5] =
-    ["Entrance", "Puzzle", "Setback", "Climax", "Resolution"];
+pub const DUNGEON_FUNCTIONS: [&str; 5] = ["Entrance", "Puzzle", "Setback", "Climax", "Resolution"];
 
 pub const DUNGEON_CONTENT_TYPES: [&str; 12] = [
     "combat",
@@ -628,7 +625,10 @@ mod tests {
             strip_reference_syntax("@events/Harvest Moon Festival"),
             "Harvest Moon Festival"
         );
-        assert_eq!(strip_reference_syntax("@quests/The Lost Crown"), "The Lost Crown");
+        assert_eq!(
+            strip_reference_syntax("@quests/The Lost Crown"),
+            "The Lost Crown"
+        );
     }
 
     #[test]
@@ -651,9 +651,15 @@ mod tests {
     #[test]
     fn strip_reference_syntax_leaves_emails_and_bare_tokens_alone() {
         // `@` mid-word (email) is not a reference boundary.
-        assert_eq!(strip_reference_syntax("reach gm@example.com"), "reach gm@example.com");
+        assert_eq!(
+            strip_reference_syntax("reach gm@example.com"),
+            "reach gm@example.com"
+        );
         // A bare `@token` with no path is not a directory reference.
-        assert_eq!(strip_reference_syntax("warn @everyone now"), "warn @everyone now");
+        assert_eq!(
+            strip_reference_syntax("warn @everyone now"),
+            "warn @everyone now"
+        );
     }
 
     #[test]
@@ -661,7 +667,10 @@ mod tests {
         // The reported bug: a generated field carrying the input `@reference`
         // syntax is cleaned to the bare name (which the linker then wikilinks).
         assert_eq!(normalize_unknown_text("@locations/Elyria"), "Elyria");
-        assert_eq!(normalize_unknown_text("@events/Harvest Moon"), "Harvest Moon");
+        assert_eq!(
+            normalize_unknown_text("@events/Harvest Moon"),
+            "Harvest Moon"
+        );
     }
 
     #[test]

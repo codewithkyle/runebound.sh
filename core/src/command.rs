@@ -641,11 +641,7 @@ fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDo
 /// Structured, clickable help for a single command (`subcommand = None`) or one
 /// of its subcommands. Subcommands render as `command_ref`s and examples as
 /// code; the plain-text `render_*_help` functions remain the fallback string.
-fn command_help_doc(
-    manifest: &CommandManifest,
-    root: &str,
-    subcommand: Option<&str>,
-) -> OutputDoc {
+fn command_help_doc(manifest: &CommandManifest, root: &str, subcommand: Option<&str>) -> OutputDoc {
     let Some(command) = find_manifest_command(manifest, root) else {
         return doc().with_block(paragraph_with_inlines(vec![
             text_node(format!("unknown command: {root}. use ")),

@@ -1,4 +1,4 @@
-use dnd_core::calendar::{self, format_date_conversational, StoredCalendar};
+use dnd_core::calendar::{self, StoredCalendar, format_date_conversational};
 use runebound_models::CommandResponse;
 use runebound_models::output::{StatusTone, doc, status};
 
@@ -15,9 +15,7 @@ pub(crate) fn date_response(formatted: String) -> CommandResult {
     Ok(Some(ok_response_with_doc(formatted, Some(document), None)))
 }
 
-pub async fn handle_date(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_date(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
@@ -161,7 +159,10 @@ async fn date_set(tokens: &[String]) -> CommandResult {
         "month" => date_set_month(stored, value),
         "day" => date_set_day(stored, value),
         _ => Ok(Some(ok_response(
-            format!("Unknown date component '{}'. Valid options: year, month, day, time.", component),
+            format!(
+                "Unknown date component '{}'. Valid options: year, month, day, time.",
+                component
+            ),
             None,
         ))),
     }
@@ -172,17 +173,17 @@ fn date_set_year(mut stored: StoredCalendar, value: &str) -> CommandResult {
         Ok(y) => y,
         Err(_) => {
             return Ok(Some(ok_response(
-                format!("'{}' is not a valid year number. Year must be an integer (0 or greater).", value),
+                format!(
+                    "'{}' is not a valid year number. Year must be an integer (0 or greater).",
+                    value
+                ),
                 None,
             )));
         }
     };
 
     if let Err(e) = stored.state.set_year(year) {
-        return Ok(Some(ok_response(
-            format!("{}", e),
-            None,
-        )));
+        return Ok(Some(ok_response(format!("{}", e), None)));
     }
 
     if let Err(e) = calendar::save_calendar(&stored) {
@@ -216,11 +217,11 @@ fn date_set_month(mut stored: StoredCalendar, value: &str) -> CommandResult {
     };
 
     // `set_month_index` clamps the day into the new month's range for us.
-    if let Err(e) = stored.state.set_month_index(month_index, &stored.definition) {
-        return Ok(Some(ok_response(
-            format!("invalid month: {}", e),
-            None,
-        )));
+    if let Err(e) = stored
+        .state
+        .set_month_index(month_index, &stored.definition)
+    {
+        return Ok(Some(ok_response(format!("invalid month: {}", e), None)));
     }
 
     if let Err(e) = calendar::save_calendar(&stored) {
@@ -239,17 +240,17 @@ fn date_set_day(mut stored: StoredCalendar, value: &str) -> CommandResult {
         Ok(d) => d,
         Err(_) => {
             return Ok(Some(ok_response(
-                format!("'{}' is not a valid day number. Day must be a positive integer.", value),
+                format!(
+                    "'{}' is not a valid day number. Day must be a positive integer.",
+                    value
+                ),
                 None,
             )));
         }
     };
 
     if let Err(e) = stored.state.set_day(day, &stored.definition) {
-        return Ok(Some(ok_response(
-            format!("{}", e),
-            None,
-        )));
+        return Ok(Some(ok_response(format!("{}", e), None)));
     }
 
     if let Err(e) = calendar::save_calendar(&stored) {
@@ -263,7 +264,11 @@ fn date_set_day(mut stored: StoredCalendar, value: &str) -> CommandResult {
     date_response(formatted)
 }
 
-fn date_set_time(mut stored: StoredCalendar, time_value: &str, suffix: Option<&str>) -> CommandResult {
+fn date_set_time(
+    mut stored: StoredCalendar,
+    time_value: &str,
+    suffix: Option<&str>,
+) -> CommandResult {
     let (hour, minute) = match parse_time_input(time_value, suffix) {
         Ok(result) => result,
         Err(err) => {
@@ -364,7 +369,7 @@ fn convert_without_suffix(hour: u32) -> Result<u8, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{convert_without_suffix, convert_to_24_hour_am_pm, parse_time_input};
+    use super::{convert_to_24_hour_am_pm, convert_without_suffix, parse_time_input};
 
     #[test]
     fn parses_time_with_pm_suffix() {

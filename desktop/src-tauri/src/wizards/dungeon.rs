@@ -13,19 +13,19 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use dnd_core::npc::slugify;
 use runebound_models::apply_plan_meta_to_beats;
-use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
+use runebound_models::dungeon_plan::{DungeonContentPlan, roll_dungeon_content_plan};
 use runebound_models::output::{
-    code, command_ref, doc, heading, image, list, paragraph_text, paragraph_with_inlines,
-    text_node, InlineNode, OutputDoc,
+    InlineNode, OutputDoc, code, command_ref, doc, heading, image, list, paragraph_text,
+    paragraph_with_inlines, text_node,
 };
-use runebound_models::utils::{make_entity_id, DUNGEON_FUNCTIONS, DUNGEON_TOPOLOGIES};
+use runebound_models::utils::{DUNGEON_FUNCTIONS, DUNGEON_TOPOLOGIES, make_entity_id};
 
 use crate::app_state::{AppState, DungeonDraftSession};
 use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
-use crate::entities::common::{
-    command_message_response_with_doc, command_response_with_event, CommandResult,
-};
 use crate::entities::EntityKind;
+use crate::entities::common::{
+    CommandResult, command_message_response_with_doc, command_response_with_event,
+};
 use crate::services::ai_generation::{AiGenerationService, DungeonStory, SeedGeneration};
 use crate::utils::{normalize_unknown_text, prepend_notice};
 
@@ -106,8 +106,10 @@ impl WizardStep<AppState> for PremiseStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![WizardChoice::new("generate", "generate")
-            .with_help("Have the oracle invent a premise for you")]
+        vec![
+            WizardChoice::new("generate", "generate")
+                .with_help("Have the oracle invent a premise for you"),
+        ]
     }
 
     async fn accept(
@@ -341,7 +343,9 @@ impl WizardStep<AppState> for PlanReviewStep {
             document = document.with_block(paragraph_text(notice.clone()));
         }
         document
-            .with_block(paragraph_text("The dice rolled these rooms for your dungeon:"))
+            .with_block(paragraph_text(
+                "The dice rolled these rooms for your dungeon:",
+            ))
             .with_block(list(items))
             .with_block(paragraph_with_inlines(vec![
                 text_node("Re-roll one with "),
@@ -662,7 +666,10 @@ async fn generate_story(
 fn set_room_type(d: &mut DungeonWizardData, rest: &str) -> Result<(), String> {
     let mut tokens = rest.split_whitespace();
     // Require the explicit `room` keyword: `set room <room> <type>`.
-    if !tokens.next().is_some_and(|t| t.eq_ignore_ascii_case("room")) {
+    if !tokens
+        .next()
+        .is_some_and(|t| t.eq_ignore_ascii_case("room"))
+    {
         return Err(set_room_usage());
     }
     let room = tokens.next().unwrap_or("");
@@ -687,7 +694,11 @@ fn set_room_type(d: &mut DungeonWizardData, rest: &str) -> Result<(), String> {
 /// (case-insensitive) like "entrance" or "climax".
 fn resolve_room_index(room: &str) -> Option<usize> {
     if let Ok(n) = room.parse::<usize>() {
-        return if (1..=5).contains(&n) { Some(n - 1) } else { None };
+        return if (1..=5).contains(&n) {
+            Some(n - 1)
+        } else {
+            None
+        };
     }
     DUNGEON_FUNCTIONS
         .iter()
@@ -885,7 +896,12 @@ fn plan_room_lines(plan: &DungeonContentPlan) -> Vec<String> {
         .iter()
         .enumerate()
         .map(|(i, anchor)| {
-            format!("{}. {} — {}", i + 1, DUNGEON_FUNCTIONS[i], content_label(anchor))
+            format!(
+                "{}. {} — {}",
+                i + 1,
+                DUNGEON_FUNCTIONS[i],
+                content_label(anchor)
+            )
         })
         .collect();
     if let Some(overlay) = &plan.overlay {
@@ -996,10 +1012,7 @@ mod tests {
         assert!(!per_room.contains(&"reroll".to_string()));
         assert!(per_room.contains(&"reroll climax".to_string()));
 
-        assert_eq!(
-            completions("reroll cl"),
-            vec!["reroll climax".to_string()]
-        );
+        assert_eq!(completions("reroll cl"), vec!["reroll climax".to_string()]);
     }
 
     #[test]

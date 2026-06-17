@@ -11,11 +11,11 @@ use dnd_core::command_manifest::InputContext;
 use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
 use crate::services::entity_admin::EntityType;
-use crate::wizards::WizardChoice;
 use crate::services::vault_ref::{
     VaultReferenceEntry, can_start_reference_at, load_vault_reference_entries,
 };
 use crate::utils::normalize_relative_path_for_storage;
+use crate::wizards::WizardChoice;
 
 pub struct SuggestionService;
 
@@ -40,7 +40,8 @@ impl SuggestionService {
             }
 
             if !active_ref.query.trim().starts_with('-') {
-                let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+                let loaded =
+                    load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
                 if let Some(vault_path) = loaded.effective.vault.path {
                     let vault = Vault::new(vault_path);
                     if vault.ensure_root_exists().is_ok() {
@@ -104,8 +105,8 @@ impl SuggestionService {
         let is_show_context = lowered == "show" || lowered.starts_with("show ");
         let is_preview_context = lowered == "preview" || lowered.starts_with("preview ");
         let is_publish_help = lowered.starts_with("publish help");
-        let is_publish_context = !is_publish_help
-            && (lowered == "publish" || lowered.starts_with("publish "));
+        let is_publish_context =
+            !is_publish_help && (lowered == "publish" || lowered.starts_with("publish "));
         let search_query = if is_load_context {
             trimmed[4..].trim()
         } else if is_delete_context {
@@ -234,7 +235,6 @@ struct ActiveReferenceQuery {
     at_index: usize,
     query: String,
 }
-
 
 async fn search_entities(
     state: &AppState,
@@ -477,19 +477,16 @@ fn build_argument_suggestions(
     }
 
     if command.name == "setup" {
-        if let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input) {
+        if let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input)
+        {
             return suggestions;
         }
     }
 
     if let Some(kind) = entity_kind_for_root(command.name.as_str()) {
-        if let Some(suggestions) = build_entity_field_argument_suggestions(
-            kind,
-            command,
-            subcommand_name,
-            parsed,
-            input,
-        ) {
+        if let Some(suggestions) =
+            build_entity_field_argument_suggestions(kind, command, subcommand_name, parsed, input)
+        {
             return suggestions;
         }
     }
@@ -581,7 +578,9 @@ fn build_field_suggestions(
     let prefix = parsed.completion.current_token.to_ascii_lowercase();
     let base = replace_current_token(input, &parsed.completion.current_token);
     let mut field_names: Vec<&'static str> = if verb == "set" {
-        settable_fields(kind).map(|spec| spec.display_name).collect()
+        settable_fields(kind)
+            .map(|spec| spec.display_name)
+            .collect()
     } else {
         rerollable_fields(kind)
             .map(|spec| spec.display_name)
@@ -656,7 +655,8 @@ fn build_date_argument_suggestions(
     let is_known_target = target_token_lower
         .as_deref()
         .is_some_and(|value| matches!(value, "year" | "month" | "day" | "time"));
-    let selecting_component = !has_target_token || !is_known_target || (typed_after_set == 1 && !ends_with_space);
+    let selecting_component =
+        !has_target_token || !is_known_target || (typed_after_set == 1 && !ends_with_space);
 
     if selecting_component {
         let base = base_for_date_component_selection(input, typed_after_set);
@@ -802,7 +802,8 @@ fn replace_current_token(input: &str, current_token: &str) -> String {
 }
 
 fn completion_suffix(command: &CommandSpec) -> &'static str {
-    if !command.subcommands.is_empty() || !command.options.is_empty() || command.requires_subcommand {
+    if !command.subcommands.is_empty() || !command.options.is_empty() || command.requires_subcommand
+    {
         " "
     } else {
         ""
@@ -819,7 +820,10 @@ pub(crate) fn starts_with_known_command_root(input: &str, manifest: &CommandMani
         return false;
     };
     let lowered = first.to_ascii_lowercase();
-    manifest.commands.iter().any(|command| command.name == lowered)
+    manifest
+        .commands
+        .iter()
+        .any(|command| command.name == lowered)
 }
 
 fn extract_active_reference_query(input: &str) -> Option<ActiveReferenceQuery> {
@@ -903,15 +907,15 @@ fn npc_travel_location_query(input: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
+        ActiveReferenceQuery, SuggestionHelperText, VaultReferenceEntry,
         build_active_reroll_suggestions, build_command_suggestions,
         build_entity_field_argument_suggestions, build_reference_suggestions_from_entries,
         entity_kind_for_root, extract_active_reference_query, find_command,
-        npc_travel_location_query, wizard_choices_to_suggestions, ActiveReferenceQuery,
-        SuggestionHelperText, VaultReferenceEntry,
+        npc_travel_location_query, wizard_choices_to_suggestions,
     };
     use crate::entities::EntityKind;
-    use crate::wizards::WizardChoice;
     use crate::services::vault_ref::extract_prompt_reference_keys;
+    use crate::wizards::WizardChoice;
     use dnd_core::{command_manifest, command_parse};
 
     #[test]
@@ -1010,10 +1014,14 @@ mod tests {
             at_index: 11,
             query: String::new(),
         };
-        let suggestions = build_reference_suggestions_from_entries("create npc @", &active, &entries);
+        let suggestions =
+            build_reference_suggestions_from_entries("create npc @", &active, &entries);
         let labels: Vec<String> = suggestions.into_iter().map(|item| item.label).collect();
 
-        assert_eq!(labels, vec!["@locations/".to_string(), "@npcs/".to_string()]);
+        assert_eq!(
+            labels,
+            vec!["@locations/".to_string(), "@npcs/".to_string()]
+        );
     }
 
     #[test]
@@ -1022,7 +1030,10 @@ mod tests {
             npc_travel_location_query("npc travel to Aegis Isle"),
             Some("Aegis Isle".to_string())
         );
-        assert_eq!(npc_travel_location_query("npc travel to"), Some(String::new()));
+        assert_eq!(
+            npc_travel_location_query("npc travel to"),
+            Some(String::new())
+        );
         assert_eq!(npc_travel_location_query("npc travel"), None);
     }
 
@@ -1297,7 +1308,11 @@ mod tests {
             "missing bare reroll beat suggestion"
         );
         // The label is the bare form, not `dungeon reroll …`.
-        assert!(suggestions.iter().all(|item| item.label.starts_with("reroll ")));
+        assert!(
+            suggestions
+                .iter()
+                .all(|item| item.label.starts_with("reroll "))
+        );
     }
 
     #[test]

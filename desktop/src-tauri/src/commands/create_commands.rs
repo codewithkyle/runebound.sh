@@ -5,30 +5,23 @@ use crate::commands::{
     item_event_from_draft, item_summary_text, location_event_from_draft, location_summary_text,
     npc_event_from_draft, npc_summary_text,
 };
-use crate::entities::common::{
-    command_message_response,
-    command_response_with_event,
-    CommandResult,
-};
 use crate::entities::EntityKind;
+use crate::entities::common::{
+    CommandResult, command_message_response, command_response_with_event,
+};
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{
-    normalize_optional_prompt,
-    normalize_sex,
-    normalize_unknown_list,
-    normalize_unknown_text,
+    normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text,
     prepend_notice,
 };
 use dnd_core::npc::UNKNOWN_LOCATION;
 
 use crate::app_state::{
-    EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession, LocationDraftSession,
-    NpcDraftSession,
+    EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession,
+    LocationDraftSession, NpcDraftSession,
 };
 
-pub async fn handle_create(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_create(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -37,22 +30,25 @@ pub async fn handle_create(
     let lowered = trimmed.to_ascii_lowercase();
 
     if lowered == "create help" {
-        return command_message_response([
-            "## Create commands",
-            "create npc",
-            "create npc <prompt text>",
-            "create location",
-            "create location <prompt text>",
-            "create faction",
-            "create faction <prompt text>",
-            "create item",
-            "create item <prompt text>",
-            "create event",
-            "create event <prompt text>",
-            "create god",
-            "create god <prompt text>",
-            "create dungeon",
-        ].join("\n"));
+        return command_message_response(
+            [
+                "## Create commands",
+                "create npc",
+                "create npc <prompt text>",
+                "create location",
+                "create location <prompt text>",
+                "create faction",
+                "create faction <prompt text>",
+                "create item",
+                "create item <prompt text>",
+                "create event",
+                "create event <prompt text>",
+                "create god",
+                "create god <prompt text>",
+                "create dungeon",
+            ]
+            .join("\n"),
+        );
     }
 
     if lowered == "create dungeon" || lowered.starts_with("create dungeon ") {
@@ -93,10 +89,7 @@ pub async fn handle_create(
     )))
 }
 
-async fn create_npc(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_npc(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 10 {
@@ -154,10 +147,7 @@ async fn create_npc(
     )
 }
 
-async fn create_location(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_location(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 15 {
@@ -214,10 +204,7 @@ async fn create_location(
     )
 }
 
-async fn create_faction(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_faction(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 14 {
@@ -282,10 +269,7 @@ async fn create_faction(
     )
 }
 
-async fn create_item(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_item(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 11 {
@@ -346,10 +330,7 @@ async fn create_item(
     )
 }
 
-async fn create_event(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_event(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     // "create event" is 12 chars; anything after it is a free-form guidance prompt.
@@ -402,10 +383,7 @@ async fn create_event(
     )
 }
 
-async fn create_god(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_god(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     // "create god" is 10 chars; anything after it is a free-form guidance prompt.

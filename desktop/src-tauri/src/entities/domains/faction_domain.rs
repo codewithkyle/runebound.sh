@@ -1,20 +1,19 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, FactionDraftSession};
+use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
+    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
+    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, FACTION_SCHEMA};
-use crate::entities::EntityKind;
+use crate::entities::schema::{
+    FACTION_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
+};
 use crate::services::entity_persistence::{EntityPersistenceService, SaveFactionDraftInput};
-use crate::services::entity_reroll::{EntityRerollService, FactionRerollContext, RerollFactionFieldInput};
+use crate::services::entity_reroll::{
+    EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
+};
 use crate::utils::{normalize_optional_prompt, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
@@ -74,9 +73,9 @@ impl EntityDomain for FactionDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_faction_mut()
-                .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            let draft = editor.get_faction_mut().ok_or_else(|| {
+                "no active faction draft. run create faction or load <name>.".to_string()
+            })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
             let snapshot = draft.clone();
@@ -109,9 +108,9 @@ impl EntityDomain for FactionDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_faction_mut()
-                .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            let draft = editor.get_faction_mut().ok_or_else(|| {
+                "no active faction draft. run create faction or load <name>.".to_string()
+            })?;
 
             match canonical {
                 "name" => {
@@ -187,10 +186,9 @@ impl EntityDomain for FactionDomain {
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_faction()
-                .cloned()
-        }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            editor.get_faction().cloned()
+        }
+        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
         let prompt = normalize_optional_prompt(prompt).map(|value| value.to_string());
 
@@ -342,10 +340,9 @@ impl EntityDomain for FactionDomain {
     async fn save(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_faction()
-                .cloned()
-        }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            editor.get_faction().cloned()
+        }
+        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
         let persistence = EntityPersistenceService;
         let result = persistence

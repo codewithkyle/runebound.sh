@@ -114,7 +114,10 @@ mod tests {
         let response = service.execute_line("start setup").await;
         assert!(response.ok, "start setup failed: {:?}", response.error);
         assert!(response.output.contains("Vault setup"));
-        assert_eq!(response.wizard.as_ref().map(|w| w.id.as_str()), Some("setup"));
+        assert_eq!(
+            response.wizard.as_ref().map(|w| w.id.as_str()),
+            Some("setup")
+        );
         assert_eq!(service.wizard_session.active_id, Some("setup"));
     }
 

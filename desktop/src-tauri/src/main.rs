@@ -21,15 +21,16 @@ use tokio::sync::Mutex;
 
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
-use crate::wizards::build_default_wizard_registry;
 use crate::repositories::{
-    DocumentRepository, EventRepository, FactionRepository, GenerationRepository, GodRepository,
-    ItemRepository, LocationRepository, NpcRepository, ProdDocumentRepository, ProdEventRepository,
-    DungeonRepository, ProdDungeonRepository, ProdFactionRepository, ProdGenerationRepository,
-    ProdGodRepository, ProdItemRepository, ProdLocationRepository, ProdNpcRepository,
-    ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository, VaultRepository,
+    DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
+    GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
+    ProdDocumentRepository, ProdDungeonRepository, ProdEventRepository, ProdFactionRepository,
+    ProdGenerationRepository, ProdGodRepository, ProdItemRepository, ProdLocationRepository,
+    ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository,
+    VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
+use crate::wizards::build_default_wizard_registry;
 
 #[tauri::command]
 async fn suggest_command_input(
@@ -99,9 +100,13 @@ async fn run_command(
         return Err(message);
     }
 
-    if let Some(response) =
-        router::dispatch_desktop_command(&normalized_input, &parsed.normalized_tokens, state.clone(), app_handle.clone())
-            .await?
+    if let Some(response) = router::dispatch_desktop_command(
+        &normalized_input,
+        &parsed.normalized_tokens,
+        state.clone(),
+        app_handle.clone(),
+    )
+    .await?
     {
         let skip_history_push = matches!(
             response.client_event,

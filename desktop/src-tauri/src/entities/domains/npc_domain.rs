@@ -1,17 +1,15 @@
 use async_trait::async_trait;
 
 use crate::app_state::{AppState, NpcDraftSession};
+use crate::entities::EntityKind;
 use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
+    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
+    no_active_draft_message, normalize_unknown_list, normalize_unknown_text,
 };
 use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, NPC_SCHEMA};
-use crate::entities::EntityKind;
+use crate::entities::schema::{
+    FieldAccess, NPC_SCHEMA, canonical_field_name, format_valid_field_list,
+};
 use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraftInput};
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
 use crate::utils::{normalize_sex, parse_carrying_csv, path_for_display};
@@ -145,10 +143,9 @@ impl EntityDomain for NpcDomain {
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_npc()
-                .cloned()
-        }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
+            editor.get_npc().cloned()
+        }
+        .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
@@ -254,10 +251,9 @@ impl EntityDomain for NpcDomain {
     async fn save(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_npc()
-                .cloned()
-        }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
+            editor.get_npc().cloned()
+        }
+        .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
         let persistence = EntityPersistenceService;
         let result = persistence

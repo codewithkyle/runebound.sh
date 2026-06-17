@@ -757,7 +757,7 @@ pub fn canonical_field_spec(
         schema_for_kind(kind)
             .fields
             .iter()
-            .find(|spec| spec.matches(&normalized) && access.allows(spec))?
+            .find(|spec| spec.matches(&normalized) && access.allows(spec))?,
     )
 }
 

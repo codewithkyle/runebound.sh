@@ -16,7 +16,9 @@
 use std::collections::HashSet;
 use std::path::Path;
 
-use crate::services::ollama_chat::{build_chat_client, load_generation_config, post_chat_for_content};
+use crate::services::ollama_chat::{
+    build_chat_client, load_generation_config, post_chat_for_content,
+};
 
 /// Characters that can't appear in a clean `[[wikilink]]` target (mirrors the
 /// guard in [`super::publish`]).
@@ -143,7 +145,10 @@ mod tests {
     fn drops_already_known_names() {
         let prose = "She fled to Waterdeep at dawn.";
         let out = filter_mentions(vec!["Waterdeep".to_string()], prose, &known(&["waterdeep"]));
-        assert!(out.is_empty(), "known names are handled by store/vault candidates");
+        assert!(
+            out.is_empty(),
+            "known names are handled by store/vault candidates"
+        );
     }
 
     #[test]
@@ -161,7 +166,11 @@ mod tests {
     fn drops_link_unsafe_and_too_short_names() {
         let prose = "Notes mention X and [bracketed] and Aldric Vane here.";
         let out = filter_mentions(
-            vec!["X".to_string(), "[bracketed]".to_string(), "Aldric Vane".to_string()],
+            vec![
+                "X".to_string(),
+                "[bracketed]".to_string(),
+                "Aldric Vane".to_string(),
+            ],
             prose,
             &known(&[]),
         );

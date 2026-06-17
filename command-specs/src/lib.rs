@@ -1301,7 +1301,9 @@ mod tests {
     #[test]
     fn entity_roots_are_scoped_to_their_own_editor() {
         // Regression guard: these must NOT silently fall through to `Default`.
-        for root in ["npc", "location", "faction", "item", "event", "god", "dungeon"] {
+        for root in [
+            "npc", "location", "faction", "item", "event", "god", "dungeon",
+        ] {
             assert_eq!(
                 command_availability(root),
                 CommandAvailability::EntityScoped(root),
@@ -1313,7 +1315,9 @@ mod tests {
         assert!(command_availability("npc").is_visible_in(&npc_editor()));
         assert!(!command_availability("npc").is_visible_in(&location_editor()));
         assert!(!command_availability("npc").is_visible_in(&InputContext::Default));
-        assert!(!command_availability("npc").is_visible_in(&InputContext::Wizard("setup".to_string())));
+        assert!(
+            !command_availability("npc").is_visible_in(&InputContext::Wizard("setup".to_string()))
+        );
     }
 
     #[test]
@@ -1325,7 +1329,10 @@ mod tests {
         assert!(command_availability("reroll").is_visible_in(&npc_editor()));
         assert!(command_availability("reroll").is_visible_in(&location_editor()));
         assert!(!command_availability("reroll").is_visible_in(&InputContext::Default));
-        assert!(!command_availability("reroll").is_visible_in(&InputContext::Wizard("setup".to_string())));
+        assert!(
+            !command_availability("reroll")
+                .is_visible_in(&InputContext::Wizard("setup".to_string()))
+        );
     }
 
     #[test]
@@ -1333,7 +1340,10 @@ mod tests {
         // `save` writes an entity draft; `cancel` exits an entity editor or a
         // wizard. (Onboarding's `save`/`cancel` are handled by the wizard route,
         // not these manifest commands.)
-        assert_eq!(command_availability("save"), CommandAvailability::EntityEditorOnly);
+        assert_eq!(
+            command_availability("save"),
+            CommandAvailability::EntityEditorOnly
+        );
         assert_eq!(
             command_availability("cancel"),
             CommandAvailability::AnyEditorOrWizard
@@ -1368,7 +1378,10 @@ mod tests {
         assert!(command_availability("publish").is_visible_in(&InputContext::Default));
         assert!(command_availability("publish").is_visible_in(&npc_editor()));
         // Not inside a wizard.
-        assert!(!command_availability("publish").is_visible_in(&InputContext::Wizard("setup".to_string())));
+        assert!(
+            !command_availability("publish")
+                .is_visible_in(&InputContext::Wizard("setup".to_string()))
+        );
     }
 
     #[test]
@@ -1472,7 +1485,11 @@ mod tests {
     fn command_roots_are_unique() {
         let roots = manifest_roots();
         let unique: HashSet<&String> = roots.iter().collect();
-        assert_eq!(unique.len(), roots.len(), "duplicate command root in manifest");
+        assert_eq!(
+            unique.len(),
+            roots.len(),
+            "duplicate command root in manifest"
+        );
     }
 
     #[test]
@@ -1523,11 +1540,7 @@ mod tests {
     fn alias_targets_resolve_to_real_roots() {
         let roots: HashSet<String> = manifest_roots().into_iter().collect();
         for alias in command_manifest().aliases {
-            let target = alias
-                .to
-                .first()
-                .expect("alias must have a target")
-                .clone();
+            let target = alias.to.first().expect("alias must have a target").clone();
             assert!(
                 roots.contains(&target),
                 "alias {:?} targets unknown root {target}",
@@ -1547,6 +1560,9 @@ mod tests {
             .map(|command| command.name)
             .collect();
         let expected: HashSet<String> = ["+", "-"].into_iter().map(String::from).collect();
-        assert_eq!(hidden, expected, "unexpected change to autocomplete-hidden roots");
+        assert_eq!(
+            hidden, expected,
+            "unexpected change to autocomplete-hidden roots"
+        );
     }
 }

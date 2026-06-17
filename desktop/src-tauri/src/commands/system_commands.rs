@@ -1,26 +1,26 @@
 use crate::app_state::AppState;
-use crate::commands::{
-    faction_event_from_draft, faction_summary_text, DesktopHandlerInvocation,
-};
+use crate::commands::ok_response_with_doc;
+use crate::commands::{DesktopHandlerInvocation, faction_event_from_draft, faction_summary_text};
+use crate::entities::EntityKind;
 use crate::entities::common::{
-    command_message_response,
-    entity_message_response,
-    entity_response_with_event,
+    command_message_response, entity_message_response, entity_response_with_event,
     merge_seed_and_reroll_prompt,
 };
-use crate::commands::ok_response_with_doc;
 use crate::entities::domains::dungeon_domain::beat_index_from_token;
-use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
-use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text, prepend_notice};
+use crate::utils::{
+    normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text,
+    prepend_notice,
+};
 use dnd_core::command::render_help_overview;
 use dnd_core::npc::slugify;
 use runebound_models::CommandResponse;
-use runebound_models::dungeon_plan::{roll_dungeon_content_plan, DungeonContentPlan};
+use runebound_models::dungeon_plan::{DungeonContentPlan, roll_dungeon_content_plan};
 use runebound_models::{apply_plan_meta_to_beats, plan_meta_from_beats};
 
-
-pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
+pub async fn handle_help(
+    invocation: DesktopHandlerInvocation<'_>,
+) -> Result<Option<CommandResponse>, String> {
     // Resolve the current input context so the help index lists the commands
     // actually runnable here. Shared with the suggestion service via
     // AppState::resolve_input_context so the two cannot drift.
@@ -34,7 +34,9 @@ pub async fn handle_help(invocation: DesktopHandlerInvocation<'_>) -> Result<Opt
     )))
 }
 
-pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
+pub async fn handle_save(
+    invocation: DesktopHandlerInvocation<'_>,
+) -> Result<Option<CommandResponse>, String> {
     let active_kind = {
         let editor = invocation.state.editor_session.lock().await;
         editor.active_kind()
@@ -53,14 +55,18 @@ pub async fn handle_save(invocation: DesktopHandlerInvocation<'_>) -> Result<Opt
     }
 }
 
-pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
+pub async fn handle_reroll(
+    invocation: DesktopHandlerInvocation<'_>,
+) -> Result<Option<CommandResponse>, String> {
     let active_kind = {
         let editor = invocation.state.editor_session.lock().await;
         editor.active_kind()
     };
 
     let reroll_prompt = if invocation.lowered.len() > 1 {
-        let raw_after_reroll = invocation.raw_input.trim_start_matches(|c: char| c.is_whitespace());
+        let raw_after_reroll = invocation
+            .raw_input
+            .trim_start_matches(|c: char| c.is_whitespace());
         if let Some(stripped) = raw_after_reroll.strip_prefix("reroll") {
             let after_reroll = stripped.trim_start_matches(|c: char| c.is_whitespace());
             if !after_reroll.is_empty() {
@@ -77,17 +83,30 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
 
     match active_kind {
         Some(EntityKind::Npc) => reroll_current_npc(invocation.state.clone(), reroll_prompt).await,
-        Some(EntityKind::Location) => reroll_current_location(invocation.state.clone(), reroll_prompt).await,
-        Some(EntityKind::Faction) => reroll_current_faction(invocation.state.clone(), reroll_prompt).await,
-        Some(EntityKind::Item) => reroll_current_item(invocation.state.clone(), reroll_prompt).await,
-        Some(EntityKind::Event) => reroll_current_event(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Location) => {
+            reroll_current_location(invocation.state.clone(), reroll_prompt).await
+        }
+        Some(EntityKind::Faction) => {
+            reroll_current_faction(invocation.state.clone(), reroll_prompt).await
+        }
+        Some(EntityKind::Item) => {
+            reroll_current_item(invocation.state.clone(), reroll_prompt).await
+        }
+        Some(EntityKind::Event) => {
+            reroll_current_event(invocation.state.clone(), reroll_prompt).await
+        }
         Some(EntityKind::God) => reroll_current_god(invocation.state.clone(), reroll_prompt).await,
-        Some(EntityKind::Dungeon) => reroll_current_dungeon(invocation.state.clone(), reroll_prompt).await,
+        Some(EntityKind::Dungeon) => {
+            reroll_current_dungeon(invocation.state.clone(), reroll_prompt).await
+        }
         None => command_message_response("no active draft to reroll."),
     }
 }
 
-async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_dungeon(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
 
     // `reroll <beat>` (e.g. `reroll entrance` or `reroll 1`) regenerates just that
@@ -197,7 +216,9 @@ async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt
     )
 }
 
-pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<Option<CommandResponse>, String> {
+pub async fn handle_cancel(
+    invocation: DesktopHandlerInvocation<'_>,
+) -> Result<Option<CommandResponse>, String> {
     let active_kind = {
         let editor = invocation.state.editor_session.lock().await;
         editor.active_kind()
@@ -216,7 +237,10 @@ pub async fn handle_cancel(invocation: DesktopHandlerInvocation<'_>) -> Result<O
     }
 }
 
-async fn reroll_current_event(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_event(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
     // Events regenerate as a whole, which is exactly what the domain's
     // (field-agnostic) reroll does — route through it so the logic lives once.
     let domain = state
@@ -226,8 +250,11 @@ async fn reroll_current_event(state: tauri::State<'_, AppState>, reroll_prompt: 
     domain.reroll_field("", reroll_prompt, state.inner()).await
 }
 
-async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
-    use crate::commands::{npc_summary_text, npc_event_from_draft};
+async fn reroll_current_npc(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
+    use crate::commands::{npc_event_from_draft, npc_summary_text};
 
     let draft = {
         let editor = state.editor_session.lock().await;
@@ -274,8 +301,11 @@ async fn reroll_current_npc(state: tauri::State<'_, AppState>, reroll_prompt: Op
     )
 }
 
-async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
-    use crate::commands::{location_summary_text, location_event_from_draft};
+async fn reroll_current_location(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
+    use crate::commands::{location_event_from_draft, location_summary_text};
 
     let draft = {
         let editor = state.editor_session.lock().await;
@@ -321,7 +351,10 @@ async fn reroll_current_location(state: tauri::State<'_, AppState>, reroll_promp
     )
 }
 
-async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_faction(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
     let draft = {
         let editor = state.editor_session.lock().await;
         editor.get_faction().cloned()
@@ -374,7 +407,10 @@ async fn reroll_current_faction(state: tauri::State<'_, AppState>, reroll_prompt
     )
 }
 
-async fn reroll_current_god(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_god(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{god_event_from_draft, god_summary_text};
 
     let draft = {
@@ -426,7 +462,10 @@ async fn reroll_current_god(state: tauri::State<'_, AppState>, reroll_prompt: Op
     )
 }
 
-async fn reroll_current_item(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
+async fn reroll_current_item(
+    state: tauri::State<'_, AppState>,
+    reroll_prompt: Option<String>,
+) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{item_event_from_draft, item_summary_text};
 
     let draft = {

@@ -89,7 +89,10 @@ pub(crate) async fn post_chat_for_content(
         .await
         .map_err(|err| err.to_string())?;
     if !response.status().is_success() {
-        return Err(format!("ollama chat failed with status {}", response.status()));
+        return Err(format!(
+            "ollama chat failed with status {}",
+            response.status()
+        ));
     }
 
     let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;

@@ -3,11 +3,11 @@ use std::path::MAIN_SEPARATOR;
 use crate::services::ai_generation::{FactionSeed, GodSeed, LocationSeed};
 
 pub use runebound_models::utils::{
-    normalize_dungeon_tone, normalize_dungeon_topology,
-    normalize_dungeon_twist, normalize_exports, normalize_faction_kind_type,
-    normalize_god_alignment, normalize_god_rank, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_item_category, normalize_item_rarity, normalize_sex,
-    normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+    normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist, normalize_exports,
+    normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
+    normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
+    normalize_location_kind_type, normalize_sex, normalize_unknown_list, normalize_unknown_text,
+    parse_list_csv,
 };
 
 pub fn parse_carrying_csv(value: &str) -> Vec<String> {
@@ -31,8 +31,7 @@ pub fn normalize_optional_prompt(prompt: Option<String>) -> Option<String> {
 }
 
 pub fn normalize_relative_path_for_storage(path: &str) -> String {
-    path
-        .replace('\\', "/")
+    path.replace('\\', "/")
         .split('/')
         .filter(|segment| !segment.is_empty())
         .collect::<Vec<_>>()
@@ -73,10 +72,17 @@ pub fn prepend_notice(notice: Option<String>, body: String) -> String {
     }
 }
 
-pub fn validate_sentence_range(value: &str, min: usize, max: usize, field: &str) -> Result<(), String> {
+pub fn validate_sentence_range(
+    value: &str,
+    min: usize,
+    max: usize,
+    field: &str,
+) -> Result<(), String> {
     let count = sentence_count(value);
     if count < min || count > max {
-        return Err(format!("{field} must be {min}-{max} sentences; got {count}"));
+        return Err(format!(
+            "{field} must be {min}-{max} sentences; got {count}"
+        ));
     }
     Ok(())
 }
@@ -86,7 +92,11 @@ pub fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, S
     seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
     seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
     if seed.kind_type == "other" {
-        if seed.kind_custom.as_ref().is_none_or(|value| value.trim().is_empty()) {
+        if seed
+            .kind_custom
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             return Err("kind_custom is required when kind_type is other".to_string());
         }
     } else {
@@ -136,7 +146,11 @@ pub fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, Stri
     seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
     seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
     if seed.kind_type == "other" {
-        if seed.kind_custom.as_ref().is_none_or(|value| value.trim().is_empty()) {
+        if seed
+            .kind_custom
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             return Err("kind_custom is required when kind_type is other".to_string());
         }
     } else {
@@ -183,7 +197,11 @@ pub fn normalize_god_seed(mut seed: GodSeed) -> Result<GodSeed, String> {
     seed.rank = normalize_god_rank(&seed.rank)?;
     seed.rank_custom = seed.rank_custom.map(|value| value.trim().to_string());
     if seed.rank == "other" {
-        if seed.rank_custom.as_ref().is_none_or(|value| value.trim().is_empty()) {
+        if seed
+            .rank_custom
+            .as_ref()
+            .is_none_or(|value| value.trim().is_empty())
+        {
             return Err("rank_custom is required when rank is other".to_string());
         }
     } else {

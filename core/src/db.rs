@@ -1057,7 +1057,10 @@ pub async fn search_events_by_name(
     rows.into_iter().map(row_to_event).collect()
 }
 
-pub async fn find_event_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<EventRow>> {
+pub async fn find_event_by_name_or_slug(
+    pool: &SqlitePool,
+    input: &str,
+) -> Result<Option<EventRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
         "SELECT id, slug, name, vault_path, body, created_at, updated_at
@@ -1205,12 +1208,13 @@ pub async fn mark_soft_delete_undone(pool: &SqlitePool, id: i64, undone_at: &str
 /// Finalizes any still-pending `publish` recovery records so they can no longer be
 /// undone (a publish that survives to a restart is permanent). Returns the count.
 pub async fn finalize_pending_publishes(pool: &SqlitePool, finalized_at: &str) -> Result<u64> {
-    let result =
-        sqlx::query("UPDATE soft_deletes SET undone_at = ?1 WHERE operation = 'publish' AND undone_at IS NULL")
-            .bind(finalized_at)
-            .execute(pool)
-            .await
-            .context("failed to finalize pending publishes")?;
+    let result = sqlx::query(
+        "UPDATE soft_deletes SET undone_at = ?1 WHERE operation = 'publish' AND undone_at IS NULL",
+    )
+    .bind(finalized_at)
+    .execute(pool)
+    .await
+    .context("failed to finalize pending publishes")?;
 
     Ok(result.rows_affected())
 }
@@ -1596,11 +1600,8 @@ mod tests {
     async fn temp_db() -> Database {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "dnd_db_test_{}_{}.sqlite",
-            std::process::id(),
-            n
-        ));
+        let path =
+            std::env::temp_dir().join(format!("dnd_db_test_{}_{}.sqlite", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         init_database_at_path(&path).await.expect("init test db")
     }
@@ -1784,9 +1785,12 @@ mod tests {
     async fn search_npcs_by_name_is_substring_case_insensitive_and_sorted() {
         let database = temp_db().await;
         let pool = &database.pool;
-        upsert_npc(pool, &sample_npc("npc_1", "Bram Stoneford", "bram-stoneford"))
-            .await
-            .expect("upsert");
+        upsert_npc(
+            pool,
+            &sample_npc("npc_1", "Bram Stoneford", "bram-stoneford"),
+        )
+        .await
+        .expect("upsert");
         upsert_npc(pool, &sample_npc("npc_2", "Aldric Vane", "aldric-vane"))
             .await
             .expect("upsert");
@@ -1807,7 +1811,11 @@ mod tests {
         for i in 0..5 {
             upsert_npc(
                 pool,
-                &sample_npc(&format!("npc_{i}"), &format!("Guard {i}"), &format!("guard-{i}")),
+                &sample_npc(
+                    &format!("npc_{i}"),
+                    &format!("Guard {i}"),
+                    &format!("guard-{i}"),
+                ),
             )
             .await
             .expect("upsert");
@@ -1830,8 +1838,18 @@ mod tests {
 
         delete_npc_by_id(pool, "npc_1").await.expect("delete");
 
-        assert!(find_npc_by_id(pool, "npc_1").await.expect("query").is_none());
-        assert!(find_npc_by_id(pool, "npc_2").await.expect("query").is_some());
+        assert!(
+            find_npc_by_id(pool, "npc_1")
+                .await
+                .expect("query")
+                .is_none()
+        );
+        assert!(
+            find_npc_by_id(pool, "npc_2")
+                .await
+                .expect("query")
+                .is_some()
+        );
         assert_eq!(list_npcs(pool).await.expect("list").len(), 1);
     }
 
@@ -1839,9 +1857,12 @@ mod tests {
     async fn location_find_by_slug_round_trips() {
         let database = temp_db().await;
         let pool = &database.pool;
-        upsert_location(pool, &sample_location("loc_1", "Neverwinter Harbor", "neverwinter-harbor"))
-            .await
-            .expect("upsert location");
+        upsert_location(
+            pool,
+            &sample_location("loc_1", "Neverwinter Harbor", "neverwinter-harbor"),
+        )
+        .await
+        .expect("upsert location");
 
         let found = find_location_by_slug(pool, "neverwinter-harbor")
             .await
@@ -1852,6 +1873,11 @@ mod tests {
         assert_eq!(found.exports, "smoked eel, river pearls");
 
         // A non-matching slug returns nothing.
-        assert!(find_location_by_slug(pool, "missing").await.expect("query").is_none());
+        assert!(
+            find_location_by_slug(pool, "missing")
+                .await
+                .expect("query")
+                .is_none()
+        );
     }
 }

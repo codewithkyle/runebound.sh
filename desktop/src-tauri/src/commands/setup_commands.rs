@@ -27,8 +27,8 @@ pub fn pick_vault_folder(app_handle: &tauri::AppHandle) -> Result<FolderPick, St
     };
 
     let path_string = path.to_string_lossy().into_owned();
-    let expanded = shellexpand::full(&path_string)
-        .map_err(|e| format!("failed to expand path: {}", e))?;
+    let expanded =
+        shellexpand::full(&path_string).map_err(|e| format!("failed to expand path: {}", e))?;
 
     Ok(FolderPick::Picked(expanded.into_owned()))
 }
