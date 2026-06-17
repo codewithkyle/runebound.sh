@@ -1,20 +1,23 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, NpcDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, NpcDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, NPC_SCHEMA, canonical_field_name, format_valid_field_list,
 };
 use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraftInput};
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
-use crate::utils::{normalize_sex, parse_carrying_csv, path_for_display};
+use crate::utils::{
+    normalize_relative_path_for_storage, normalize_sex, parse_carrying_csv, path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::carrying_from_db_text;
 
 pub struct NpcDomain;
 
@@ -47,6 +50,43 @@ impl EntityDomain for NpcDomain {
             "npc cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .npc_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = NpcDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            race: row.race,
+            occupation: row.occupation,
+            sex: normalize_sex(&row.sex).unwrap_or_else(|_| "male".to_string()),
+            age: row.age,
+            height: row.height,
+            weight_lbs: row.weight_lbs,
+            background: row.background,
+            want_need: row.want_need,
+            secret_obstacle: row.secret_obstacle,
+            carrying: carrying_from_db_text(&row.carrying),
+            location: row.location,
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::Npc(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {

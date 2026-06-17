@@ -1,16 +1,16 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, EventDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, EventDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt, no_active_draft_message,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::EVENT_SCHEMA;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::services::entity_persistence::{EntityPersistenceService, SaveEventDraftInput};
-use crate::utils::{path_for_display, prepend_notice};
+use crate::utils::{normalize_relative_path_for_storage, path_for_display, prepend_notice};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 
@@ -42,6 +42,33 @@ impl EntityDomain for EventDomain {
             "event cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .event_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = EventDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            body: row.body,
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::Event(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {

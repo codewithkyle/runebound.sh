@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, DungeonDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, DungeonDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     DUNGEON_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
 };
@@ -16,7 +16,8 @@ use crate::services::entity_reroll::{
 };
 use crate::utils::{
     normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist,
-    normalize_optional_prompt, normalize_unknown_text, path_for_display,
+    normalize_optional_prompt, normalize_relative_path_for_storage, normalize_unknown_text,
+    path_for_display,
 };
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
@@ -92,6 +93,40 @@ impl EntityDomain for DungeonDomain {
             "dungeon cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .dungeon_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = DungeonDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            location: row.location,
+            story: row.story,
+            premise: row.premise,
+            topology: row.topology,
+            tone: row.tone,
+            twist: row.twist,
+            beats: serde_json::from_str(&row.beats_json).unwrap_or_default(),
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::Dungeon(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {

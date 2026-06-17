@@ -48,6 +48,30 @@ impl DraftEnvelope {
         }
     }
 
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            DraftEnvelope::Npc(d) => &d.name,
+            DraftEnvelope::Location(d) => &d.name,
+            DraftEnvelope::Faction(d) => &d.name,
+            DraftEnvelope::Item(d) => &d.name,
+            DraftEnvelope::Event(d) => &d.name,
+            DraftEnvelope::God(d) => &d.name,
+            DraftEnvelope::Dungeon(d) => &d.name,
+        }
+    }
+
+    pub(crate) fn slug(&self) -> &str {
+        match self {
+            DraftEnvelope::Npc(d) => &d.slug,
+            DraftEnvelope::Location(d) => &d.slug,
+            DraftEnvelope::Faction(d) => &d.slug,
+            DraftEnvelope::Item(d) => &d.slug,
+            DraftEnvelope::Event(d) => &d.slug,
+            DraftEnvelope::God(d) => &d.slug,
+            DraftEnvelope::Dungeon(d) => &d.slug,
+        }
+    }
+
     pub(crate) fn as_npc(&self) -> Option<&NpcDraftSession> {
         if let DraftEnvelope::Npc(value) = self {
             Some(value)

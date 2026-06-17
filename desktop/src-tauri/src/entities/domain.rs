@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 
-use crate::app_state::AppState;
+use crate::app_state::{AppState, DraftEnvelope};
 use runebound_models::CommandResponse;
 
 use super::kind::EntityKind;
@@ -8,12 +8,52 @@ use super::schema::EntitySchema;
 
 pub type EntityDomainResult = Result<Option<CommandResponse>, String>;
 
+/// A saved entity resolved from the store/db, in the typed draft form the editor
+/// and the entity cards already consume, plus the DB-only metadata the draft
+/// session itself doesn't carry (`vault_path`, `created_at`). The kind-specific
+/// fields live in `draft`; common fields are read through the accessors.
+#[derive(Debug, Clone)]
+pub struct EntityDetail {
+    // `vault_path` + `created_at` are the resolved entity's DB-only metadata. The
+    // card/load consumers read only the typed `draft`; these become live when the
+    // registry-driven `soft_delete`/`restore` land in P5.2d (Commit 9).
+    #[allow(dead_code)]
+    pub vault_path: String,
+    #[allow(dead_code)]
+    pub created_at: Option<String>,
+    pub draft: DraftEnvelope,
+}
+
+impl EntityDetail {
+    pub fn kind(&self) -> EntityKind {
+        self.draft.kind()
+    }
+
+    pub fn name(&self) -> &str {
+        self.draft.name()
+    }
+
+    pub fn slug(&self) -> &str {
+        self.draft.slug()
+    }
+}
+
 #[async_trait]
 pub trait EntityDomain: Send + Sync {
     fn kind(&self) -> EntityKind;
     #[allow(dead_code)]
     fn schema(&self) -> &'static EntitySchema;
     fn help_text(&self) -> String;
+
+    /// Look up a saved entity of this kind by name-or-slug, returning it as an
+    /// [`EntityDetail`] (the typed draft + DB metadata), or `None` if this kind
+    /// has no match. The registry loop in `EntityAdminService::resolve_entity`
+    /// calls this for every kind.
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String>;
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult;
     async fn rename(&self, value: &str, state: &AppState) -> EntityDomainResult;

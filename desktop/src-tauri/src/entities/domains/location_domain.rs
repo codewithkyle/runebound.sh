@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, LocationDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, LocationDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, LOCATION_SCHEMA, canonical_field_name, format_valid_field_list,
 };
@@ -14,9 +14,10 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveLocation
 use crate::services::entity_reroll::{
     EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
-use crate::utils::path_for_display;
+use crate::utils::{normalize_relative_path_for_storage, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::exports_from_db_text;
 
 pub struct LocationDomain;
 
@@ -48,6 +49,42 @@ impl EntityDomain for LocationDomain {
             "location cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .location_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = LocationDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            kind_type: row.kind_type,
+            kind_custom: row.kind_custom,
+            visual_description: row.visual_description,
+            history_background: row.history_background,
+            exports: exports_from_db_text(&row.exports),
+            tone: row.tone,
+            authority: row.authority,
+            danger_level: row.danger_level,
+            current_tension: row.current_tension,
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::Location(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {

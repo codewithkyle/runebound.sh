@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
-use crate::entities::EntityKind;
+use crate::entities::{ALL_ENTITY_KINDS, EntityDetail, EntityKind};
 use crate::repositories::db;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
@@ -18,11 +18,7 @@ use dnd_core::npc::{
     LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
     unique_slug_for_dir,
 };
-use dnd_core::serialization::{
-    carrying_from_db_text, exports_from_db_text, faction_list_from_db_text,
-};
 use dnd_core::vault::Vault;
-use runebound_models::DungeonBeat;
 
 pub struct EntityAdminService;
 
@@ -191,535 +187,43 @@ impl EntityAdminService {
         &self,
         input: String,
         state: &AppState,
-    ) -> Result<Option<EntityDetails>, String> {
+    ) -> Result<Option<EntityDetail>, String> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Ok(None);
         }
 
-        let database = state.database();
-        let npc_repo = state.npc_repo();
-        let location_repo = state.location_repo();
-        let faction_repo = state.faction_repo();
-        let item_repo = state.item_repo();
-        let event_repo = state.event_repo();
-        let god_repo = state.god_repo();
-        let dungeon_repo = state.dungeon_repo();
-
-        if let Some(npc) = npc_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: npc.id,
-                entity_type: EntityKind::Npc,
-                name: npc.name,
-                slug: npc.slug,
-                race: Some(npc.race),
-                occupation: Some(npc.occupation),
-                sex: Some(npc.sex),
-                age: Some(npc.age),
-                height: Some(npc.height),
-                weight_lbs: Some(npc.weight_lbs),
-                background: Some(npc.background),
-                want_need: Some(npc.want_need),
-                secret_obstacle: Some(npc.secret_obstacle),
-                carrying: Some(carrying_from_db_text(&npc.carrying)),
-                location: Some(npc.location),
-                vault_path: normalize_relative_path_for_storage(&npc.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(npc.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
+        // Drive resolution through the domain registry: ask every kind, then
+        // disambiguate. Collecting all matches (rather than returning the first)
+        // is what lets a cross-kind name collision surface as an error instead of
+        // silently shadowing the kinds later in the walk order (P5.7).
+        let registry = state.domains();
+        let mut matches: Vec<EntityDetail> = Vec::new();
+        for kind in ALL_ENTITY_KINDS {
+            if let Some(domain) = registry.domain(kind)
+                && let Some(detail) = domain.resolve(trimmed, state).await?
+            {
+                matches.push(detail);
+            }
         }
 
-        if let Some(location) = location_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: location.id,
-                entity_type: EntityKind::Location,
-                name: location.name,
-                slug: location.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&location.vault_path),
-                kind_type: Some(location.kind_type),
-                kind_custom: location.kind_custom,
-                visual_description: Some(location.visual_description),
-                history_background: Some(location.history_background),
-                exports: Some(exports_from_db_text(&location.exports)),
-                tone: Some(location.tone),
-                authority: Some(location.authority),
-                danger_level: Some(location.danger_level),
-                current_tension: Some(location.current_tension),
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(location.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            _ => {
+                let name = matches[0].name().to_string();
+                let kinds = matches
+                    .iter()
+                    .map(|detail| detail.kind().display_name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(format!(
+                    "\"{name}\" matches multiple saved entities ({kinds}). Names must be \
+                     unique to load, show, or delete by name — rename one so the name no \
+                     longer collides."
+                ))
+            }
         }
-
-        if let Some(faction) = faction_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: faction.id,
-                entity_type: EntityKind::Faction,
-                name: faction.name,
-                slug: faction.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&faction.vault_path),
-                kind_type: Some(faction.kind_type),
-                kind_custom: faction.kind_custom,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: Some(faction.current_tension),
-                public_description: Some(faction.public_description),
-                true_agenda: Some(faction.true_agenda),
-                methods: Some(faction.methods),
-                leadership: Some(faction.leadership),
-                headquarters: Some(faction.headquarters),
-                sphere_of_influence: Some(faction.sphere_of_influence),
-                resources_assets: Some(faction.resources_assets),
-                allies: Some(faction_list_from_db_text(&faction.allies)),
-                rivals_enemies: Some(faction_list_from_db_text(&faction.rivals_enemies)),
-                reputation: Some(faction.reputation),
-                goals_short_term: Some(faction_list_from_db_text(&faction.goals_short_term)),
-                goals_long_term: Some(faction_list_from_db_text(&faction.goals_long_term)),
-                symbol_description: Some(faction.symbol_description),
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(faction.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(item) = item_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: item.id,
-                entity_type: EntityKind::Item,
-                name: item.name,
-                slug: item.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: Some(item.location.clone()),
-                vault_path: normalize_relative_path_for_storage(&item.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: Some(item.category),
-                rarity: Some(item.rarity),
-                attunement: Some(item.attunement),
-                materials: Some(faction_list_from_db_text(&item.materials)),
-                appearance: Some(item.appearance),
-                abilities: Some(item.abilities),
-                drawbacks: Some(item.drawbacks),
-                history: Some(item.history),
-                value: Some(item.value),
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(item.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(event) = event_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: event.id,
-                entity_type: EntityKind::Event,
-                name: event.name,
-                slug: event.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&event.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: Some(event.body),
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(event.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(god) = god_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: god.id,
-                entity_type: EntityKind::God,
-                name: god.name,
-                slug: god.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&god.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: Some(faction_list_from_db_text(&god.allies)),
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: Some(god.appearance),
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: Some(god.epithet),
-                rank: Some(god.rank),
-                rank_custom: god.rank_custom,
-                alignment: Some(god.alignment),
-                domains: Some(faction_list_from_db_text(&god.domains)),
-                symbol: Some(god.symbol),
-                dogma: Some(god.dogma),
-                realm: Some(god.realm),
-                worshippers: Some(god.worshippers),
-                clergy: Some(god.clergy),
-                rivals: Some(faction_list_from_db_text(&god.rivals)),
-                created_at: Some(god.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(dungeon) = dungeon_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            let beats: Vec<DungeonBeat> =
-                serde_json::from_str(&dungeon.beats_json).unwrap_or_default();
-            return Ok(Some(EntityDetails {
-                id: dungeon.id,
-                entity_type: EntityKind::Dungeon,
-                name: dungeon.name,
-                slug: dungeon.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: Some(dungeon.location.clone()),
-                vault_path: normalize_relative_path_for_storage(&dungeon.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: Some(dungeon.tone),
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(dungeon.created_at),
-                premise: Some(dungeon.premise),
-                topology: Some(dungeon.topology),
-                twist: Some(dungeon.twist),
-                beats: Some(beats),
-                story: Some(dungeon.story),
-            }));
-        }
-
-        Ok(None)
     }
 
     pub async fn soft_delete_entity(
@@ -2113,78 +1617,6 @@ pub struct EnsureLocationResult {
     pub vault_path: String,
     pub created_file: bool,
     pub created_record: bool,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityDetails {
-    pub id: String,
-    pub entity_type: EntityKind,
-    pub name: String,
-    pub slug: String,
-    pub race: Option<String>,
-    pub occupation: Option<String>,
-    pub sex: Option<String>,
-    pub age: Option<String>,
-    pub height: Option<String>,
-    pub weight_lbs: Option<String>,
-    pub background: Option<String>,
-    pub want_need: Option<String>,
-    pub secret_obstacle: Option<String>,
-    pub carrying: Option<Vec<String>>,
-    pub location: Option<String>,
-    pub vault_path: String,
-    pub kind_type: Option<String>,
-    pub kind_custom: Option<String>,
-    pub visual_description: Option<String>,
-    pub history_background: Option<String>,
-    pub exports: Option<Vec<String>>,
-    pub tone: Option<String>,
-    pub authority: Option<String>,
-    pub danger_level: Option<String>,
-    pub current_tension: Option<String>,
-    pub public_description: Option<String>,
-    pub true_agenda: Option<String>,
-    pub methods: Option<String>,
-    pub leadership: Option<String>,
-    pub headquarters: Option<String>,
-    pub sphere_of_influence: Option<String>,
-    pub resources_assets: Option<String>,
-    pub allies: Option<Vec<String>>,
-    pub rivals_enemies: Option<Vec<String>>,
-    pub reputation: Option<String>,
-    pub goals_short_term: Option<Vec<String>>,
-    pub goals_long_term: Option<Vec<String>>,
-    pub symbol_description: Option<String>,
-    pub category: Option<String>,
-    pub rarity: Option<String>,
-    pub attunement: Option<String>,
-    pub materials: Option<Vec<String>>,
-    pub appearance: Option<String>,
-    pub abilities: Option<String>,
-    pub drawbacks: Option<String>,
-    pub history: Option<String>,
-    pub value: Option<String>,
-    /// The narrative body of an event; `None` for the structured entity kinds.
-    pub body: Option<String>,
-    // God-specific fields (`appearance` and `allies` above are reused for gods).
-    pub epithet: Option<String>,
-    pub rank: Option<String>,
-    pub rank_custom: Option<String>,
-    pub alignment: Option<String>,
-    pub domains: Option<Vec<String>>,
-    pub symbol: Option<String>,
-    pub dogma: Option<String>,
-    pub realm: Option<String>,
-    pub worshippers: Option<String>,
-    pub clergy: Option<String>,
-    pub rivals: Option<Vec<String>>,
-    pub created_at: Option<String>,
-    // Dungeon-specific fields.
-    pub premise: Option<String>,
-    pub topology: Option<String>,
-    pub twist: Option<String>,
-    pub beats: Option<Vec<DungeonBeat>>,
-    pub story: Option<String>,
 }
 
 /// Recovery record for a `publish` soft-delete. The full entity data is restored

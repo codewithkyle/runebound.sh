@@ -1,13 +1,13 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, ItemDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, ItemDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt, no_active_draft_message, normalize_unknown_list,
     normalize_unknown_text, parse_list_csv,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, ITEM_SCHEMA, canonical_field_name, format_valid_field_list,
 };
@@ -15,9 +15,13 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveItemDraf
 use crate::services::entity_reroll::{
     EntityRerollService, ItemRerollContext, RerollItemFieldInput,
 };
-use crate::utils::{normalize_item_category, normalize_item_rarity, path_for_display};
+use crate::utils::{
+    normalize_item_category, normalize_item_rarity, normalize_relative_path_for_storage,
+    path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::faction_list_from_db_text;
 
 pub struct ItemDomain;
 
@@ -49,6 +53,43 @@ impl EntityDomain for ItemDomain {
             "item cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .item_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = ItemDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            category: row.category,
+            rarity: row.rarity,
+            attunement: row.attunement,
+            materials: faction_list_from_db_text(&row.materials),
+            appearance: row.appearance,
+            abilities: row.abilities,
+            drawbacks: row.drawbacks,
+            history: row.history,
+            value: row.value,
+            location: row.location,
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::Item(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {

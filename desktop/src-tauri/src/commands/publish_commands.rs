@@ -12,8 +12,9 @@ use crate::app_state::{
     ItemDraftSession, LocationDraftSession, NpcDraftSession,
 };
 use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
+use crate::entities::EntityDetail;
 use crate::entities::EntityKind;
-use crate::services::entity_admin::{EntityAdminService, EntityDetails};
+use crate::services::entity_admin::EntityAdminService;
 use crate::services::entity_persistence::{
     EntityPersistenceService, SaveDungeonDraftInput, SaveEventDraftInput, SaveFactionDraftInput,
     SaveGodDraftInput, SaveItemDraftInput, SaveLocationDraftInput, SaveNpcDraftInput,
@@ -560,11 +561,11 @@ struct PublishTargetInfo {
 }
 
 impl PublishTargetInfo {
-    fn from_details(details: EntityDetails) -> Self {
+    fn from_details(details: EntityDetail) -> Self {
         Self {
-            entity_type: details.entity_type,
-            slug: details.slug,
-            name: details.name,
+            entity_type: details.kind(),
+            slug: details.slug().to_string(),
+            name: details.name().to_string(),
         }
     }
 }

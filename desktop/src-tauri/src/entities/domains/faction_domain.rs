@@ -1,12 +1,12 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, FactionDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, FactionDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FACTION_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
 };
@@ -14,9 +14,12 @@ use crate::services::entity_persistence::{EntityPersistenceService, SaveFactionD
 use crate::services::entity_reroll::{
     EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
 };
-use crate::utils::{normalize_optional_prompt, path_for_display};
+use crate::utils::{
+    normalize_optional_prompt, normalize_relative_path_for_storage, path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::faction_list_from_db_text;
 
 pub struct FactionDomain;
 
@@ -48,6 +51,49 @@ impl EntityDomain for FactionDomain {
             "faction cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .faction_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = FactionDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            kind_type: row.kind_type,
+            kind_custom: row.kind_custom,
+            public_description: row.public_description,
+            true_agenda: row.true_agenda,
+            methods: row.methods,
+            leadership: row.leadership,
+            headquarters: row.headquarters,
+            sphere_of_influence: row.sphere_of_influence,
+            resources_assets: row.resources_assets,
+            allies: faction_list_from_db_text(&row.allies),
+            rivals_enemies: faction_list_from_db_text(&row.rivals_enemies),
+            reputation: row.reputation,
+            current_tension: row.current_tension,
+            goals_short_term: faction_list_from_db_text(&row.goals_short_term),
+            goals_long_term: faction_list_from_db_text(&row.goals_long_term),
+            symbol_description: row.symbol_description,
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::Faction(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {

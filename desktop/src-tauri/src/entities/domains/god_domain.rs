@@ -1,22 +1,24 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, GodDraftSession};
+use crate::app_state::{AppState, DraftEnvelope, GodDraftSession};
 use crate::entities::EntityKind;
 use crate::entities::common::{
     entity_message_response, entity_no_active_draft, entity_response_with_event,
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, GOD_SCHEMA, canonical_field_name, format_valid_field_list,
 };
 use crate::services::entity_persistence::{EntityPersistenceService, SaveGodDraftInput};
 use crate::services::entity_reroll::{EntityRerollService, GodRerollContext, RerollGodFieldInput};
 use crate::utils::{
-    normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display,
+    normalize_god_alignment, normalize_god_rank, normalize_optional_prompt,
+    normalize_relative_path_for_storage, path_for_display,
 };
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::faction_list_from_db_text;
 
 pub struct GodDomain;
 
@@ -48,6 +50,46 @@ impl EntityDomain for GodDomain {
             "god cancel",
         ]
         .join("\n")
+    }
+
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .god_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = GodDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            epithet: row.epithet,
+            rank: row.rank,
+            rank_custom: row.rank_custom,
+            alignment: row.alignment,
+            domains: faction_list_from_db_text(&row.domains),
+            symbol: row.symbol,
+            appearance: row.appearance,
+            dogma: row.dogma,
+            realm: row.realm,
+            worshippers: row.worshippers,
+            clergy: row.clergy,
+            allies: faction_list_from_db_text(&row.allies),
+            rivals: faction_list_from_db_text(&row.rivals),
+        };
+        Ok(Some(EntityDetail {
+            vault_path: normalize_relative_path_for_storage(&row.vault_path),
+            created_at: Some(row.created_at),
+            draft: DraftEnvelope::God(draft),
+        }))
     }
 
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
