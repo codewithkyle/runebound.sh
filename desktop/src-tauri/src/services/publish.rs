@@ -164,6 +164,19 @@ pub fn render_dungeon_markdown_with_links(
     linker: &EntityLinker,
 ) -> String {
     let mut out = String::new();
+    // Provenance: the Pass-1 micro-story the dungeon was generated from, as a
+    // block quote at the very top of the file.
+    let story = frontmatter.story.trim();
+    if !story.is_empty() {
+        for line in story.lines() {
+            if line.trim().is_empty() {
+                writeln!(&mut out, ">").ok();
+            } else {
+                writeln!(&mut out, "> {line}").ok();
+            }
+        }
+        writeln!(&mut out).ok();
+    }
     let premise = normalize_unknown_text(&frontmatter.premise);
     if premise != "Unknown" {
         writeln!(&mut out, "*{}*", linker.link_prose(&premise)).ok();
@@ -863,6 +876,7 @@ mod tests {
             name: "The Sunken Forge".to_string(),
             vault_path: "dungeons/The Sunken Forge.md".to_string(),
             location: "A drowned bell-foundry beneath the tide line.".to_string(),
+            story: "The tide took the foundry, but the forge never went out.".to_string(),
             premise: "A drowned forge that still burns.".to_string(),
             topology: "The Moose".to_string(),
             tone: "tragedy".to_string(),

@@ -132,7 +132,7 @@ pub const GOD_ALIGNMENTS: [&str; 9] = [
 pub const DUNGEON_FUNCTIONS: [&str; 5] =
     ["Entrance", "Puzzle", "Setback", "Climax", "Resolution"];
 
-pub const DUNGEON_CONTENT_TYPES: [&str; 11] = [
+pub const DUNGEON_CONTENT_TYPES: [&str; 12] = [
     "combat",
     "cache",
     "sidekick",
@@ -144,6 +144,7 @@ pub const DUNGEON_CONTENT_TYPES: [&str; 11] = [
     "factions",
     "map",
     "puzzle",
+    "ability_check",
 ];
 
 pub const DUNGEON_TONES: [&str; 2] = ["tragedy", "comedy"];

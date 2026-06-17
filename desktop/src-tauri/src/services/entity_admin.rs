@@ -278,6 +278,7 @@ impl EntityAdminService {
                 topology: None,
                 twist: None,
                 beats: None,
+                story: None,
             }));
         }
 
@@ -350,6 +351,7 @@ impl EntityAdminService {
                 topology: None,
                 twist: None,
                 beats: None,
+                story: None,
             }));
         }
 
@@ -422,6 +424,7 @@ impl EntityAdminService {
                 topology: None,
                 twist: None,
                 beats: None,
+                story: None,
             }));
         }
 
@@ -494,6 +497,7 @@ impl EntityAdminService {
                 topology: None,
                 twist: None,
                 beats: None,
+                story: None,
             }));
         }
 
@@ -566,6 +570,7 @@ impl EntityAdminService {
                 topology: None,
                 twist: None,
                 beats: None,
+                story: None,
             }));
         }
 
@@ -638,6 +643,7 @@ impl EntityAdminService {
                 topology: None,
                 twist: None,
                 beats: None,
+                story: None,
             }));
         }
 
@@ -712,6 +718,7 @@ impl EntityAdminService {
                 topology: Some(dungeon.topology),
                 twist: Some(dungeon.twist),
                 beats: Some(beats),
+                story: Some(dungeon.story),
             }));
         }
 
@@ -1138,6 +1145,7 @@ impl EntityAdminService {
                 name: dungeon.name.clone(),
                 vault_path: normalized_vault_path.clone(),
                 location: dungeon.location,
+                story: dungeon.story,
                 premise: dungeon.premise,
                 topology: dungeon.topology,
                 tone: dungeon.tone,
@@ -1627,6 +1635,7 @@ impl EntityAdminService {
                 name: payload.name.clone(),
                 vault_path: restored_vault_path.clone(),
                 location: payload.location,
+                story: payload.story,
                 premise: payload.premise,
                 topology: payload.topology,
                 tone: payload.tone,
@@ -2005,6 +2014,7 @@ pub struct EntityDetails {
     pub topology: Option<String>,
     pub twist: Option<String>,
     pub beats: Option<Vec<DungeonBeat>>,
+    pub story: Option<String>,
 }
 
 /// Recovery record for a `publish` soft-delete. The full entity data is restored
@@ -2145,6 +2155,8 @@ struct DungeonDeletePayload {
     vault_path: String,
     #[serde(default)]
     location: String,
+    #[serde(default)]
+    story: String,
     premise: String,
     topology: String,
     tone: String,

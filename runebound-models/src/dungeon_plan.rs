@@ -18,8 +18,9 @@
 //! Dungeon-level appearance rates are a *union* over five beats, so a type
 //! sprinkled thinly across many beats becomes common; to stay rare (forge ~10%)
 //! a type must live in essentially one signature beat. The weights below are
-//! tuned to: combat ~93%, puzzle ~82%, cache ~77%, oddity ~42%, offshoot ~50%,
-//! sidekick ~20% (entrance-only), forge ~12% (see the statistical test below).
+//! tuned to: combat ~91%, puzzle ~70%, cache ~77%, oddity ~42%, offshoot ~50%,
+//! ability_check ~39% (bell curve, peaks at Puzzle), sidekick ~20% (entrance-only),
+//! forge ~12% (see the statistical test below).
 
 /// A small, dependency-free deterministic PRNG (SplitMix64). Seedable so the roll
 /// is reproducible in tests; call sites seed it from wall-clock micros, matching
@@ -53,9 +54,29 @@ type Weight = (&'static str, u32);
 // the opening beat regardless of where the roll places it, so we stop fighting it
 // and only allow a sidekick at beat 1, where "meet an ally who then accompanies
 // you" is exactly right. ~20% of dungeons get one; the rest never do.
-const ENTRANCE: &[Weight] = &[("combat", 28), ("puzzle", 30), ("offshoot", 22), ("sidekick", 20)];
-const PUZZLE: &[Weight] = &[("combat", 24), ("puzzle", 54), ("offshoot", 16), ("forge", 6)];
-const SETBACK: &[Weight] = &[("combat", 36), ("puzzle", 28), ("offshoot", 22), ("oddity", 14)];
+// Ability checks (a feat of skill/nerve to pass) ride a bell curve over the first
+// three beats, peaking at the Puzzle beat where "a gate to get past" fits best.
+const ENTRANCE: &[Weight] = &[
+    ("combat", 28),
+    ("puzzle", 24),
+    ("offshoot", 18),
+    ("sidekick", 20),
+    ("ability_check", 10),
+];
+const PUZZLE: &[Weight] = &[
+    ("combat", 24),
+    ("puzzle", 36),
+    ("offshoot", 14),
+    ("ability_check", 20),
+    ("forge", 6),
+];
+const SETBACK: &[Weight] = &[
+    ("combat", 36),
+    ("puzzle", 22),
+    ("offshoot", 18),
+    ("oddity", 14),
+    ("ability_check", 10),
+];
 const CLIMAX: &[Weight] = &[("combat", 60), ("puzzle", 16), ("oddity", 24)];
 const RESOLUTION: &[Weight] = &[
     ("cache", 76),
@@ -195,6 +216,20 @@ mod tests {
     }
 
     #[test]
+    fn ability_check_is_a_bell_curve_over_the_first_three_beats() {
+        // Peaks at the Puzzle beat (1), tapers either side, absent from the Climax
+        // and Resolution where a skill check is no longer the point.
+        let weight = |table: &[Weight], t: &str| {
+            table.iter().find(|(n, _)| *n == t).map(|(_, w)| *w).unwrap_or(0)
+        };
+        let curve: Vec<u32> = BEAT_TABLES.iter().map(|t| weight(t, "ability_check")).collect();
+        assert!(curve[1] > curve[0], "ability_check should peak at the Puzzle beat");
+        assert!(curve[1] > curve[2], "ability_check should peak at the Puzzle beat");
+        assert_eq!(curve[3], 0, "no ability_check at the Climax");
+        assert_eq!(curve[4], 0, "no ability_check at the Resolution");
+    }
+
+    #[test]
     fn sidekick_appears_only_at_the_entrance() {
         // The model can't reliably hold a sidekick to a later beat, so it is
         // allowed ONLY at the entrance (beat 0) and nowhere else.
@@ -271,6 +306,7 @@ mod tests {
         let mut cache = 0;
         let mut oddity = 0;
         let mut forge = 0;
+        let mut ability = 0;
         let mut overlay = 0;
         let mut factions = 0;
         for seed in 0..n {
@@ -281,6 +317,7 @@ mod tests {
             cache += has("cache") as u64;
             oddity += has("oddity") as u64;
             forge += has("forge") as u64;
+            ability += has("ability_check") as u64;
             overlay += plan.overlay.is_some() as u64;
             factions += plan.factions as u64;
         }
@@ -288,15 +325,16 @@ mod tests {
         let within = |actual: f64, target: f64, tol: f64| (actual - target).abs() <= tol;
 
         eprintln!(
-            "RATES combat={:.1} puzzle={:.1} cache={:.1} oddity={:.1} forge={:.1} overlay={:.1} factions={:.1}",
-            pct(combat), pct(puzzle), pct(cache), pct(oddity), pct(forge), pct(overlay), pct(factions)
+            "RATES combat={:.1} puzzle={:.1} cache={:.1} oddity={:.1} forge={:.1} ability={:.1} overlay={:.1} factions={:.1}",
+            pct(combat), pct(puzzle), pct(cache), pct(oddity), pct(forge), pct(ability), pct(overlay), pct(factions)
         );
         // Targets are the emergent rates these weights actually produce (the
         // adjacency rule renormalizes excluded weight onto the heaviest type, so
         // combat lands a touch above its naive ~90%). Weights are the design
         // artifact; these assertions guard against accidental retuning.
         assert!(within(pct(combat), 93.0, 3.0), "combat {:.1}%", pct(combat));
-        assert!(within(pct(puzzle), 82.0, 4.0), "puzzle {:.1}%", pct(puzzle));
+        assert!(within(pct(puzzle), 70.0, 4.0), "puzzle {:.1}%", pct(puzzle));
+        assert!(within(pct(ability), 39.0, 4.0), "ability_check {:.1}%", pct(ability));
         assert!(within(pct(cache), 77.0, 4.0), "cache {:.1}%", pct(cache));
         assert!(within(pct(oddity), 42.0, 4.0), "oddity {:.1}%", pct(oddity));
         assert!(within(pct(forge), 12.0, 3.0), "forge {:.1}%", pct(forge));

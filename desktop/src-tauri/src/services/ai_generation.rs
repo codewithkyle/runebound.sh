@@ -1255,6 +1255,7 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
         "offshoot" => "an optional branching path: a side chamber, a hidden room, or a tempting dead end",
         "sidekick" => "a lone ally met here who joins the party and travels deeper with them through the rest of this place",
         "oddity" => "a strange and significant object that is the very reason this place exists",
+        "ability_check" => "a feat of skill or nerve to get past — a climb, a leap, a steady hand, or a test of will",
         _ => "something noteworthy",
     }
 }
@@ -1270,6 +1271,7 @@ fn anchor_mechanic(content_type: &str) -> &'static str {
         "offshoot" => "an optional side passage, hidden room, or dead end off the main path",
         "sidekick" => "a dungeon-only ally introduced here who joins the party and stays with them through the later beats, leaving only when the dungeon ends",
         "oddity" => "the world-significant object that is the reason this dungeon exists",
+        "ability_check" => "an ability/skill check the party must pass — name the check (athletics, perception, persuasion, sleight of hand…) and what failure costs; not a riddle",
         _ => "a noteworthy room",
     }
 }

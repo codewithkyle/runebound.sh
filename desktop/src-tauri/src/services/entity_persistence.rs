@@ -690,6 +690,7 @@ impl EntityPersistenceService {
         }
 
         let location = normalize_unknown_text(&input.location);
+        let story = input.story.trim().to_string();
         let premise = normalize_unknown_text(&input.premise);
         let topology = normalize_dungeon_topology(&input.topology)?;
         let tone = normalize_dungeon_tone(&input.tone)?;
@@ -745,6 +746,7 @@ impl EntityPersistenceService {
             name: name.to_string(),
             vault_path: vault_path.clone(),
             location: location.clone(),
+            story: story.clone(),
             premise: premise.clone(),
             topology: topology.clone(),
             tone: tone.clone(),
@@ -775,6 +777,7 @@ impl EntityPersistenceService {
             name: name.to_string(),
             vault_path: vault_path.clone(),
             location,
+            story,
             premise,
             topology,
             tone,
@@ -1274,6 +1277,8 @@ pub struct SaveDungeonDraftInput {
     pub vault_path: String,
     #[serde(default)]
     pub location: String,
+    #[serde(default)]
+    pub story: String,
     pub premise: String,
     pub topology: String,
     pub tone: String,

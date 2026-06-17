@@ -853,6 +853,7 @@ async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTarget
                         name: draft.name.clone(),
                         vault_path: draft.vault_path.clone(),
                         location: draft.location.clone(),
+                        story: draft.story.clone(),
                         premise: draft.premise.clone(),
                         topology: draft.topology.clone(),
                         tone: draft.tone.clone(),

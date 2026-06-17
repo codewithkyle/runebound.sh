@@ -123,6 +123,8 @@ export type DungeonDraft = {
   name: string;
   slug: string;
   vault_path: string;
+  location: string;
+  story: string;
   premise: string;
   topology: string;
   tone: string;

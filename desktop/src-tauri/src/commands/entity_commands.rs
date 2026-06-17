@@ -331,6 +331,7 @@ pub(crate) async fn build_load_response(entity: EntityDetails, state: tauri::Sta
                 slug: entity.slug.clone(),
                 vault_path: path_for_display(&entity.vault_path),
                 location: entity.location.clone().unwrap_or_default(),
+                story: entity.story.clone().unwrap_or_default(),
                 premise: entity.premise.clone().unwrap_or_else(|| "Unknown".to_string()),
                 topology: entity.topology.clone().unwrap_or_else(|| "none".to_string()),
                 tone: entity.tone.clone().unwrap_or_else(|| "tragedy".to_string()),

@@ -88,6 +88,7 @@ pub struct DungeonRow {
     pub name: String,
     pub vault_path: String,
     pub location: String,
+    pub story: String,
     pub premise: String,
     pub topology: String,
     pub tone: String,
@@ -520,7 +521,7 @@ pub async fn search_dungeons_by_name(
 ) -> Result<Vec<DungeonRow>> {
     let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
     let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, premise, topology, tone, twist, beats_json, created_at, updated_at
+        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at
          FROM dungeons
          WHERE lower(name) LIKE ?1
          ORDER BY name COLLATE NOCASE ASC
@@ -541,7 +542,7 @@ pub async fn find_dungeon_by_name_or_slug(
 ) -> Result<Option<DungeonRow>> {
     let normalized = input.trim().to_ascii_lowercase();
     let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, premise, topology, tone, twist, beats_json, created_at, updated_at
+        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at
          FROM dungeons
          WHERE lower(name) = ?1 OR lower(slug) = ?2
          ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
@@ -558,7 +559,7 @@ pub async fn find_dungeon_by_name_or_slug(
 
 pub async fn find_dungeon_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<DungeonRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE slug = ?1",
+        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE slug = ?1",
     )
     .bind(slug)
     .fetch_optional(pool)
@@ -570,7 +571,7 @@ pub async fn find_dungeon_by_slug(pool: &SqlitePool, slug: &str) -> Result<Optio
 
 pub async fn find_dungeon_by_id(pool: &SqlitePool, id: &str) -> Result<Option<DungeonRow>> {
     let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE id = ?1",
+        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE id = ?1",
     )
     .bind(id)
     .fetch_optional(pool)
@@ -582,7 +583,7 @@ pub async fn find_dungeon_by_id(pool: &SqlitePool, id: &str) -> Result<Option<Du
 
 pub async fn list_dungeons(pool: &SqlitePool) -> Result<Vec<DungeonRow>> {
     let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, premise, topology, tone, twist, beats_json, created_at, updated_at
+        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at
          FROM dungeons",
     )
     .fetch_all(pool)
@@ -594,13 +595,14 @@ pub async fn list_dungeons(pool: &SqlitePool) -> Result<Vec<DungeonRow>> {
 
 pub async fn upsert_dungeon(pool: &SqlitePool, dungeon: &DungeonRow) -> Result<()> {
     sqlx::query(
-        "INSERT INTO dungeons (id, slug, name, vault_path, location, premise, topology, tone, twist, beats_json, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)
+        "INSERT INTO dungeons (id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          ON CONFLICT(id) DO UPDATE SET
             slug = excluded.slug,
             name = excluded.name,
             vault_path = excluded.vault_path,
             location = excluded.location,
+            story = excluded.story,
             premise = excluded.premise,
             topology = excluded.topology,
             tone = excluded.tone,
@@ -613,6 +615,7 @@ pub async fn upsert_dungeon(pool: &SqlitePool, dungeon: &DungeonRow) -> Result<(
     .bind(&dungeon.name)
     .bind(&dungeon.vault_path)
     .bind(&dungeon.location)
+    .bind(&dungeon.story)
     .bind(&dungeon.premise)
     .bind(&dungeon.topology)
     .bind(&dungeon.tone)
@@ -1421,6 +1424,7 @@ fn row_to_dungeon(row: sqlx::sqlite::SqliteRow) -> Result<DungeonRow> {
             .try_get("vault_path")
             .context("dungeons.vault_path missing")?,
         location: row.try_get("location").unwrap_or_default(),
+        story: row.try_get("story").unwrap_or_default(),
         premise: row
             .try_get("premise")
             .unwrap_or_else(|_| "Unknown".to_string()),

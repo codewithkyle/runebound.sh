@@ -157,6 +157,7 @@ async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt
     draft.slug = slugify(seed.name.trim());
     draft.name = seed.name.trim().to_string();
     draft.location = normalize_unknown_text(&seed.location);
+    draft.story = story.story.clone();
     draft.premise = normalize_unknown_text(&seed.premise);
     draft.beats = seed.into_beats();
 

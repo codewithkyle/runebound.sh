@@ -157,6 +157,8 @@ pub struct DungeonDraft {
     pub vault_path: String,
     #[serde(default)]
     pub location: String, // the single bounded place all five beats sit inside
+    #[serde(default)]
+    pub story: String, // the Pass-1 micro-story the dungeon was generated from
     pub premise: String, // the spine / top-line (feature-dungeons.md §6)
     pub topology: String, // one of DUNGEON_TOPOLOGIES, or "none"
     pub tone: String,    // "tragedy" | "comedy"
@@ -322,6 +324,8 @@ pub struct DungeonFrontmatter {
     pub vault_path: String,
     #[serde(default)]
     pub location: String,
+    #[serde(default)]
+    pub story: String,
     pub premise: String,
     pub topology: String,
     pub tone: String,

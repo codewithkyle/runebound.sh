@@ -131,6 +131,8 @@ fn generate_typescript() -> String {
     out.push_str("  name: string;\n");
     out.push_str("  slug: string;\n");
     out.push_str("  vault_path: string;\n");
+    out.push_str("  location: string;\n");
+    out.push_str("  story: string;\n");
     out.push_str("  premise: string;\n");
     out.push_str("  topology: string;\n");
     out.push_str("  tone: string;\n");

@@ -405,6 +405,7 @@ async fn finalize_dungeon(state: &AppState) -> CommandResult {
         slug: slugify(seed.name.trim()),
         vault_path: String::new(),
         location: normalize_unknown_text(&seed.location),
+        story: story.story.clone(),
         premise: normalize_unknown_text(&seed.premise),
         topology,
         tone,
