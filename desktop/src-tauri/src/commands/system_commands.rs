@@ -9,6 +9,7 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt,
 };
 use crate::commands::ok_response_with_doc;
+use crate::entities::domains::dungeon_domain::beat_index_from_token;
 use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text, prepend_notice};
@@ -105,6 +106,27 @@ pub async fn handle_reroll(invocation: DesktopHandlerInvocation<'_>) -> Result<O
 
 async fn reroll_current_dungeon(state: tauri::State<'_, AppState>, reroll_prompt: Option<String>) -> Result<Option<CommandResponse>, String> {
     use crate::commands::{dungeon_event_from_draft, dungeon_summary_text};
+
+    // `reroll <beat>` (e.g. `reroll entrance` or `reroll 1`) regenerates just that
+    // one card, mirroring `dungeon reroll <beat>` — only a bare `reroll` or a
+    // free-text hint re-rolls all five. Split off the leading token and, if it
+    // names a beat, hand the per-beat reroll to the dungeon domain.
+    if let Some(args) = reroll_prompt.as_deref() {
+        let mut parts = args.splitn(2, char::is_whitespace);
+        let field = parts.next().unwrap_or("").trim();
+        let rest = parts
+            .next()
+            .map(str::trim)
+            .filter(|hint| !hint.is_empty())
+            .map(str::to_string);
+        if beat_index_from_token(field).is_some() {
+            let domain = state
+                .domains()
+                .domain(EntityKind::Dungeon)
+                .expect("dungeon domain not registered");
+            return domain.reroll_field(field, rest, state.inner()).await;
+        }
+    }
 
     let draft = {
         let editor = state.editor_session.lock().await;

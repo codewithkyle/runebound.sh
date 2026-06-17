@@ -3,7 +3,7 @@ use std::path::MAIN_SEPARATOR;
 use crate::services::ai_generation::{FactionSeed, GodSeed, LocationSeed};
 
 pub use runebound_models::utils::{
-    normalize_dungeon_content_type, normalize_dungeon_tone, normalize_dungeon_topology,
+    normalize_dungeon_tone, normalize_dungeon_topology,
     normalize_dungeon_twist, normalize_exports, normalize_faction_kind_type,
     normalize_god_alignment, normalize_god_rank, normalize_location_danger_level,
     normalize_location_kind_type, normalize_item_category, normalize_item_rarity, normalize_sex,

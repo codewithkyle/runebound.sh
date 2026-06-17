@@ -1261,8 +1261,9 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
 }
 
 /// Mechanical meaning of an anchor type, given to Pass 2 so the card's idea
-/// actually delivers that type's function.
-fn anchor_mechanic(content_type: &str) -> &'static str {
+/// actually delivers that type's function. Also reused by the single-beat reroll,
+/// which holds the rolled type fixed and only regenerates the prose.
+pub(crate) fn anchor_mechanic(content_type: &str) -> &'static str {
     match content_type {
         "combat" => "a fight; convey the enemy's tactics, behavior, and use of terrain, and NEVER name specific creatures (the GM picks them)",
         "cache" => "a stash of loot or rewards",

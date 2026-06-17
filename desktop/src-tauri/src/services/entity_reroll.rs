@@ -1,5 +1,6 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
+    anchor_mechanic,
     build_reference_context,
     describe_recent_npc_occupation_anchors,
     occupation_anchor,
@@ -10,7 +11,6 @@ use crate::services::ollama_chat::{
     attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
 };
 use crate::utils::{
-    normalize_dungeon_content_type,
     normalize_exports,
     normalize_faction_kind_type,
     normalize_god_alignment,
@@ -24,7 +24,7 @@ use crate::utils::{
     normalize_unknown_text,
 };
 use runebound_models::DungeonBeat;
-use runebound_models::utils::{DUNGEON_CONTENT_TYPES, DUNGEON_FUNCTIONS, GOD_ALIGNMENTS, GOD_RANKS};
+use runebound_models::utils::{DUNGEON_FUNCTIONS, GOD_ALIGNMENTS, GOD_RANKS};
 use dnd_core::config::AppConfig;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -803,9 +803,10 @@ impl EntityRerollService {
 
     /// Regenerate a single beat against the frozen rest of the dungeon. The other
     /// four beats are sent verbatim as context; only `beats[beat_index]` is
-    /// rerolled, and its `function` stays fixed. Anti-stagnation rejects a reroll
-    /// whose `content_type` repeats the current beat's on early attempts so the
-    /// palette actually varies ("can't converge to goblins-trap-boss").
+    /// rerolled. Both its `function` AND its rolled `content_type` stay fixed — the
+    /// content type was deterministically assigned (see `dungeon_plan`) and the
+    /// model is no good at picking it, so the reroll only rewrites the prose
+    /// (idea, player_goals, lever, loot, design_note) for that same room type.
     pub async fn reroll_dungeon_beat(
         &self,
         input: RerollDungeonBeatInput,
@@ -847,12 +848,16 @@ impl EntityRerollService {
 
         let frozen = dungeon_context_summary(&input.dungeon, Some(beat_index));
 
+        // The rolled content type is authoritative — it is NOT regenerated. The
+        // model only rewrites the prose for that same room type.
+        let content_type = current.content_type.trim().to_string();
+        let mechanic = anchor_mechanic(&content_type);
+
         let schema = serde_json::json!({
             "type": "object",
-            "required": ["content_type", "idea", "player_goals", "lever", "design_note"],
+            "required": ["idea", "player_goals", "lever", "design_note"],
             "additionalProperties": false,
             "properties": {
-                "content_type": { "type": "string", "enum": DUNGEON_CONTENT_TYPES },
                 "idea": { "type": "string", "minLength": 1 },
                 "player_goals": { "type": "string", "minLength": 1 },
                 "lever": { "type": "string", "minLength": 1 },
@@ -861,12 +866,16 @@ impl EntityRerollService {
             }
         });
 
-        let loot_rule = if function == "Resolution" || function == "Climax" {
+        // A cache room always pays out, regardless of where it sits; otherwise the
+        // function decides whether loot belongs here.
+        let loot_rule = if content_type.eq_ignore_ascii_case("cache") {
+            "Loot REQUIRED — name a concrete reward the party claims here."
+        } else if function == "Resolution" || function == "Climax" {
             "This beat may carry loot (the payoff/boss hoard)."
         } else if function == "Setback" {
             "Set loot to null — the Setback is where players pay, not collect."
         } else {
-            "Set loot to null unless this beat is genuinely a reward cache."
+            "Set loot to null."
         };
 
         let (client, url) = build_chat_client(&config)?;
@@ -888,18 +897,21 @@ impl EntityRerollService {
                     {
                         "role": "system",
                         "content": format!(
-                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field tight and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 1-2 sentences (for combat: tactics/behavior, never creature names). player_goals is one sentence — the clear, concrete goal for the players here (what they must learn, do, reach, or overcome). lever is one hook/question in 1-2 sentences. design_note is one sentence to the GM, out of fiction, on how this beat fits the overall dungeon and story. This beat is a room or area INSIDE the dungeon's single location (shown below) — keep it there; do not move the party to a new region, town, or building. {loot_rule} Pick a content_type that fits this beat's function (match its MEANING, not just the word: forge = a place to craft magic items; foreshadowing/history/map are overlays that layer onto a concrete beat, never the whole beat) and ideally differs from its current one to keep variety.{reference_suffix}",
+                            "You are a 5-room-dungeon oracle regenerating ONE beat for a game master. Return only JSON matching the schema. Keep each field tight and SPECIFIC BUT UNRESOLVED (a concrete spark, never the answer). idea is 1-2 sentences (for combat: tactics/behavior, never creature names). player_goals is one sentence — the clear, concrete goal for the players here (what they must learn, do, reach, or overcome). lever is one hook/question in 1-2 sentences. design_note is one sentence to the GM, out of fiction, on how this beat fits the overall dungeon and story. This beat is a room or area INSIDE the dungeon's single location (shown below) — keep it there; do not move the party to a new region, town, or building. {loot_rule} This beat's room type is FIXED as `{content_type}` ({mechanic}). Do NOT change the type — keep the idea squarely a {content_type} room; only the wording changes.{reference_suffix}",
                             loot_rule = loot_rule,
+                            content_type = content_type,
+                            mechanic = mechanic,
                             reference_suffix = reference_suffix
                         )
                     },
                     {
                         "role": "user",
                         "content": format!(
-                            "Dungeon so far (the other four beats are frozen — stay coherent with them):\n{frozen}\n\nRegenerate ONLY beat {n} (function = {function}). It must follow the {prev} beat and feed the {next} beat. Optional shaping prompt: {shape}",
+                            "Dungeon so far (the other four beats are frozen — stay coherent with them):\n{frozen}\n\nRegenerate ONLY beat {n} (function = {function}, type = {content_type} — keep this type). It must follow the {prev} beat and feed the {next} beat. Optional shaping prompt: {shape}",
                             frozen = frozen,
                             n = beat_index + 1,
                             function = function,
+                            content_type = content_type,
                             prev = prev,
                             next = next,
                             shape = if extra_prompt.is_empty() { "(none)" } else { extra_prompt }
@@ -917,13 +929,6 @@ impl EntityRerollService {
                 Err(_) => continue,
             };
 
-            let Some(content_type_raw) = parsed.get("content_type").and_then(|v| v.as_str()) else {
-                continue;
-            };
-            let content_type = match normalize_dungeon_content_type(content_type_raw) {
-                Ok(value) => value,
-                Err(_) => continue,
-            };
             let Some(idea) = parsed.get("idea").and_then(|v| v.as_str()) else {
                 continue;
             };
@@ -942,15 +947,10 @@ impl EntityRerollService {
                 .map(|value| value.trim().to_string())
                 .filter(|value| !value.is_empty() && !value.eq_ignore_ascii_case("none"));
 
-            // Anti-stagnation: force palette variety on early attempts.
-            if attempt < 3 && content_type.eq_ignore_ascii_case(current.content_type.trim()) {
-                continue;
-            }
-
             return Ok(RerollDungeonBeatResult {
                 beat: DungeonBeat {
                     function: function.to_string(),
-                    content_type,
+                    content_type: content_type.clone(),
                     idea: normalize_unknown_text(idea),
                     player_goals: normalize_unknown_text(player_goals),
                     lever: normalize_unknown_text(lever),

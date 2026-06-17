@@ -80,7 +80,8 @@ impl EntityDomain for DungeonDomain {
             "dungeon set <beat> <field> <value>",
             "dungeon reroll <beat>",
             "dungeon reroll premise",
-            "reroll",
+            "reroll <beat>      (reroll just that card)",
+            "reroll             (reroll the whole dungeon)",
             "dungeon save",
             "dungeon cancel",
         ]

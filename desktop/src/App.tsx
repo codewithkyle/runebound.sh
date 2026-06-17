@@ -1147,6 +1147,11 @@ function commandSpinnerLabel(
     return "generating god";
   }
   if (lowered === "reroll" || lowered.startsWith("reroll ")) {
+    // `reroll <beat>` on a dungeon regenerates a single card, not the whole draft.
+    const arg = lowered.slice("reroll".length).trim().split(/\s+/)[0];
+    if (["entrance", "puzzle", "setback", "climax", "resolution", "1", "2", "3", "4", "5"].includes(arg)) {
+      return "rerolling beat";
+    }
     return "rerolling draft";
   }
   if (lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
