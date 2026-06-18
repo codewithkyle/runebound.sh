@@ -1,9 +1,36 @@
+//! Host-agnostic command-handler infrastructure: the registry, the handler
+//! traits, and the metadata a handler advertises. Deliberately standalone — it
+//! depends on no manifest crate — so both the core CLI and the desktop app build
+//! their own `HandlerRegistry` over it.
+//!
+//! ## Two traits, on purpose
+//! [`HandlerBridge`] is the *minimal* thing a handler author writes: one
+//! `invoke(invocation) -> future` method. [`CommandHandler`] is the *full* surface
+//! the registry dispatches against — `handles()` (the name) + `metadata()` +
+//! `execute()`. [`HandlerEntry`] is the adapter: it wraps a `HandlerBridge` with a
+//! name and [`HandlerMetadata`] and `impl`s `CommandHandler` by delegating
+//! `execute` → `invoke`. So handler code stays a bare closure/bridge, and the
+//! name/metadata are supplied once at registration rather than threaded through
+//! every handler.
+//!
+//! ## The `command-specs` bridge is not duplication
+//! [`HandlerMetadata`] / [`ExecutionTarget`] live here (the generic layer); the
+//! manifest single-source (`command-specs`) declares its own
+//! `HandlerMetadataDescriptor` / `CommandExecution` and provides `From` impls that
+//! convert *its* records into these types (`handler_metadata_for`). The two type
+//! families mirror each other on purpose: this crate must not depend on the
+//! manifest crate, so the manifest owns the bridge, not the other way around.
+
 use std::collections::HashMap;
 use std::future::Future;
 use std::pin::Pin;
 
 pub type HandlerFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// The full surface the [`HandlerRegistry`] dispatches against: a command's name,
+/// its [`HandlerMetadata`], and its async `execute`. Most handlers don't implement
+/// this directly — they implement [`HandlerBridge`] and let [`HandlerEntry`] supply
+/// the name + metadata. See the module docs for the split.
 pub trait CommandHandler: Send + Sync {
     type Output;
     type Invocation<'a>: 'a
@@ -85,6 +112,9 @@ impl HandlerMetadata {
     }
 }
 
+/// The minimal per-handler logic: just `invoke`. A [`HandlerEntry`] wraps one of
+/// these with a name + [`HandlerMetadata`] to form a full [`CommandHandler`]. See
+/// the module docs for why the surface is split this way.
 pub trait HandlerBridge: Send + Sync {
     type Output;
     type Invocation<'a>: 'a
@@ -173,12 +203,11 @@ impl<B: HandlerBridge> HandlerRegistry<B> {
         self.entries.values()
     }
 
-    // P7.5 (cleanup-0.5.0): `into_iter` is intentionally an inherent method that
-    // consumes the registry into owned entries; whether to rename it to
-    // `into_values` or implement `IntoIterator` is the deliberate API decision
-    // deferred to Phase 7. Remove this allow when P7.5 lands.
-    #[allow(clippy::should_implement_trait)]
-    pub fn into_iter(self) -> impl Iterator<Item = HandlerEntry<B>> {
+    /// Consume the registry, yielding its owned entries (insertion order is not
+    /// preserved — it's a `HashMap`). Named `into_values` rather than `into_iter`
+    /// so it doesn't shadow the `IntoIterator` convention (an inherent `into_iter`
+    /// that isn't the trait method is a footgun in `for` loops).
+    pub fn into_values(self) -> impl Iterator<Item = HandlerEntry<B>> {
         self.entries.into_values()
     }
 
