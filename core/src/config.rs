@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -107,40 +107,6 @@ pub struct LoadedConfig {
     pub paths: ConfigPaths,
 }
 
-#[derive(Debug, Clone, Default, Deserialize)]
-struct PartialAppConfig {
-    version: Option<u32>,
-    vault: Option<PartialVaultConfig>,
-    ollama: Option<PartialOllamaConfig>,
-    ui: Option<PartialUiConfig>,
-    generation: Option<PartialGenerationConfig>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct PartialVaultConfig {
-    path: Option<PathBuf>,
-    autoscan_on_start: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct PartialOllamaConfig {
-    base_url: Option<String>,
-    model: Option<String>,
-    timeout_seconds: Option<u64>,
-    num_ctx: Option<u32>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct PartialUiConfig {
-    confirm_soft_delete: Option<bool>,
-    show_inline_help: Option<bool>,
-}
-
-#[derive(Debug, Clone, Default, Deserialize)]
-struct PartialGenerationConfig {
-    verbosity: Option<Verbosity>,
-}
-
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
@@ -184,17 +150,22 @@ impl Default for UiConfig {
 
 pub fn load_effective() -> Result<LoadedConfig> {
     let paths = config_paths()?;
-
-    let mut config = AppConfig::default();
     let global_exists = paths.global.exists();
 
-    if global_exists {
-        let partial = load_partial_file(&paths.global)?;
-        apply_partial(&mut config, partial);
-    }
+    // Every `AppConfig` field is `#[serde(default)]`, so deserializing a partial
+    // file straight into `AppConfig` fills the gaps with defaults — no `Partial*`
+    // mirror + merge needed.
+    let effective = if global_exists {
+        let raw = fs::read_to_string(&paths.global)
+            .with_context(|| format!("failed to read config file {}", paths.global.display()))?;
+        toml::from_str(&raw)
+            .with_context(|| format!("invalid TOML in {}", paths.global.display()))?
+    } else {
+        AppConfig::default()
+    };
 
     Ok(LoadedConfig {
-        effective: config,
+        effective,
         global_exists,
         paths,
     })
@@ -229,14 +200,24 @@ pub fn ensure_config_sections_persisted() -> Result<bool> {
         return Ok(false);
     }
 
-    let partial = load_partial_file(&paths.global)?;
-    if partial.generation.is_some() {
+    let raw = fs::read_to_string(&paths.global)
+        .with_context(|| format!("failed to read config file {}", paths.global.display()))?;
+    if section_present(&raw, "generation")? {
         return Ok(false);
     }
 
     let loaded = load_effective()?;
     save_config(&loaded.effective)?;
     Ok(true)
+}
+
+/// Whether `raw` TOML literally contains a top-level `[section]`. A parsed
+/// `AppConfig` can't answer this — `#[serde(default)]` fills the section in whether
+/// or not it was on disk — so the section-backfill probe reads the raw document as
+/// a `toml::Value` instead (replacing the old `Partial*` mirror).
+fn section_present(raw: &str, section: &str) -> Result<bool> {
+    let value: toml::Value = toml::from_str(raw).context("failed to parse config file as TOML")?;
+    Ok(value.get(section).is_some())
 }
 
 pub fn config_paths() -> Result<ConfigPaths> {
@@ -285,60 +266,6 @@ pub fn validate_for_runtime(config: &AppConfig) -> Result<()> {
         bail!("config is incomplete:\n- {}", issues.join("\n- "));
     }
     Ok(())
-}
-
-fn load_partial_file(path: &Path) -> Result<PartialAppConfig> {
-    let raw = fs::read_to_string(path)
-        .with_context(|| format!("failed to read config file {}", path.display()))?;
-
-    let parsed: PartialAppConfig =
-        toml::from_str(&raw).with_context(|| format!("invalid TOML in {}", path.display()))?;
-    Ok(parsed)
-}
-
-fn apply_partial(base: &mut AppConfig, partial: PartialAppConfig) {
-    if let Some(version) = partial.version {
-        base.version = version;
-    }
-
-    if let Some(vault) = partial.vault {
-        if let Some(path) = vault.path {
-            base.vault.path = Some(path);
-        }
-        if let Some(autoscan_on_start) = vault.autoscan_on_start {
-            base.vault.autoscan_on_start = autoscan_on_start;
-        }
-    }
-
-    if let Some(ollama) = partial.ollama {
-        if let Some(base_url) = ollama.base_url {
-            base.ollama.base_url = base_url;
-        }
-        if let Some(model) = ollama.model {
-            base.ollama.model = Some(model);
-        }
-        if let Some(timeout_seconds) = ollama.timeout_seconds {
-            base.ollama.timeout_seconds = timeout_seconds;
-        }
-        if let Some(num_ctx) = ollama.num_ctx {
-            base.ollama.num_ctx = num_ctx;
-        }
-    }
-
-    if let Some(ui) = partial.ui {
-        if let Some(confirm_soft_delete) = ui.confirm_soft_delete {
-            base.ui.confirm_soft_delete = confirm_soft_delete;
-        }
-        if let Some(show_inline_help) = ui.show_inline_help {
-            base.ui.show_inline_help = show_inline_help;
-        }
-    }
-
-    if let Some(generation) = partial.generation
-        && let Some(verbosity) = generation.verbosity
-    {
-        base.generation.verbosity = verbosity;
-    }
 }
 
 fn default_version() -> u32 {
@@ -396,23 +323,23 @@ mod tests {
     }
 
     #[test]
-    fn apply_partial_overrides_verbosity() {
-        let mut base = AppConfig::default();
-        let partial = PartialAppConfig {
-            generation: Some(PartialGenerationConfig {
-                verbosity: Some(Verbosity::Verbose),
-            }),
-            ..Default::default()
-        };
-        apply_partial(&mut base, partial);
-        assert_eq!(base.generation.verbosity, Verbosity::Verbose);
+    fn partial_file_fills_unspecified_fields_with_defaults() {
+        // A file that sets only one field deserializes straight into AppConfig, with
+        // every other field falling back to its default (the old apply_partial merge).
+        let config: AppConfig =
+            toml::from_str("[generation]\nverbosity = \"verbose\"\n").expect("parse config");
+        assert_eq!(config.generation.verbosity, Verbosity::Verbose);
+        // Untouched sections still carry their defaults.
+        assert_eq!(config.ollama.base_url, default_ollama_base_url());
+        assert!(config.vault.autoscan_on_start);
     }
 
     #[test]
-    fn apply_partial_without_generation_keeps_default() {
-        let mut base = AppConfig::default();
-        apply_partial(&mut base, PartialAppConfig::default());
-        assert_eq!(base.generation.verbosity, Verbosity::Medium);
+    fn section_present_detects_literal_section() {
+        // The backfill probe must see the section as written, not as defaulted.
+        assert!(section_present("[generation]\nverbosity = \"brief\"\n", "generation").unwrap());
+        assert!(!section_present("[ollama]\nmodel = \"x\"\n", "generation").unwrap());
+        assert!(!section_present("", "generation").unwrap());
     }
 
     #[test]
