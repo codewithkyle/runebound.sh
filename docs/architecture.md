@@ -230,7 +230,7 @@ Handlers orchestrate; services implement workflows.
 - `EntityPersistenceService` handles save + write + index upsert paths
 - `EntityAdminService` handles entity resolve/load/delete/undo and ensure-location flows
 - `SuggestionService` handles autocomplete and reference suggestions
-- `VaultSyncService` handles startup scan and reconciliation
+- `VaultSyncService` projects the canonical TOML store into the db + document index at startup (store → db only; the Obsidian `.md` vault is a publish target, not an input)
 
 Alongside these orchestrating `*Service` types, `services/` also holds shared support modules (free functions, not `Service` structs): `publish.rs` (entity frontmatter → Obsidian markdown), `ollama_chat.rs` (shared Ollama `/api/chat` plumbing for generation + reroll), `vault_ref.rs` (the `@reference` index used by AI context + autocomplete), and `mention_extraction.rs` (Tier-2 LLM link generation for not-yet-known entities).
 

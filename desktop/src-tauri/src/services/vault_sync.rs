@@ -21,7 +21,14 @@ use crate::utils::normalize_relative_path_for_storage;
 pub struct VaultSyncService;
 
 impl VaultSyncService {
-    pub async fn sync_from_vault(&self, state: &AppState) -> Result<(), String> {
+    /// Project the canonical TOML entity store into the database + document index
+    /// at startup. The direction is **store → db only**: the store is the source of
+    /// truth, the DB is a rebuildable projection, and the Obsidian `.md` vault is a
+    /// *publish target*, never an input — deleted/renamed `.md` files are not read
+    /// back here (despite this module's historical "reconcile vault ↔ db" framing).
+    /// Each entity's row + index commit atomically, and published records are reaped
+    /// (P6.1/P6.3).
+    pub async fn project_store_into_db(&self, state: &AppState) -> Result<(), String> {
         let loaded = load_effective().map_err(|err| err.to_string())?;
         if !loaded.effective.vault.autoscan_on_start {
             return Ok(());
@@ -96,7 +103,7 @@ impl VaultSyncService {
     }
 }
 
-/// Frontmatter fields the generic reconcile loop reads, normalized across kinds.
+/// Frontmatter fields the generic projection loop reads, normalized across kinds.
 struct StoreView<'a> {
     id: &'a str,
     slug: &'a str,
@@ -116,7 +123,7 @@ struct RowView<'a> {
 
 /// Per-kind glue for [`sync_entities`]. Each impl wraps the kind's repository and
 /// exposes its typed store/DB operations through one uniform interface so the
-/// reconcile logic lives in exactly one place.
+/// store → db projection logic lives in exactly one place.
 #[async_trait]
 trait SyncRepository: Send + Sync {
     type Frontmatter: Send;

@@ -78,8 +78,11 @@ pub async fn run_boot_task(
     match id.as_str() {
         "cleanup" => {
             // Migrations already ran at `init_database`; this finalizes pending
-            // publishes and reaps soft-deleted entities / TOML via the vault sync.
-            VaultSyncService.sync_from_vault(state.inner()).await?;
+            // publishes and projects the canonical TOML store into the db + index
+            // (reaping published records), the source of truth for a rebuilt db.
+            VaultSyncService
+                .project_store_into_db(state.inner())
+                .await?;
             Ok(BootTaskResult {
                 ok: true,
                 tone: "success".to_string(),
