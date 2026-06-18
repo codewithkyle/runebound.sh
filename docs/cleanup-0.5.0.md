@@ -419,33 +419,40 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 7 — Structural simplifications
+## Phase 7 — Structural simplifications — **DONE ✅ (2026-06-18)**
 
 *Goal: remove drift-prone parallel structures now that behavior is unified.*
 
-- [ ] **P7.1 — Drop the `config.rs` `Partial*` mirror** · Medium · ✅
-  `core/src/config.rs:9–142` mirrors every config struct with an `Option`-wrapped twin + hand-written `apply_partial` (`:299–342`). Since the base already uses `#[serde(default)]`, deserialize straight into `AppConfig`.
-  **Fix:** delete the `Partial*` hierarchy + `apply_partial`. The only thing they buy — `ensure_config_sections_persisted`'s "was `[generation]` literally present?" probe (`:233`) — can use a `toml::Value`/`Option<toml::Table>` probe instead.
+> **Outcome (DONE ✅ 2026-06-18):** All P7 items resolved (P7.3 had already landed,
+> pulled forward). P7.1 deletes the `config.rs` `Partial*` mirror — `load_effective`
+> deserializes straight into `AppConfig` (every field is `#[serde(default)]`), and the
+> "was `[generation]` present?" probe reads a `toml::Value`. P7.2 makes the
+> `OutputDoc` the single source for help: one `OutputDoc::to_plain_text()` (in the
+> model crate) derives the plain-text fallback, the three string help builders are
+> gone, and the desktop entity-card text renderer collapses onto the same method.
+> P7.4 (the one real refactor) models `WizardSession` as `Inactive | Active(..)` so
+> data presence is a type guarantee — all six `.expect("active wizard data")` are
+> gone. P7.5 renames `into_iter`→`into_values` + documents the handler-layer split.
+> P7.6 folds inline-delta expansion into `normalize_alias_tokens` so core dispatch
+> matches the parse view. Verified: workspace 11 binaries + desktop 126 tests green;
+> `make lint` (clippy `-D warnings` + fmt, both targets) exit 0; `tsc`/`vite build`
+> clean. *Remaining manual smoke (left to the user): config load→modify→save→reload
+> + the section-backfill behavior; help text/clickables across contexts; wizard
+> back/cancel/native flows.*
 
-- [ ] **P7.2 — Collapse dual help renderers** · Medium · ✅
-  `core/src/command.rs:550–706`: a markdown-string help renderer (`render_command_help`/`render_subcommand_help`) and a structured `OutputDoc` renderer (`command_help_doc`/`root_help_doc`) walk the same manifest in parallel and already nearly drift.
-  **Fix:** write one doc→text renderer, derive the plain-text `output` from the `OutputDoc`, delete the string builders (~150 lines). Pairs well with P3.
+- [x] **P7.1 — Drop the `config.rs` `Partial*` mirror** · Medium · ✅ — *done: deleted `PartialAppConfig` + 4 nested twins, `apply_partial`, and `load_partial_file` (~75 lines); `load_effective` deserializes a partial file straight into `AppConfig` (serde defaults fill the gaps). The one capability the mirror bought — `ensure_config_sections_persisted`'s literal-`[generation]`-present probe — is now a `section_present(raw, "generation")` helper that reads the raw doc as a `toml::Value`. The `apply_partial` tests became direct-deserialize + `section_present` tests.*
+
+- [x] **P7.2 — Collapse dual help renderers** · Medium · ✅ — *done: added `OutputDoc::to_plain_text()` (model crate) + `CommandOutput::from_doc()`; the seven help call sites pass only the doc, and the three string builders (`render_root_help`/`render_command_help`/`render_subcommand_help`, ~150 lines) are deleted. The desktop entity-card text fallback (`card_doc_to_text`, the same walk-the-doc renderer) collapses onto `to_plain_text` too — one doc→text renderer for the whole app. `with_doc` stays for the doctor report (independently-built text). New model test pins the renderer; no test pinned the old help text.*
 
 - [x] **P7.3 — `config_paths(workspace_root)` is vestigial** · Low · ✅ — *done (pulled forward out of phase order): `workspace_root` removed entirely — 33 files, +320/−511, zero remaining references. `config_paths`/`load_effective`/`save_config`/`ensure_config_sections_persisted`/`EntityStore::new` are now argument-free; dropped from the `command.rs` dispatch chain, `CommandService` (+`Default`), the onboarding host/ctx (`OnboardingHost` is now an empty marker trait), and all desktop threading (ai_generation/reroll/mention/ollama_chat/publish/boot/suggestions/domains/wizards) + `AppState`. One behavioral change: the `config test` doctor report dropped its meaningless "workspace root" (CWD) check item. `make lint` rc=0; workspace + desktop 123 tests green.*
   `core/src/config.rs:96–101,242–256`: the `_workspace_root` param is ignored (everything derives from `dirs::config_dir()`), yet `workspace_root` is threaded through many signatures implying workspace-scoped config.
   **Fix:** drop the param (and the threading) or honor it; at minimum document that config is global.
 
-- [ ] **P7.4 — Wizard `session.data` invariant via scattered `.expect()`** · Medium · 🔶
-  `wizard/src/runtime.rs:66,161,229,244,253,283` `.expect("active wizard data")`; the host downcast helpers also `.expect()`. Safe today, but a future transition that leaves the session active after `data.take()` becomes a host crash.
-  **Fix:** model `WizardSession` as `Inactive | Active { data, cursor, history }` so data presence is a type guarantee, removing all the `expect`s. Add a `WizardData` doc note that a failed downcast is a construction bug (the type-erasure invariant). Add tests for `Native` resubmit → `Stay`/`Next` history behavior.
+- [x] **P7.4 — Wizard `session.data` invariant via scattered `.expect()`** · Medium · ✅ — *done: `WizardSession` is now `Inactive | Active(ActiveWizard { id, cursor, history, data })`, so an active session always carries its accumulator — all six `.expect("active wizard data")` (+ the `seeded wizard data` one) are gone. `complete()` deactivates and takes ownership in one `std::mem::take`; the few "shouldn't-be-inactive" control-flow spots degrade to `Ok(None)` instead of panicking. `active_id()` is the one cross-module accessor (core service + desktop `AppState`). `WizardData` gained a doc note that a failed downcast is a construction bug. New test drives a `Native` resubmit into a *staying* step, pinning the Stay-after-Native cursor/history behavior the prior (complete-only) tests missed.*
 
-- [ ] **P7.5 — `command-handler` ergonomics** · Low · 🔶
-  `command-handler/src/lib.rs:147–181`: `into_iter(self)` is an inherent method shadowing the `IntoIterator` convention; `new()` without `impl Default` (clippy `new_without_default`).
-  **Fix:** rename to `into_values()` (or impl `IntoIterator`); add `impl Default`. Add a doc comment clarifying the intentional `CommandHandler` vs `HandlerBridge` split (and the `ExecutionTarget`/`HandlerMetadata` ↔ `command-specs` `From`-bridge duplication) so the layering reads as deliberate.
+- [x] **P7.5 — `command-handler` ergonomics** · Low · ✅ — *done: renamed `HandlerRegistry::into_iter` → `into_values` and dropped the `should_implement_trait` allow (the `new_without_default` half was already handled — `Default` exists). Added module + trait docs making the layering deliberate: why two traits (`HandlerBridge` minimal-invoke vs `CommandHandler` full-dispatch, adapted by `HandlerEntry`) and why `ExecutionTarget`/`HandlerMetadata` mirror command-specs' `HandlerMetadataDescriptor`/`CommandExecution` (this crate must not depend on the manifest crate, so command-specs owns the `From` bridge).*
 
-- [ ] **P7.6 — Core `execute_line` doesn't expand inline `+1d`** · Low · ✅
-  `core/src/command.rs:404–408` (`execute_line_internal`) runs `shell_words::split` → `normalize_alias_tokens` but **not** `expand_inline_delta_root_tokens` (`command_parse.rs:89–104,157`), so the parse view (`+`,`1d`) and core dispatch (`+1d`) disagree. **Not user-facing** — the desktop seam (`main.rs:50`) dispatches via `parse_command_input` (which expands) → registered `+` handler. Only bites if core is exercised standalone (CLI/tests).
-  **Fix:** run the same delta expansion (ideally inside `normalize_alias_tokens` so both paths share it) for consistency.
+- [x] **P7.6 — Core `execute_line` doesn't expand inline `+1d`** · Low · ✅ — *done: folded `expand_inline_delta_root_tokens` into `normalize_alias_tokens`, which both the parse view and core's `execute_line_internal` share — so `+1d` splits to `+`, `1d` on both paths (idempotent: an already-split `+`/`-` isn't re-expanded). `parse_command_input` keeps its own pre-pass so `ParseResult.raw_tokens` still carries the split form. New test pins the core-path expansion.*
 
 **Phase 7 verify:** both test suites green; config round-trips (load → modify → save → reload) and the "section was/wasn't present" persistence behavior still holds; help output (plain text + clickable) unchanged across contexts; wizard back/cancel/native flows still work.
 
