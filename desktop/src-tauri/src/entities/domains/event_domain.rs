@@ -9,8 +9,7 @@ use crate::entities::common::{
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::EVENT_SCHEMA;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
-use crate::services::entity_persistence::{EntityPersistenceService, SaveEventDraftInput};
-use crate::utils::{normalize_relative_path_for_storage, path_for_display, prepend_notice};
+use crate::utils::{normalize_relative_path_for_storage, prepend_notice};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 
@@ -157,42 +156,6 @@ impl EntityDomain for EventDomain {
             prepend_notice(notice, event_summary_text(&updated)),
             event_event_from_draft(&updated),
         )
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_event().cloned()
-        }
-        .ok_or_else(|| no_active_draft_message(EntityKind::Event))?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_event_draft(
-                SaveEventDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    body: draft.body.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Event saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {

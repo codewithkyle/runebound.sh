@@ -240,6 +240,12 @@ impl EditorSession {
         self.draft.as_ref().map(DraftEnvelope::kind)
     }
 
+    /// The single active draft of any kind, if one is open. Used by the generic
+    /// save (publish auto-save) which persists whatever the editor currently holds.
+    pub(crate) fn active_draft(&self) -> Option<&DraftEnvelope> {
+        self.draft.as_ref()
+    }
+
     /// Set the single active draft, replacing any draft of any other kind.
     pub(crate) fn set_active_draft(&mut self, draft: DraftEnvelope) {
         self.draft = Some(draft);

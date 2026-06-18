@@ -10,7 +10,6 @@ use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, GOD_SCHEMA, canonical_field_name, format_valid_field_list,
 };
-use crate::services::entity_persistence::{EntityPersistenceService, SaveGodDraftInput};
 use crate::services::entity_reroll::{EntityRerollService, GodRerollContext, RerollGodFieldInput};
 use crate::utils::{
     normalize_god_alignment, normalize_god_rank, normalize_optional_prompt,
@@ -328,55 +327,6 @@ impl EntityDomain for GodDomain {
         }
 
         entity_response_with_event(god_summary_text(&draft), god_event_from_draft(&draft))
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_god().cloned()
-        }
-        .ok_or_else(|| "no active god draft. run create god or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_god_draft(
-                SaveGodDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    epithet: draft.epithet.clone(),
-                    rank: draft.rank.clone(),
-                    rank_custom: draft.rank_custom.clone(),
-                    alignment: draft.alignment.clone(),
-                    domains: draft.domains.clone(),
-                    symbol: draft.symbol.clone(),
-                    appearance: draft.appearance.clone(),
-                    dogma: draft.dogma.clone(),
-                    realm: draft.realm.clone(),
-                    worshippers: draft.worshippers.clone(),
-                    clergy: draft.clergy.clone(),
-                    allies: draft.allies.clone(),
-                    rivals: draft.rivals.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## God saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {

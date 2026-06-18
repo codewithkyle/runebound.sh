@@ -64,6 +64,13 @@ pub trait EntityDomain: Send + Sync {
         prompt: Option<String>,
         state: &AppState,
     ) -> EntityDomainResult;
-    async fn save(&self, state: &AppState) -> EntityDomainResult;
+
+    /// Persist the active draft. Uniform across every kind, so the default body
+    /// drives it from the registry/persistence layer via the draft's own type
+    /// (see [`crate::entities::common::save_active_draft`]); domains do not override.
+    async fn save(&self, state: &AppState) -> EntityDomainResult {
+        crate::entities::common::save_active_draft(self.kind(), state).await
+    }
+
     async fn cancel(&self, state: &AppState) -> EntityDomainResult;
 }

@@ -5,11 +5,13 @@ use runebound_models::output::{
     paragraph_with_inlines, strong, text_node,
 };
 
+use crate::app_state::AppState;
 use crate::commands::{ok_response, ok_response_with_doc};
 use crate::entities::domain::EntityDomainResult;
 use crate::entities::kind::EntityKind;
 use crate::entities::schema::{FieldAccess, format_field_help, rerollable_fields, settable_fields};
-use crate::utils::normalize_optional_prompt;
+use crate::services::entity_persistence::EntityPersistenceService;
+use crate::utils::{normalize_optional_prompt, path_for_display};
 
 pub use crate::utils::{normalize_unknown_list, normalize_unknown_text, parse_list_csv};
 
@@ -233,6 +235,38 @@ pub fn entity_response_with_event(
     event: CommandClientEvent,
 ) -> EntityDomainResult {
     entity_ok_response(message, Some(event))
+}
+
+/// Persist the active draft of `kind` and report it. Shared by every domain's
+/// `save` (the default [`EntityDomain::save`] body): the seven per-kind `save`
+/// methods were mechanically identical — fetch the typed draft, persist it via
+/// [`EntityPersistenceService::save`], clear the editor, and render the
+/// `## <Kind> saved` block — diverging only in the kind heading and the
+/// no-active-draft message, both now derived from `kind`.
+pub async fn save_active_draft(kind: EntityKind, state: &AppState) -> EntityDomainResult {
+    let draft = {
+        let editor = state.editor_session.lock().await;
+        editor.draft(kind).cloned()
+    }
+    .ok_or_else(|| no_active_draft_message(kind))?;
+
+    let outcome = EntityPersistenceService.save(&draft, state).await?;
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.clear_all();
+    }
+
+    let output = [
+        format!("## {} saved", kind.display_name()),
+        format!("id: {}", outcome.id),
+        format!("slug: {}", outcome.slug),
+        format!("vault: {}", path_for_display(&outcome.vault_path)),
+        format!("updated: {}", outcome.updated_at),
+    ]
+    .join("\n");
+
+    entity_response_with_event(output, CommandClientEvent::ClearDrafts)
 }
 
 // P5.2 (cleanup-0.5.0): this helper returns a `CommandResult` as its `Err` to

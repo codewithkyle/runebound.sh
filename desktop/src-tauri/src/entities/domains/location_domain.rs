@@ -10,7 +10,6 @@ use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, LOCATION_SCHEMA, canonical_field_name, format_valid_field_list,
 };
-use crate::services::entity_persistence::{EntityPersistenceService, SaveLocationDraftInput};
 use crate::services::entity_reroll::{
     EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
@@ -309,53 +308,6 @@ impl EntityDomain for LocationDomain {
             location_summary_text(&draft),
             location_event_from_draft(&draft),
         )
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_location().cloned()
-        }
-        .ok_or_else(|| {
-            "no active location draft. run create location or load <name>.".to_string()
-        })?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_location_draft(
-                SaveLocationDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    kind_type: draft.kind_type.clone(),
-                    kind_custom: draft.kind_custom.clone(),
-                    visual_description: draft.visual_description.clone(),
-                    history_background: draft.history_background.clone(),
-                    exports: draft.exports.clone(),
-                    tone: draft.tone.clone(),
-                    authority: draft.authority.clone(),
-                    danger_level: draft.danger_level.clone(),
-                    current_tension: draft.current_tension.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Location saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {

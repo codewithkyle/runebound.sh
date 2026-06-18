@@ -10,7 +10,6 @@ use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FACTION_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
 };
-use crate::services::entity_persistence::{EntityPersistenceService, SaveFactionDraftInput};
 use crate::services::entity_reroll::{
     EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
 };
@@ -371,58 +370,6 @@ impl EntityDomain for FactionDomain {
             faction_summary_text(&draft),
             faction_event_from_draft(&draft),
         )
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_faction().cloned()
-        }
-        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_faction_draft(
-                SaveFactionDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    kind_type: draft.kind_type.clone(),
-                    kind_custom: draft.kind_custom.clone(),
-                    public_description: draft.public_description.clone(),
-                    true_agenda: draft.true_agenda.clone(),
-                    methods: draft.methods.clone(),
-                    leadership: draft.leadership.clone(),
-                    headquarters: draft.headquarters.clone(),
-                    sphere_of_influence: draft.sphere_of_influence.clone(),
-                    resources_assets: draft.resources_assets.clone(),
-                    allies: draft.allies.clone(),
-                    rivals_enemies: draft.rivals_enemies.clone(),
-                    reputation: draft.reputation.clone(),
-                    current_tension: draft.current_tension.clone(),
-                    goals_short_term: draft.goals_short_term.clone(),
-                    goals_long_term: draft.goals_long_term.clone(),
-                    symbol_description: draft.symbol_description.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Faction saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {

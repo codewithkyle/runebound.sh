@@ -1,6 +1,7 @@
 pub mod ai_generation;
 pub mod entity_admin;
 pub mod entity_persistence;
+mod entity_persistence_macros;
 pub mod entity_reroll;
 pub mod mention_extraction;
 pub mod ollama_chat;

@@ -7,18 +7,12 @@ use dnd_core::npc::now_timestamp;
 use dnd_core::vault::Vault;
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons};
 
-use crate::app_state::{
-    AppState, DungeonDraftSession, EventDraftSession, FactionDraftSession, GodDraftSession,
-    ItemDraftSession, LocationDraftSession, NpcDraftSession,
-};
+use crate::app_state::AppState;
 use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
 use crate::entities::EntityDetail;
 use crate::entities::EntityKind;
 use crate::services::entity_admin::EntityAdminService;
-use crate::services::entity_persistence::{
-    EntityPersistenceService, SaveDungeonDraftInput, SaveEventDraftInput, SaveFactionDraftInput,
-    SaveGodDraftInput, SaveItemDraftInput, SaveLocationDraftInput, SaveNpcDraftInput,
-};
+use crate::services::entity_persistence::EntityPersistenceService;
 use std::collections::HashSet;
 use std::path::Path;
 
@@ -644,238 +638,31 @@ fn title_case_from_slug(slug: &str) -> String {
         .join(" ")
 }
 
-enum ActiveDraft {
-    Npc(NpcDraftSession),
-    Location(LocationDraftSession),
-    Faction(FactionDraftSession),
-    Item(ItemDraftSession),
-    Event(EventDraftSession),
-    God(GodDraftSession),
-    Dungeon(DungeonDraftSession),
-}
-
 async fn auto_save_active_draft(state: &AppState) -> Result<Option<PublishTargetInfo>, String> {
-    let (kind, draft) = {
+    let draft = {
         let editor = state.editor_session.lock().await;
-        let Some(kind) = editor.active_kind() else {
-            return Ok(None);
-        };
-        let draft = match kind {
-            EntityKind::Npc => editor.get_npc().cloned().map(ActiveDraft::Npc),
-            EntityKind::Location => editor.get_location().cloned().map(ActiveDraft::Location),
-            EntityKind::Faction => editor.get_faction().cloned().map(ActiveDraft::Faction),
-            EntityKind::Item => editor.get_item().cloned().map(ActiveDraft::Item),
-            EntityKind::Event => editor.get_event().cloned().map(ActiveDraft::Event),
-            EntityKind::God => editor.get_god().cloned().map(ActiveDraft::God),
-            EntityKind::Dungeon => editor.get_dungeon().cloned().map(ActiveDraft::Dungeon),
-        };
-        match draft {
-            Some(draft) => (kind, draft),
-            None => return Ok(None),
-        }
+        editor.active_draft().cloned()
+    };
+    let Some(draft) = draft else {
+        return Ok(None);
     };
 
-    let persistence = EntityPersistenceService;
-    let publish_target = match (kind, draft) {
-        (EntityKind::Npc, ActiveDraft::Npc(draft)) => {
-            let result = persistence
-                .save_npc_draft(
-                    SaveNpcDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        race: draft.race.clone(),
-                        occupation: draft.occupation.clone(),
-                        sex: draft.sex.clone(),
-                        age: draft.age.clone(),
-                        height: draft.height.clone(),
-                        weight_lbs: draft.weight_lbs.clone(),
-                        background: draft.background.clone(),
-                        want_need: draft.want_need.clone(),
-                        secret_obstacle: draft.secret_obstacle.clone(),
-                        carrying: draft.carrying.clone(),
-                        location: draft.location.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::Npc,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        (EntityKind::Location, ActiveDraft::Location(draft)) => {
-            let result = persistence
-                .save_location_draft(
-                    SaveLocationDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        vault_path: draft.vault_path.clone(),
-                        kind_type: draft.kind_type.clone(),
-                        kind_custom: draft.kind_custom.clone(),
-                        visual_description: draft.visual_description.clone(),
-                        history_background: draft.history_background.clone(),
-                        exports: draft.exports.clone(),
-                        tone: draft.tone.clone(),
-                        authority: draft.authority.clone(),
-                        danger_level: draft.danger_level.clone(),
-                        current_tension: draft.current_tension.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::Location,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        (EntityKind::Faction, ActiveDraft::Faction(draft)) => {
-            let result = persistence
-                .save_faction_draft(
-                    SaveFactionDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        vault_path: draft.vault_path.clone(),
-                        kind_type: draft.kind_type.clone(),
-                        kind_custom: draft.kind_custom.clone(),
-                        public_description: draft.public_description.clone(),
-                        true_agenda: draft.true_agenda.clone(),
-                        methods: draft.methods.clone(),
-                        leadership: draft.leadership.clone(),
-                        headquarters: draft.headquarters.clone(),
-                        sphere_of_influence: draft.sphere_of_influence.clone(),
-                        resources_assets: draft.resources_assets.clone(),
-                        allies: draft.allies.clone(),
-                        rivals_enemies: draft.rivals_enemies.clone(),
-                        reputation: draft.reputation.clone(),
-                        current_tension: draft.current_tension.clone(),
-                        goals_short_term: draft.goals_short_term.clone(),
-                        goals_long_term: draft.goals_long_term.clone(),
-                        symbol_description: draft.symbol_description.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::Faction,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        (EntityKind::Item, ActiveDraft::Item(draft)) => {
-            let result = persistence
-                .save_item_draft(
-                    SaveItemDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        category: draft.category.clone(),
-                        rarity: draft.rarity.clone(),
-                        attunement: draft.attunement.clone(),
-                        materials: draft.materials.clone(),
-                        appearance: draft.appearance.clone(),
-                        abilities: draft.abilities.clone(),
-                        drawbacks: draft.drawbacks.clone(),
-                        history: draft.history.clone(),
-                        value: draft.value.clone(),
-                        location: draft.location.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::Item,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        (EntityKind::Event, ActiveDraft::Event(draft)) => {
-            let result = persistence
-                .save_event_draft(
-                    SaveEventDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        body: draft.body.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::Event,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        (EntityKind::God, ActiveDraft::God(draft)) => {
-            let result = persistence
-                .save_god_draft(
-                    SaveGodDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        vault_path: draft.vault_path.clone(),
-                        epithet: draft.epithet.clone(),
-                        rank: draft.rank.clone(),
-                        rank_custom: draft.rank_custom.clone(),
-                        alignment: draft.alignment.clone(),
-                        domains: draft.domains.clone(),
-                        symbol: draft.symbol.clone(),
-                        appearance: draft.appearance.clone(),
-                        dogma: draft.dogma.clone(),
-                        realm: draft.realm.clone(),
-                        worshippers: draft.worshippers.clone(),
-                        clergy: draft.clergy.clone(),
-                        allies: draft.allies.clone(),
-                        rivals: draft.rivals.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::God,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        (EntityKind::Dungeon, ActiveDraft::Dungeon(draft)) => {
-            let result = persistence
-                .save_dungeon_draft(
-                    SaveDungeonDraftInput {
-                        id: draft.id.clone(),
-                        name: draft.name.clone(),
-                        vault_path: draft.vault_path.clone(),
-                        location: draft.location.clone(),
-                        story: draft.story.clone(),
-                        premise: draft.premise.clone(),
-                        topology: draft.topology.clone(),
-                        tone: draft.tone.clone(),
-                        twist: draft.twist.clone(),
-                        beats: draft.beats.clone(),
-                    },
-                    state,
-                )
-                .await?;
-
-            PublishTargetInfo {
-                entity_type: EntityKind::Dungeon,
-                slug: result.slug,
-                name: draft.name,
-            }
-        }
-        _ => return Ok(None),
-    };
+    // The typed draft carries everything the persistence layer needs; the publish
+    // target is just its kind + name plus the saved slug.
+    let entity_type = draft.kind();
+    let name = draft.name().to_string();
+    let outcome = EntityPersistenceService.save(&draft, state).await?;
 
     {
         let mut editor = state.editor_session.lock().await;
         editor.clear_all();
     }
 
-    Ok(Some(publish_target))
+    Ok(Some(PublishTargetInfo {
+        entity_type,
+        slug: outcome.slug,
+        name,
+    }))
 }
 
 #[cfg(test)]

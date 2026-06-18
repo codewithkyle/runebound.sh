@@ -10,11 +10,8 @@ use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     FieldAccess, NPC_SCHEMA, canonical_field_name, format_valid_field_list,
 };
-use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraftInput};
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
-use crate::utils::{
-    normalize_relative_path_for_storage, normalize_sex, parse_carrying_csv, path_for_display,
-};
+use crate::utils::{normalize_relative_path_for_storage, normalize_sex, parse_carrying_csv};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::carrying_from_db_text;
@@ -279,52 +276,6 @@ impl EntityDomain for NpcDomain {
         }
 
         entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_npc().cloned()
-        }
-        .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_npc_draft(
-                SaveNpcDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    race: draft.race.clone(),
-                    occupation: draft.occupation.clone(),
-                    sex: draft.sex.clone(),
-                    age: draft.age.clone(),
-                    height: draft.height.clone(),
-                    weight_lbs: draft.weight_lbs.clone(),
-                    background: draft.background.clone(),
-                    want_need: draft.want_need.clone(),
-                    secret_obstacle: draft.secret_obstacle.clone(),
-                    carrying: draft.carrying.clone(),
-                    location: draft.location.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## NPC saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {

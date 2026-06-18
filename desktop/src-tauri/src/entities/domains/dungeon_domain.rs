@@ -10,7 +10,6 @@ use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::{
     DUNGEON_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
 };
-use crate::services::entity_persistence::{EntityPersistenceService, SaveDungeonDraftInput};
 use crate::services::entity_reroll::{
     DungeonRerollContext, EntityRerollService, RerollDungeonBeatInput, RerollDungeonFieldInput,
 };
@@ -365,49 +364,6 @@ impl EntityDomain for DungeonDomain {
             dungeon_summary_text(&draft),
             dungeon_event_from_draft(&draft),
         )
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_dungeon().cloned()
-        }
-        .ok_or_else(|| "no active dungeon draft. run create dungeon or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_dungeon_draft(
-                SaveDungeonDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    location: draft.location.clone(),
-                    story: draft.story.clone(),
-                    premise: draft.premise.clone(),
-                    topology: draft.topology.clone(),
-                    tone: draft.tone.clone(),
-                    twist: draft.twist.clone(),
-                    beats: draft.beats.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Dungeon saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
