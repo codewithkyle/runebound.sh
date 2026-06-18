@@ -12,8 +12,7 @@ use crate::entities::schema::{
 };
 use crate::services::entity_reroll::{EntityRerollService, GodRerollContext, RerollGodFieldInput};
 use crate::utils::{
-    normalize_god_alignment, normalize_god_rank, normalize_optional_prompt,
-    normalize_relative_path_for_storage, path_for_display,
+    normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display,
 };
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
@@ -85,8 +84,6 @@ impl EntityDomain for GodDomain {
             rivals: faction_list_from_db_text(&row.rivals),
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::God(draft),
         }))
     }

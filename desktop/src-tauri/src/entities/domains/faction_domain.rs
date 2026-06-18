@@ -13,9 +13,7 @@ use crate::entities::schema::{
 use crate::services::entity_reroll::{
     EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
 };
-use crate::utils::{
-    normalize_optional_prompt, normalize_relative_path_for_storage, path_for_display,
-};
+use crate::utils::{normalize_optional_prompt, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::faction_list_from_db_text;
@@ -89,8 +87,6 @@ impl EntityDomain for FactionDomain {
             symbol_description: row.symbol_description,
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::Faction(draft),
         }))
     }

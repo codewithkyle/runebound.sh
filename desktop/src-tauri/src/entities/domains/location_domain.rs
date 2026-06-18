@@ -13,7 +13,7 @@ use crate::entities::schema::{
 use crate::services::entity_reroll::{
     EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
-use crate::utils::{normalize_relative_path_for_storage, path_for_display};
+use crate::utils::path_for_display;
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::exports_from_db_text;
@@ -80,8 +80,6 @@ impl EntityDomain for LocationDomain {
             current_tension: row.current_tension,
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::Location(draft),
         }))
     }

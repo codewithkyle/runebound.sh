@@ -15,8 +15,7 @@ use crate::services::entity_reroll::{
 };
 use crate::utils::{
     normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist,
-    normalize_optional_prompt, normalize_relative_path_for_storage, normalize_unknown_text,
-    path_for_display,
+    normalize_optional_prompt, normalize_unknown_text, path_for_display,
 };
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
@@ -122,8 +121,6 @@ impl EntityDomain for DungeonDomain {
             beats: serde_json::from_str(&row.beats_json).unwrap_or_default(),
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::Dungeon(draft),
         }))
     }

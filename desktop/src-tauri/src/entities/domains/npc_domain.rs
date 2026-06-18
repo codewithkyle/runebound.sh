@@ -11,7 +11,7 @@ use crate::entities::schema::{
     FieldAccess, NPC_SCHEMA, canonical_field_name, format_valid_field_list,
 };
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
-use crate::utils::{normalize_relative_path_for_storage, normalize_sex, parse_carrying_csv};
+use crate::utils::{normalize_sex, parse_carrying_csv};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::carrying_from_db_text;
@@ -80,8 +80,6 @@ impl EntityDomain for NpcDomain {
             location: row.location,
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::Npc(draft),
         }))
     }

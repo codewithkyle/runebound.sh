@@ -14,10 +14,7 @@ use crate::entities::schema::{
 use crate::services::entity_reroll::{
     EntityRerollService, ItemRerollContext, RerollItemFieldInput,
 };
-use crate::utils::{
-    normalize_item_category, normalize_item_rarity, normalize_relative_path_for_storage,
-    path_for_display,
-};
+use crate::utils::{normalize_item_category, normalize_item_rarity, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::faction_list_from_db_text;
@@ -85,8 +82,6 @@ impl EntityDomain for ItemDomain {
             location: row.location,
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::Item(draft),
         }))
     }

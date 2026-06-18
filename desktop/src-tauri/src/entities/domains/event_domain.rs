@@ -9,7 +9,7 @@ use crate::entities::common::{
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
 use crate::entities::schema::EVENT_SCHEMA;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
-use crate::utils::{normalize_relative_path_for_storage, prepend_notice};
+use crate::utils::prepend_notice;
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 
@@ -64,8 +64,6 @@ impl EntityDomain for EventDomain {
             body: row.body,
         };
         Ok(Some(EntityDetail {
-            vault_path: normalize_relative_path_for_storage(&row.vault_path),
-            created_at: Some(row.created_at),
             draft: DraftEnvelope::Event(draft),
         }))
     }

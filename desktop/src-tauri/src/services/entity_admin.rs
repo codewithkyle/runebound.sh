@@ -20,6 +20,110 @@ use dnd_core::npc::{
 };
 use dnd_core::vault::Vault;
 
+/// Generate one entity's `soft_delete_<kind>` + `restore_<kind>` free functions
+/// (P5.2d). Both wrap the shared `record_soft_delete` / `restore_collision` +
+/// `commit_restore` helpers around the per-kind repo + DB row. The DB row IS the
+/// recovery payload (serialized to/from `payload_json`), so there are no per-kind
+/// payload structs. `soft_delete` writes the recovery row before any destructive
+/// step (P1.3).
+macro_rules! impl_entity_soft_delete {
+    (
+        kind: $kind:expr,
+        dir: $dir:literal,
+        repo: $repo:ident,
+        row: $Row:ty,
+        soft_delete_fn: $sd:ident,
+        restore_fn: $rs:ident $(,)?
+    ) => {
+        async fn $sd(
+            target: &str,
+            state: &AppState,
+            vault: &Vault,
+            now: &str,
+        ) -> Result<Option<SoftDeleteEntityResult>, String> {
+            let database = state.database();
+            let Some(row) = state
+                .$repo()
+                .find_by_name_or_slug(database.as_ref(), target)
+                .await?
+            else {
+                return Ok(None);
+            };
+            let payload_json = serde_json::to_string(&row).map_err(|err| err.to_string())?;
+            let trash_vault_path = record_soft_delete(
+                state,
+                vault,
+                $kind,
+                $dir,
+                &row.id,
+                &row.slug,
+                &row.name,
+                &row.vault_path,
+                payload_json,
+                now,
+            )
+            .await?;
+            // Destructive steps run only after the recovery row is committed (P1.3).
+            state
+                .$repo()
+                .delete_by_id(database.as_ref(), &row.id)
+                .await?;
+            state
+                .document_repo()
+                .delete_by_vault_path(database.as_ref(), &row.vault_path)
+                .await?;
+            Ok(Some(SoftDeleteEntityResult {
+                entity_type: $kind,
+                id: row.id,
+                name: row.name,
+                slug: row.slug,
+                trash_vault_path,
+            }))
+        }
+
+        async fn $rs(
+            soft_delete: &db::SoftDeleteRow,
+            state: &AppState,
+            vault: &Vault,
+            now: &str,
+        ) -> Result<UndoSoftDeleteResult, String> {
+            let database = state.database();
+            let mut row: $Row =
+                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+            let (restored_slug, restored_vault_path) =
+                restore_collision(vault, $dir, &row.slug, &row.name, &row.vault_path)?;
+            move_vault_file(
+                vault,
+                &normalize_relative_path_for_storage(&soft_delete.trash_vault_path),
+                &restored_vault_path,
+            )?;
+            row.slug = restored_slug.clone();
+            row.vault_path = restored_vault_path.clone();
+            row.updated_at = now.to_string();
+            state.$repo().upsert(database.as_ref(), &row).await?;
+            commit_restore(
+                state,
+                $kind,
+                &row.slug,
+                &row.name,
+                &row.vault_path,
+                &row.created_at,
+                &row.updated_at,
+                soft_delete.id,
+                now,
+            )
+            .await?;
+            Ok(UndoSoftDeleteResult {
+                entity_type: $kind,
+                id: row.id,
+                name: row.name,
+                slug: restored_slug,
+                vault_path: restored_vault_path,
+            })
+        }
+    };
+}
+
 pub struct EntityAdminService;
 
 impl EntityAdminService {
@@ -247,448 +351,25 @@ impl EntityAdminService {
         let vault = Vault::new(vault_path);
         state.vault_repo().ensure_structure(&vault)?;
 
-        let database = state.database();
-        let npc_repo = state.npc_repo();
-        let location_repo = state.location_repo();
-        let faction_repo = state.faction_repo();
-        let item_repo = state.item_repo();
-        let event_repo = state.event_repo();
-        let god_repo = state.god_repo();
-        let dungeon_repo = state.dungeon_repo();
-        let document_repo = state.document_repo();
-        let soft_delete_repo = state.soft_delete_repo();
         let now = now_timestamp();
 
-        if let Some(npc) = npc_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&npc.vault_path);
-            let trash_path = unique_trash_path(&vault, "npcs", &npc.slug, &now)?;
-
-            let payload = NpcDeletePayload {
-                id: npc.id.clone(),
-                slug: npc.slug.clone(),
-                name: npc.name.clone(),
-                race: npc.race,
-                occupation: npc.occupation,
-                sex: npc.sex,
-                age: npc.age,
-                height: npc.height,
-                weight_lbs: npc.weight_lbs,
-                background: npc.background,
-                want_need: npc.want_need,
-                secret_obstacle: npc.secret_obstacle,
-                carrying: npc.carrying,
-                location: npc.location,
-                vault_path: normalized_vault_path.clone(),
-                created_at: npc.created_at,
-                updated_at: npc.updated_at,
+        // Walk kinds in registry order, soft-deleting the first name/slug match
+        // (first-match wins, as before \u2014 a bare name colliding across kinds resolves
+        // to the earliest kind). The per-kind snapshot/trash/delete is generated by
+        // `impl_entity_soft_delete!`.
+        for kind in ALL_ENTITY_KINDS {
+            let found = match kind {
+                EntityKind::Npc => soft_delete_npc(target, state, &vault, &now).await?,
+                EntityKind::Location => soft_delete_location(target, state, &vault, &now).await?,
+                EntityKind::Faction => soft_delete_faction(target, state, &vault, &now).await?,
+                EntityKind::Item => soft_delete_item(target, state, &vault, &now).await?,
+                EntityKind::Event => soft_delete_event(target, state, &vault, &now).await?,
+                EntityKind::God => soft_delete_god(target, state, &vault, &now).await?,
+                EntityKind::Dungeon => soft_delete_dungeon(target, state, &vault, &now).await?,
             };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "npc".to_string(),
-                entity_id: npc.id.clone(),
-                name: npc.name.clone(),
-                slug: npc.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            npc_repo.delete_by_id(database.as_ref(), &npc.id).await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &npc.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::Npc,
-                id: npc.id,
-                name: npc.name,
-                slug: npc.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(location) = location_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&location.vault_path);
-            let trash_path = unique_trash_path(&vault, "locations", &location.slug, &now)?;
-
-            let payload = LocationDeletePayload {
-                id: location.id.clone(),
-                slug: location.slug.clone(),
-                name: location.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                kind_type: location.kind_type,
-                kind_custom: location.kind_custom,
-                visual_description: location.visual_description,
-                history_background: location.history_background,
-                exports: location.exports,
-                tone: location.tone,
-                authority: location.authority,
-                danger_level: location.danger_level,
-                current_tension: location.current_tension,
-                created_at: location.created_at,
-                updated_at: location.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "location".to_string(),
-                entity_id: location.id.clone(),
-                name: location.name.clone(),
-                slug: location.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            location_repo
-                .delete_by_id(database.as_ref(), &location.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &location.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::Location,
-                id: location.id,
-                name: location.name,
-                slug: location.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(faction) = faction_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&faction.vault_path);
-            let trash_path = unique_trash_path(&vault, "factions", &faction.slug, &now)?;
-
-            let payload = FactionDeletePayload {
-                id: faction.id.clone(),
-                slug: faction.slug.clone(),
-                name: faction.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                kind_type: faction.kind_type,
-                kind_custom: faction.kind_custom,
-                public_description: faction.public_description,
-                true_agenda: faction.true_agenda,
-                methods: faction.methods,
-                leadership: faction.leadership,
-                headquarters: faction.headquarters,
-                sphere_of_influence: faction.sphere_of_influence,
-                resources_assets: faction.resources_assets,
-                allies: faction.allies,
-                rivals_enemies: faction.rivals_enemies,
-                reputation: faction.reputation,
-                current_tension: faction.current_tension,
-                goals_short_term: faction.goals_short_term,
-                goals_long_term: faction.goals_long_term,
-                symbol_description: faction.symbol_description,
-                created_at: faction.created_at,
-                updated_at: faction.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "faction".to_string(),
-                entity_id: faction.id.clone(),
-                name: faction.name.clone(),
-                slug: faction.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            faction_repo
-                .delete_by_id(database.as_ref(), &faction.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &faction.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::Faction,
-                id: faction.id,
-                name: faction.name,
-                slug: faction.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(item) = item_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&item.vault_path);
-            let trash_path = unique_trash_path(&vault, "items", &item.slug, &now)?;
-
-            let payload = ItemDeletePayload {
-                id: item.id.clone(),
-                slug: item.slug.clone(),
-                name: item.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                category: item.category,
-                rarity: item.rarity,
-                attunement: item.attunement,
-                materials: item.materials,
-                appearance: item.appearance,
-                abilities: item.abilities,
-                drawbacks: item.drawbacks,
-                history: item.history,
-                value: item.value,
-                location: item.location,
-                created_at: item.created_at,
-                updated_at: item.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "item".to_string(),
-                entity_id: item.id.clone(),
-                name: item.name.clone(),
-                slug: item.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            item_repo.delete_by_id(database.as_ref(), &item.id).await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &item.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::Item,
-                id: item.id,
-                name: item.name,
-                slug: item.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(event) = event_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&event.vault_path);
-            let trash_path = unique_trash_path(&vault, "events", &event.slug, &now)?;
-
-            let payload = EventDeletePayload {
-                id: event.id.clone(),
-                slug: event.slug.clone(),
-                name: event.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                body: event.body,
-                created_at: event.created_at,
-                updated_at: event.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "event".to_string(),
-                entity_id: event.id.clone(),
-                name: event.name.clone(),
-                slug: event.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            event_repo
-                .delete_by_id(database.as_ref(), &event.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &event.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::Event,
-                id: event.id,
-                name: event.name,
-                slug: event.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(god) = god_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&god.vault_path);
-            let trash_path = unique_trash_path(&vault, "gods", &god.slug, &now)?;
-
-            let payload = GodDeletePayload {
-                id: god.id.clone(),
-                slug: god.slug.clone(),
-                name: god.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                epithet: god.epithet,
-                rank: god.rank,
-                rank_custom: god.rank_custom,
-                alignment: god.alignment,
-                domains: god.domains,
-                symbol: god.symbol,
-                appearance: god.appearance,
-                dogma: god.dogma,
-                realm: god.realm,
-                worshippers: god.worshippers,
-                clergy: god.clergy,
-                allies: god.allies,
-                rivals: god.rivals,
-                created_at: god.created_at,
-                updated_at: god.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "god".to_string(),
-                entity_id: god.id.clone(),
-                name: god.name.clone(),
-                slug: god.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            god_repo.delete_by_id(database.as_ref(), &god.id).await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &god.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::God,
-                id: god.id,
-                name: god.name,
-                slug: god.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(dungeon) = dungeon_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&dungeon.vault_path);
-            let trash_path = unique_trash_path(&vault, "dungeons", &dungeon.slug, &now)?;
-
-            let payload = DungeonDeletePayload {
-                id: dungeon.id.clone(),
-                slug: dungeon.slug.clone(),
-                name: dungeon.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                location: dungeon.location,
-                story: dungeon.story,
-                premise: dungeon.premise,
-                topology: dungeon.topology,
-                tone: dungeon.tone,
-                twist: dungeon.twist,
-                beats_json: dungeon.beats_json,
-                created_at: dungeon.created_at,
-                updated_at: dungeon.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "dungeon".to_string(),
-                entity_id: dungeon.id.clone(),
-                name: dungeon.name.clone(),
-                slug: dungeon.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            // The recovery row is committed before any destructive step, so a
-            // failure below leaves a restorable entity, not an unrecoverable one.
-            move_vault_file(&vault, &soft_delete_row.original_vault_path, &trash_path)?;
-            dungeon_repo
-                .delete_by_id(database.as_ref(), &dungeon.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &dungeon.vault_path)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityKind::Dungeon,
-                id: dungeon.id,
-                name: dungeon.name,
-                slug: dungeon.slug,
-                trash_vault_path: trash_path,
-            });
+            if let Some(result) = found {
+                return Ok(result);
+            }
         }
 
         Err(format!(
@@ -712,14 +393,6 @@ impl EntityAdminService {
         state.vault_repo().ensure_structure(&vault)?;
 
         let database = state.database();
-        let npc_repo = state.npc_repo();
-        let location_repo = state.location_repo();
-        let faction_repo = state.faction_repo();
-        let item_repo = state.item_repo();
-        let event_repo = state.event_repo();
-        let god_repo = state.god_repo();
-        let dungeon_repo = state.dungeon_repo();
-        let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
         let Some(soft_delete) = soft_delete_repo.latest_pending(database.as_ref()).await? else {
@@ -731,458 +404,16 @@ impl EntityAdminService {
         }
 
         let now = now_timestamp();
-
-        if soft_delete.entity_type == "npc" {
-            let payload: NpcDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug;
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "npcs", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "npcs", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let npc_row = db::NpcRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                race: payload.race,
-                occupation: payload.occupation,
-                sex: payload.sex,
-                age: payload.age,
-                height: payload.height,
-                weight_lbs: payload.weight_lbs,
-                background: payload.background,
-                want_need: payload.want_need,
-                secret_obstacle: payload.secret_obstacle,
-                carrying: payload.carrying,
-                location: payload.location,
-                vault_path: restored_vault_path.clone(),
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            npc_repo.upsert(database.as_ref(), &npc_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "npc",
-                    &npc_row.slug,
-                    Some(&npc_row.name),
-                    &npc_row.vault_path,
-                    &npc_row.created_at,
-                    &npc_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::Npc,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
+        match soft_delete.entity_type.as_str() {
+            "npc" => restore_npc(&soft_delete, state, &vault, &now).await,
+            "location" => restore_location(&soft_delete, state, &vault, &now).await,
+            "faction" => restore_faction(&soft_delete, state, &vault, &now).await,
+            "item" => restore_item(&soft_delete, state, &vault, &now).await,
+            "event" => restore_event(&soft_delete, state, &vault, &now).await,
+            "god" => restore_god(&soft_delete, state, &vault, &now).await,
+            "dungeon" => restore_dungeon(&soft_delete, state, &vault, &now).await,
+            other => Err(format!("unsupported soft delete entity type: {other}")),
         }
-
-        if soft_delete.entity_type == "location" {
-            let payload: LocationDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug;
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "locations", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "locations", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let location_row = db::LocationRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                kind_type: payload.kind_type,
-                kind_custom: payload.kind_custom,
-                visual_description: payload.visual_description,
-                history_background: payload.history_background,
-                exports: payload.exports,
-                tone: payload.tone,
-                authority: payload.authority,
-                danger_level: payload.danger_level,
-                current_tension: payload.current_tension,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            location_repo
-                .upsert(database.as_ref(), &location_row)
-                .await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "location",
-                    &location_row.slug,
-                    Some(&location_row.name),
-                    &location_row.vault_path,
-                    &location_row.created_at,
-                    &location_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::Location,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "faction" {
-            let payload: FactionDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug;
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "factions", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "factions", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let faction_row = db::FactionRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                kind_type: payload.kind_type,
-                kind_custom: payload.kind_custom,
-                public_description: payload.public_description,
-                true_agenda: payload.true_agenda,
-                methods: payload.methods,
-                leadership: payload.leadership,
-                headquarters: payload.headquarters,
-                sphere_of_influence: payload.sphere_of_influence,
-                resources_assets: payload.resources_assets,
-                allies: payload.allies,
-                rivals_enemies: payload.rivals_enemies,
-                reputation: payload.reputation,
-                current_tension: payload.current_tension,
-                goals_short_term: payload.goals_short_term,
-                goals_long_term: payload.goals_long_term,
-                symbol_description: payload.symbol_description,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            faction_repo.upsert(database.as_ref(), &faction_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "faction",
-                    &faction_row.slug,
-                    Some(&faction_row.name),
-                    &faction_row.vault_path,
-                    &faction_row.created_at,
-                    &faction_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::Faction,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "item" {
-            let payload: ItemDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "items", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "items", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let item_row = db::ItemRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                category: payload.category,
-                rarity: payload.rarity,
-                attunement: payload.attunement,
-                materials: payload.materials,
-                appearance: payload.appearance,
-                abilities: payload.abilities,
-                drawbacks: payload.drawbacks,
-                history: payload.history,
-                value: payload.value,
-                location: payload.location,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            item_repo.upsert(database.as_ref(), &item_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "item",
-                    &item_row.slug,
-                    Some(&item_row.name),
-                    &item_row.vault_path,
-                    &item_row.created_at,
-                    &item_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::Item,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "event" {
-            let payload: EventDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "events", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "events", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let event_row = db::EventRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                body: payload.body,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            event_repo.upsert(database.as_ref(), &event_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "event",
-                    &event_row.slug,
-                    Some(&event_row.name),
-                    &event_row.vault_path,
-                    &event_row.created_at,
-                    &event_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::Event,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "god" {
-            let payload: GodDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "gods", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "gods", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let god_row = db::GodRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                epithet: payload.epithet,
-                rank: payload.rank,
-                rank_custom: payload.rank_custom,
-                alignment: payload.alignment,
-                domains: payload.domains,
-                symbol: payload.symbol,
-                appearance: payload.appearance,
-                dogma: payload.dogma,
-                realm: payload.realm,
-                worshippers: payload.worshippers,
-                clergy: payload.clergy,
-                allies: payload.allies,
-                rivals: payload.rivals,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            god_repo.upsert(database.as_ref(), &god_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "god",
-                    &god_row.slug,
-                    Some(&god_row.name),
-                    &god_row.vault_path,
-                    &god_row.created_at,
-                    &god_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::God,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "dungeon" {
-            let payload: DungeonDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path =
-                normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "dungeons", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "dungeons", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let dungeon_row = db::DungeonRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                location: payload.location,
-                story: payload.story,
-                premise: payload.premise,
-                topology: payload.topology,
-                tone: payload.tone,
-                twist: payload.twist,
-                beats_json: payload.beats_json,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            dungeon_repo.upsert(database.as_ref(), &dungeon_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "dungeon",
-                    &dungeon_row.slug,
-                    Some(&dungeon_row.name),
-                    &dungeon_row.vault_path,
-                    &dungeon_row.created_at,
-                    &dungeon_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityKind::Dungeon,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        Err(format!(
-            "unsupported soft delete entity type: {}",
-            soft_delete.entity_type
-        ))
     }
 
     /// Retires a just-published entity from the app: records a reversible `publish`
@@ -1582,6 +813,161 @@ impl EntityAdminService {
     }
 }
 
+impl_entity_soft_delete! {
+    kind: EntityKind::Npc,
+    dir: "npcs",
+    repo: npc_repo,
+    row: db::NpcRow,
+    soft_delete_fn: soft_delete_npc,
+    restore_fn: restore_npc,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Location,
+    dir: "locations",
+    repo: location_repo,
+    row: db::LocationRow,
+    soft_delete_fn: soft_delete_location,
+    restore_fn: restore_location,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Faction,
+    dir: "factions",
+    repo: faction_repo,
+    row: db::FactionRow,
+    soft_delete_fn: soft_delete_faction,
+    restore_fn: restore_faction,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Item,
+    dir: "items",
+    repo: item_repo,
+    row: db::ItemRow,
+    soft_delete_fn: soft_delete_item,
+    restore_fn: restore_item,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Event,
+    dir: "events",
+    repo: event_repo,
+    row: db::EventRow,
+    soft_delete_fn: soft_delete_event,
+    restore_fn: restore_event,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::God,
+    dir: "gods",
+    repo: god_repo,
+    row: db::GodRow,
+    soft_delete_fn: soft_delete_god,
+    restore_fn: restore_god,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Dungeon,
+    dir: "dungeons",
+    repo: dungeon_repo,
+    row: db::DungeonRow,
+    soft_delete_fn: soft_delete_dungeon,
+    restore_fn: restore_dungeon,
+}
+
+/// Snapshot a row's recovery record (serialized payload + trash path) and move its
+/// vault file to trash. The recovery row is committed BEFORE the file move, and
+/// the caller deletes the DB row only after this returns (P1.3 safe order).
+#[allow(clippy::too_many_arguments)]
+async fn record_soft_delete(
+    state: &AppState,
+    vault: &Vault,
+    kind: EntityKind,
+    dir: &str,
+    id: &str,
+    slug: &str,
+    name: &str,
+    raw_vault_path: &str,
+    payload_json: String,
+    now: &str,
+) -> Result<String, String> {
+    let database = state.database();
+    let normalized_vault_path = normalize_relative_path_for_storage(raw_vault_path);
+    let trash_vault_path = unique_trash_path(vault, dir, slug, now)?;
+    let soft_delete_row = db::SoftDeleteRow {
+        id: 0,
+        entity_type: kind.as_str().to_string(),
+        entity_id: id.to_string(),
+        name: name.to_string(),
+        slug: slug.to_string(),
+        original_vault_path: normalized_vault_path,
+        trash_vault_path: trash_vault_path.clone(),
+        payload_json,
+        created_at: now.to_string(),
+        undone_at: None,
+        operation: "delete".to_string(),
+    };
+    state
+        .soft_delete_repo()
+        .insert(database.as_ref(), &soft_delete_row)
+        .await?;
+    move_vault_file(
+        vault,
+        &soft_delete_row.original_vault_path,
+        &trash_vault_path,
+    )?;
+    Ok(trash_vault_path)
+}
+
+/// Resolve the slug + vault path to restore to: keep the originals unless that
+/// path is already occupied, in which case mint fresh unique ones.
+fn restore_collision(
+    vault: &Vault,
+    dir: &str,
+    slug: &str,
+    name: &str,
+    vault_path: &str,
+) -> Result<(String, String), String> {
+    let mut restored_slug = slug.to_string();
+    let mut restored_vault_path = normalize_relative_path_for_storage(vault_path);
+    let preferred_full = vault
+        .resolve_relative(&PathBuf::from(&restored_vault_path))
+        .map_err(|err| err.to_string())?;
+    if preferred_full.exists() {
+        restored_slug = unique_slug_for_dir(vault.root(), dir, &restored_slug);
+        restored_vault_path = unique_markdown_path_for_name(vault, dir, name, None)?;
+    }
+    Ok((restored_slug, restored_vault_path))
+}
+
+/// Re-index a restored entity and mark its recovery row undone.
+#[allow(clippy::too_many_arguments)]
+async fn commit_restore(
+    state: &AppState,
+    kind: EntityKind,
+    slug: &str,
+    name: &str,
+    vault_path: &str,
+    created_at: &str,
+    updated_at: &str,
+    soft_delete_id: i64,
+    now: &str,
+) -> Result<(), String> {
+    let database = state.database();
+    state
+        .document_repo()
+        .upsert_index(
+            database.as_ref(),
+            kind.as_str(),
+            slug,
+            Some(name),
+            vault_path,
+            created_at,
+            updated_at,
+        )
+        .await?;
+    state
+        .soft_delete_repo()
+        .mark_undone(database.as_ref(), soft_delete_id, now)
+        .await?;
+    Ok(())
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct SoftDeleteEntityInput {
     pub target: String,
@@ -1627,143 +1013,4 @@ struct PublishPayload {
     slug: String,
     name: String,
     vault_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct NpcDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    race: String,
-    occupation: String,
-    sex: String,
-    age: String,
-    height: String,
-    weight_lbs: String,
-    background: String,
-    want_need: String,
-    secret_obstacle: String,
-    carrying: String,
-    location: String,
-    vault_path: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LocationDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    kind_type: String,
-    kind_custom: Option<String>,
-    visual_description: String,
-    history_background: String,
-    exports: String,
-    tone: String,
-    authority: String,
-    danger_level: String,
-    current_tension: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FactionDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    kind_type: String,
-    kind_custom: Option<String>,
-    public_description: String,
-    true_agenda: String,
-    methods: String,
-    leadership: String,
-    headquarters: String,
-    sphere_of_influence: String,
-    resources_assets: String,
-    allies: String,
-    rivals_enemies: String,
-    reputation: String,
-    current_tension: String,
-    goals_short_term: String,
-    goals_long_term: String,
-    symbol_description: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ItemDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    category: String,
-    rarity: String,
-    attunement: String,
-    materials: String,
-    appearance: String,
-    abilities: String,
-    drawbacks: String,
-    history: String,
-    value: String,
-    location: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EventDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    body: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GodDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    epithet: String,
-    rank: String,
-    rank_custom: Option<String>,
-    alignment: String,
-    domains: String,
-    symbol: String,
-    appearance: String,
-    dogma: String,
-    realm: String,
-    worshippers: String,
-    clergy: String,
-    allies: String,
-    rivals: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DungeonDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    #[serde(default)]
-    location: String,
-    #[serde(default)]
-    story: String,
-    premise: String,
-    topology: String,
-    tone: String,
-    twist: String,
-    beats_json: String,
-    created_at: String,
-    updated_at: String,
 }

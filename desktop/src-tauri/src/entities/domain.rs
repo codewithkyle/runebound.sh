@@ -9,18 +9,11 @@ use super::schema::EntitySchema;
 pub type EntityDomainResult = Result<Option<CommandResponse>, String>;
 
 /// A saved entity resolved from the store/db, in the typed draft form the editor
-/// and the entity cards already consume, plus the DB-only metadata the draft
-/// session itself doesn't carry (`vault_path`, `created_at`). The kind-specific
-/// fields live in `draft`; common fields are read through the accessors.
+/// and the entity cards already consume. The kind-specific fields live in
+/// `draft`; common fields are read through the accessors. (Soft-delete snapshots
+/// the full DB row directly, so no extra metadata is carried here.)
 #[derive(Debug, Clone)]
 pub struct EntityDetail {
-    // `vault_path` + `created_at` are the resolved entity's DB-only metadata. The
-    // card/load consumers read only the typed `draft`; these become live when the
-    // registry-driven `soft_delete`/`restore` land in P5.2d (Commit 9).
-    #[allow(dead_code)]
-    pub vault_path: String,
-    #[allow(dead_code)]
-    pub created_at: Option<String>,
     pub draft: DraftEnvelope,
 }
 
