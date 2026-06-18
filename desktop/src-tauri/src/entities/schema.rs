@@ -35,6 +35,11 @@ pub struct EntityFieldSpec {
     pub value_kind: ValueKind,
     pub settable: bool,
     pub rerollable: bool,
+    /// Imperative instruction handed to the LLM when this field is rerolled
+    /// (`<entity> reroll <field>`). Single-sources what `EntityRerollService` used
+    /// to inline as a per-kind `field_instructions` match (P5.2c). Empty for
+    /// non-rerollable fields (they are never sent to the model).
+    pub reroll_instruction: &'static str,
 }
 
 impl EntityFieldSpec {
@@ -58,6 +63,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a single fitting fantasy NPC name.",
     },
     EntityFieldSpec {
         canonical: "race",
@@ -67,6 +73,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a fitting fantasy race for this NPC.",
     },
     EntityFieldSpec {
         canonical: "occupation",
@@ -76,6 +83,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one concise occupation for this NPC.",
     },
     EntityFieldSpec {
         canonical: "sex",
@@ -85,6 +93,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate sex as exactly male or female.",
     },
     EntityFieldSpec {
         canonical: "age",
@@ -94,6 +103,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::IntegerLikeText,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise age value (typically in years).",
     },
     EntityFieldSpec {
         canonical: "height",
@@ -103,6 +113,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a height in imperial format like 5'11\".",
     },
     EntityFieldSpec {
         canonical: "weight_lbs",
@@ -112,6 +123,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::IntegerLikeText,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a weight in lbs as text, for example 185.",
     },
     EntityFieldSpec {
         canonical: "background",
@@ -121,6 +133,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a coherent background in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "want_need",
@@ -130,6 +143,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one concise Want.",
     },
     EntityFieldSpec {
         canonical: "secret_obstacle",
@@ -139,6 +153,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one concise Secret.",
     },
     EntityFieldSpec {
         canonical: "carrying",
@@ -148,6 +163,7 @@ const NPC_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a carrying list as practical comma-like item strings.",
     },
 ];
 
@@ -160,6 +176,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise, fitting fantasy location name.",
     },
     EntityFieldSpec {
         canonical: "kind_type",
@@ -169,6 +186,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other.",
     },
     EntityFieldSpec {
         canonical: "kind_custom",
@@ -178,6 +196,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise custom kind label for this location.",
     },
     EntityFieldSpec {
         canonical: "visual_description",
@@ -187,6 +206,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a visual description in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "history_background",
@@ -196,6 +216,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a history/background in 2-5 sentences.",
     },
     EntityFieldSpec {
         canonical: "exports",
@@ -205,6 +226,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-3 exports as concise industry or specialty item strings.",
     },
     EntityFieldSpec {
         canonical: "tone",
@@ -214,6 +236,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a mood tone in 2-5 words.",
     },
     EntityFieldSpec {
         canonical: "authority",
@@ -223,6 +246,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate who controls or governs this location.",
     },
     EntityFieldSpec {
         canonical: "danger_level",
@@ -232,6 +256,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate danger_level as one of: Unknown, safe, guarded, risky, deadly.",
     },
     EntityFieldSpec {
         canonical: "current_tension",
@@ -241,6 +266,7 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate current_tension in 1-2 sentences.",
     },
 ];
 
@@ -253,6 +279,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise fantasy faction name.",
     },
     EntityFieldSpec {
         canonical: "kind_type",
@@ -262,6 +289,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one kind_type enum value from: guild, cult, military_order, noble_house, criminal_syndicate, mercantile_league, religious_order, arcane_circle, revolutionary_cell, other.",
     },
     EntityFieldSpec {
         canonical: "kind_custom",
@@ -271,6 +299,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise custom faction kind label.",
     },
     EntityFieldSpec {
         canonical: "public_description",
@@ -280,6 +309,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a public-facing description in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "true_agenda",
@@ -289,6 +319,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate the hidden agenda in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "methods",
@@ -298,6 +329,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate methods in 1-3 concise sentences.",
     },
     EntityFieldSpec {
         canonical: "leadership",
@@ -307,6 +339,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate concise leadership details.",
     },
     EntityFieldSpec {
         canonical: "headquarters",
@@ -316,6 +349,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate concise headquarters details.",
     },
     EntityFieldSpec {
         canonical: "sphere_of_influence",
@@ -325,6 +359,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate concise sphere of influence details.",
     },
     EntityFieldSpec {
         canonical: "resources_assets",
@@ -334,6 +369,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate concise resources/assets details.",
     },
     EntityFieldSpec {
         canonical: "allies",
@@ -343,6 +379,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 ally strings.",
     },
     EntityFieldSpec {
         canonical: "rivals_enemies",
@@ -352,6 +389,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 rival or enemy strings.",
     },
     EntityFieldSpec {
         canonical: "reputation",
@@ -361,6 +399,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate concise public reputation.",
     },
     EntityFieldSpec {
         canonical: "current_tension",
@@ -370,6 +409,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate current tension in 1-2 sentences.",
     },
     EntityFieldSpec {
         canonical: "goals_short_term",
@@ -379,6 +419,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 short-term goals.",
     },
     EntityFieldSpec {
         canonical: "goals_long_term",
@@ -388,6 +429,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 long-term goals.",
     },
     EntityFieldSpec {
         canonical: "symbol_description",
@@ -397,6 +439,7 @@ const FACTION_FIELDS: [EntityFieldSpec; 17] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate exactly 1 sentence describing symbol/sigil/colors/banner/iconography.",
     },
 ];
 
@@ -409,6 +452,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise, evocative item name.",
     },
     EntityFieldSpec {
         canonical: "category",
@@ -418,6 +462,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one category from: weapon, armor, consumable, wondrous, arcane_focus, tool, trinket, other.",
     },
     EntityFieldSpec {
         canonical: "rarity",
@@ -427,6 +472,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate rarity as one of: unknown, common, uncommon, rare, very_rare, legendary, artifact.",
     },
     EntityFieldSpec {
         canonical: "attunement",
@@ -436,6 +482,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Describe attunement requirements in a short phrase (or 'None').",
     },
     EntityFieldSpec {
         canonical: "materials",
@@ -445,6 +492,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "List 1-4 notable materials as concise strings.",
     },
     EntityFieldSpec {
         canonical: "appearance",
@@ -454,6 +502,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Describe appearance in 1-2 sentences.",
     },
     EntityFieldSpec {
         canonical: "abilities",
@@ -463,6 +512,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Describe abilities/powers in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "drawbacks",
@@ -472,6 +522,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Describe drawbacks/costs in up to 2 sentences (or 'None').",
     },
     EntityFieldSpec {
         canonical: "history",
@@ -481,6 +532,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Describe history/origin in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "value",
@@ -490,6 +542,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Provide estimated value in format like '1000gp' or '250sp' or '50cp' (amount + currency suffix).",
     },
     EntityFieldSpec {
         canonical: "location",
@@ -499,6 +552,7 @@ const ITEM_FIELDS: [EntityFieldSpec; 11] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Provide current location or hiding place.",
     },
 ];
 
@@ -511,6 +565,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise fantasy deity name.",
     },
     EntityFieldSpec {
         canonical: "epithet",
@@ -520,7 +575,11 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a short by-name or honorific (e.g. The Stormcaller).",
     },
+    // rank/alignment inline their enum values (kept in sync with GOD_RANKS /
+    // GOD_ALIGNMENTS in runebound_models::utils), matching how location/faction
+    // kind_type spell out their enums here.
     EntityFieldSpec {
         canonical: "rank",
         display_name: "rank",
@@ -529,6 +588,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one rank enum value from: greater, intermediate, lesser, demigod, dead, other.",
     },
     EntityFieldSpec {
         canonical: "rank_custom",
@@ -538,6 +598,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise custom divine rank label.",
     },
     EntityFieldSpec {
         canonical: "alignment",
@@ -547,6 +608,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate one alignment enum value from: LG, NG, CG, LN, TN, CN, LE, NE, CE.",
     },
     EntityFieldSpec {
         canonical: "domains",
@@ -556,6 +618,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 divine domain strings (e.g. war, death, harvest).",
     },
     EntityFieldSpec {
         canonical: "symbol",
@@ -565,6 +628,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate exactly 1 sentence describing the holy symbol/sigil/iconography.",
     },
     EntityFieldSpec {
         canonical: "appearance",
@@ -574,6 +638,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-3 sentences describing how the deity manifests.",
     },
     EntityFieldSpec {
         canonical: "dogma",
@@ -583,6 +648,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate core teachings/commandments in 1-3 sentences.",
     },
     EntityFieldSpec {
         canonical: "realm",
@@ -592,6 +658,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise home plane or divine realm.",
     },
     EntityFieldSpec {
         canonical: "worshippers",
@@ -601,6 +668,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise description of who venerates the deity.",
     },
     EntityFieldSpec {
         canonical: "clergy",
@@ -610,6 +678,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise description of how the priesthood is organized.",
     },
     EntityFieldSpec {
         canonical: "allies",
@@ -619,6 +688,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 allied deity or power strings.",
     },
     EntityFieldSpec {
         canonical: "rivals",
@@ -628,6 +698,7 @@ const GOD_FIELDS: [EntityFieldSpec; 14] = [
         value_kind: ValueKind::List,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate 1-5 rival or enemy strings.",
     },
 ];
 
@@ -644,6 +715,7 @@ const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a concise, evocative name for the dungeon.",
     },
     EntityFieldSpec {
         canonical: "location",
@@ -653,6 +725,7 @@ const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate the single bounded place all five beats sit inside — one short phrase naming one explorable location the party moves deeper into (e.g. 'a drowned bell-foundry'), never a region or a journey.",
     },
     EntityFieldSpec {
         canonical: "premise",
@@ -662,6 +735,7 @@ const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
         value_kind: ValueKind::Text,
         settable: true,
         rerollable: true,
+        reroll_instruction: "Generate a single-line spine summarizing the whole dungeon (one sentence; specific but unresolved).",
     },
     EntityFieldSpec {
         canonical: "topology",
@@ -671,6 +745,7 @@ const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: false,
+        reroll_instruction: "",
     },
     EntityFieldSpec {
         canonical: "tone",
@@ -680,6 +755,7 @@ const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: false,
+        reroll_instruction: "",
     },
     EntityFieldSpec {
         canonical: "twist",
@@ -689,6 +765,7 @@ const DUNGEON_FIELDS: [EntityFieldSpec; 6] = [
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: false,
+        reroll_instruction: "",
     },
 ];
 
