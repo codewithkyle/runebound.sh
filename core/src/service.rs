@@ -46,7 +46,7 @@ impl CommandService {
         // owns the session for the duration of the call (moved in, restored
         // after); on the CLI the folder picker degrades via the default
         // `perform_native`.
-        let active = self.wizard_session.active_id.is_some();
+        let active = self.wizard_session.active_id().is_some();
         let entry = onboarding_entry_wizard_id(trimmed);
         if active || entry.is_some() {
             if !trimmed.is_empty() {
@@ -108,7 +108,7 @@ mod tests {
             response.wizard.as_ref().map(|w| w.id.as_str()),
             Some("setup")
         );
-        assert_eq!(service.wizard_session.active_id, Some("setup"));
+        assert_eq!(service.wizard_session.active_id(), Some("setup"));
     }
 
     #[tokio::test]
@@ -127,7 +127,7 @@ mod tests {
         service.execute_line("start setup").await;
         let response = service.execute_line("cancel").await;
         assert!(response.output.to_lowercase().contains("cancel"));
-        assert_eq!(service.wizard_session.active_id, None);
+        assert_eq!(service.wizard_session.active_id(), None);
     }
 
     #[tokio::test]
@@ -136,6 +136,6 @@ mod tests {
         service.execute_line("start setup").await;
         let response = service.execute_line("99").await;
         assert!(response.output.contains("invalid choice"));
-        assert_eq!(service.wizard_session.active_id, Some("setup"));
+        assert_eq!(service.wizard_session.active_id(), Some("setup"));
     }
 }

@@ -534,7 +534,7 @@ impl AppState {
         if let Some(kind) = active_kind {
             return InputContext::EntityEditor(kind.as_str().to_string());
         }
-        if let Some(id) = self.wizard_session.lock().await.active_id {
+        if let Some(id) = self.wizard_session.lock().await.active_id() {
             return InputContext::Wizard(id.to_string());
         }
         InputContext::Default

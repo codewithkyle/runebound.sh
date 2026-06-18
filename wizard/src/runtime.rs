@@ -18,7 +18,7 @@ use runebound_models::{CommandResponse, OutputSegment, OutputSegmentKind, Wizard
 use crate::CommandResult;
 use crate::prompt::doc_to_plain_text;
 use crate::registry::WizardRegistry;
-use crate::session::{WizardData, WizardSession};
+use crate::session::{ActiveWizard, WizardData, WizardSession};
 use crate::wizard::{
     NativeAction, NativeOutcome, Wizard, WizardChoice, WizardStep, WizardTransition,
 };
@@ -49,22 +49,24 @@ pub async fn start_wizard<H: WizardHost>(id: &'static str, host: &H) -> CommandR
     let Some(wizard) = host.wizard_registry().get(id) else {
         return Err(format!("unknown wizard: {id}"));
     };
-    // Seed before claiming the session so a failed seed (e.g. a probe error)
-    // leaves any prior session untouched and surfaces the error.
+    // Seed + resolve the first step *before* claiming the session, so a failure (a
+    // probe error in `seed`, or a wizard with no steps) leaves any prior session
+    // untouched. Rendering the prompt before the move also avoids re-borrowing the
+    // session for the seeded data.
     let data = wizard.seed(host).await?;
-    let mut session = host.wizard_session().lock().await;
-    *session = WizardSession {
-        active_id: Some(id),
-        cursor: 0,
-        history: Vec::new(),
-        data: Some(data),
-    };
     let Some(step) = wizard.steps().first().cloned() else {
-        *session = WizardSession::default();
         return Err(format!("wizard {id} has no steps"));
     };
-    let data = session.data.as_ref().expect("seeded wizard data");
-    Ok(Some(render_step(wizard.as_ref(), step.as_ref(), data)))
+    let response = render_step(wizard.as_ref(), step.as_ref(), &data);
+
+    let mut session = host.wizard_session().lock().await;
+    *session = WizardSession::Active(ActiveWizard {
+        id,
+        cursor: 0,
+        history: Vec::new(),
+        data,
+    });
+    Ok(Some(response))
 }
 
 /// The always-available wizard verbs, appended to every step's suggestions and
@@ -95,21 +97,18 @@ fn dedupe_choices(choices: Vec<WizardChoice>) -> Vec<WizardChoice> {
 /// The suggestion service calls this and maps the result to `CommandSuggestion`.
 pub async fn active_step_suggestions<H: WizardHost>(host: &H, input: &str) -> Vec<WizardChoice> {
     let session = host.wizard_session().lock().await;
-    let Some(id) = session.active_id else {
+    let WizardSession::Active(active) = &*session else {
         return Vec::new();
     };
-    let Some(wizard) = host.wizard_registry().get(id) else {
+    let Some(wizard) = host.wizard_registry().get(active.id) else {
         return Vec::new();
     };
-    let Some(step) = wizard.steps().get(session.cursor) else {
+    let Some(step) = wizard.steps().get(active.cursor) else {
         return Vec::new();
     };
-    let Some(data) = session.data.as_ref() else {
-        return Vec::new();
-    };
-    let mut out = step.suggest(input, data);
+    let mut out = step.suggest(input, &active.data);
     out.extend(crate::prompt::filter_choices(
-        &global_verbs(!session.history.is_empty()),
+        &global_verbs(!active.history.is_empty()),
         input,
     ));
     dedupe_choices(out)
@@ -122,45 +121,55 @@ pub async fn try_execute_active_wizard<H: WizardHost>(line: &str, host: &H) -> C
     let lowered = trimmed.to_ascii_lowercase();
 
     let mut session = host.wizard_session().lock().await;
-    let Some(id) = session.active_id else {
+    let Some(id) = session.active_id() else {
         return Ok(None);
     };
     let Some(wizard) = host.wizard_registry().get(id) else {
         // Defensive: active id with no registered wizard — drop the session.
-        *session = WizardSession::default();
+        *session = WizardSession::Inactive;
         return Ok(None);
     };
 
     // Global verb: cancel (the desktop `cancel` handler never runs mid-wizard,
     // same invariant as setup). Both `cancel` and `cancel <id>` exit.
     if lowered == "cancel" || lowered == format!("cancel {id}") {
-        *session = WizardSession::default();
+        *session = WizardSession::Inactive;
         return cancelled(wizard.as_ref());
     }
 
     // Global verb: back — pop to the previous step, keeping accumulated answers.
     if lowered == "back" {
-        if let Some(prev) = session.history.pop() {
-            session.cursor = prev;
+        let WizardSession::Active(active) = &mut *session else {
+            return Ok(None);
+        };
+        if let Some(prev) = active.history.pop() {
+            active.cursor = prev;
         }
-        return Ok(Some(render_current(wizard.as_ref(), &session)));
+        return Ok(Some(render_current(wizard.as_ref(), active)));
     }
 
     // Global verb: help — render the current step's commands without advancing.
     if lowered == "help" || lowered == format!("help {id}") {
-        return Ok(Some(render_step_help(wizard.as_ref(), &session)));
+        let WizardSession::Active(active) = &*session else {
+            return Ok(None);
+        };
+        return Ok(Some(render_step_help(wizard.as_ref(), active)));
     }
 
-    // Delegate to the active step.
-    let cursor = session.cursor;
-    let Some(step) = wizard.steps().get(cursor).cloned() else {
-        *session = WizardSession::default();
+    // Delegate to the active step. Resolve the step from a copied cursor first so
+    // the "step gone" reset doesn't fight the `&mut data` borrow taken below.
+    let WizardSession::Active(active) = &*session else {
         return Ok(None);
     };
-    let transition = {
-        let data = session.data.as_mut().expect("active wizard data");
-        step.accept(trimmed, data, host).await?
+    let cursor = active.cursor;
+    let Some(step) = wizard.steps().get(cursor).cloned() else {
+        *session = WizardSession::Inactive;
+        return Ok(None);
     };
+    let WizardSession::Active(active) = &mut *session else {
+        return Ok(None);
+    };
+    let transition = step.accept(trimmed, &mut active.data, host).await?;
 
     run_transition(host, &mut session, wizard.as_ref(), transition).await
 }
@@ -177,40 +186,57 @@ async fn run_transition<H: WizardHost>(
 ) -> CommandResult {
     loop {
         match transition {
-            WizardTransition::Stay => return Ok(Some(render_current(wizard, session))),
+            WizardTransition::Stay => {
+                let WizardSession::Active(active) = &*session else {
+                    return Ok(None);
+                };
+                return Ok(Some(render_current(wizard, active)));
+            }
             WizardTransition::Next => {
-                let current = session.cursor;
-                session.history.push(current);
-                session.cursor = current + 1;
-                if session.cursor >= wizard.steps().len() {
+                let WizardSession::Active(active) = &mut *session else {
+                    return Ok(None);
+                };
+                active.history.push(active.cursor);
+                active.cursor += 1;
+                if active.cursor >= wizard.steps().len() {
                     return complete(wizard, session, host).await;
                 }
-                return Ok(Some(render_current(wizard, session)));
+                return Ok(Some(render_current(wizard, active)));
             }
             WizardTransition::Goto(target) => {
                 let Some(idx) = wizard.steps().iter().position(|s| s.id() == target) else {
                     return Err(format!("wizard {}: unknown step '{target}'", wizard.id()));
                 };
-                let current = session.cursor;
-                session.history.push(current);
-                session.cursor = idx;
-                return Ok(Some(render_current(wizard, session)));
+                let WizardSession::Active(active) = &mut *session else {
+                    return Ok(None);
+                };
+                active.history.push(active.cursor);
+                active.cursor = idx;
+                return Ok(Some(render_current(wizard, active)));
             }
             WizardTransition::Back => {
-                if let Some(prev) = session.history.pop() {
-                    session.cursor = prev;
+                let WizardSession::Active(active) = &mut *session else {
+                    return Ok(None);
+                };
+                if let Some(prev) = active.history.pop() {
+                    active.cursor = prev;
                 }
-                return Ok(Some(render_current(wizard, session)));
+                return Ok(Some(render_current(wizard, active)));
             }
             WizardTransition::Complete => return complete(wizard, session, host).await,
             WizardTransition::Cancel => {
-                *session = WizardSession::default();
+                *session = WizardSession::Inactive;
                 return cancelled(wizard);
             }
             WizardTransition::Native(action) => {
                 match host.perform_native(&action).await {
                     // No capability / user cancelled: re-render the requesting step.
-                    NativeOutcome::Cancelled => return Ok(Some(render_current(wizard, session))),
+                    NativeOutcome::Cancelled => {
+                        let WizardSession::Active(active) = &*session else {
+                            return Ok(None);
+                        };
+                        return Ok(Some(render_current(wizard, active)));
+                    }
                     // Feed the produced value to the action's target step, as if
                     // the user had typed it there, and apply its transition next.
                     NativeOutcome::Provided(value) => {
@@ -222,12 +248,13 @@ async fn run_transition<H: WizardHost>(
                                 wizard.id()
                             ));
                         };
-                        let current = session.cursor;
-                        session.history.push(current);
-                        session.cursor = idx;
                         let step = wizard.steps()[idx].clone();
-                        let data = session.data.as_mut().expect("active wizard data");
-                        transition = step.accept(&value, data, host).await?;
+                        let WizardSession::Active(active) = &mut *session else {
+                            return Ok(None);
+                        };
+                        active.history.push(active.cursor);
+                        active.cursor = idx;
+                        transition = step.accept(&value, &mut active.data, host).await?;
                     }
                 }
             }
@@ -241,20 +268,21 @@ async fn complete<H: WizardHost>(
     session: &mut WizardSession,
     host: &H,
 ) -> CommandResult {
-    let data = session.data.take().expect("active wizard data");
-    let result = wizard.finalize(host, &data).await;
-    *session = WizardSession::default();
-    result
+    // Deactivate and take ownership of the run in one move: the accumulator comes
+    // out with it (no `Option::take` + `expect`), and the session is left inactive.
+    let WizardSession::Active(active) = std::mem::take(session) else {
+        return Ok(None);
+    };
+    wizard.finalize(host, &active.data).await
 }
 
 /// Render the step the cursor currently points at.
 fn render_current<H: Send + Sync>(
     wizard: &dyn Wizard<H>,
-    session: &WizardSession,
+    active: &ActiveWizard,
 ) -> CommandResponse {
-    let step = &wizard.steps()[session.cursor];
-    let data = session.data.as_ref().expect("active wizard data");
-    render_step(wizard, step.as_ref(), data)
+    let step = &wizard.steps()[active.cursor];
+    render_step(wizard, step.as_ref(), &active.data)
 }
 
 /// Build a `CommandResponse` for a step prompt: the clickable `output_doc`, a
@@ -280,12 +308,11 @@ fn render_step<H: Send + Sync>(
 /// context (and the next submission's spinner) stays intact.
 fn render_step_help<H: Send + Sync>(
     wizard: &dyn Wizard<H>,
-    session: &WizardSession,
+    active: &ActiveWizard,
 ) -> CommandResponse {
-    let step = wizard.steps()[session.cursor].as_ref();
-    let data = session.data.as_ref().expect("active wizard data");
-    let mut commands = step.choices(data);
-    commands.extend(global_verbs(!session.history.is_empty()));
+    let step = wizard.steps()[active.cursor].as_ref();
+    let mut commands = step.choices(&active.data);
+    commands.extend(global_verbs(!active.history.is_empty()));
     let commands = dedupe_choices(commands);
     let document = crate::prompt::step_help_doc(step.summary(), &commands);
     let text = doc_to_plain_text(&document);
@@ -352,6 +379,7 @@ mod tests {
         fn new(native: NativeOutcome) -> Self {
             let mut registry = WizardRegistry::new();
             registry.register(Arc::new(TestWizard::new()));
+            registry.register(Arc::new(StayWizard::new()));
             Self {
                 registry,
                 session: Mutex::new(WizardSession::default()),
@@ -381,6 +409,13 @@ mod tests {
 
     fn data(d: &WizardData) -> &TestData {
         d.downcast_ref::<TestData>().expect("test data")
+    }
+
+    fn active(session: &WizardSession) -> &ActiveWizard {
+        match session {
+            WizardSession::Active(active) => active,
+            WizardSession::Inactive => panic!("expected an active wizard session"),
+        }
     }
 
     /// "menu": `1` requests the native picker (resubmit to "path"); anything else
@@ -472,7 +507,7 @@ mod tests {
             .expect("start")
             .expect("prompt");
         let session = host.session.lock().await;
-        let picked = data(session.data.as_ref().unwrap()).picked.clone();
+        let picked = data(&active(&session).data).picked.clone();
         assert_eq!(picked.as_deref(), Some("seeded"));
     }
 
@@ -488,7 +523,7 @@ mod tests {
             .expect("response");
         assert_eq!(response.output, "/vault");
         // Completing resets the session.
-        assert!(host.session.lock().await.active_id.is_none());
+        assert!(host.session.lock().await.active_id().is_none());
     }
 
     #[tokio::test]
@@ -502,12 +537,90 @@ mod tests {
         // Cancelled native action re-renders the requesting "menu" step.
         assert_eq!(response.wizard.expect("wizard view").step_id, "menu");
         let session = host.session.lock().await;
-        assert_eq!(session.active_id, Some("t"));
-        assert_eq!(session.cursor, 0);
+        assert_eq!(session.active_id(), Some("t"));
+        assert_eq!(active(&session).cursor, 0);
         // The seeded value is untouched; no path was resubmitted.
         assert_eq!(
-            data(session.data.as_ref().unwrap()).picked.as_deref(),
+            data(&active(&session).data).picked.as_deref(),
             Some("seeded")
+        );
+    }
+
+    /// A resubmit target that records its input and *stays* (no advance) — so a
+    /// Native resubmit into it exercises the Stay-after-Native + history path
+    /// (P7.4), unlike `PathStep` which completes. Reuses `MenuStep`'s
+    /// `resubmit_to: "path"` id so the menu's native action lands here.
+    struct StayStep;
+    #[async_trait]
+    impl WizardStep<FakeHost> for StayStep {
+        fn id(&self) -> &'static str {
+            "path"
+        }
+        fn prompt(&self, _data: &WizardData) -> OutputDoc {
+            doc().with_block(paragraph_text("stay"))
+        }
+        async fn accept(
+            &self,
+            input: &str,
+            d: &mut WizardData,
+            _host: &FakeHost,
+        ) -> Result<WizardTransition, String> {
+            d.downcast_mut::<TestData>().expect("test data").picked = Some(input.to_string());
+            Ok(WizardTransition::Stay)
+        }
+    }
+
+    /// `menu` then a staying `path`: `1` fires the picker (resubmit_to "path") and
+    /// the provided value lands on `StayStep`, which records it and stays.
+    struct StayWizard {
+        steps: Vec<Arc<dyn WizardStep<FakeHost>>>,
+    }
+    impl StayWizard {
+        fn new() -> Self {
+            Self {
+                steps: vec![Arc::new(MenuStep), Arc::new(StayStep)],
+            }
+        }
+    }
+    #[async_trait]
+    impl Wizard<FakeHost> for StayWizard {
+        fn id(&self) -> &'static str {
+            "stays"
+        }
+        fn title(&self) -> &'static str {
+            "StayW"
+        }
+        fn steps(&self) -> &[Arc<dyn WizardStep<FakeHost>>] {
+            &self.steps
+        }
+        async fn seed(&self, _host: &FakeHost) -> Result<WizardData, String> {
+            Ok(WizardData::new(TestData::default()))
+        }
+        async fn finalize(&self, _host: &FakeHost, _d: &WizardData) -> CommandResult {
+            Ok(Some(ok_response_with_doc("done".to_string(), doc())))
+        }
+    }
+
+    #[tokio::test]
+    async fn native_resubmit_that_stays_lands_on_target_and_records_history() {
+        let host = FakeHost::new(NativeOutcome::Provided("/picked".to_string()));
+        start_wizard("stays", &host).await.expect("start");
+        // `1` at the menu fires the picker; the host provides a path, resubmitted to
+        // "path" (StayStep), which stores it and stays (no complete).
+        let response = try_execute_active_wizard("1", &host)
+            .await
+            .expect("handled")
+            .expect("response");
+        assert_eq!(response.wizard.expect("wizard view").step_id, "path");
+        let session = host.session.lock().await;
+        // Still active, parked on the resubmit target, with the menu step in history.
+        assert_eq!(session.active_id(), Some("stays"));
+        assert_eq!(active(&session).cursor, 1);
+        assert_eq!(active(&session).history, vec![0]);
+        // The resubmitted value reached the staying step.
+        assert_eq!(
+            data(&active(&session).data).picked.as_deref(),
+            Some("/picked")
         );
     }
 }
