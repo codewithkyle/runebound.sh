@@ -62,7 +62,10 @@ pub(crate) fn build_chat_client(config: &AppConfig) -> Result<(reqwest::Client, 
 }
 
 /// Per-attempt RNG seed derived from wall-clock micros plus the attempt index, so
-/// retries within a single call diverge from one another.
+/// retries within a single call diverge from one another. The `as i32` truncation
+/// is intentional: only the low bits need to differ between attempts of one call,
+/// and Ollama accepts any 32-bit seed — the wider clock value would just overflow
+/// the field, so we keep the cheap wrap rather than hashing.
 pub(crate) fn attempt_seed(attempt: i32) -> i32 {
     let base_seed = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -73,9 +76,10 @@ pub(crate) fn attempt_seed(attempt: i32) -> i32 {
 
 /// POST a chat payload and return the assistant message content.
 ///
-/// `Err` for transport, non-success status, or unreadable JSON (these abort the
-/// whole call); `Ok(None)` when the response carried no usable content, which the
-/// caller treats as a retryable attempt.
+/// `Err` for transport, non-success status, unreadable JSON, a top-level error
+/// body, or a truncated response (these abort the whole call); `Ok(None)` when the
+/// response carried no usable content, which the caller treats as a retryable
+/// attempt. The body interpretation lives in [`interpret_chat_response`].
 pub(crate) async fn post_chat_for_content(
     client: &reqwest::Client,
     url: &str,
@@ -95,6 +99,37 @@ pub(crate) async fn post_chat_for_content(
     }
 
     let value: serde_json::Value = response.json().await.map_err(|err| err.to_string())?;
+    interpret_chat_response(&value)
+}
+
+/// Decide what a successful (`2xx`) Ollama `/api/chat` JSON body means. Split out
+/// from [`post_chat_for_content`] so the (transport-free) decision logic is
+/// unit-testable.
+///
+/// Two failure modes hide behind a 200 and must not be swallowed into the retry
+/// loop's generic "failed to generate" outcome:
+///
+/// - a top-level `{"error": …}` body (e.g. model not found / out of memory) —
+///   surfaced verbatim, since no retry fixes it; and
+/// - `done_reason == "length"`, which means the model hit its context/output limit
+///   and the content was cut off mid-token. Any JSON it carries is truncated and
+///   would fail to parse, and this recurs at the same prompt size — so we report it
+///   as an actionable capacity error rather than retrying and then blaming a parse
+///   miss.
+fn interpret_chat_response(value: &serde_json::Value) -> Result<Option<String>, String> {
+    if let Some(error) = value.get("error").and_then(|err| err.as_str()) {
+        return Err(format!("ollama chat returned an error: {error}"));
+    }
+
+    if value.get("done_reason").and_then(|reason| reason.as_str()) == Some("length") {
+        return Err(
+            "ollama truncated its response at the context/output limit (done_reason = \
+             \"length\"); raise ollama.num_ctx or lower generation.verbosity / reference \
+             fewer documents, then try again."
+                .to_string(),
+        );
+    }
+
     Ok(value
         .get("message")
         .and_then(|msg| msg.get("content"))
@@ -125,5 +160,46 @@ mod tests {
         for directive in [brief, medium, verbose] {
             assert!(directive.starts_with(' '));
         }
+    }
+
+    #[test]
+    fn interpret_returns_content_on_normal_completion() {
+        let body = serde_json::json!({
+            "done_reason": "stop",
+            "message": { "role": "assistant", "content": "{\"name\":\"Lirael\"}" }
+        });
+        assert_eq!(
+            interpret_chat_response(&body).unwrap().as_deref(),
+            Some("{\"name\":\"Lirael\"}")
+        );
+    }
+
+    #[test]
+    fn interpret_returns_none_when_content_missing() {
+        // A 200 with no assistant content is a retryable empty attempt, not an abort.
+        let body = serde_json::json!({ "done_reason": "stop", "message": { "role": "assistant" } });
+        assert_eq!(interpret_chat_response(&body).unwrap(), None);
+    }
+
+    #[test]
+    fn interpret_surfaces_top_level_error_body() {
+        // Ollama can answer 200 with an error body; it must abort with that message.
+        let body = serde_json::json!({ "error": "model 'llama9' not found" });
+        let err = interpret_chat_response(&body).unwrap_err();
+        assert!(err.contains("model 'llama9' not found"), "got: {err}");
+    }
+
+    #[test]
+    fn interpret_surfaces_truncation_distinctly() {
+        // done_reason == "length" means the content was cut off: abort with an
+        // actionable capacity message rather than letting the truncated (invalid)
+        // JSON read as a generic parse miss.
+        let body = serde_json::json!({
+            "done_reason": "length",
+            "message": { "role": "assistant", "content": "{\"name\":\"Lir" }
+        });
+        let err = interpret_chat_response(&body).unwrap_err();
+        assert!(err.contains("truncated"), "got: {err}");
+        assert!(err.contains("num_ctx"), "got: {err}");
     }
 }
