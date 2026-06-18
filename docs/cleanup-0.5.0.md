@@ -192,7 +192,7 @@ The core architecture is sound. This plan is about **finishing the additive refa
   Scattered on `EntityDomain::schema()`, `EntityFieldSpec::value_kind`, `EntitySchema::kind`, `EntityKind::as_str`, `ALL_ENTITY_KINDS`, `WizardTransition`/`NativeAction` variants, `DonjonCalendarJson` fields, etc. Several mark metadata that *should* be live (and will become live in P5).
   **Fix:** for each, either wire it up or delete it. Track which are "becomes-live-in-P5" vs genuinely dead. Re-run after P5/P7 to remove the rest.
 
-- [ ] **P2.5 — Name the magic LLM sampling constants** · Low · 🔶 — **DEFERRED → P5.2** *(by decision: the literals live in the `ai_generation` (8×) + `entity_reroll` (7×) fan-out P5.2 collapses; hoisting now would churn ~15 call sites P5 rewrites. Folds into P5.2's generator/reroll-loop extraction.)*
+- [ ] **P2.5 — Name the magic LLM sampling constants** · Low · 🔶 — **PARTIAL** *(the `entity_reroll` 7× are done — named `Sampling` consts in P5.2c. The `ai_generation` 8× create-path literals are still inline: that service wasn't in the P5.2/commits-7–10 scope. Remaining: hoist `ai_generation`'s sampling literals, ideally alongside a generator-loop extraction for that service.)*
   `services/ai_generation.rs` repeats `"temperature"/"top_p"/"repeat_penalty"` literals ~8× with small per-kind variations and no rationale.
   **Fix:** hoist to named consts (or per-kind config). Best done alongside the P5 generator-loop extraction so they land in one place.
 
@@ -293,46 +293,76 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 5 — Entity-fan-out unification (the big one)
+## Phase 5 — Entity-fan-out unification (the big one) — **DONE ✅ (2026-06-17)**
 
 *Goal: finish the additive design. Today the command-behavior layer uses the `EntityDomain` registry, but `db.rs` and the three big services re-enumerate all 7 kinds by hand. Each new entity currently costs ~250 LOC in db + ~450–550 in services + ~100 per command module. Drive everything from the schema/registry so "add an entity" is truly additive.*
 
+> **Outcome:** All P5 items (P5.1–P5.9) resolved. The reroll half of the deferred
+> **P2.5** landed too (named `Sampling` consts in `entity_reroll`); its
+> `ai_generation` create-path literals (8×) are still inline — **P2.5 stays open**
+> (it was not in the commits-7–10 scope; fold into a future `ai_generation`
+> generator-loop pass). The per-entity
+> fan-out is gone: one declaration per entity now drives db CRUD
+> (`impl_entity_table!`, P5.5–5.7), save (`impl_entity_persistence!`, P5.2b), and
+> soft-delete/restore (`impl_entity_soft_delete!`, P5.2d); reroll shares one LLM
+> retry loop with per-field instructions + sampling profiles moved into the schema
+> (P5.2c / P2.5); `resolve` + the entity card are registry/draft-driven (P5.2a /
+> P5.4); the seven command modules collapse to one `dispatch_entity_command`
+> (P5.3); and the editor is a single-draft slot (P5.9). The `db::*Row` types are
+> now the soft-delete recovery payload (no `*DeletePayload` mirror). Decisions
+> taken with the user: macro-per-declaration (matching P5.5) for save/soft-delete;
+> a **balanced** reroll collapse (shared loop + sampling consts + spec
+> instructions, keeping NPC occupation-anchoring and dungeon's bespoke
+> beat/field rerolls); soft-delete keeps **first-match** on a bare-name collision
+> (resolve/show/load disambiguate via P5.2a, delete does not). `EntityDetail` lost
+> its now-dead `vault_path`/`created_at` (soft-delete snapshots the row directly).
+>
+> Verified per commit: workspace + desktop 123 tests green (schema/registry
+> contract tests + the db round-trip/LIKE/tie-break tests are the guardrail);
+> clippy `-D warnings` + `cargo fmt --check` clean on both targets; generated TS
+> unchanged (these types are backend-internal). *Remaining manual check (left to
+> the user): for every entity kind, walk create → show → set → reroll → save →
+> load → delete → undo + `npc travel` + event narrative reroll + dungeon beat
+> reroll.* Landed as commits P5.1, P5.9, P5.8, P5.5/6/7a, P5.2a+P5.4, then
+> **P5.2b (save), P5.2c (reroll+P2.5), P5.2d (soft_delete/restore), P5.3
+> (command modules)**.
+
 > Do the **enablers (P5.1)** first. If a new entity type is planned for v0.5.0, do this phase **before** adding it (don't create an 8th copy).
 
-- [ ] **P5.1 (enabler) — Merge `EntityType` into `EntityKind`** · High · ✅
+- [x] **P5.1 (enabler) — Merge `EntityType` into `EntityKind`** · High · ✅ — *done: `EntityType` deleted; one canonical `EntityKind` + `ALL_ENTITY_KINDS`, serde wire form locked by round-trip tests.*
   `services/entity_admin.rs:1924` defines `EntityType`, an exact twin of `EntityKind` (`entities/kind.rs`). Two enums, same variants, same `as_str`.
   **Fix:** delete `EntityType`, use `EntityKind` everywhere. Mechanical, removes a whole "which enum?" class. Centralize the canonical kind list (`ALL_ENTITY_KINDS`) so P1.6 / P5.5 / P5.8 can derive from it.
 
-- [ ] **P5.2 — Services should dispatch through the domain registry** · High · ✅
+- [x] **P5.2 — Services should dispatch through the domain registry** · High · ✅ — *done in four slices: **P5.2a** (resolve via the registry loop + collapse the `EntityDetails` god-struct to a typed `EntityDetail{draft}`, with cross-kind disambiguation); **P5.2b** (`save` → `impl_entity_persistence!`, one `SaveOutcome`, `EntityDomain::save` default method); **P5.2c** (reroll → one shared retry loop + named `Sampling` consts + per-field instructions in the schema; `canonical_*_reroll_field` replaced by the schema lookup); **P5.2d** (`soft_delete`/`restore` → `impl_entity_soft_delete!`, rows are the recovery payload). `EntityDetail.vault_path`/`created_at` removed (dead). NOTE: the value_kind-driven `set_field` rewrite was deferred — the balanced reroll keeps per-kind schema selection — so `value_kind`'s `#[allow(dead_code)]` stays.*
   `services/entity_admin.rs` (`resolve_entity` `:212–723`, `soft_delete_entity` `:761–1183`, `undo_last_soft_delete` `:1229–1672`), `entity_persistence.rs` (7× `save_*_draft`), `entity_reroll.rs` (7× `reroll_*_field` + `canonical_*_reroll_field` + `*_context_summary`). ~3,600 of ~5,200 logic lines are 7-way fan-out. The 70-field `EntityDetails` god-struct (`:1948`) has each arm write ~60 explicit `None`s.
   **Fix:** add object-safe methods to `EntityDomain` — `resolve`, `soft_delete`, `restore`, `save`, `reroll` — so services become `for kind in ALL_ENTITY_KINDS { registry.domain(kind).op(...).await? }`. Replace `EntityDetails`'s 70 fields with an enum-of-structs or `serde_json::Value` so arms stop writing `None`s. Drive the reroll retry loop and `set_field` from `EntitySchema.value_kind` (this retires the `#[allow(dead_code)]` on `value_kind`). Move per-field reroll instruction strings into the spec.
 
-- [ ] **P5.3 — Collapse the 6 near-identical command modules** · High · ✅
+- [x] **P5.3 — Collapse the 6 near-identical command modules** · High · ✅ — *done: all seven modules deleted; one `dispatch_entity_command(kind, invocation)` drives the ladder off `command_root()` + the schema (set/rename gated on settable fields, reroll on rerollable; no magic offsets). `npc travel` is an `EntityKind::Npc` pre-check; event's narrative reroll + dungeon's beat-reroll usage fold in. Used `editor.draft(kind)` for the help gate rather than adding `has_draft`. Registered via one `entity_handler_entry(root, kind)` builder.*
   `commands/{location,faction,item,god,dungeon}_commands.rs` are character-for-character identical modulo the entity-name string and rename byte-offset; `npc_commands.rs` only adds `travel`. ~500 lines that should be ~80.
   **Fix:** one `dispatch_entity_command(kind, invocation)` driving the verb ladder generically (root = `kind.command_root()`, so rename/set/reroll parse off `root.len()` — removes the magic offsets). Add `fn has_draft(&self, state) -> bool` to `EntityDomain` (replaces the only per-entity line in the `help` branch). Register per-entity via a closure in `commands/mod.rs`. `npc travel` stays a pre-check or a per-domain `extra_verbs` hook; event's narrative-only reroll folds in.
 
-- [ ] **P5.4 — `entity_commands` triple-encodes fields** · Medium · ✅
+- [x] **P5.4 — `entity_commands` triple-encodes fields** · Medium · ✅ — *done (with P5.2a): the card is the canonical `*_entity_card` built from the typed draft, and the text fallback derives from that same `OutputDoc` (`card_doc_to_text`) — fields encoded once.*
   `commands/entity_commands.rs:166–622`: `build_load_response`, `build_entity_card_doc`, `build_entity_card_text` each re-list every field per entity — the doc and text encode the **same** fields twice (drift hazard).
   **Fix:** drive the card (doc + text fallback) and the load mapping from one per-entity field descriptor (the schema, or a domain method), so the text fallback derives from the doc.
 
-- [ ] **P5.5 — `db.rs` per-entity CRUD copy-paste** · High · ✅
+- [x] **P5.5 — `db.rs` per-entity CRUD copy-paste** · High · ✅ — *done: `impl_entity_table!` (core/src/db_macros.rs) generates the whole CRUD set from one column declaration; static `concat!` queries with positional `?`. Read-path schema-drift tolerance kept (so a macro, not `FromRow`).*
   `core/src/db.rs` (1857 lines): `search/find_by_name_or_slug/find_by_slug/find_by_id/list/upsert/delete/row_to_*` per entity, with column lists restated 5–7× and order-sensitive `?N` placeholders edited by hand. ~250 LOC per new entity, six coordinated edits per column add.
   **Fix (incremental):** (a) one `const COLUMNS: &str` per entity reused in every query; (b) `#[derive(sqlx::FromRow)]` to delete the hand-written `row_to_*` block; (c) a small `EntityTable` trait or `impl_entity_table!` macro generating the CRUD set. Also fold `find_by_slug`/`find_by_id`/`find_by_name_or_slug` into one `find(Key)`.
 
-- [ ] **P5.6 — `db.rs` `LIKE` wildcards unescaped** · Medium · ✅
+- [x] **P5.6 — `db.rs` `LIKE` wildcards unescaped** · Medium · ✅ — *done (with P5.5): `like_contains` escapes `\ % _` and the generated `search_*` append `ESCAPE '\'`; LIKE-escaping test added.*
   `core/src/db.rs:173` et al. `format!("%{}%", query…)` — `%`, `_`, `\` in a query act as wildcards (searching `_` matches every 1-char name). Not injection (values are bound), but wrong results.
   **Fix:** escape `\ % _` in the user portion and append `ESCAPE '\\'`; factor into one helper (repeats 7×). Lands naturally with P5.5.
 
-- [ ] **P5.7 — Nondeterministic name tie-break** · Medium · ✅
+- [x] **P5.7 — Nondeterministic name tie-break** · Medium · ✅ — *done: (a) the generated `find_*`/`search_*`/`list_*` gained `, id ASC` (with P5.5); (b) `resolve_entity` now **errors** on a cross-kind bare-name collision (P5.2a). Decision: `soft_delete_entity` keeps first-match (delete is not made stricter) — noted in the P5.2d commit.*
   `core/src/db.rs:262` et al. `find_*_by_name_or_slug` / `search_*` lack a secondary sort key; two rows with the same lowercased name resolve arbitrarily across runs (no DB uniqueness on `name`).
   **Fix:** add `, id ASC` (or `, slug ASC`) to the `ORDER BY`.
   *Related design note:* `resolve_entity`/`soft_delete_entity` walk kinds in a fixed order and return the first name hit, so an NPC and Location both named "Raven" → the Location is unreachable by bare name and `delete Raven` always hits the NPC. Consider a disambiguation error when multiple kinds match. (Decide during P5.2.)
 
-- [ ] **P5.8 — `entity_store.ensure_dirs` repetition** · Low · ✅
+- [x] **P5.8 — `entity_store.ensure_dirs` repetition** · Low · ✅ — *done: hoisted one `ENTITY_DIRS: [&str; 7]` and looped over it; hermetic all-dirs test added.*
   `core/src/entity_store.rs:37–81` repeats the `create_dir_all(...).with_context(...)` block 7×.
   **Fix:** iterate the centralized kind list (from P5.1). Resolves P1.6's drift at the same time.
 
-- [ ] **P5.9 — `create`/`system` seed→draft duplication + `clear_kind` cascades** · Low · 🔶
+- [x] **P5.9 — `create`/`system` seed→draft duplication + `clear_kind` cascades** · Low · 🔶 — *done: decided **single-draft** (the multi-draft retention was never surfaced); `EditorSession` collapsed to one `Option<DraftEnvelope>` slot, the 83 cascade/activate call sites deleted, retention tests rewritten to the single-draft contract.*
   `commands/create_commands.rs:96–472` (7× `create_*`) and `commands/system_commands.rs:229–474` (7× `reroll_current_*`) duplicate the seed→draft field copy; each does a `set_<kind>` then `clear_kind` for the other six. But `EditorSession` is designed to *retain* multiple drafts (`app_state.rs:218–228`, with a test asserting "second draft switches active but keeps both") — so the cascades may be discarding drafts the design means to keep.
   **Fix:** add an `EntityDomain::generate_draft(prompt, state)` so create and reroll share one builder. **Decide intent on multi-draft:** if single-draft, use a clear `clear_all()` + `set`; if multi-draft, the cascades are a latent bug. Confirm before changing.
 
