@@ -1,15 +1,26 @@
 use crate::app_state::{AppState, DraftEnvelope};
-use crate::commands::{DesktopHandlerInvocation, ok_response, ok_response_with_doc};
+use crate::commands::{
+    DesktopHandlerInvocation, command_action_response, ok_response, ok_response_with_doc,
+};
 use dnd_core::command::CommandClientEvent;
 use runebound_models::{CommandResponse, OutputDoc};
 
-use crate::entities::EntityDetail;
+use crate::entities::common::{
+    command_message_response, command_message_response_with_doc, command_no_active_draft,
+    command_response_with_event, entity_help_doc, entity_reroll_field_help, entity_set_field_help,
+    parse_reroll_field_and_prompt,
+};
 use crate::entities::domains::{
     dungeon_event_from_draft, event_event_from_draft, faction_event_from_draft,
     god_event_from_draft, item_event_from_draft, location_event_from_draft, npc_event_from_draft,
+    npc_summary_text,
 };
-use crate::services::entity_admin::{EntityAdminService, SoftDeleteEntityInput};
-use crate::utils::path_for_display;
+use crate::entities::schema::{rerollable_fields, settable_fields};
+use crate::entities::{CommandResult, EntityDetail, EntityKind};
+use crate::services::entity_admin::{
+    EnsureLocationInput, EntityAdminService, SoftDeleteEntityInput,
+};
+use crate::utils::{normalize_optional_prompt, path_for_display};
 
 pub async fn handle_load(
     invocation: DesktopHandlerInvocation<'_>,
@@ -285,4 +296,156 @@ fn card_doc_to_text(doc: &OutputDoc) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// Generic handler for every entity's `<root> ...` editor command ladder (P5.3).
+/// The seven per-kind command modules were character-for-character identical
+/// modulo the root string and a hand-counted rename byte offset; this drives the
+/// ladder off `kind.command_root()` and the schema (so rename/set parse off the
+/// real prefix length, no magic offsets). Registered per kind in `commands/mod.rs`.
+pub async fn dispatch_entity_command(
+    kind: EntityKind,
+    invocation: DesktopHandlerInvocation<'_>,
+) -> CommandResult {
+    let root = kind.command_root();
+    let trimmed = invocation.raw_input.trim();
+    let lowered = trimmed.to_ascii_lowercase();
+    let state_ref = invocation.state.inner();
+    let domain = state_ref
+        .domains()
+        .domain(kind)
+        .unwrap_or_else(|| panic!("{root} domain not registered"));
+
+    // Events are narrative-only (empty schema): no set/rename, and `reroll`
+    // regenerates the whole body rather than a named field. Every other kind has
+    // both settable and rerollable fields.
+    let has_fields = settable_fields(kind).next().is_some();
+    let per_field_reroll = rerollable_fields(kind).next().is_some();
+
+    if lowered == format!("{root} help") {
+        let has_draft = {
+            let editor = state_ref.editor_session.lock().await;
+            editor.draft(kind).is_some()
+        };
+        if !has_draft {
+            return command_no_active_draft(kind);
+        }
+        let prose = domain.help_text();
+        let help_doc = entity_help_doc(kind, &prose);
+        return command_message_response_with_doc(prose, help_doc);
+    }
+
+    if lowered == format!("{root} show") {
+        return domain.show_draft(state_ref).await;
+    }
+
+    if lowered == format!("{root} cancel") {
+        return domain.cancel(state_ref).await;
+    }
+
+    // `npc travel to <location>` is the one per-kind extra verb.
+    if kind == EntityKind::Npc && lowered.starts_with("npc travel ") {
+        return npc_travel(trimmed, invocation.state.clone()).await;
+    }
+
+    if has_fields {
+        let rename_prefix = format!("{root} rename ");
+        if lowered.starts_with(&rename_prefix) {
+            let name = trimmed[rename_prefix.len()..].trim();
+            return domain.rename(name, state_ref).await;
+        }
+
+        if lowered == format!("{root} set help") {
+            return entity_set_field_help(kind);
+        }
+
+        let set_prefix = format!("{root} set ");
+        if lowered.starts_with(&set_prefix) {
+            // splitn(4) keeps the value as one token so multi-word values (and beat
+            // edits like `dungeon set setback loot none`) reach the domain intact.
+            let mut parts = trimmed.splitn(4, char::is_whitespace);
+            let _ = parts.next();
+            let _ = parts.next();
+            let field = parts.next().unwrap_or_default();
+            let value = parts.next().unwrap_or_default();
+            return domain.set_field(field, value, state_ref).await;
+        }
+    }
+
+    if lowered == format!("{root} save") {
+        return domain.save(state_ref).await;
+    }
+
+    let reroll_word = format!("{root} reroll");
+    let is_reroll = lowered == reroll_word || lowered.starts_with(&format!("{reroll_word} "));
+    if per_field_reroll {
+        if lowered == format!("{root} reroll help") {
+            return entity_reroll_field_help(kind);
+        }
+        if is_reroll {
+            let usage = if kind == EntityKind::Dungeon {
+                "usage: dungeon reroll <beat>|premise|name [prompt]".to_string()
+            } else {
+                format!("usage: {root} reroll <field> [prompt]")
+            };
+            let (field, prompt) = match parse_reroll_field_and_prompt(trimmed, &reroll_word, &usage)
+            {
+                Ok(result) => result,
+                Err(response) => return response,
+            };
+            return domain.reroll_field(&field, prompt, state_ref).await;
+        }
+    } else if is_reroll {
+        // Narrative-only reroll (events): text after `reroll` is free-form guidance,
+        // not a field name; the empty field argument is ignored by the domain.
+        let prompt = normalize_optional_prompt(Some(trimmed[reroll_word.len()..].to_string()));
+        return domain.reroll_field("", prompt, state_ref).await;
+    }
+
+    Ok(Some(command_action_response(
+        &format!("unknown {root} command. use "),
+        &format!("{root} help"),
+        "",
+    )))
+}
+
+/// `npc travel to <location>`: the one entity verb outside the generic ladder.
+/// Ensures the named location exists (creating a stub if needed) and points the
+/// active NPC draft at its canonical name.
+async fn npc_travel(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
+    if !trimmed.to_ascii_lowercase().starts_with("npc travel to ") {
+        return command_message_response("usage: npc travel to <location>");
+    }
+    let location_name = trimmed["npc travel to ".len()..].trim();
+    if location_name.is_empty() {
+        return command_message_response("location cannot be empty.");
+    }
+
+    let mut draft = {
+        let editor = state.editor_session.lock().await;
+        editor.get_npc().cloned()
+    }
+    .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
+
+    let admin = EntityAdminService;
+    let result = admin
+        .ensure_location_exists(
+            EnsureLocationInput {
+                name: location_name.to_string(),
+            },
+            state.inner(),
+        )
+        .await?;
+    draft.location = if result.name.trim().is_empty() {
+        location_name.to_string()
+    } else {
+        result.name
+    };
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.set_npc(draft.clone());
+    }
+
+    command_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
 }

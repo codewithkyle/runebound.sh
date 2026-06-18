@@ -1,15 +1,8 @@
 pub mod calendar_commands;
 pub mod create_commands;
 pub mod date_commands;
-pub mod dungeon_commands;
 pub mod entity_commands;
-pub mod event_commands;
-pub mod faction_commands;
-pub mod god_commands;
-pub mod item_commands;
-pub mod location_commands;
 pub mod moon_commands;
-pub mod npc_commands;
 pub mod publish_commands;
 pub mod setup_commands;
 pub mod system_commands;
@@ -29,6 +22,7 @@ use runebound_models::{
 use tauri::State;
 
 use crate::app_state::AppState;
+use crate::entities::EntityKind;
 use command_specs::handler_metadata_for;
 
 pub type CommandHandlerFuture<'a> =
@@ -277,74 +271,47 @@ pub fn create_handler_entry() -> HandlerEntry<DesktopHandler> {
     )
 }
 
-pub fn npc_handler_entry() -> HandlerEntry<DesktopHandler> {
+/// Build the handler entry for one entity kind. Every entity routes its
+/// `<root> ...` editor commands through the single generic
+/// `entity_commands::dispatch_entity_command` (P5.3).
+fn entity_handler_entry(root: &'static str, kind: EntityKind) -> HandlerEntry<DesktopHandler> {
     HandlerEntry::new(
-        "npc",
-        metadata_for("npc"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { npc_commands::handle_npc(invocation).await })
+        root,
+        metadata_for(root),
+        DesktopHandler::new(move |invocation| {
+            Box::pin(
+                async move { entity_commands::dispatch_entity_command(kind, invocation).await },
+            )
         }),
     )
+}
+
+pub fn npc_handler_entry() -> HandlerEntry<DesktopHandler> {
+    entity_handler_entry("npc", EntityKind::Npc)
 }
 
 pub fn location_handler_entry() -> HandlerEntry<DesktopHandler> {
-    HandlerEntry::new(
-        "location",
-        metadata_for("location"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { location_commands::handle_location(invocation).await })
-        }),
-    )
+    entity_handler_entry("location", EntityKind::Location)
 }
 
 pub fn faction_handler_entry() -> HandlerEntry<DesktopHandler> {
-    HandlerEntry::new(
-        "faction",
-        metadata_for("faction"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { faction_commands::handle_faction(invocation).await })
-        }),
-    )
+    entity_handler_entry("faction", EntityKind::Faction)
 }
 
 pub fn item_handler_entry() -> HandlerEntry<DesktopHandler> {
-    HandlerEntry::new(
-        "item",
-        metadata_for("item"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { item_commands::handle_item(invocation).await })
-        }),
-    )
+    entity_handler_entry("item", EntityKind::Item)
 }
 
 pub fn event_handler_entry() -> HandlerEntry<DesktopHandler> {
-    HandlerEntry::new(
-        "event",
-        metadata_for("event"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { event_commands::handle_event(invocation).await })
-        }),
-    )
+    entity_handler_entry("event", EntityKind::Event)
 }
 
 pub fn god_handler_entry() -> HandlerEntry<DesktopHandler> {
-    HandlerEntry::new(
-        "god",
-        metadata_for("god"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { god_commands::handle_god(invocation).await })
-        }),
-    )
+    entity_handler_entry("god", EntityKind::God)
 }
 
 pub fn dungeon_handler_entry() -> HandlerEntry<DesktopHandler> {
-    HandlerEntry::new(
-        "dungeon",
-        metadata_for("dungeon"),
-        DesktopHandler::new(|invocation| {
-            Box::pin(async move { dungeon_commands::handle_dungeon(invocation).await })
-        }),
-    )
+    entity_handler_entry("dungeon", EntityKind::Dungeon)
 }
 
 pub fn publish_handler_entry() -> HandlerEntry<DesktopHandler> {
