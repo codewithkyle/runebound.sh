@@ -414,7 +414,7 @@ The core architecture is sound. This plan is about **finishing the additive refa
   `core/src/command.rs:550–706`: a markdown-string help renderer (`render_command_help`/`render_subcommand_help`) and a structured `OutputDoc` renderer (`command_help_doc`/`root_help_doc`) walk the same manifest in parallel and already nearly drift.
   **Fix:** write one doc→text renderer, derive the plain-text `output` from the `OutputDoc`, delete the string builders (~150 lines). Pairs well with P3.
 
-- [ ] **P7.3 — `config_paths(workspace_root)` is vestigial** · Low · ✅
+- [x] **P7.3 — `config_paths(workspace_root)` is vestigial** · Low · ✅ — *done (pulled forward out of phase order): `workspace_root` removed entirely — 33 files, +320/−511, zero remaining references. `config_paths`/`load_effective`/`save_config`/`ensure_config_sections_persisted`/`EntityStore::new` are now argument-free; dropped from the `command.rs` dispatch chain, `CommandService` (+`Default`), the onboarding host/ctx (`OnboardingHost` is now an empty marker trait), and all desktop threading (ai_generation/reroll/mention/ollama_chat/publish/boot/suggestions/domains/wizards) + `AppState`. One behavioral change: the `config test` doctor report dropped its meaningless "workspace root" (CWD) check item. `make lint` rc=0; workspace + desktop 123 tests green.*
   `core/src/config.rs:96–101,242–256`: the `_workspace_root` param is ignored (everything derives from `dirs::config_dir()`), yet `workspace_root` is threaded through many signatures implying workspace-scoped config.
   **Fix:** drop the param (and the threading) or honor it; at minimum document that config is global.
 

@@ -49,6 +49,7 @@ const BANNER_DOC: OutputDoc = {
   blocks: [
     {
       kind: "code",
+      language: null,
       text:
         "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
         "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
