@@ -370,9 +370,36 @@ The core architecture is sound. This plan is about **finishing the additive refa
 
 ---
 
-## Phase 6 — Data integrity & async hygiene
+## Phase 6 — Data integrity & async hygiene — **DONE ✅ (2026-06-18)**
 
 *Goal: make persistence atomic and keep the async runtime responsive.*
+
+> **Outcome:** All P6 items resolved. Two decisions taken with the user: (1)
+> **P6.3** = correct the naming/docs (store → db projection) rather than build the
+> vault-markdown disk-scan half, accepting the canonical TOML store as the source
+> of truth; (2) **P6.6** = make `resources_assets` a model-first `Vec<String>` with
+> a lenient deserializer for legacy string-form TOML; (3) **P6.1** = the **Full**
+> transaction scope (save + soft-delete + reap). The key architectural call: P6.1
+> keeps **FS-first** ordering (canonical store write, then an atomic DB projection),
+> the inverse of the plan's generic "FS last" — because here the DB is the
+> rebuildable projection, so a partial DB failure self-heals on the next `sync`. A
+> `Database::begin()` primitive + executor-generic core mutations + object-safe
+> `*_tx` repo methods make save/soft-delete/reap atomic; the dead non-tx delete
+> methods were removed. P6.2 moved the per-keystroke `@reference` scan + the
+> generation/reroll `build_reference_context` off the runtime via `spawn_blocking`;
+> P6.4 surfaces ollama truncation / 200-error bodies; P6.5 hoisted the linker's
+> lowercased needles; P6.6 retired the publish reverse-engineering heuristic.
+>
+> Deferred to follow-ups (noted in-line): the restore/undo + ensure-location upsert
+> paths stay non-transactional (recovery-side, lower-risk); `EntityStore` reads on
+> the startup/save paths stay synchronous (not the per-keystroke concern). Verified:
+> `cargo test --workspace` (incl. the new transaction + lenient-deser tests) +
+> desktop **126** tests green; `make lint` (clippy `-D warnings` + `cargo fmt
+> --check`, both targets) exit 0; `tsc --noEmit` + `vite build` clean against the
+> regenerated `models.ts`. *Remaining manual smoke (left to the user): per entity
+> kind, save / rename / delete / undo and confirm no half-written state; faction
+> `resources_assets` create/set/reroll/publish renders as a list; a kill-test of a
+> save mid-flight; a truncated ollama body surfaces the capacity message.*
 
 - [x] **P6.1 — No transaction boundary across vault + db + index** · High · ✅ — *done (user chose **Full: save + soft-delete + reap**): added `Database::begin()` (vending a `DbTransaction`, re-exported so desktop needs no `sqlx` dep) and made the macro-generated `upsert`/`delete_by_id` + the document-index upsert/delete **executor-generic** (run on the pool or a `&mut Transaction`; `&pool` callers unchanged). Object-safe `upsert_tx`/`delete_by_id_tx` (entity) + `upsert_index_tx`/`delete_by_vault_path_tx` (document) thread a tx through the repo boundary; the now-dead non-tx delete methods were removed. **save** writes the canonical TOML first, then commits `{retire stale index on rename, upsert row, upsert index}` as one tx (`resolve_vault_path` now returns the index to retire rather than deleting mid-resolve); **soft-delete** (+ publish-reap) commits its `{delete row, delete index}` after the recovery row; **reap/prune** (vault_sync) commits each entity's delete/projection pair. New core test pins commit-persists / rollback-discards over a `&mut Transaction`. **Deviation (documented):** kept FS-first, not the plan's generic "FS last" — the TOML store is canonical and the DB is a `sync`-rebuildable projection, so a partial DB failure self-heals rather than orphaning a row. Restore/undo + ensure-location upserts stay non-transactional (recovery-side, lower-risk) — follow-up.*
   The repository layer exposes no transaction primitive. `save_*` = vault write + (rename: delete old slug) + `repo.upsert` + `document_repo.upsert_index`, each independently fallible with no rollback; soft-delete/undo/sync are the same shape.
