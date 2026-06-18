@@ -62,24 +62,31 @@ fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
 /// missing or unreadable vault by returning empty context. Shared by seed
 /// generation and field reroll so a custom prompt's `@references` resolve the same
 /// way in both flows.
-pub(crate) fn build_reference_context(
+pub(crate) async fn build_reference_context(
     config: &AppConfig,
     user_prompt: &str,
 ) -> PromptReferenceContext {
     let Some(vault_path) = config.vault.path.clone() else {
         return PromptReferenceContext::default();
     };
-    let vault = Vault::new(vault_path);
-    if vault.ensure_root_exists().is_err() {
-        return PromptReferenceContext::default();
-    }
-    match load_vault_reference_entries(&vault) {
-        Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault),
-        Err(err) => {
-            eprintln!("reference context warning: {err}");
-            PromptReferenceContext::default()
+    let user_prompt = user_prompt.to_string();
+    // read_dir + TOML loads + referenced-file reads are blocking IO; keep them off
+    // the async runtime worker (P6.2). A panicked task degrades to empty context.
+    tokio::task::spawn_blocking(move || {
+        let vault = Vault::new(vault_path);
+        if vault.ensure_root_exists().is_err() {
+            return PromptReferenceContext::default();
         }
-    }
+        match load_vault_reference_entries(&vault) {
+            Ok(entries) => build_prompt_reference_context(&user_prompt, &entries, &vault),
+            Err(err) => {
+                eprintln!("reference context warning: {err}");
+                PromptReferenceContext::default()
+            }
+        }
+    })
+    .await
+    .unwrap_or_default()
 }
 
 pub struct AiGenerationService;
@@ -99,7 +106,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "npc_seed", 20)
@@ -232,7 +239,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "location_seed", 20)
@@ -344,7 +351,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "faction_seed", 20)
@@ -467,7 +474,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy deity for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "god_seed", 20)
@@ -588,7 +595,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one magical or legendary item.");
 
-        let reference_context = build_reference_context(&config, user_prompt);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
             + estimate_tokens(&reference_context.system_context)
@@ -705,7 +712,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Write a short piece of lore about a notable event in a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "event_seed", 20)
@@ -823,7 +830,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty());
 
         let reference_probe = format!("{} {}", premise.unwrap_or(""), context);
-        let reference_context = build_reference_context(&config, reference_probe.trim());
+        let reference_context = build_reference_context(&config, reference_probe.trim()).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "dungeon_story", 12)

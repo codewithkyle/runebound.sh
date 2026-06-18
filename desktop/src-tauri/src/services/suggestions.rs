@@ -43,13 +43,21 @@ impl SuggestionService {
             if !active_ref.query.trim().starts_with('-') {
                 let loaded = load_effective().map_err(|err| err.to_string())?;
                 if let Some(vault_path) = loaded.effective.vault.path {
-                    let vault = Vault::new(vault_path);
-                    if vault.ensure_root_exists().is_ok() {
-                        let entries = load_vault_reference_entries(&vault)?;
-                        let suggestions =
-                            build_reference_suggestions_from_entries(&input, &active_ref, &entries);
-                        return Ok(suggestions);
-                    }
+                    // Recursive read_dir + TOML loads are blocking IO; run them off
+                    // the async runtime so a large vault can't stall this per-keystroke
+                    // autocomplete path (P6.2).
+                    let entries = tokio::task::spawn_blocking(move || {
+                        let vault = Vault::new(vault_path);
+                        if vault.ensure_root_exists().is_err() {
+                            return Ok(Vec::new());
+                        }
+                        load_vault_reference_entries(&vault)
+                    })
+                    .await
+                    .map_err(|err| err.to_string())??;
+                    let suggestions =
+                        build_reference_suggestions_from_entries(&input, &active_ref, &entries);
+                    return Ok(suggestions);
                 }
 
                 return Ok(Vec::new());

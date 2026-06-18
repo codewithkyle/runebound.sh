@@ -22,11 +22,11 @@ use std::collections::HashSet;
 /// Resolve any `@references` in a custom reroll prompt into an authoritative
 /// setting-context block appended to the system message. Returns an empty string
 /// when the prompt is blank or references nothing, so a plain reroll is unchanged.
-fn resolve_reference_suffix(config: &AppConfig, extra_prompt: &str) -> String {
+async fn resolve_reference_suffix(config: &AppConfig, extra_prompt: &str) -> String {
     if extra_prompt.is_empty() {
         return String::new();
     }
-    let context = build_reference_context(config, extra_prompt);
+    let context = build_reference_context(config, extra_prompt).await;
     if context.system_context.is_empty() {
         String::new()
     } else {
@@ -188,7 +188,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = npc_context_summary(&input.npc);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
         let (recent_occupation_anchors, recent_occupation_context) = if field == "occupation" {
             let recent_payloads = generation_repo
                 .recent_prompts(database, "npc_seed", 20)
@@ -371,7 +371,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = location_context_summary(&input.location);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
         let schema = if field == "exports" {
             serde_json::json!({
@@ -513,7 +513,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = faction_context_summary(&input.faction);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
         let is_list = [
             "resources_assets",
@@ -667,7 +667,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = god_context_summary(&input.god);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
         let is_list = ["domains", "allies", "rivals"].contains(&field);
         let schema = if is_list {
@@ -826,7 +826,7 @@ impl EntityRerollService {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .unwrap_or("");
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
         let prev = if beat_index > 0 {
             DUNGEON_FUNCTIONS[beat_index - 1]
@@ -976,7 +976,7 @@ impl EntityRerollService {
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .unwrap_or("");
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
         let frozen = dungeon_context_summary(&input.dungeon, None);
 
         let current = match field {
@@ -1056,7 +1056,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = item_context_summary(&input.item);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
         let schema = if field == "materials" {
             serde_json::json!({
