@@ -6,7 +6,6 @@
 //! message content back out. Only the schema, prompt, and post-processing differ
 //! per entity kind/field, so that plumbing lives here once.
 
-use std::path::Path;
 use std::time::Duration;
 
 use dnd_core::config::{AppConfig, Verbosity, load_effective, validate_for_runtime};
@@ -40,8 +39,8 @@ pub(crate) fn detail_directive(verbosity: Verbosity) -> &'static str {
 /// Load + validate the runtime config and extract the configured model. This is the
 /// common preamble for every generation/reroll call; errors mirror the prior inline
 /// messages so user-facing output is unchanged.
-pub(crate) fn load_generation_config(workspace_root: &Path) -> Result<(AppConfig, String), String> {
-    let loaded = load_effective(workspace_root).map_err(|err| err.to_string())?;
+pub(crate) fn load_generation_config() -> Result<(AppConfig, String), String> {
+    let loaded = load_effective().map_err(|err| err.to_string())?;
     validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
     let config = loaded.effective;
     let model = config

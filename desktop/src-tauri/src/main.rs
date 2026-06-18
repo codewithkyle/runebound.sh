@@ -10,7 +10,6 @@ mod services;
 mod utils;
 mod wizards;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse, reject_help_flags};
@@ -139,11 +138,9 @@ fn exit_app(app: tauri::AppHandle) {
 }
 
 fn main() {
-    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
     // Backfill config sections added since the user's config was written (e.g.
     // `[generation]`) so they are visible and editable on disk. Best-effort.
-    if let Err(err) = dnd_core::config::ensure_config_sections_persisted(&workspace_root) {
+    if let Err(err) = dnd_core::config::ensure_config_sections_persisted() {
         eprintln!("config migration warning: {err:#}");
     }
 
@@ -163,13 +160,12 @@ fn main() {
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
 
-    let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
+    let command_service = dnd_core::service::CommandService::new();
 
     let domains = Arc::new(build_default_registry());
     let wizards = Arc::new(build_default_wizard_registry());
 
     let app_state = AppState {
-        workspace_root,
         command_service: Mutex::new(command_service),
         editor_session: Mutex::new(EditorSession::default()),
         database: database.clone(),

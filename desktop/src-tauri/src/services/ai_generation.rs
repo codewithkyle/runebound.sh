@@ -1,5 +1,5 @@
 // P5.2 (cleanup-0.5.0): the per-kind generator fan-out in this module (the
-// near-identical `generate_*` fns taking `workspace_root: &PathBuf`, plus an
+// near-identical `generate_*` fns, plus an
 // `into_*` helper) collapses into one loop in P5.2; the `ptr_arg` and
 // `wrong_self_convention` lints there are resolved by that rewrite. Remove
 // these module allows when P5.2 lands.
@@ -29,7 +29,7 @@ use runebound_models::utils::{
     ITEM_RARITIES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Tokens reserved within the context window for the model's own output, so the
 /// capacity warning fires before the prompt crowds out room to respond.
@@ -65,7 +65,6 @@ fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
 pub(crate) fn build_reference_context(
     config: &AppConfig,
     user_prompt: &str,
-    workspace_root: &Path,
 ) -> PromptReferenceContext {
     let Some(vault_path) = config.vault.path.clone() else {
         return PromptReferenceContext::default();
@@ -75,9 +74,7 @@ pub(crate) fn build_reference_context(
         return PromptReferenceContext::default();
     }
     match load_vault_reference_entries(&vault) {
-        Ok(entries) => {
-            build_prompt_reference_context(user_prompt, &entries, &vault, workspace_root)
-        }
+        Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault),
         Err(err) => {
             eprintln!("reference context warning: {err}");
             PromptReferenceContext::default()
@@ -91,11 +88,10 @@ impl AiGenerationService {
     pub async fn generate_npc_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<NpcSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -103,7 +99,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "npc_seed", 20)
@@ -225,11 +221,10 @@ impl AiGenerationService {
     pub async fn generate_location_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<LocationSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -237,7 +232,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "location_seed", 20)
@@ -338,11 +333,10 @@ impl AiGenerationService {
     pub async fn generate_faction_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<FactionSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -350,7 +344,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "faction_seed", 20)
@@ -462,11 +456,10 @@ impl AiGenerationService {
     pub async fn generate_god_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<GodSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -474,7 +467,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy deity for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "god_seed", 20)
@@ -584,11 +577,10 @@ impl AiGenerationService {
     pub async fn generate_item_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<ItemSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -596,7 +588,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one magical or legendary item.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt);
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
             + estimate_tokens(&reference_context.system_context)
@@ -702,11 +694,10 @@ impl AiGenerationService {
     pub async fn generate_event_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<EventSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -714,7 +705,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Write a short piece of lore about a notable event in a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt);
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "event_seed", 20)
@@ -817,11 +808,10 @@ impl AiGenerationService {
         twist: &str,
         topology: &str,
         extra_prompt: Option<&str>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<DungeonStory>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let premise = premise
             .as_ref()
@@ -833,8 +823,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty());
 
         let reference_probe = format!("{} {}", premise.unwrap_or(""), context);
-        let reference_context =
-            build_reference_context(&config, reference_probe.trim(), workspace_root);
+        let reference_context = build_reference_context(&config, reference_probe.trim());
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "dungeon_story", 12)
@@ -995,11 +984,10 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
         tone: &str,
         twist: &str,
         topology: &str,
-        workspace_root: &PathBuf,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<DungeonSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let beat_schema = serde_json::json!({
             "type": "object",
@@ -1699,7 +1687,6 @@ fn build_prompt_reference_context(
     prompt: &str,
     entries: &[VaultReferenceEntry],
     vault: &Vault,
-    workspace_root: &Path,
 ) -> PromptReferenceContext {
     let keys = extract_prompt_reference_keys(prompt, entries);
     if keys.is_empty() {
@@ -1717,7 +1704,7 @@ fn build_prompt_reference_context(
         .collect();
     let mut blocks = Vec::new();
 
-    let canonical_metadata = match EntityStore::new(workspace_root) {
+    let canonical_metadata = match EntityStore::new() {
         Ok(store) => canonical_metadata_map(&store),
         Err(err) => {
             eprintln!("reference context warning: failed to load canonical entities: {err}");

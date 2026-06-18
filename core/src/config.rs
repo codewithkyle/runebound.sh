@@ -182,8 +182,8 @@ impl Default for UiConfig {
     }
 }
 
-pub fn load_effective(workspace_root: &Path) -> Result<LoadedConfig> {
-    let paths = config_paths(workspace_root)?;
+pub fn load_effective() -> Result<LoadedConfig> {
+    let paths = config_paths()?;
 
     let mut config = AppConfig::default();
     let global_exists = paths.global.exists();
@@ -200,8 +200,8 @@ pub fn load_effective(workspace_root: &Path) -> Result<LoadedConfig> {
     })
 }
 
-pub fn save_config(workspace_root: &Path, config: &AppConfig) -> Result<PathBuf> {
-    let paths = config_paths(workspace_root)?;
+pub fn save_config(config: &AppConfig) -> Result<PathBuf> {
+    let paths = config_paths()?;
     let target = paths.global;
 
     if let Some(parent) = target.parent() {
@@ -223,8 +223,8 @@ pub fn save_config(workspace_root: &Path, config: &AppConfig) -> Result<PathBuf>
 /// written back so the section becomes visible and editable on disk. No-op when
 /// the file is absent (first-time setup writes a complete file) or the section
 /// is already present. Returns `Ok(true)` when it wrote.
-pub fn ensure_config_sections_persisted(workspace_root: &Path) -> Result<bool> {
-    let paths = config_paths(workspace_root)?;
+pub fn ensure_config_sections_persisted() -> Result<bool> {
+    let paths = config_paths()?;
     if !paths.global.exists() {
         return Ok(false);
     }
@@ -234,12 +234,12 @@ pub fn ensure_config_sections_persisted(workspace_root: &Path) -> Result<bool> {
         return Ok(false);
     }
 
-    let loaded = load_effective(workspace_root)?;
-    save_config(workspace_root, &loaded.effective)?;
+    let loaded = load_effective()?;
+    save_config(&loaded.effective)?;
     Ok(true)
 }
 
-pub fn config_paths(_workspace_root: &Path) -> Result<ConfigPaths> {
+pub fn config_paths() -> Result<ConfigPaths> {
     let config_base =
         dirs::config_dir().ok_or_else(|| anyhow!("unable to find config directory"))?;
 

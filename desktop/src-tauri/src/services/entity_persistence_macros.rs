@@ -56,7 +56,7 @@ macro_rules! impl_entity_persistence {
             // locals the frontmatter/row field lists below reference.
             $($normalize)*
 
-            let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+            let store = EntityStore::new().map_err(|err| err.to_string())?;
             let database = state.database();
             let repo = state.$repo();
             let document_repo = state.document_repo();

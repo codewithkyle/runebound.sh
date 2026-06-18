@@ -82,7 +82,6 @@ impl HandlerBridge for CoreHandler {
 }
 
 struct CoreHandlerInvocation<'a> {
-    workspace_root: &'a Path,
     _tokens: &'a [String],
     lowered: &'a [String],
     manifest: &'a CommandManifest,
@@ -123,7 +122,7 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
         CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match invocation.lowered.len() {
-                    0 | 1 => execute_status(invocation.workspace_root).await,
+                    0 | 1 => execute_status().await,
                     2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "status"),
                         command_help_doc(invocation.manifest, "status", None),
@@ -206,7 +205,7 @@ fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
         CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match invocation.lowered.len() {
-                    0 | 1 => execute_ping(invocation.workspace_root).await,
+                    0 | 1 => execute_ping().await,
                     2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
                         render_command_help(invocation.manifest, "ping"),
                         command_help_doc(invocation.manifest, "ping", None),
@@ -235,7 +234,7 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
                         command_help_doc(invocation.manifest, "setup", None),
                     )),
                     Some("verbosity") => {
-                        let loaded = load_effective(invocation.workspace_root)?;
+                        let loaded = load_effective()?;
                         match invocation.lowered.get(2) {
                             None => Ok(CommandOutput::text(format!(
                                 "generation verbosity is '{}'.\nUsage: setup verbosity <brief|medium|verbose>",
@@ -249,7 +248,7 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
                                 };
                                 let mut config = loaded.effective;
                                 config.generation.verbosity = level;
-                                let path = save_config(invocation.workspace_root, &config)?;
+                                let path = save_config(&config)?;
                                 Ok(CommandOutput::text(format!(
                                     "generation verbosity set to '{}' ({}).",
                                     level.as_str(),
@@ -269,22 +268,18 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
     )
 }
 
-pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse {
+pub async fn execute_line(input: &str) -> CommandResponse {
     let mut session = SessionState::default();
-    execute_line_with_session(workspace_root, input, &mut session).await
+    execute_line_with_session(input, &mut session).await
 }
 
-pub async fn execute_line_with_session(
-    workspace_root: &Path,
-    input: &str,
-    session: &mut SessionState,
-) -> CommandResponse {
+pub async fn execute_line_with_session(input: &str, session: &mut SessionState) -> CommandResponse {
     let trimmed = input.trim();
     if !trimmed.is_empty() {
         session.push_history(trimmed, 50);
     }
 
-    match execute_line_internal(workspace_root, input, session).await {
+    match execute_line_internal(input, session).await {
         Ok(output) => {
             let output_text = output.output.clone();
             // Every successful response carries a structured doc — the command's
@@ -397,29 +392,18 @@ pub(crate) async fn probe_ollama_models(
     Ok((detail, probe.models))
 }
 
-pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {
+pub async fn execute_line_result(input: &str) -> Result<CommandOutput> {
     let mut session = SessionState::default();
-    execute_line_internal(workspace_root, input, &mut session).await
+    execute_line_internal(input, &mut session).await
 }
 
-async fn execute_line_internal(
-    workspace_root: &Path,
-    input: &str,
-    session: &mut SessionState,
-) -> Result<CommandOutput> {
+async fn execute_line_internal(input: &str, session: &mut SessionState) -> Result<CommandOutput> {
     let normalized_input = normalize_command_input(input);
     let parsed_words =
         shell_words::split(&normalized_input).map_err(|e| anyhow!("invalid command input: {e}"))?;
     let manifest = command_manifest();
     let normalized_words = normalize_alias_tokens(&parsed_words, &manifest);
-    execute_dispatched(
-        workspace_root,
-        &normalized_words,
-        &manifest,
-        session,
-        &normalized_input,
-    )
-    .await
+    execute_dispatched(&normalized_words, &manifest, session, &normalized_input).await
 }
 
 /// Reject `-h`/`--help` anywhere in a command, returning the phrase-help hint to
@@ -444,7 +428,6 @@ pub fn reject_help_flags(tokens: &[String]) -> Option<String> {
 }
 
 async fn execute_dispatched(
-    workspace_root: &Path,
     tokens: &[String],
     manifest: &CommandManifest,
     session: &mut SessionState,
@@ -468,7 +451,6 @@ async fn execute_dispatched(
 
     if let Some(entry) = registry.get(handler_name) {
         let invocation = CoreHandlerInvocation {
-            workspace_root,
             _tokens: tokens,
             lowered: &lowered,
             manifest,
@@ -486,7 +468,6 @@ async fn execute_dispatched(
 }
 
 async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result<CommandOutput> {
-    let workspace_root = invocation.workspace_root;
     let lowered = invocation.lowered;
     let manifest = invocation.manifest;
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
@@ -505,7 +486,7 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
 
     match lowered[1].as_str() {
         "show" if lowered.len() == 2 => {
-            let loaded = load_effective(workspace_root)?;
+            let loaded = load_effective()?;
             let mut out = String::new();
             out.push_str(&format!(
                 "global config: {}\n",
@@ -525,8 +506,8 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
             Ok(CommandOutput::text(out.trim_end().to_string()))
         }
         "test" if lowered.len() == 2 => {
-            let loaded = load_effective(workspace_root)?;
-            let report = health::run_doctor_checks(&loaded.effective, workspace_root).await;
+            let loaded = load_effective()?;
+            let report = health::run_doctor_checks(&loaded.effective).await;
             let out = format_report("config test", &report);
             let output_doc = report_output_doc("Config Test", &report);
             if !report.is_ok() {
@@ -707,8 +688,8 @@ fn command_help_doc(manifest: &CommandManifest, root: &str, subcommand: Option<&
     document
 }
 
-async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
-    let loaded = load_effective(workspace_root)?;
+async fn execute_status() -> Result<CommandOutput> {
+    let loaded = load_effective()?;
     let global_config_path = loaded.paths.global.display().to_string();
     let config = loaded.effective;
 
@@ -761,8 +742,8 @@ pub(crate) const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
 /// Backs the `ping` command (and its `reconnect` alias). Fails (so the spinner
 /// flips to error) when the server is unreachable; reports a warning when the
 /// server answers but the configured model is missing.
-async fn execute_ping(workspace_root: &Path) -> Result<CommandOutput> {
-    let loaded = load_effective(workspace_root)?;
+async fn execute_ping() -> Result<CommandOutput> {
+    let loaded = load_effective()?;
     let config = loaded.effective;
 
     if config.ollama.base_url.trim().is_empty() {
@@ -955,8 +936,6 @@ fn setup_required_doc(setup: &SetupRequired) -> OutputDoc {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::{
         SetupRequired, build_core_handler_registry, execute_line_result, output_doc_from_error,
     };
@@ -988,7 +967,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_help_flags_in_favor_of_phrase_help() {
-        let result = execute_line_result(Path::new("."), "config --help").await;
+        let result = execute_line_result("config --help").await;
         let error = result.expect_err("expected --help to be rejected");
         assert!(error.to_string().contains("not supported"));
         assert!(error.to_string().contains("config help"));
@@ -996,7 +975,7 @@ mod tests {
 
     #[tokio::test]
     async fn supports_help_prefix_normalization() {
-        let result = execute_line_result(Path::new("."), "help config")
+        let result = execute_line_result("help config")
             .await
             .expect("expected help config to succeed");
         assert!(result.output.contains("## config"));

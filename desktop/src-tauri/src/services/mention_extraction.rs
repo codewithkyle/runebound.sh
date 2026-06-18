@@ -14,7 +14,6 @@
 //! server is known to be down.
 
 use std::collections::HashSet;
-use std::path::Path;
 
 use crate::services::ollama_chat::{
     build_chat_client, load_generation_config, post_chat_for_content,
@@ -25,22 +24,18 @@ use crate::services::publish::{WIKILINK_UNSAFE_CHARS, contains_word_boundary};
 /// `known_lower` (a set of lowercased known names). Returns canonical-cased
 /// names ready to be fed to the linker. Never errors — returns `[]` on any
 /// failure so publishing is unaffected.
-pub async fn extract_unknown_mentions(
-    workspace_root: &Path,
-    prose: &str,
-    known_lower: &HashSet<String>,
-) -> Vec<String> {
+pub async fn extract_unknown_mentions(prose: &str, known_lower: &HashSet<String>) -> Vec<String> {
     if prose.trim().is_empty() {
         return Vec::new();
     }
-    match request_mentions(workspace_root, prose).await {
+    match request_mentions(prose).await {
         Ok(raw) => filter_mentions(raw, prose, known_lower),
         Err(_) => Vec::new(),
     }
 }
 
-async fn request_mentions(workspace_root: &Path, prose: &str) -> Result<Vec<String>, String> {
-    let (config, model) = load_generation_config(workspace_root)?;
+async fn request_mentions(prose: &str) -> Result<Vec<String>, String> {
+    let (config, model) = load_generation_config()?;
     let (client, url) = build_chat_client(&config)?;
 
     let schema = serde_json::json!({

@@ -5,40 +5,52 @@ use serde::{Deserialize, Serialize};
 use crate::app_state::AppState;
 use crate::entities::{ALL_ENTITY_KINDS, EntityDetail, EntityKind};
 use crate::repositories::db;
+use crate::services::entity_persistence::unique_readable_vault_path;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
     dungeon_row_from_frontmatter, event_row_from_frontmatter, faction_row_from_frontmatter,
     god_row_from_frontmatter, item_row_from_frontmatter, location_row_from_frontmatter,
-    move_vault_file, npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
+    npc_row_from_frontmatter, unique_markdown_path_for_name,
 };
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
-    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
-    unique_slug_for_dir,
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
+    unique_slug_for_dir_with_ext,
 };
 use dnd_core::vault::Vault;
 
 /// Generate one entity's `soft_delete_<kind>` + `restore_<kind>` free functions
 /// (P5.2d). Both wrap the shared `record_soft_delete` / `restore_collision` +
-/// `commit_restore` helpers around the per-kind repo + DB row. The DB row IS the
-/// recovery payload (serialized to/from `payload_json`), so there are no per-kind
-/// payload structs. `soft_delete` writes the recovery row before any destructive
-/// step (P1.3).
+/// `commit_restore` helpers around the per-kind repo + TOML store.
+///
+/// Delete and undo operate ENTIRELY on local state — the TOML draft (the entity
+/// store), the DB row, and the document index. They never read, move, or remove
+/// anything in the user's Obsidian vault: deleting a saved-but-unpublished draft
+/// must not depend on a vault `.md` that publish hasn't written yet, and we never
+/// destroy a vault file the user owns. The serialized TOML frontmatter IS the
+/// recovery payload (it preserves `published_at`, which the DB row drops), so
+/// undo recreates the draft and re-derives the DB row from it. `soft_delete`
+/// writes the recovery row before any destructive step (P1.3).
 macro_rules! impl_entity_soft_delete {
     (
         kind: $kind:expr,
         dir: $dir:literal,
         repo: $repo:ident,
-        row: $Row:ty,
+        frontmatter: $Frontmatter:ty,
+        store_load: $store_load:ident,
+        store_save: $store_save:ident,
+        store_delete: $store_delete:ident,
+        row_from_frontmatter: $row_from_frontmatter:ident,
         soft_delete_fn: $sd:ident,
         restore_fn: $rs:ident $(,)?
     ) => {
         async fn $sd(
             target: &str,
             state: &AppState,
-            vault: &Vault,
+            store: &EntityStore,
             now: &str,
         ) -> Result<Option<SoftDeleteEntityResult>, String> {
             let database = state.database();
@@ -49,12 +61,18 @@ macro_rules! impl_entity_soft_delete {
             else {
                 return Ok(None);
             };
-            let payload_json = serde_json::to_string(&row).map_err(|err| err.to_string())?;
-            let trash_vault_path = record_soft_delete(
+            // The local TOML draft is the recovery payload — never the vault file.
+            let frontmatter = store
+                .$store_load(&row.slug)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| {
+                    format!("cannot delete \"{}\": its draft file is missing", row.name)
+                })?;
+            let payload_json =
+                serde_json::to_string(&frontmatter).map_err(|err| err.to_string())?;
+            record_soft_delete(
                 state,
-                vault,
                 $kind,
-                $dir,
                 &row.id,
                 &row.slug,
                 &row.name,
@@ -64,6 +82,10 @@ macro_rules! impl_entity_soft_delete {
             )
             .await?;
             // Destructive steps run only after the recovery row is committed (P1.3).
+            // We remove the local TOML draft + DB/index rows; the vault is untouched.
+            store
+                .$store_delete(&row.slug)
+                .map_err(|err| err.to_string())?;
             state
                 .$repo()
                 .delete_by_id(database.as_ref(), &row.id)
@@ -77,29 +99,38 @@ macro_rules! impl_entity_soft_delete {
                 id: row.id,
                 name: row.name,
                 slug: row.slug,
-                trash_vault_path,
             }))
         }
 
         async fn $rs(
             soft_delete: &db::SoftDeleteRow,
             state: &AppState,
-            vault: &Vault,
+            store: &EntityStore,
             now: &str,
         ) -> Result<UndoSoftDeleteResult, String> {
             let database = state.database();
-            let mut row: $Row =
+            let mut frontmatter: $Frontmatter =
                 serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-            let (restored_slug, restored_vault_path) =
-                restore_collision(vault, $dir, &row.slug, &row.name, &row.vault_path)?;
-            move_vault_file(
-                vault,
-                &normalize_relative_path_for_storage(&soft_delete.trash_vault_path),
-                &restored_vault_path,
-            )?;
-            row.slug = restored_slug.clone();
-            row.vault_path = restored_vault_path.clone();
-            row.updated_at = now.to_string();
+            // Re-mint slug/vault path only if a new entity took them while this one
+            // was deleted. Collisions are checked against the local store + document
+            // index — never the vault.
+            let (restored_slug, restored_vault_path) = restore_collision(
+                state,
+                store,
+                $dir,
+                &frontmatter.slug,
+                &frontmatter.name,
+                &frontmatter.vault_path,
+            )
+            .await?;
+            frontmatter.slug = restored_slug.clone();
+            frontmatter.vault_path = restored_vault_path.clone();
+            frontmatter.updated_at = now.to_string();
+            // Recreate the TOML draft, then re-derive the DB row + document index.
+            store
+                .$store_save(&frontmatter)
+                .map_err(|err| err.to_string())?;
+            let row = $row_from_frontmatter(&frontmatter)?;
             state.$repo().upsert(database.as_ref(), &row).await?;
             commit_restore(
                 state,
@@ -132,7 +163,7 @@ impl EntityAdminService {
         input: EnsureLocationInput,
         state: &AppState,
     ) -> Result<EnsureLocationResult, String> {
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+        let loaded = load_effective().map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let vault_path = loaded
             .effective
@@ -337,35 +368,27 @@ impl EntityAdminService {
     ) -> Result<SoftDeleteEntityResult, String> {
         let target = input.target.trim();
         if target.is_empty() {
-            return Err("usage: delete <npc-or-location-name>".to_string());
+            return Err("usage: delete <entity-name>".to_string());
         }
 
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
+        // Delete works purely on local state, so it needs no vault config \u2014 only the
+        // entity store (TOML drafts) and the database.
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let now = now_timestamp();
 
         // Walk kinds in registry order, soft-deleting the first name/slug match
-        // (first-match wins, as before \u2014 a bare name colliding across kinds resolves
-        // to the earliest kind). The per-kind snapshot/trash/delete is generated by
-        // `impl_entity_soft_delete!`.
+        // (first-match wins \u2014 a bare name colliding across kinds resolves to the
+        // earliest kind). The per-kind snapshot + draft/DB/index removal is generated
+        // by `impl_entity_soft_delete!`; the vault is never touched.
         for kind in ALL_ENTITY_KINDS {
             let found = match kind {
-                EntityKind::Npc => soft_delete_npc(target, state, &vault, &now).await?,
-                EntityKind::Location => soft_delete_location(target, state, &vault, &now).await?,
-                EntityKind::Faction => soft_delete_faction(target, state, &vault, &now).await?,
-                EntityKind::Item => soft_delete_item(target, state, &vault, &now).await?,
-                EntityKind::Event => soft_delete_event(target, state, &vault, &now).await?,
-                EntityKind::God => soft_delete_god(target, state, &vault, &now).await?,
-                EntityKind::Dungeon => soft_delete_dungeon(target, state, &vault, &now).await?,
+                EntityKind::Npc => soft_delete_npc(target, state, &store, &now).await?,
+                EntityKind::Location => soft_delete_location(target, state, &store, &now).await?,
+                EntityKind::Faction => soft_delete_faction(target, state, &store, &now).await?,
+                EntityKind::Item => soft_delete_item(target, state, &store, &now).await?,
+                EntityKind::Event => soft_delete_event(target, state, &store, &now).await?,
+                EntityKind::God => soft_delete_god(target, state, &store, &now).await?,
+                EntityKind::Dungeon => soft_delete_dungeon(target, state, &store, &now).await?,
             };
             if let Some(result) = found {
                 return Ok(result);
@@ -373,7 +396,7 @@ impl EntityAdminService {
         }
 
         Err(format!(
-            "no npc, location, faction, item, event, god, or dungeon found for: {target}"
+            "nothing to delete: no saved draft found for \"{target}\"."
         ))
     }
 
@@ -381,17 +404,6 @@ impl EntityAdminService {
         &self,
         state: &AppState,
     ) -> Result<UndoSoftDeleteResult, String> {
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
         let database = state.database();
         let soft_delete_repo = state.soft_delete_repo();
 
@@ -403,15 +415,18 @@ impl EntityAdminService {
             return self.undo_publish(state, &soft_delete).await;
         }
 
+        // Undo of a delete is local-only too: recreate the TOML draft + DB/index
+        // rows from the recovery payload. No vault config or file moves involved.
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let now = now_timestamp();
         match soft_delete.entity_type.as_str() {
-            "npc" => restore_npc(&soft_delete, state, &vault, &now).await,
-            "location" => restore_location(&soft_delete, state, &vault, &now).await,
-            "faction" => restore_faction(&soft_delete, state, &vault, &now).await,
-            "item" => restore_item(&soft_delete, state, &vault, &now).await,
-            "event" => restore_event(&soft_delete, state, &vault, &now).await,
-            "god" => restore_god(&soft_delete, state, &vault, &now).await,
-            "dungeon" => restore_dungeon(&soft_delete, state, &vault, &now).await,
+            "npc" => restore_npc(&soft_delete, state, &store, &now).await,
+            "location" => restore_location(&soft_delete, state, &store, &now).await,
+            "faction" => restore_faction(&soft_delete, state, &store, &now).await,
+            "item" => restore_item(&soft_delete, state, &store, &now).await,
+            "event" => restore_event(&soft_delete, state, &store, &now).await,
+            "god" => restore_god(&soft_delete, state, &store, &now).await,
+            "dungeon" => restore_dungeon(&soft_delete, state, &store, &now).await,
             other => Err(format!("unsupported soft delete entity type: {other}")),
         }
     }
@@ -561,7 +576,7 @@ impl EntityAdminService {
         let database = state.database();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
-        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let now = now_timestamp();
         let slug = soft_delete.slug.as_str();
         let missing = || {
@@ -817,7 +832,11 @@ impl_entity_soft_delete! {
     kind: EntityKind::Npc,
     dir: "npcs",
     repo: npc_repo,
-    row: db::NpcRow,
+    frontmatter: NpcFrontmatter,
+    store_load: load_npc,
+    store_save: save_npc,
+    store_delete: delete_npc,
+    row_from_frontmatter: npc_row_from_frontmatter,
     soft_delete_fn: soft_delete_npc,
     restore_fn: restore_npc,
 }
@@ -825,7 +844,11 @@ impl_entity_soft_delete! {
     kind: EntityKind::Location,
     dir: "locations",
     repo: location_repo,
-    row: db::LocationRow,
+    frontmatter: LocationFrontmatter,
+    store_load: load_location,
+    store_save: save_location,
+    store_delete: delete_location,
+    row_from_frontmatter: location_row_from_frontmatter,
     soft_delete_fn: soft_delete_location,
     restore_fn: restore_location,
 }
@@ -833,7 +856,11 @@ impl_entity_soft_delete! {
     kind: EntityKind::Faction,
     dir: "factions",
     repo: faction_repo,
-    row: db::FactionRow,
+    frontmatter: FactionFrontmatter,
+    store_load: load_faction,
+    store_save: save_faction,
+    store_delete: delete_faction,
+    row_from_frontmatter: faction_row_from_frontmatter,
     soft_delete_fn: soft_delete_faction,
     restore_fn: restore_faction,
 }
@@ -841,7 +868,11 @@ impl_entity_soft_delete! {
     kind: EntityKind::Item,
     dir: "items",
     repo: item_repo,
-    row: db::ItemRow,
+    frontmatter: ItemFrontmatter,
+    store_load: load_item,
+    store_save: save_item,
+    store_delete: delete_item,
+    row_from_frontmatter: item_row_from_frontmatter,
     soft_delete_fn: soft_delete_item,
     restore_fn: restore_item,
 }
@@ -849,7 +880,11 @@ impl_entity_soft_delete! {
     kind: EntityKind::Event,
     dir: "events",
     repo: event_repo,
-    row: db::EventRow,
+    frontmatter: EventFrontmatter,
+    store_load: load_event,
+    store_save: save_event,
+    store_delete: delete_event,
+    row_from_frontmatter: event_row_from_frontmatter,
     soft_delete_fn: soft_delete_event,
     restore_fn: restore_event,
 }
@@ -857,7 +892,11 @@ impl_entity_soft_delete! {
     kind: EntityKind::God,
     dir: "gods",
     repo: god_repo,
-    row: db::GodRow,
+    frontmatter: GodFrontmatter,
+    store_load: load_god,
+    store_save: save_god,
+    store_delete: delete_god,
+    row_from_frontmatter: god_row_from_frontmatter,
     soft_delete_fn: soft_delete_god,
     restore_fn: restore_god,
 }
@@ -865,38 +904,40 @@ impl_entity_soft_delete! {
     kind: EntityKind::Dungeon,
     dir: "dungeons",
     repo: dungeon_repo,
-    row: db::DungeonRow,
+    frontmatter: DungeonFrontmatter,
+    store_load: load_dungeon,
+    store_save: save_dungeon,
+    store_delete: delete_dungeon,
+    row_from_frontmatter: dungeon_row_from_frontmatter,
     soft_delete_fn: soft_delete_dungeon,
     restore_fn: restore_dungeon,
 }
 
-/// Snapshot a row's recovery record (serialized payload + trash path) and move its
-/// vault file to trash. The recovery row is committed BEFORE the file move, and
-/// the caller deletes the DB row only after this returns (P1.3 safe order).
+/// Record an entity's recovery row (the serialized TOML draft) before any
+/// destructive step. The vault is never touched — the recovery payload is the
+/// draft itself, so there is no trash file to move. The caller removes the draft
+/// + DB row only after this returns (P1.3 safe order).
 #[allow(clippy::too_many_arguments)]
 async fn record_soft_delete(
     state: &AppState,
-    vault: &Vault,
     kind: EntityKind,
-    dir: &str,
     id: &str,
     slug: &str,
     name: &str,
     raw_vault_path: &str,
     payload_json: String,
     now: &str,
-) -> Result<String, String> {
+) -> Result<(), String> {
     let database = state.database();
-    let normalized_vault_path = normalize_relative_path_for_storage(raw_vault_path);
-    let trash_vault_path = unique_trash_path(vault, dir, slug, now)?;
     let soft_delete_row = db::SoftDeleteRow {
         id: 0,
         entity_type: kind.as_str().to_string(),
         entity_id: id.to_string(),
         name: name.to_string(),
         slug: slug.to_string(),
-        original_vault_path: normalized_vault_path,
-        trash_vault_path: trash_vault_path.clone(),
+        original_vault_path: normalize_relative_path_for_storage(raw_vault_path),
+        // No vault file is moved on delete, so there is no trash path.
+        trash_vault_path: String::new(),
         payload_json,
         created_at: now.to_string(),
         undone_at: None,
@@ -906,33 +947,38 @@ async fn record_soft_delete(
         .soft_delete_repo()
         .insert(database.as_ref(), &soft_delete_row)
         .await?;
-    move_vault_file(
-        vault,
-        &soft_delete_row.original_vault_path,
-        &trash_vault_path,
-    )?;
-    Ok(trash_vault_path)
+    Ok(())
 }
 
-/// Resolve the slug + vault path to restore to: keep the originals unless that
-/// path is already occupied, in which case mint fresh unique ones.
-fn restore_collision(
-    vault: &Vault,
+/// Resolve the slug + vault path to restore to without touching the vault: keep
+/// the originals unless a new entity claimed the slug's TOML draft or the
+/// document-index path while this one was deleted, in which case mint fresh
+/// unique ones.
+async fn restore_collision(
+    state: &AppState,
+    store: &EntityStore,
     dir: &str,
     slug: &str,
     name: &str,
     vault_path: &str,
 ) -> Result<(String, String), String> {
-    let mut restored_slug = slug.to_string();
-    let mut restored_vault_path = normalize_relative_path_for_storage(vault_path);
-    let preferred_full = vault
-        .resolve_relative(&PathBuf::from(&restored_vault_path))
-        .map_err(|err| err.to_string())?;
-    if preferred_full.exists() {
-        restored_slug = unique_slug_for_dir(vault.root(), dir, &restored_slug);
-        restored_vault_path = unique_markdown_path_for_name(vault, dir, name, None)?;
+    let database = state.database();
+    let document_repo = state.document_repo();
+    let restored_vault_path = normalize_relative_path_for_storage(vault_path);
+    let toml_taken = store.root().join(dir).join(format!("{slug}.toml")).exists();
+    let path_taken = document_repo
+        .find_by_vault_path(database.as_ref(), &restored_vault_path)
+        .await?
+        .is_some();
+    if toml_taken || path_taken {
+        let fresh_slug = unique_slug_for_dir_with_ext(store.root(), dir, slug, "toml");
+        let fresh_path =
+            unique_readable_vault_path(document_repo.as_ref(), database.as_ref(), dir, name, None)
+                .await?;
+        Ok((fresh_slug, fresh_path))
+    } else {
+        Ok((slug.to_string(), restored_vault_path))
     }
-    Ok((restored_slug, restored_vault_path))
 }
 
 /// Re-index a restored entity and mark its recovery row undone.
@@ -979,7 +1025,6 @@ pub struct SoftDeleteEntityResult {
     pub id: String,
     pub name: String,
     pub slug: String,
-    pub trash_vault_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

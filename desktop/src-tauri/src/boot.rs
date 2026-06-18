@@ -58,8 +58,8 @@ fn boot_task_infos() -> Vec<BootTaskInfo> {
 
 /// Return the ordered boot tasks, or signal that first-time setup is required.
 #[tauri::command]
-pub fn boot_plan(state: State<'_, AppState>) -> Result<BootPlan, String> {
-    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+pub fn boot_plan() -> Result<BootPlan, String> {
+    let loaded = load_effective().map_err(|err| err.to_string())?;
     let needs_setup = !required_issues(&loaded.effective).is_empty();
     let tasks = if needs_setup {
         Vec::new()
@@ -104,7 +104,7 @@ pub async fn run_boot_task(
             }
         }
         "llm" => {
-            let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+            let loaded = load_effective().map_err(|err| err.to_string())?;
             let health = check_ollama_health(&loaded.effective, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
 
             let tone = if health.reachable && health.model_available {
@@ -130,7 +130,7 @@ pub async fn run_boot_task(
 /// cached boot probe result where available.
 #[tauri::command]
 pub async fn boot_motd(state: State<'_, AppState>) -> Result<CommandResponse, String> {
-    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    let loaded = load_effective().map_err(|err| err.to_string())?;
     let config = loaded.effective;
 
     let health = {

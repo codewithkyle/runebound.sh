@@ -34,8 +34,8 @@ pub struct EntityStore {
 }
 
 impl EntityStore {
-    pub fn new(workspace_root: &Path) -> Result<Self> {
-        let paths = config_paths(workspace_root)?;
+    pub fn new() -> Result<Self> {
+        let paths = config_paths()?;
         let root = paths.entities;
         let store = Self { root };
         store.ensure_dirs()?;

@@ -1,7 +1,6 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
-use serde::{Deserialize, Serialize};
 use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Row, SqlitePool};
@@ -16,7 +15,7 @@ pub struct Database {
     pub path: PathBuf,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct LocationRow {
     pub id: String,
     pub slug: String,
@@ -35,7 +34,7 @@ pub struct LocationRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct FactionRow {
     pub id: String,
     pub slug: String,
@@ -61,7 +60,7 @@ pub struct FactionRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct GodRow {
     pub id: String,
     pub slug: String,
@@ -84,15 +83,13 @@ pub struct GodRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct DungeonRow {
     pub id: String,
     pub slug: String,
     pub name: String,
     pub vault_path: String,
-    #[serde(default)]
     pub location: String,
-    #[serde(default)]
     pub story: String,
     pub premise: String,
     pub topology: String,
@@ -103,7 +100,7 @@ pub struct DungeonRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct ItemRow {
     pub id: String,
     pub slug: String,
@@ -123,7 +120,7 @@ pub struct ItemRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct EventRow {
     pub id: String,
     pub slug: String,
@@ -134,7 +131,7 @@ pub struct EventRow {
     pub updated_at: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct NpcRow {
     pub id: String,
     pub slug: String,

@@ -41,8 +41,7 @@ impl SuggestionService {
             }
 
             if !active_ref.query.trim().starts_with('-') {
-                let loaded =
-                    load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+                let loaded = load_effective().map_err(|err| err.to_string())?;
                 if let Some(vault_path) = loaded.effective.vault.path {
                     let vault = Vault::new(vault_path);
                     if vault.ensure_root_exists().is_ok() {

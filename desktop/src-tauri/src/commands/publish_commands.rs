@@ -14,7 +14,6 @@ use crate::entities::EntityKind;
 use crate::services::entity_admin::EntityAdminService;
 use crate::services::entity_persistence::EntityPersistenceService;
 use std::collections::HashSet;
-use std::path::Path;
 
 use crate::services::mention_extraction::extract_unknown_mentions;
 use crate::services::publish::{
@@ -76,9 +75,9 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
         PublishTargetInfo::from_details(details)
     };
 
-    let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+    let store = EntityStore::new().map_err(|err| err.to_string())?;
 
-    let effective = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    let effective = load_effective().map_err(|err| err.to_string())?;
     validate_for_runtime(&effective.effective).map_err(|err| err.to_string())?;
     let vault_root = effective
         .effective
@@ -118,7 +117,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -140,7 +138,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -166,7 +163,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -192,7 +188,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -214,7 +209,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -240,7 +234,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -262,7 +255,6 @@ pub async fn handle_publish(invocation: DesktopHandlerInvocation<'_>) -> Command
                 None => return Ok(Some(ok_response(missing_canonical_message(&target), None))),
             };
             let linker = build_linker(
-                &state.workspace_root,
                 &candidate_names,
                 &known_lower,
                 ollama_ok,
@@ -529,7 +521,6 @@ fn collect_known_entity_names(store: &EntityStore, vault: &Vault) -> Result<Vec<
 /// Tier 2 LLM-recognized names found in this entity's `prose` that aren't
 /// already known. `EntityLinker` excludes `self_name` and de-duplicates.
 async fn build_linker(
-    workspace_root: &Path,
     base_names: &[String],
     known_lower: &HashSet<String>,
     ollama_ok: bool,
@@ -538,7 +529,7 @@ async fn build_linker(
 ) -> EntityLinker {
     let mut names = base_names.to_vec();
     if ollama_ok {
-        names.extend(extract_unknown_mentions(workspace_root, prose, known_lower).await);
+        names.extend(extract_unknown_mentions(prose, known_lower).await);
     }
     EntityLinker::new(names, self_name)
 }

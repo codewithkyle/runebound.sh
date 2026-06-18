@@ -108,12 +108,7 @@ async fn create_npc(trimmed: &str, state: tauri::State<'_, AppState>) -> Command
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_npc_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_npc_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = NpcDraftSession {
@@ -165,12 +160,7 @@ async fn create_location(trimmed: &str, state: tauri::State<'_, AppState>) -> Co
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_location_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_location_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = LocationDraftSession {
@@ -221,12 +211,7 @@ async fn create_faction(trimmed: &str, state: tauri::State<'_, AppState>) -> Com
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_faction_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_faction_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = FactionDraftSession {
@@ -284,12 +269,7 @@ async fn create_item(trimmed: &str, state: tauri::State<'_, AppState>) -> Comman
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_item_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_item_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let slug = slugify(&seed.name);
@@ -343,12 +323,7 @@ async fn create_event(trimmed: &str, state: tauri::State<'_, AppState>) -> Comma
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_event_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_event_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let title = seed.title.trim();
@@ -392,12 +367,7 @@ async fn create_god(trimmed: &str, state: tauri::State<'_, AppState>) -> Command
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_god_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_god_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = GodDraftSession {

@@ -1,5 +1,4 @@
 use std::collections::HashSet;
-use std::fs;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
@@ -23,7 +22,7 @@ pub struct VaultSyncService;
 
 impl VaultSyncService {
     pub async fn sync_from_vault(&self, state: &AppState) -> Result<(), String> {
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+        let loaded = load_effective().map_err(|err| err.to_string())?;
         if !loaded.effective.vault.autoscan_on_start {
             return Ok(());
         }
@@ -35,7 +34,7 @@ impl VaultSyncService {
         let vault = Vault::new(vault_path);
         vault.ensure_structure().map_err(|err| err.to_string())?;
 
-        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let database = state.database();
         let npc_repo = state.npc_repo();
         let location_repo = state.location_repo();
@@ -679,68 +678,6 @@ pub(crate) fn god_row_from_frontmatter(frontmatter: &GodFrontmatter) -> Result<d
         rivals: faction_list_to_db_text(&frontmatter.rivals).map_err(|err| err.to_string())?,
         created_at: frontmatter.created_at.clone(),
         updated_at: frontmatter.updated_at.clone(),
-    })
-}
-
-pub fn unique_trash_path(
-    vault: &Vault,
-    entity_dir: &str,
-    slug: &str,
-    timestamp: &str,
-) -> Result<String, String> {
-    let base = format!("{}-{}", slug, timestamp.replace([':', '-'], ""));
-    let mut candidate = format!(".trash/{entity_dir}/{base}.md");
-    let mut index = 2;
-
-    loop {
-        let full = vault
-            .resolve_relative(&PathBuf::from(&candidate))
-            .map_err(|err| err.to_string())?;
-        if !full.exists() {
-            return Ok(candidate);
-        }
-        candidate = format!(".trash/{entity_dir}/{base}-{index}.md");
-        index += 1;
-    }
-}
-
-pub fn move_vault_file(
-    vault: &Vault,
-    source_relative: &str,
-    target_relative: &str,
-) -> Result<(), String> {
-    let source_relative = normalize_relative_path_for_storage(source_relative);
-    let target_relative = normalize_relative_path_for_storage(target_relative);
-    let source_full = vault
-        .resolve_relative(&PathBuf::from(&source_relative))
-        .map_err(|err| err.to_string())?;
-    if !source_full.exists() {
-        return Err(format!(
-            "source file does not exist: {}",
-            source_full.display()
-        ));
-    }
-
-    let target_full = vault
-        .resolve_relative(&PathBuf::from(&target_relative))
-        .map_err(|err| err.to_string())?;
-    if let Some(parent) = target_full.parent() {
-        fs::create_dir_all(parent).map_err(|err| {
-            format!(
-                "failed to create trash directory {}: {}",
-                parent.display(),
-                err
-            )
-        })?;
-    }
-
-    fs::rename(&source_full, &target_full).map_err(|err| {
-        format!(
-            "failed to move file from {} to {}: {}",
-            source_full.display(),
-            target_full.display(),
-            err
-        )
     })
 }
 

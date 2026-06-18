@@ -554,7 +554,6 @@ impl Wizard<AppState> for DungeonWizard {
                 &tone,
                 &twist,
                 &topology,
-                &state.workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )
@@ -641,7 +640,6 @@ async fn generate_story(
             &twist,
             &topology,
             extra_prompt,
-            &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),
         )

@@ -131,7 +131,6 @@ impl EntityDomain for EventDomain {
         let SeedGeneration { seed, notice } = ai
             .generate_event_seed(
                 merged_prompt,
-                &state.workspace_root,
                 state.database().as_ref(),
                 state.generation_repo().as_ref(),
             )

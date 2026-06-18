@@ -184,7 +184,6 @@ impl EntityDomain for ItemDomain {
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let rerolled = reroll_service
             .reroll_item_field(
                 RerollItemFieldInput {
@@ -204,7 +203,6 @@ impl EntityDomain for ItemDomain {
                         location: draft.location.clone(),
                     },
                 },
-                &workspace_root,
                 state.database().as_ref(),
                 state.generation_repo().as_ref(),
             )

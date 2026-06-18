@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -45,6 +44,18 @@ impl DraftEnvelope {
             DraftEnvelope::Event(_) => EntityKind::Event,
             DraftEnvelope::God(_) => EntityKind::God,
             DraftEnvelope::Dungeon(_) => EntityKind::Dungeon,
+        }
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            DraftEnvelope::Npc(d) => &d.id,
+            DraftEnvelope::Location(d) => &d.id,
+            DraftEnvelope::Faction(d) => &d.id,
+            DraftEnvelope::Item(d) => &d.id,
+            DraftEnvelope::Event(d) => &d.id,
+            DraftEnvelope::God(d) => &d.id,
+            DraftEnvelope::Dungeon(d) => &d.id,
         }
     }
 
@@ -428,7 +439,6 @@ impl EditorSession {
 }
 
 pub(crate) struct AppState {
-    pub(crate) workspace_root: PathBuf,
     pub(crate) command_service: Mutex<dnd_core::service::CommandService>,
     pub(crate) editor_session: Mutex<EditorSession>,
     pub(crate) database: Arc<Database>,

@@ -11,7 +11,7 @@
 //! section — see docs/command-contexts.md §4-§5 and docs/config.md for the
 //! dispatch route, seed invariants, and config keys.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -39,13 +39,11 @@ use anyhow::{Result, anyhow, bail};
 // Host capability trait
 // ---------------------------------------------------------------------------
 
-/// What an onboarding step needs from its host beyond the base [`WizardHost`]:
-/// the workspace root used for config I/O. The native folder picker is provided
-/// through `WizardHost::perform_native` (overridden on the desktop, degraded by
-/// the default elsewhere), so it is not part of this trait.
-pub trait OnboardingHost: WizardHost + 'static {
-    fn workspace_root(&self) -> &Path;
-}
+/// Marker for a host that can run the onboarding wizard. It adds nothing beyond
+/// [`WizardHost`] (config I/O is global, no longer host-scoped); the native folder
+/// picker is provided through `WizardHost::perform_native` (overridden on the
+/// desktop, degraded by the default elsewhere).
+pub trait OnboardingHost: WizardHost + 'static {}
 
 // ---------------------------------------------------------------------------
 // Accumulator
@@ -485,7 +483,7 @@ impl<H: OnboardingHost> WizardStep<H> for SaveStep {
 
 /// The full save: vault + ollama + (optional) model, ensure vault structure,
 /// init the database, run quick health checks. Mirrors the former `save` block.
-async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_full(d: &OnboardingData) -> Result<CommandResponse> {
     if d.vault_path.trim().is_empty() {
         bail!("vault path is missing. run set vault <path>.");
     }
@@ -494,7 +492,7 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
     }
     let missing_model = d.selected_model.trim().is_empty();
 
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.vault.path = Some(PathBuf::from(&d.vault_path));
     config.ollama.base_url = d.ollama_base_url.clone();
@@ -507,7 +505,7 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
         bail!("missing required config:\n- {}", issues.join("\n- "));
     }
 
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
     let vault_path = config
         .vault
         .path
@@ -569,15 +567,15 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
 }
 
 /// Save only the vault section. Mirrors the former `save_vault_section`.
-async fn finalize_vault(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_vault(d: &OnboardingData) -> Result<CommandResponse> {
     if d.vault_path.trim().is_empty() {
         bail!("vault path is missing.");
     }
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.vault.path = Some(PathBuf::from(&d.vault_path));
 
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
     let vault_path = config
         .vault
         .path
@@ -607,18 +605,18 @@ async fn finalize_vault(root: &Path, d: &OnboardingData) -> Result<CommandRespon
 }
 
 /// Save the ollama server + (optional) model. Mirrors `save_llm_section`.
-async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_llm(d: &OnboardingData) -> Result<CommandResponse> {
     if d.ollama_base_url.trim().is_empty() {
         bail!("ollama URL is missing. run set ollama <url>.");
     }
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.ollama.base_url = d.ollama_base_url.clone();
     let missing_model = d.selected_model.trim().is_empty();
     if !missing_model {
         config.ollama.model = Some(d.selected_model.clone());
     }
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
 
     let mut lines = vec![
         "## LLM updated".to_string(),
@@ -655,14 +653,14 @@ async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse
 }
 
 /// Save only the selected model. Mirrors `save_model_section`.
-async fn finalize_model(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_model(d: &OnboardingData) -> Result<CommandResponse> {
     if d.selected_model.trim().is_empty() {
         bail!("no model is selected. choose a model first.");
     }
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.ollama.model = Some(d.selected_model.clone());
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
 
     let lines = [
         "## Model updated".to_string(),
@@ -689,8 +687,8 @@ async fn finalize_model(root: &Path, d: &OnboardingData) -> Result<CommandRespon
 /// `ollama_base_url` *unconditionally* from effective config (the documented
 /// "continue with 127.0.0.1" invariant — see docs/command-contexts.md §5). The
 /// Model flow starts at the model step, so it probes the configured server here.
-async fn seed_data(root: &Path, flow: OnboardingFlow) -> Result<OnboardingData> {
-    let loaded = load_effective(root)?;
+async fn seed_data(flow: OnboardingFlow) -> Result<OnboardingData> {
+    let loaded = load_effective()?;
     let mut d = OnboardingData {
         flow,
         ollama_base_url: loaded.effective.ollama.base_url.clone(),
@@ -734,16 +732,12 @@ macro_rules! onboarding_wizard {
             fn steps(&self) -> &[Arc<dyn WizardStep<H>>] {
                 &self.steps
             }
-            async fn seed(&self, host: &H) -> std::result::Result<WizardData, String> {
-                let acc = seed_data(host.workspace_root(), $flow)
-                    .await
-                    .map_err(|e| e.to_string())?;
+            async fn seed(&self, _host: &H) -> std::result::Result<WizardData, String> {
+                let acc = seed_data($flow).await.map_err(|e| e.to_string())?;
                 Ok(WizardData::new(acc))
             }
-            async fn finalize(&self, host: &H, d: &WizardData) -> CommandResult {
-                let response = $finalize(host.workspace_root(), data(d))
-                    .await
-                    .map_err(|e| e.to_string())?;
+            async fn finalize(&self, _host: &H, d: &WizardData) -> CommandResult {
+                let response = $finalize(data(d)).await.map_err(|e| e.to_string())?;
                 Ok(Some(response))
             }
         }
@@ -821,23 +815,21 @@ pub fn register_onboarding_wizards<H: OnboardingHost>(registry: &mut WizardRegis
 // Core/CLI host
 // ---------------------------------------------------------------------------
 
-/// The core/CLI onboarding host: owns the workspace root, the live wizard session
-/// (moved in and out of the long-lived `CommandService` around each dispatch),
-/// and the registry. `perform_native` uses the default (`Cancelled`), so the
-/// folder picker degrades gracefully on the CLI.
+/// The core/CLI onboarding host: owns the live wizard session (moved in and out
+/// of the long-lived `CommandService` around each dispatch) and the registry.
+/// `perform_native` uses the default (`Cancelled`), so the folder picker degrades
+/// gracefully on the CLI.
 pub struct CoreOnboardingCtx {
-    workspace_root: PathBuf,
     session: tokio::sync::Mutex<WizardSession>,
     registry: WizardRegistry<CoreOnboardingCtx>,
 }
 
 impl CoreOnboardingCtx {
     /// Build a host taking ownership of `session` (restore it with `into_session`).
-    pub fn new(workspace_root: PathBuf, session: WizardSession) -> Self {
+    pub fn new(session: WizardSession) -> Self {
         let mut registry = WizardRegistry::new();
         register_onboarding_wizards(&mut registry);
         Self {
-            workspace_root,
             session: tokio::sync::Mutex::new(session),
             registry,
         }
@@ -859,11 +851,7 @@ impl WizardHost for CoreOnboardingCtx {
     // perform_native defaults to Cancelled — the CLI degradation path.
 }
 
-impl OnboardingHost for CoreOnboardingCtx {
-    fn workspace_root(&self) -> &Path {
-        &self.workspace_root
-    }
-}
+impl OnboardingHost for CoreOnboardingCtx {}
 
 #[cfg(test)]
 mod tests {
@@ -873,7 +861,7 @@ mod tests {
     use super::*;
 
     fn host() -> CoreOnboardingCtx {
-        CoreOnboardingCtx::new(std::env::temp_dir(), WizardSession::default())
+        CoreOnboardingCtx::new(WizardSession::default())
     }
     fn wd(d: OnboardingData) -> WizardData {
         WizardData::new(d)

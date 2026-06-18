@@ -539,7 +539,7 @@ async fn resolve_vault_path(
 
 /// Compute a unique `dir/Name.md` path, disambiguating collisions with a numeric
 /// suffix unless the colliding entry is the entity we're saving (`current_slug`).
-async fn unique_readable_vault_path(
+pub(crate) async fn unique_readable_vault_path(
     document_repo: &dyn crate::repositories::DocumentRepository,
     database: &db::Database,
     relative_dir: &str,

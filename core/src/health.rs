@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -230,17 +229,9 @@ pub async fn run_quick_checks(config: &AppConfig) -> CheckReport {
     CheckReport { items }
 }
 
-pub async fn run_doctor_checks(config: &AppConfig, workspace_root: &Path) -> CheckReport {
+pub async fn run_doctor_checks(config: &AppConfig) -> CheckReport {
     let mut report = run_quick_checks(config).await;
-
-    report.items.push(CheckItem {
-        name: "workspace root".to_string(),
-        ok: true,
-        detail: workspace_root.display().to_string(),
-    });
-
     report.items.push(check_vault_structure(config));
-
     report
 }
 

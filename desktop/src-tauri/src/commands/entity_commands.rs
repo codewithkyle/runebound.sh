@@ -152,21 +152,15 @@ pub async fn handle_delete(
         format!("type: {}", result.entity_type.as_str()),
         format!("name: {}", result.name),
         format!("slug: {}", result.slug),
-        format!("trash: {}", path_for_display(&result.trash_vault_path)),
         "tip: run undo to restore it.".to_string(),
     ]
     .join("\n");
 
     let should_clear = {
         let editor = invocation.state.editor_session.lock().await;
-        editor.get_npc().is_some_and(|draft| draft.id == result.id)
-            || editor
-                .get_location()
-                .is_some_and(|draft| draft.id == result.id)
-            || editor
-                .get_faction()
-                .is_some_and(|draft| draft.id == result.id)
-            || editor.get_god().is_some_and(|draft| draft.id == result.id)
+        editor
+            .active_draft()
+            .is_some_and(|draft| draft.id() == result.id)
     };
 
     if should_clear {

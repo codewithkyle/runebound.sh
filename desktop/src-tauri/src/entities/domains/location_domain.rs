@@ -210,7 +210,6 @@ impl EntityDomain for LocationDomain {
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let database = state.database();
         let generation_repo = state.generation_repo();
         let rerolled = reroll_service
@@ -231,7 +230,6 @@ impl EntityDomain for LocationDomain {
                         current_tension: draft.current_tension.clone(),
                     },
                 },
-                &workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )

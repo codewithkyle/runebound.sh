@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -661,7 +661,7 @@ pub fn import_donjon_json(json_content: &str) -> Result<StoredCalendar> {
 }
 
 pub fn load_calendar() -> Result<Option<StoredCalendar>> {
-    let paths = config_paths(Path::new(""))?;
+    let paths = config_paths()?;
     if !paths.calendar.exists() {
         return Ok(None);
     }
@@ -686,7 +686,7 @@ pub fn save_calendar(calendar: &StoredCalendar) -> Result<PathBuf> {
         .validate()
         .context("cannot save invalid calendar")?;
 
-    let paths = config_paths(Path::new(""))?;
+    let paths = config_paths()?;
 
     if let Some(parent) = paths.calendar.parent() {
         std::fs::create_dir_all(parent)
@@ -703,7 +703,7 @@ pub fn save_calendar(calendar: &StoredCalendar) -> Result<PathBuf> {
 }
 
 pub fn calendar_toml_path() -> Result<PathBuf> {
-    let paths = config_paths(Path::new(""))?;
+    let paths = config_paths()?;
     Ok(paths.calendar)
 }
 

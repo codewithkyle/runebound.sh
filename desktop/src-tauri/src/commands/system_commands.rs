@@ -178,7 +178,6 @@ async fn reroll_current_dungeon(
             &draft.twist,
             &draft.topology,
             None,
-            &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),
         )
@@ -190,7 +189,6 @@ async fn reroll_current_dungeon(
             &draft.tone,
             &draft.twist,
             &draft.topology,
-            &state.workspace_root,
             database.as_ref(),
             generation_repo.as_ref(),
         )
@@ -269,12 +267,7 @@ async fn reroll_current_npc(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_npc_seed(
-            merged_prompt,
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_npc_seed(merged_prompt, database.as_ref(), generation_repo.as_ref())
         .await?;
     draft.slug = slugify(seed.name.trim());
     draft.name = seed.name.trim().to_string();
@@ -319,12 +312,7 @@ async fn reroll_current_location(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_location_seed(
-            merged_prompt,
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_location_seed(merged_prompt, database.as_ref(), generation_repo.as_ref())
         .await?;
     draft.slug = slugify(&seed.name);
     draft.name = seed.name;
@@ -366,12 +354,7 @@ async fn reroll_current_faction(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_faction_seed(
-            merged_prompt,
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_faction_seed(merged_prompt, database.as_ref(), generation_repo.as_ref())
         .await?;
     draft.slug = slugify(&seed.name);
     draft.name = seed.name;
@@ -422,12 +405,7 @@ async fn reroll_current_god(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_god_seed(
-            merged_prompt,
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_god_seed(merged_prompt, database.as_ref(), generation_repo.as_ref())
         .await?;
     draft.slug = slugify(&seed.name);
     draft.name = seed.name;
@@ -475,12 +453,7 @@ async fn reroll_current_item(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_item_seed(
-            merged_prompt,
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_item_seed(merged_prompt, database.as_ref(), generation_repo.as_ref())
         .await?;
     draft.slug = slugify(&seed.name);
     draft.name = seed.name;

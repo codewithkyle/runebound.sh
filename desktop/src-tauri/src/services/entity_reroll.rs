@@ -18,20 +18,15 @@ use dnd_core::config::AppConfig;
 use runebound_models::DungeonBeat;
 use runebound_models::utils::DUNGEON_FUNCTIONS;
 use std::collections::HashSet;
-use std::path::Path;
 
 /// Resolve any `@references` in a custom reroll prompt into an authoritative
 /// setting-context block appended to the system message. Returns an empty string
 /// when the prompt is blank or references nothing, so a plain reroll is unchanged.
-fn resolve_reference_suffix(
-    config: &AppConfig,
-    extra_prompt: &str,
-    workspace_root: &Path,
-) -> String {
+fn resolve_reference_suffix(config: &AppConfig, extra_prompt: &str) -> String {
     if extra_prompt.is_empty() {
         return String::new();
     }
-    let context = build_reference_context(config, extra_prompt, workspace_root);
+    let context = build_reference_context(config, extra_prompt);
     if context.system_context.is_empty() {
         String::new()
     } else {
@@ -170,7 +165,6 @@ impl EntityRerollService {
     pub async fn reroll_npc_field(
         &self,
         input: RerollNpcFieldInput,
-        workspace_root: &Path,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollNpcFieldResult, String> {
@@ -184,7 +178,7 @@ impl EntityRerollService {
         let spec = canonical_field_spec(EntityKind::Npc, &input.field, FieldAccess::Reroll)
             .ok_or_else(|| reroll_unknown_field_error(EntityKind::Npc, &input.field))?;
         let field = spec.canonical;
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let extra_prompt = input
             .prompt
@@ -194,7 +188,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = npc_context_summary(&input.npc);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
         let (recent_occupation_anchors, recent_occupation_context) = if field == "occupation" {
             let recent_payloads = generation_repo
                 .recent_prompts(database, "npc_seed", 20)
@@ -361,14 +355,13 @@ impl EntityRerollService {
     pub async fn reroll_location_field(
         &self,
         input: RerollLocationFieldInput,
-        workspace_root: &Path,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollLocationFieldResult, String> {
         let spec = canonical_field_spec(EntityKind::Location, &input.field, FieldAccess::Reroll)
             .ok_or_else(|| reroll_unknown_field_error(EntityKind::Location, &input.field))?;
         let field = spec.canonical;
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let extra_prompt = input
             .prompt
@@ -378,7 +371,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = location_context_summary(&input.location);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
 
         let schema = if field == "exports" {
             serde_json::json!({
@@ -504,14 +497,13 @@ impl EntityRerollService {
     pub async fn reroll_faction_field(
         &self,
         input: RerollFactionFieldInput,
-        workspace_root: &Path,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollFactionFieldResult, String> {
         let spec = canonical_field_spec(EntityKind::Faction, &input.field, FieldAccess::Reroll)
             .ok_or_else(|| reroll_unknown_field_error(EntityKind::Faction, &input.field))?;
         let field = spec.canonical;
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let extra_prompt = input
             .prompt
@@ -521,7 +513,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = faction_context_summary(&input.faction);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
 
         let is_list = [
             "allies",
@@ -658,14 +650,13 @@ impl EntityRerollService {
     pub async fn reroll_god_field(
         &self,
         input: RerollGodFieldInput,
-        workspace_root: &Path,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollGodFieldResult, String> {
         let spec = canonical_field_spec(EntityKind::God, &input.field, FieldAccess::Reroll)
             .ok_or_else(|| reroll_unknown_field_error(EntityKind::God, &input.field))?;
         let field = spec.canonical;
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let extra_prompt = input
             .prompt
@@ -675,7 +666,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = god_context_summary(&input.god);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
 
         let is_list = ["domains", "allies", "rivals"].contains(&field);
         let schema = if is_list {
@@ -812,7 +803,6 @@ impl EntityRerollService {
     pub async fn reroll_dungeon_beat(
         &self,
         input: RerollDungeonBeatInput,
-        workspace_root: &Path,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollDungeonBeatResult, String> {
@@ -828,14 +818,14 @@ impl EntityRerollService {
             .ok_or_else(|| "dungeon is missing the beat to reroll".to_string())?;
         let function = DUNGEON_FUNCTIONS[beat_index];
 
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
         let extra_prompt = input
             .prompt
             .as_ref()
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .unwrap_or("");
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
 
         let prev = if beat_index > 0 {
             DUNGEON_FUNCTIONS[beat_index - 1]
@@ -958,7 +948,6 @@ impl EntityRerollService {
     pub async fn reroll_dungeon_field(
         &self,
         input: RerollDungeonFieldInput,
-        workspace_root: &Path,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollDungeonFieldResult, String> {
@@ -979,14 +968,14 @@ impl EntityRerollService {
             .map(|spec| spec.reroll_instruction)
             .unwrap_or("Generate a concise field value.");
 
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
         let extra_prompt = input
             .prompt
             .as_ref()
             .map(|value| value.trim())
             .filter(|value| !value.is_empty())
             .unwrap_or("");
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
         let frozen = dungeon_context_summary(&input.dungeon, None);
 
         let current = match field {
@@ -1050,14 +1039,13 @@ impl EntityRerollService {
     pub async fn reroll_item_field(
         &self,
         input: RerollItemFieldInput,
-        workspace_root: &Path,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<RerollItemFieldResult, String> {
         let spec = canonical_field_spec(EntityKind::Item, &input.field, FieldAccess::Reroll)
             .ok_or_else(|| reroll_unknown_field_error(EntityKind::Item, &input.field))?;
         let field = spec.canonical;
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let extra_prompt = input
             .prompt
@@ -1067,7 +1055,7 @@ impl EntityRerollService {
             .unwrap_or("");
 
         let context_summary = item_context_summary(&input.item);
-        let reference_suffix = resolve_reference_suffix(&config, extra_prompt, workspace_root);
+        let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
 
         let schema = if field == "materials" {
             serde_json::json!({
