@@ -1,4 +1,12 @@
-# v0.5.0 Cleanup Plan
+# v0.5.0 Cleanup Plan — ARCHIVED ✅ (2026-06-18)
+
+> **Status: COMPLETE.** All phases (1–8 bar the tag) landed. Phases 1–7 are done and
+> verified; Phase 8 bumped the version to `0.5.0` and ran the full verification matrix
+> (workspace + desktop tests, `make lint`, `make build`, frontend build — all green);
+> only the actual `git tag`/release cut (P8.4) is left, by request. Resolved friction is
+> folded into `docs/architecture.md` §10 and the §8.C "Add a New Entity" playbook is
+> updated. Kept as a historical record of the pre-release review and the decisions taken.
+> Deferred follow-ups are listed in §10 of the architecture doc.
 
 > **Purpose:** A phased punch-list to get the codebase into tip-top shape before tagging v0.5.0.
 > Findings come from a full pre-release review (all crates + Tauri backend + React frontend).

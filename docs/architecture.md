@@ -280,15 +280,32 @@ No router changes are needed for normal top-level command additions. See `docs/c
 
 ### C) Add New Entity Type (example: `item`, `quest`, `dungeon`)
 
-1. **Schema + kind**: add `EntityKind` variant, schema constants, and helper exports in `entities/{kind,schema}.rs`.
-2. **Domain**: implement `<Entity>Domain` under `entities/domains/`, hook into shared helpers, and register it inside `build_default_registry()`.
-3. **Draft storage**: add `DraftEnvelope::<Entity>` variants plus `get_/set_/take_` helpers in `app_state.rs`.
-4. **Data layer**: create migration (`core/migrations`), extend `core/src/db.rs`, and add repository trait + prod impl.
-5. **Services**: add persistence/reroll/admin logic (`services/entity_{persistence,reroll,admin}.rs`) and ensure vault sync covers the new table.
-6. **Commands**: add CLI module (pattern after `commands/item_commands.rs`) and register handler entries.
-7. **Shared entity commands**: update `commands/entity_commands.rs` load/show/delete/undo flows to hydrate drafts + events; extend `SuggestionService` filters as needed.
-8. **Front-end + contracts**: add draft/frontmatter + card builder + events to `runebound-models`, regenerate TS, and handle the client event in `desktop/src/App.tsx`.
-9. **Docs/tests**: update `docs/` playbooks and run the verification checklist.
+After the v0.5.0 unification, the per-entity fan-out is generated from the schema +
+a macro per layer, so an entity is mostly **one declaration per layer** rather than
+the ~250–550 hand-written lines it used to cost. No per-field branching.
+
+1. **Kind + schema**: add the `EntityKind` variant to `ALL_ENTITY_KINDS` and its
+   `EntitySchema` (field specs: `value_kind`, `settable`/`rerollable`,
+   `reroll_instruction`) in `entities/{kind,schema}.rs`. The schema drives `set`,
+   `reroll`, and the entity card.
+2. **Model**: add the `*Draft` + `*Frontmatter` + `*_entity_card` in
+   `runebound-models` (derive `TS` on the draft), then regenerate `models.ts`
+   (`UPDATE_MODELS=1 cargo test -p runebound-models`).
+3. **Domain**: implement `<Entity>Domain` under `entities/domains/` and register it in
+   the domain registry; most behavior comes from `EntityDomain` defaults.
+4. **DB**: add the migration + `*Row` struct, one `impl_entity_table!` column
+   declaration in `core/src/db.rs` (generates the whole CRUD set), and the repository
+   trait + prod impl (`upsert_tx`/`delete_by_id_tx` + reads).
+5. **Persistence / soft-delete / reroll**: one `impl_entity_persistence!` and one
+   `impl_entity_soft_delete!` declaration, plus the reroll spec entries;
+   `vault_sync`'s `*_row_from_frontmatter` projects the canonical store row.
+6. **Draft slot + command**: add the `DraftEnvelope::<Entity>` variant (the editor is
+   a single-draft slot) and register `entity_handler_entry(root, kind)` in
+   `commands/mod.rs` — the generic `dispatch_entity_command` runs the verb ladder off
+   `command_root()` + the schema (no per-kind module, no magic offsets).
+7. **Verify**: `cargo test --workspace` + the desktop suite (the schema/registry
+   contract tests guard the wiring), then walk create → show → set → reroll → save →
+   load → delete → undo for the new kind.
 
 ### D) Add a New Wizard (multi-step guided flow)
 
@@ -323,13 +340,38 @@ The only edits outside `wizards/<name>.rs` are the one registry line and the lau
 
 ## 10. Known Friction Points
 
-The refactor provides a strong base, but these are still active complexity points:
+The v0.5.0 cleanup (archived at `docs/archive/cleanup-0.5.0.md`) resolved the friction
+points this section used to list:
 
-- high duplication across `npc/location/faction` command modules
-- large service modules (`entity_admin`, `entity_reroll`, `suggestions`) that may benefit from entity-agnostic abstractions
-- many explicit type branches when adding a brand-new entity class
+- **Per-entity command duplication** — the seven near-identical entity command modules
+  collapsed into one generic `dispatch_entity_command` driven by `command_root()` + the
+  schema (P5.3).
+- **Large entity-fan-out services** — `entity_admin`/`entity_persistence`/`entity_reroll`
+  dispatch through the `EntityDomain` registry and per-entity macros
+  (`impl_entity_table!`, `impl_entity_persistence!`, `impl_entity_soft_delete!`), so a new
+  entity is one declaration per layer rather than hundreds of lines (P5.2/5.5/5.6/5.7).
+- **Explicit type branches per entity** — driven by `ALL_ENTITY_KINDS` + the schema; see
+  the (now short) §8.C playbook.
 
-This is acceptable for current velocity, but if entity count grows rapidly, consider shared entity capability traits and more table-driven field specs.
+Also closed by the cleanup: the markdown-heuristic clickability and dual help/text
+renderers (now one backend-authored `OutputDoc` + `to_plain_text`, P3/P7.2); the
+Rust↔TS contract drift (ts-rs single-sourced + drift-guarded, P4); non-atomic
+persistence (a `Database::begin()` transaction wraps save/soft-delete/reap, P6.1); and
+the wizard's cross-field `data` invariant (now a type-state enum, P7.4).
+
+Remaining, deliberately-deferred follow-ups (each noted in-code):
+
+- the wizard restore/undo + `ensure_location_exists` upsert paths are not yet
+  transactional (recovery-side, lower-risk — P6.1 covers save/soft-delete/reap);
+- `EntityStore` reads on the startup/save paths stay synchronous (not the per-keystroke
+  path — P6.2 moved the `@reference` scan off the runtime);
+- `ai_generation`'s create-path LLM sampling literals are still inline (P2.5 named only
+  the `entity_reroll` half);
+- `vault_sync` projects the canonical store → db only; the Obsidian `.md` vault is a
+  publish target, not an input (P6.3 — a true disk-scan half was intentionally not built).
+
+If entity count grows further, the schema/registry is the lever — extend the field spec,
+not the fan-out.
 
 ---
 
