@@ -19,6 +19,55 @@ impl OutputDoc {
     pub fn push(&mut self, block: OutputBlock) {
         self.blocks.push(block);
     }
+
+    /// Render this doc to plain text — the fallback `output` string for hosts that
+    /// don't render the structured doc, and the single source the help + entity-card
+    /// prose derive from (so the two can't drift). Inline `command_ref`s degrade to
+    /// their visible label, headings to `#`-prefixed lines by level, list items to
+    /// `- `, and an entity card to its title + `label value` rows.
+    pub fn to_plain_text(&self) -> String {
+        let mut lines: Vec<String> = Vec::new();
+        for block in &self.blocks {
+            match block {
+                OutputBlock::Heading { level, text } => {
+                    let hashes = "#".repeat((*level).clamp(1, 6) as usize);
+                    lines.push(format!("{hashes} {text}"));
+                }
+                OutputBlock::Paragraph { inlines } => lines.push(inlines_to_text(inlines)),
+                OutputBlock::Status { text, .. }
+                | OutputBlock::Code { text, .. }
+                | OutputBlock::Spinner { text, .. } => lines.push(text.clone()),
+                OutputBlock::List { items } => {
+                    for item in items {
+                        lines.push(format!("- {}", inlines_to_text(item)));
+                    }
+                }
+                OutputBlock::EntityCard { title, rows } => {
+                    lines.push(format!("## {title}"));
+                    for row in rows {
+                        lines.push(format!("{} {}", row.label, row.value));
+                    }
+                }
+                OutputBlock::Image { alt, .. } => lines.push(alt.clone()),
+            }
+        }
+        lines.join("\n")
+    }
+}
+
+/// Flatten inline nodes to plain text: every styled span yields its text and a
+/// `command_ref` yields its visible label (the clickable target is doc-only).
+fn inlines_to_text(inlines: &[InlineNode]) -> String {
+    inlines
+        .iter()
+        .map(|node| match node {
+            InlineNode::Text { text }
+            | InlineNode::Emphasis { text }
+            | InlineNode::Strong { text }
+            | InlineNode::Code { text } => text.as_str(),
+            InlineNode::CommandRef { label, .. } => label.as_str(),
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -199,5 +248,24 @@ mod tests {
         assert!(serialized.contains("system status") || serialized.contains("System Status"));
         assert!(serialized.contains("command_ref"));
         assert!(serialized.contains("status"));
+    }
+
+    #[test]
+    fn to_plain_text_flattens_blocks_and_inlines() {
+        // Headings honor their level, list items get `- `, and a command_ref
+        // degrades to its visible label (the clickable target is doc-only).
+        let payload = doc()
+            .with_block(heading(2, "Commands"))
+            .with_block(list(vec![vec![
+                command_ref("status", "status"),
+                text_node(" — Run checks"),
+            ]]))
+            .with_block(heading(3, "Examples"))
+            .with_block(paragraph_text("Use `status help`."));
+
+        assert_eq!(
+            payload.to_plain_text(),
+            "## Commands\n- status — Run checks\n### Examples\nUse `status help`."
+        );
     }
 }

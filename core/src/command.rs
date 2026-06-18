@@ -50,6 +50,17 @@ impl CommandOutput {
             output_doc: Some(output_doc),
         }
     }
+
+    /// Build from a structured doc, deriving the plain-text `output` from it so the
+    /// two can't drift (P7.2). Use this whenever the text is just a flattening of
+    /// the doc — `with_doc` stays for the few cases where the text is built
+    /// independently (e.g. the doctor report).
+    fn from_doc(output_doc: OutputDoc) -> Self {
+        Self {
+            output: output_doc.to_plain_text(),
+            output_doc: Some(output_doc),
+        }
+    }
 }
 
 type CoreHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>>;
@@ -123,8 +134,7 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_status().await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "status"),
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::from_doc(
                         command_help_doc(invocation.manifest, "status", None),
                     )),
                     _ => bail!("unknown status command. use `status help`"),
@@ -165,10 +175,7 @@ pub fn render_help_overview(context: &InputContext) -> CommandOutput {
 }
 
 fn help_overview(manifest: &CommandManifest, context: &InputContext) -> CommandOutput {
-    CommandOutput::with_doc(
-        render_root_help(manifest, context),
-        root_help_doc(manifest, context),
-    )
+    CommandOutput::from_doc(root_help_doc(manifest, context))
 }
 
 /// Whether a command should appear in `context`'s help index. The default
@@ -187,8 +194,7 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "exit"),
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::from_doc(
                         command_help_doc(invocation.manifest, "exit", None),
                     )),
                     _ => bail!("unknown exit command. use `exit help`"),
@@ -206,8 +212,7 @@ fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => execute_ping().await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "ping"),
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::from_doc(
                         command_help_doc(invocation.manifest, "ping", None),
                     )),
                     _ => bail!("unknown ping command. use `ping help`"),
@@ -229,10 +234,11 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
                 // they never reach this handler. What remains is the static help and
                 // the direct `setup verbosity` config write.
                 match invocation.lowered.get(1).map(String::as_str) {
-                    None | Some("help") => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "setup"),
-                        command_help_doc(invocation.manifest, "setup", None),
-                    )),
+                    None | Some("help") => Ok(CommandOutput::from_doc(command_help_doc(
+                        invocation.manifest,
+                        "setup",
+                        None,
+                    ))),
                     Some("verbosity") => {
                         let loaded = load_effective()?;
                         match invocation.lowered.get(2) {
@@ -471,17 +477,17 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     let lowered = invocation.lowered;
     let manifest = invocation.manifest;
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
-        return Ok(CommandOutput::with_doc(
-            render_command_help(manifest, "config"),
-            command_help_doc(manifest, "config", None),
-        ));
+        return Ok(CommandOutput::from_doc(command_help_doc(
+            manifest, "config", None,
+        )));
     }
 
     if lowered.len() == 3 && lowered[2] == "help" {
-        return Ok(CommandOutput::with_doc(
-            render_subcommand_help(manifest, "config", &lowered[1]),
-            command_help_doc(manifest, "config", Some(&lowered[1])),
-        ));
+        return Ok(CommandOutput::from_doc(command_help_doc(
+            manifest,
+            "config",
+            Some(&lowered[1]),
+        )));
     }
 
     match lowered[1].as_str() {
@@ -519,75 +525,6 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
     }
 }
 
-fn render_root_help(manifest: &CommandManifest, context: &InputContext) -> String {
-    let mut lines = vec!["## Commands".to_string()];
-    for command in manifest
-        .commands
-        .iter()
-        .filter(|command| command.show_in_autocomplete)
-        .filter(|command| help_lists_command(&command.name, context))
-    {
-        lines.push(format!("{} - {}", command.name, command.summary));
-    }
-    lines.push(String::new());
-    lines.push("Use `<command> help` or `help <command>` for details.".to_string());
-    lines.join("\n")
-}
-
-fn render_command_help(manifest: &CommandManifest, root: &str) -> String {
-    let Some(command) = find_manifest_command(manifest, root) else {
-        return format!("unknown command: {root}. use `help`");
-    };
-
-    let mut lines = vec![format!("## {}", command.name), command.summary.clone()];
-    if !command.subcommands.is_empty() {
-        lines.push(String::new());
-        lines.push("Subcommands:".to_string());
-        for subcommand in &command.subcommands {
-            lines.push(format!(
-                "- {} {} - {}",
-                command.name, subcommand.name, subcommand.summary
-            ));
-        }
-    }
-
-    if !command.examples.is_empty() {
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        for example in &command.examples {
-            lines.push(format!("- {example}"));
-        }
-    }
-
-    lines.join("\n")
-}
-
-fn render_subcommand_help(manifest: &CommandManifest, root: &str, subcommand: &str) -> String {
-    let Some(command) = find_manifest_command(manifest, root) else {
-        return format!("unknown command: {root}. use `help`");
-    };
-    let Some(sub) = command
-        .subcommands
-        .iter()
-        .find(|entry| entry.name.eq_ignore_ascii_case(subcommand))
-    else {
-        return format!("unknown {root} command. use `{root} help`");
-    };
-
-    let mut lines = vec![
-        format!("## {} {}", command.name, sub.name),
-        sub.summary.clone(),
-    ];
-    if !sub.examples.is_empty() {
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        for example in &sub.examples {
-            lines.push(format!("- {example}"));
-        }
-    }
-    lines.join("\n")
-}
-
 fn find_manifest_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {
     manifest
         .commands
@@ -603,7 +540,8 @@ fn examples_block(examples: &[String]) -> OutputBlock {
     list(items)
 }
 
-/// Structured, clickable counterpart to [`render_root_help`].
+/// The clickable root help index. The plain-text `output` is derived from this doc
+/// via [`OutputDoc::to_plain_text`] (P7.2), so there is one source per help surface.
 fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDoc {
     let items: Vec<Vec<InlineNode>> = manifest
         .commands
@@ -626,8 +564,8 @@ fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDo
 }
 
 /// Structured, clickable help for a single command (`subcommand = None`) or one
-/// of its subcommands. Subcommands render as `command_ref`s and examples as
-/// code; the plain-text `render_*_help` functions remain the fallback string.
+/// of its subcommands. Subcommands render as `command_ref`s and examples as code;
+/// the plain-text fallback is derived from this doc via [`OutputDoc::to_plain_text`].
 fn command_help_doc(manifest: &CommandManifest, root: &str, subcommand: Option<&str>) -> OutputDoc {
     let Some(command) = find_manifest_command(manifest, root) else {
         return doc().with_block(paragraph_with_inlines(vec![

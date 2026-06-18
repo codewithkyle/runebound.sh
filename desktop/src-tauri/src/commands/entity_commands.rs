@@ -246,50 +246,9 @@ fn build_entity_card_doc(detail: &EntityDetail) -> OutputDoc {
 
 /// Plain-text fallback for the card, derived from the same `OutputDoc` the
 /// frontend renders — so the doc is the single source and the text can't drift.
+/// Shares one doc→text renderer with the core help surfaces (P7.2).
 fn build_entity_card_text(detail: &EntityDetail) -> String {
-    card_doc_to_text(&build_entity_card_doc(detail))
-}
-
-fn card_doc_to_text(doc: &OutputDoc) -> String {
-    use runebound_models::{InlineNode, OutputBlock};
-
-    fn inlines_to_text(inlines: &[InlineNode]) -> String {
-        inlines
-            .iter()
-            .map(|node| match node {
-                InlineNode::Text { text }
-                | InlineNode::Emphasis { text }
-                | InlineNode::Strong { text }
-                | InlineNode::Code { text } => text.clone(),
-                InlineNode::CommandRef { label, .. } => label.clone(),
-            })
-            .collect()
-    }
-
-    let mut lines: Vec<String> = Vec::new();
-    for block in &doc.blocks {
-        match block {
-            OutputBlock::Heading { text, .. } => lines.push(format!("## {text}")),
-            OutputBlock::Paragraph { inlines } => lines.push(inlines_to_text(inlines)),
-            OutputBlock::Status { text, .. } | OutputBlock::Code { text, .. } => {
-                lines.push(text.clone())
-            }
-            OutputBlock::List { items } => {
-                for item in items {
-                    lines.push(format!("- {}", inlines_to_text(item)));
-                }
-            }
-            OutputBlock::EntityCard { title, rows } => {
-                lines.push(format!("## {title}"));
-                for row in rows {
-                    lines.push(format!("{} {}", row.label, row.value));
-                }
-            }
-            OutputBlock::Spinner { text, .. } => lines.push(text.clone()),
-            OutputBlock::Image { alt, .. } => lines.push(alt.clone()),
-        }
-    }
-    lines.join("\n")
+    build_entity_card_doc(detail).to_plain_text()
 }
 
 /// Generic handler for every entity's `<root> ...` editor command ladder (P5.3).
