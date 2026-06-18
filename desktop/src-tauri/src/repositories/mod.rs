@@ -5,12 +5,19 @@ use std::path::PathBuf;
 
 pub mod db {
     pub use dnd_core::db::{
-        Database, DungeonRow, EventRow, FactionRow, GodRow, ItemRow, LocationRow, NpcRow,
-        SoftDeleteRow,
+        Database, DbTransaction, DungeonRow, EventRow, FactionRow, GodRow, ItemRow, LocationRow,
+        NpcRow, SoftDeleteRow,
     };
 }
 
 pub use db::Database;
+
+/// A SQLite transaction handle threaded through the `*_tx` repository methods so a
+/// compound mutation commits atomically — save's `delete-old-index + upsert row +
+/// upsert index`, and soft-delete / reap's `delete row + delete index` (P6.1). The
+/// canonical TOML store is written outside the transaction (FS-first), so a partial
+/// DB failure self-heals on the next `sync` rather than orphaning a row.
+pub use db::DbTransaction;
 
 pub trait VaultRepository: Send + Sync {
     #[allow(dead_code)]
@@ -122,8 +129,9 @@ pub trait NpcRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::NpcRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::NpcRow>, String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::NpcRow) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdNpcRepository;
@@ -167,14 +175,20 @@ impl NpcRepository for ProdNpcRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_npc_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::NpcRow>, String> {
+        core_db::list_npcs(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::NpcRow>, String> {
-        core_db::list_npcs(&database.pool)
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::NpcRow) -> Result<(), String> {
+        core_db::upsert_npc(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_npc_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -204,8 +218,13 @@ pub trait LocationRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::LocationRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::LocationRow>, String>;
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::LocationRow,
+    ) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdLocationRepository;
@@ -259,14 +278,24 @@ impl LocationRepository for ProdLocationRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_location_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::LocationRow>, String> {
+        core_db::list_locations(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::LocationRow>, String> {
-        core_db::list_locations(&database.pool)
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::LocationRow,
+    ) -> Result<(), String> {
+        core_db::upsert_location(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_location_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -291,8 +320,13 @@ pub trait FactionRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::FactionRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::FactionRow>, String>;
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::FactionRow,
+    ) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdFactionRepository;
@@ -336,14 +370,24 @@ impl FactionRepository for ProdFactionRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_faction_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::FactionRow>, String> {
+        core_db::list_factions(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::FactionRow>, String> {
-        core_db::list_factions(&database.pool)
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::FactionRow,
+    ) -> Result<(), String> {
+        core_db::upsert_faction(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_faction_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -368,8 +412,9 @@ pub trait ItemRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::ItemRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::ItemRow>, String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::ItemRow) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdItemRepository;
@@ -413,14 +458,20 @@ impl ItemRepository for ProdItemRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_item_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::ItemRow>, String> {
+        core_db::list_items(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::ItemRow>, String> {
-        core_db::list_items(&database.pool)
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::ItemRow) -> Result<(), String> {
+        core_db::upsert_item(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_item_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -445,8 +496,10 @@ pub trait EventRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::EventRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::EventRow>, String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::EventRow)
+    -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdEventRepository;
@@ -490,14 +543,24 @@ impl EventRepository for ProdEventRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_event_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::EventRow>, String> {
+        core_db::list_events(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::EventRow>, String> {
-        core_db::list_events(&database.pool)
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::EventRow,
+    ) -> Result<(), String> {
+        core_db::upsert_event(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_event_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -519,8 +582,9 @@ pub trait GodRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::GodRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::GodRow>, String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::GodRow) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdGodRepository;
@@ -564,14 +628,20 @@ impl GodRepository for ProdGodRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_god_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::GodRow>, String> {
+        core_db::list_gods(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::GodRow>, String> {
-        core_db::list_gods(&database.pool)
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::GodRow) -> Result<(), String> {
+        core_db::upsert_god(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_god_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -596,8 +666,13 @@ pub trait DungeonRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::DungeonRow>, String>;
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String>;
     async fn list_all(&self, database: &Database) -> Result<Vec<db::DungeonRow>, String>;
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::DungeonRow,
+    ) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 pub struct ProdDungeonRepository;
@@ -641,14 +716,24 @@ impl DungeonRepository for ProdDungeonRepository {
             .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_id(&self, database: &Database, id: &str) -> Result<(), String> {
-        core_db::delete_dungeon_by_id(&database.pool, id)
+    async fn list_all(&self, database: &Database) -> Result<Vec<db::DungeonRow>, String> {
+        core_db::list_dungeons(&database.pool)
             .await
             .map_err(|e| e.to_string())
     }
 
-    async fn list_all(&self, database: &Database) -> Result<Vec<db::DungeonRow>, String> {
-        core_db::list_dungeons(&database.pool)
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::DungeonRow,
+    ) -> Result<(), String> {
+        core_db::upsert_dungeon(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        core_db::delete_dungeon_by_id(&mut **tx, id)
             .await
             .map_err(|e| e.to_string())
     }
@@ -675,9 +760,20 @@ pub trait DocumentRepository: Send + Sync {
         created_at: &str,
         updated_at: &str,
     ) -> Result<(), String>;
-    async fn delete_by_vault_path(
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_index_tx(
         &self,
-        database: &Database,
+        tx: &mut DbTransaction<'_>,
+        entity_type: &str,
+        slug: &str,
+        name: Option<&str>,
+        vault_path: &str,
+        created_at: &str,
+        updated_at: &str,
+    ) -> Result<(), String>;
+    async fn delete_by_vault_path_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
         vault_path: &str,
     ) -> Result<(), String>;
 }
@@ -719,12 +815,35 @@ impl DocumentRepository for ProdDocumentRepository {
         .map_err(|e| e.to_string())
     }
 
-    async fn delete_by_vault_path(
+    async fn upsert_index_tx(
         &self,
-        database: &Database,
+        tx: &mut DbTransaction<'_>,
+        entity_type: &str,
+        slug: &str,
+        name: Option<&str>,
+        vault_path: &str,
+        created_at: &str,
+        updated_at: &str,
+    ) -> Result<(), String> {
+        core_db::upsert_document_index(
+            &mut **tx,
+            entity_type,
+            slug,
+            name,
+            vault_path,
+            created_at,
+            updated_at,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn delete_by_vault_path_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
         vault_path: &str,
     ) -> Result<(), String> {
-        core_db::delete_document_by_vault_path(&database.pool, vault_path)
+        core_db::delete_document_by_vault_path(&mut **tx, vault_path)
             .await
             .map_err(|e| e.to_string())
     }

@@ -83,17 +83,21 @@ macro_rules! impl_entity_soft_delete {
             .await?;
             // Destructive steps run only after the recovery row is committed (P1.3).
             // We remove the local TOML draft + DB/index rows; the vault is untouched.
+            // The canonical TOML (source of truth) goes first; a partial DB failure
+            // after it self-heals on the next `sync` (P6.1).
             store
                 .$store_delete(&row.slug)
                 .map_err(|err| err.to_string())?;
-            state
-                .$repo()
-                .delete_by_id(database.as_ref(), &row.id)
-                .await?;
+            // Drop the row and its index entry as one transaction so the index can't
+            // be left pointing at a deleted entity (P6.1). The recovery row is
+            // already committed above, so undo still works if this fails.
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            state.$repo().delete_by_id_tx(&mut tx, &row.id).await?;
             state
                 .document_repo()
-                .delete_by_vault_path(database.as_ref(), &row.vault_path)
+                .delete_by_vault_path_tx(&mut tx, &row.vault_path)
                 .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
             Ok(Some(SoftDeleteEntityResult {
                 entity_type: $kind,
                 id: row.id,
@@ -515,53 +519,22 @@ impl EntityAdminService {
             .insert(database.as_ref(), &soft_delete_row)
             .await?;
 
+        // Drop the row and its index entry as one transaction (P6.1); the recovery
+        // row is already committed above.
+        let mut tx = database.begin().await.map_err(|err| err.to_string())?;
         match entity_type {
-            EntityKind::Npc => {
-                state
-                    .npc_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
-            EntityKind::Location => {
-                state
-                    .location_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
-            EntityKind::Faction => {
-                state
-                    .faction_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
-            EntityKind::Item => {
-                state
-                    .item_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
-            EntityKind::Event => {
-                state
-                    .event_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
-            EntityKind::God => {
-                state
-                    .god_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
-            EntityKind::Dungeon => {
-                state
-                    .dungeon_repo()
-                    .delete_by_id(database.as_ref(), &id)
-                    .await?
-            }
+            EntityKind::Npc => state.npc_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Location => state.location_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Faction => state.faction_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Item => state.item_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Event => state.event_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::God => state.god_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Dungeon => state.dungeon_repo().delete_by_id_tx(&mut tx, &id).await?,
         }
         document_repo
-            .delete_by_vault_path(database.as_ref(), &normalized)
+            .delete_by_vault_path_tx(&mut tx, &normalized)
             .await?;
+        tx.commit().await.map_err(|err| err.to_string())?;
 
         Ok(())
     }

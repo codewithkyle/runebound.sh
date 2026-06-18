@@ -15,6 +15,27 @@ pub struct Database {
     pub path: PathBuf,
 }
 
+/// A SQLite transaction over this app's pool, vended by [`Database::begin`] and
+/// threaded through the executor-generic mutations + the repository `*_tx` methods
+/// so a compound DB change commits atomically (P6.1). Re-exported so the desktop
+/// crate need not depend on `sqlx` directly.
+pub type DbTransaction<'a> = sqlx::Transaction<'a, sqlx::Sqlite>;
+
+impl Database {
+    /// Begin a transaction for an atomic multi-statement unit of work — the basis
+    /// for committing a save's DB projection (row + document index) or a
+    /// soft-delete / reap's deletes as a unit, so a mid-sequence failure can't
+    /// leave the index out of step with its row (P6.1). The canonical TOML store is
+    /// written outside the transaction (it is the source of truth a partial DB
+    /// failure self-heals from on the next `sync`).
+    pub async fn begin(&self) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>> {
+        self.pool
+            .begin()
+            .await
+            .context("failed to begin database transaction")
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct LocationRow {
     pub id: String,
@@ -427,15 +448,20 @@ pub async fn find_document_by_vault_path(
     Ok(row.map(|r| r.get::<String, _>("slug")))
 }
 
-pub async fn upsert_document_index(
-    pool: &SqlitePool,
+// Executor-generic (pool or `&mut Transaction`) so the document index can be
+// upserted in the same transaction as its entity row (P6.1).
+pub async fn upsert_document_index<'e, E>(
+    executor: E,
     doc_type: &str,
     slug: &str,
     title: Option<&str>,
     vault_path: &str,
     created_at: &str,
     updated_at: &str,
-) -> Result<()> {
+) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query(
         "INSERT INTO documents (doc_type, slug, title, vault_path, tags, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)
@@ -452,17 +478,21 @@ pub async fn upsert_document_index(
     .bind(vault_path)
     .bind(created_at)
     .bind(updated_at)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("failed to upsert documents index")?;
 
     Ok(())
 }
 
-pub async fn delete_document_by_vault_path(pool: &SqlitePool, vault_path: &str) -> Result<()> {
+// Executor-generic (pool or `&mut Transaction`) — see `upsert_document_index` (P6.1).
+pub async fn delete_document_by_vault_path<'e, E>(executor: E, vault_path: &str) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query("DELETE FROM documents WHERE vault_path = ?1")
         .bind(vault_path)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("failed to delete document index row")?;
 
@@ -954,6 +984,40 @@ mod tests {
                 .expect("query")
                 .map(|f| f.id),
             Some("fac_1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_commit_persists_and_rollback_discards() {
+        let database = temp_db().await;
+
+        // A committed transaction persists the row — exercising the executor-generic
+        // upsert over a `&mut Transaction` that the atomic save/reap paths rely on
+        // (P6.1).
+        let mut tx = database.begin().await.expect("begin");
+        upsert_npc(&mut *tx, &sample_npc("npc_commit", "Mara", "mara"))
+            .await
+            .expect("upsert in tx");
+        tx.commit().await.expect("commit");
+        assert!(
+            find_npc_by_id(&database.pool, "npc_commit")
+                .await
+                .expect("query")
+                .is_some()
+        );
+
+        // A dropped (un-committed) transaction rolls back — nothing persists, so a
+        // mid-sequence failure can't leave a half-written projection behind.
+        let mut tx = database.begin().await.expect("begin");
+        upsert_npc(&mut *tx, &sample_npc("npc_rollback", "Vex", "vex"))
+            .await
+            .expect("upsert in tx");
+        drop(tx);
+        assert!(
+            find_npc_by_id(&database.pool, "npc_rollback")
+                .await
+                .expect("query")
+                .is_none()
         );
     }
 

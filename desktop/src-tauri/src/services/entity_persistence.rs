@@ -498,11 +498,13 @@ fn resolve_slug(root: &Path, dir: &str, existing_slug: Option<&str>, name: &str)
     }
 }
 
-/// Resolve the readable vault (markdown) path for a save.
+/// Resolve the readable vault (markdown) path for a save, plus the old vault path
+/// whose document-index entry should be retired (if the readable name changed).
 ///
 /// Precedence: an explicit `requested` path wins; otherwise reuse the existing
 /// path when it already matches the readable name, else compute a fresh unique
-/// readable path (retiring the old document-index entry on a rename).
+/// readable path. The retirement is *returned* rather than performed here so the
+/// caller can fold it into the same transaction as the row/index upsert (P6.1).
 async fn resolve_vault_path(
     document_repo: &dyn crate::repositories::DocumentRepository,
     database: &db::Database,
@@ -510,11 +512,11 @@ async fn resolve_vault_path(
     name: &str,
     existing: Option<ExistingRef<'_>>,
     requested: Option<&str>,
-) -> Result<String, String> {
+) -> Result<(String, Option<String>), String> {
     if let Some(requested) = requested {
         let normalized = normalize_relative_path_for_storage(requested.trim());
         if !normalized.is_empty() {
-            return Ok(normalized);
+            return Ok((normalized, None));
         }
     }
 
@@ -526,15 +528,15 @@ async fn resolve_vault_path(
             if normalize_relative_path_for_storage(current.vault_path)
                 == normalize_relative_path_for_storage(&readable)
             {
-                Ok(current.vault_path.to_string())
+                Ok((current.vault_path.to_string(), None))
             } else {
-                document_repo
-                    .delete_by_vault_path(database, current.vault_path)
-                    .await?;
-                Ok(readable)
+                Ok((readable, Some(current.vault_path.to_string())))
             }
         }
-        None => unique_readable_vault_path(document_repo, database, dir, name, None).await,
+        None => Ok((
+            unique_readable_vault_path(document_repo, database, dir, name, None).await?,
+            None,
+        )),
     }
 }
 

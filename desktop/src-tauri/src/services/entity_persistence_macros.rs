@@ -73,7 +73,7 @@ macro_rules! impl_entity_persistence {
                 .as_ref()
                 .map(|row| row.created_at.clone())
                 .unwrap_or_else(|| now.clone());
-            let vault_path = resolve_vault_path(
+            let (vault_path, retire_index) = resolve_vault_path(
                 document_repo.as_ref(),
                 database.as_ref(),
                 $dir,
@@ -105,6 +105,10 @@ macro_rules! impl_entity_persistence {
                 updated_at: now.clone(),
                 published_at,
             };
+            // FS-first: the canonical TOML store is the source of truth, so write the
+            // new record (and drop the old slug on a rename) before touching the DB.
+            // A failure after this leaves the canonical file intact for `sync` to
+            // re-project (P6.1).
             store
                 .$store_save(&frontmatter)
                 .map_err(|err| err.to_string())?;
@@ -125,10 +129,19 @@ macro_rules! impl_entity_persistence {
                 created_at: created_at.clone(),
                 updated_at: now.clone(),
             };
-            repo.upsert(database.as_ref(), &row).await?;
+            // Atomic DB projection: retire the stale index entry (on a readable-name
+            // rename), upsert the row, and upsert the index as one transaction so the
+            // index can't end up out of step with its row (P6.1).
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            if let Some(old_vault_path) = retire_index.as_deref() {
+                document_repo
+                    .delete_by_vault_path_tx(&mut tx, old_vault_path)
+                    .await?;
+            }
+            repo.upsert_tx(&mut tx, &row).await?;
             document_repo
-                .upsert_index(
-                    database.as_ref(),
+                .upsert_index_tx(
+                    &mut tx,
                     $kind,
                     &row.slug,
                     Some(&row.name),
@@ -137,6 +150,7 @@ macro_rules! impl_entity_persistence {
                     &row.updated_at,
                 )
                 .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
 
             Ok(SaveOutcome {
                 id: row.id,

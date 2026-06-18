@@ -93,7 +93,13 @@ macro_rules! impl_entity_table {
             })
         }
 
-        pub async fn $upsert(pool: &SqlitePool, row: &$Row) -> Result<()> {
+        // Generic over the executor (not just `&SqlitePool`) so the same upsert can
+        // run on the pool *or* inside a `&mut Transaction` — the basis for the
+        // atomic save / soft-delete / reap units of work (P6.1).
+        pub async fn $upsert<'e, E>(executor: E, row: &$Row) -> Result<()>
+        where
+            E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+        {
             // id + the listed columns + created_at + updated_at, all bound below.
             let column_count = 1 + [$( stringify!($col), )+].len() + 2;
             let placeholders = vec!["?"; column_count].join(", ");
@@ -113,7 +119,7 @@ macro_rules! impl_entity_table {
                 $( .bind(&row.$col) )+
                 .bind(&row.created_at)
                 .bind(&row.updated_at)
-                .execute(pool)
+                .execute(executor)
                 .await
                 .context(concat!("failed to upsert ", $table))?;
             Ok(())
@@ -196,10 +202,14 @@ macro_rules! impl_entity_table {
             rows.into_iter().map($row_to).collect()
         }
 
-        pub async fn $delete_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
+        // Executor-generic (pool or `&mut Transaction`) — see `$upsert` above (P6.1).
+        pub async fn $delete_by_id<'e, E>(executor: E, id: &str) -> Result<()>
+        where
+            E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+        {
             sqlx::query(concat!("DELETE FROM ", $table, " WHERE id = ?1"))
                 .bind(id)
-                .execute(pool)
+                .execute(executor)
                 .await
                 .context(concat!("failed to delete ", $table, " row"))?;
             Ok(())

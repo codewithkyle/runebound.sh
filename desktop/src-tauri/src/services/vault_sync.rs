@@ -13,8 +13,8 @@ use dnd_core::vault::Vault;
 
 use crate::app_state::AppState;
 use crate::repositories::{
-    DocumentRepository, DungeonRepository, EventRepository, FactionRepository, GodRepository,
-    ItemRepository, LocationRepository, NpcRepository, db,
+    DbTransaction, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
+    GodRepository, ItemRepository, LocationRepository, NpcRepository, db,
 };
 use crate::utils::normalize_relative_path_for_storage;
 
@@ -137,9 +137,9 @@ trait SyncRepository: Send + Sync {
     fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_>;
     fn row_view(row: &Self::Row) -> RowView<'_>;
 
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String>;
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String>;
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 /// Reconcile one entity kind's canonical TOML store into the database + document
@@ -157,12 +157,16 @@ async fn sync_entities<K: SyncRepository>(
     for frontmatter in &frontmatters {
         let view = K::frontmatter_view(frontmatter);
         // Published entities are reaped: their record lives in Obsidian now, so drop
-        // the DB row, document index, and the backing TOML.
+        // the DB row + document index together (one transaction, P6.1), then remove
+        // the backing TOML. The store entry is flagged `published`, so a partial FS
+        // failure just re-reaps on the next sync.
         if view.published {
-            plan.delete_by_id(database, view.id).await?;
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            plan.delete_by_id_tx(&mut tx, view.id).await?;
             document_repo
-                .delete_by_vault_path(database, view.vault_path)
+                .delete_by_vault_path_tx(&mut tx, view.vault_path)
                 .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
             plan.delete_from_store(store, view.slug)?;
             continue;
         }
@@ -170,10 +174,13 @@ async fn sync_entities<K: SyncRepository>(
         let row = K::row_from_frontmatter(frontmatter)?;
         let row_view = K::row_view(&row);
         synced_ids.insert(row_view.id.to_string());
-        plan.upsert(database, &row).await?;
+        // Project canonical store -> db: upsert the row + its index entry as one
+        // transaction so the index can't be left out of step with the row (P6.1).
+        let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+        plan.upsert_tx(&mut tx, &row).await?;
         document_repo
-            .upsert_index(
-                database,
+            .upsert_index_tx(
+                &mut tx,
                 K::KIND,
                 row_view.slug,
                 Some(row_view.name),
@@ -182,16 +189,21 @@ async fn sync_entities<K: SyncRepository>(
                 row_view.updated_at,
             )
             .await?;
+        tx.commit().await.map_err(|err| err.to_string())?;
     }
 
     let existing = plan.list_all(database).await?;
     for row in &existing {
         let row_view = K::row_view(row);
         if !synced_ids.contains(row_view.id) {
-            plan.delete_by_id(database, row_view.id).await?;
+            // Prune a DB row whose canonical TOML no longer exists: row + index in
+            // one transaction (P6.1).
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            plan.delete_by_id_tx(&mut tx, row_view.id).await?;
             document_repo
-                .delete_by_vault_path(database, row_view.vault_path)
+                .delete_by_vault_path_tx(&mut tx, row_view.vault_path)
                 .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
         }
     }
 
@@ -233,14 +245,14 @@ impl SyncRepository for NpcSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -279,14 +291,14 @@ impl SyncRepository for LocationSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -325,14 +337,14 @@ impl SyncRepository for FactionSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -371,14 +383,14 @@ impl SyncRepository for ItemSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -417,14 +429,14 @@ impl SyncRepository for EventSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -463,14 +475,14 @@ impl SyncRepository for GodSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -509,14 +521,14 @@ impl SyncRepository for DungeonSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
