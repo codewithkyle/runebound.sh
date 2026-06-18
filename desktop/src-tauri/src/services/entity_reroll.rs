@@ -516,6 +516,7 @@ impl EntityRerollService {
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt);
 
         let is_list = [
+            "resources_assets",
             "allies",
             "rivals_enemies",
             "goals_short_term",
@@ -588,6 +589,7 @@ impl EntityRerollService {
                             .collect(),
                     );
                     let current = match field {
+                        "resources_assets" => input.faction.resources_assets.clone(),
                         "allies" => input.faction.allies.clone(),
                         "rivals_enemies" => input.faction.rivals_enemies.clone(),
                         "goals_short_term" => input.faction.goals_short_term.clone(),
@@ -626,7 +628,6 @@ impl EntityRerollService {
                     "leadership" => input.faction.leadership.clone(),
                     "headquarters" => input.faction.headquarters.clone(),
                     "sphere_of_influence" => input.faction.sphere_of_influence.clone(),
-                    "resources_assets" => input.faction.resources_assets.clone(),
                     "reputation" => input.faction.reputation.clone(),
                     "current_tension" => input.faction.current_tension.clone(),
                     "symbol_description" => input.faction.symbol_description.clone(),
@@ -1251,7 +1252,7 @@ pub struct FactionRerollContext {
     pub leadership: String,
     pub headquarters: String,
     pub sphere_of_influence: String,
-    pub resources_assets: String,
+    pub resources_assets: Vec<String>,
     pub allies: Vec<String>,
     pub rivals_enemies: Vec<String>,
     pub reputation: String,
@@ -1438,7 +1439,7 @@ fn faction_context_summary(context: &FactionRerollContext) -> String {
         context.leadership,
         context.headquarters,
         context.sphere_of_influence,
-        context.resources_assets,
+        context.resources_assets.join(", "),
         context.allies.join(", "),
         context.rivals_enemies.join(", "),
         context.reputation,

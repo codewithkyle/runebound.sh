@@ -95,7 +95,8 @@ pub struct FactionDraft {
     pub leadership: String,
     pub headquarters: String,
     pub sphere_of_influence: String,
-    pub resources_assets: String,
+    #[serde(default)]
+    pub resources_assets: Vec<String>,
     #[serde(default)]
     pub allies: Vec<String>,
     #[serde(default)]
@@ -277,7 +278,8 @@ pub struct FactionFrontmatter {
     pub leadership: String,
     pub headquarters: String,
     pub sphere_of_influence: String,
-    pub resources_assets: String,
+    #[serde(deserialize_with = "crate::utils::string_or_seq_list")]
+    pub resources_assets: Vec<String>,
     pub allies: Vec<String>,
     pub rivals_enemies: Vec<String>,
     pub reputation: String,
@@ -505,7 +507,7 @@ pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
         ),
         entity_row(
             "Resources:",
-            normalize_unknown_text(&draft.resources_assets),
+            normalize_unknown_list(draft.resources_assets.clone()).join(", "),
         ),
         entity_row(
             "Allies:",

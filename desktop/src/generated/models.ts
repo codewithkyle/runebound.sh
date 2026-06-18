@@ -6,7 +6,7 @@ export type NpcDraft = { id: string, seed_prompt: string | null, name: string, s
 
 export type LocationDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, visual_description: string, history_background: string, exports: Array<string>, tone: string, authority: string, danger_level: string, current_tension: string, };
 
-export type FactionDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, public_description: string, true_agenda: string, methods: string, leadership: string, headquarters: string, sphere_of_influence: string, resources_assets: string, allies: Array<string>, rivals_enemies: Array<string>, reputation: string, current_tension: string, goals_short_term: Array<string>, goals_long_term: Array<string>, symbol_description: string, };
+export type FactionDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, public_description: string, true_agenda: string, methods: string, leadership: string, headquarters: string, sphere_of_influence: string, resources_assets: Array<string>, allies: Array<string>, rivals_enemies: Array<string>, reputation: string, current_tension: string, goals_short_term: Array<string>, goals_long_term: Array<string>, symbol_description: string, };
 
 export type ItemDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, category: string, rarity: string, attunement: string, materials: Array<string>, appearance: string, abilities: string, drawbacks: string, history: string, value: string, location: string, };
 

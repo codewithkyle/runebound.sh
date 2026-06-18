@@ -602,7 +602,8 @@ pub(crate) fn faction_row_from_frontmatter(
         leadership: frontmatter.leadership.clone(),
         headquarters: frontmatter.headquarters.clone(),
         sphere_of_influence: frontmatter.sphere_of_influence.clone(),
-        resources_assets: frontmatter.resources_assets.clone(),
+        resources_assets: faction_list_to_db_text(&frontmatter.resources_assets)
+            .map_err(|err| err.to_string())?,
         allies: faction_list_to_db_text(&frontmatter.allies).map_err(|err| err.to_string())?,
         rivals_enemies: faction_list_to_db_text(&frontmatter.rivals_enemies)
             .map_err(|err| err.to_string())?,

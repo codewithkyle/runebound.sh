@@ -559,6 +559,53 @@ pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
     }
 }
 
+/// Deserialize a `Vec<String>` that also tolerates a legacy scalar: a plain string
+/// (how `resources_assets` was persisted before it became a list) is split on
+/// `, ; \n` into list items, so an existing vault loads without a migration pass.
+/// A real sequence is read element-by-element and passes through untouched.
+///
+/// Uses `deserialize_any` (sound for the self-describing formats we read — TOML on
+/// disk and JSON from the frontend) so the back-compat split lives here, at the I/O
+/// boundary, instead of leaking into the steady-state publish path.
+pub fn string_or_seq_list<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    struct StringOrSeq;
+
+    impl<'de> serde::de::Visitor<'de> for StringOrSeq {
+        type Value = Vec<String>;
+
+        fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+            formatter.write_str("a list of strings or a `, ; \\n`-delimited string")
+        }
+
+        fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+        where
+            E: serde::de::Error,
+        {
+            Ok(value
+                .split([',', ';', '\n'])
+                .map(|chunk| chunk.trim().to_string())
+                .filter(|chunk| !chunk.is_empty())
+                .collect())
+        }
+
+        fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+        where
+            A: serde::de::SeqAccess<'de>,
+        {
+            let mut out = Vec::new();
+            while let Some(item) = seq.next_element::<String>()? {
+                out.push(item);
+            }
+            Ok(out)
+        }
+    }
+
+    deserializer.deserialize_any(StringOrSeq)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -670,6 +717,43 @@ mod tests {
         assert_eq!(
             normalize_unknown_text("@events/Harvest Moon"),
             "Harvest Moon"
+        );
+    }
+
+    #[test]
+    fn string_or_seq_list_reads_a_real_sequence() {
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(deserialize_with = "string_or_seq_list")]
+            items: Vec<String>,
+        }
+        let parsed: Holder = serde_json::from_str(r#"{"items": ["vaults", "scouts"]}"#).unwrap();
+        assert_eq!(
+            parsed.items,
+            vec!["vaults".to_string(), "scouts".to_string()]
+        );
+    }
+
+    #[test]
+    fn string_or_seq_list_migrates_a_legacy_scalar_string() {
+        // Pre-list `resources_assets` was a single delimited blob; loading it splits
+        // on `, ; \n` so an existing vault upgrades to discrete items in place. (New
+        // data is already a real array, so the split only ever touches old records.)
+        #[derive(Deserialize)]
+        struct Holder {
+            #[serde(deserialize_with = "string_or_seq_list")]
+            items: Vec<String>,
+        }
+        let parsed: Holder =
+            serde_json::from_str(r#"{"items": "hidden vaults; arcane scouts, blackmail"}"#)
+                .unwrap();
+        assert_eq!(
+            parsed.items,
+            vec![
+                "hidden vaults".to_string(),
+                "arcane scouts".to_string(),
+                "blackmail".to_string(),
+            ]
         );
     }
 

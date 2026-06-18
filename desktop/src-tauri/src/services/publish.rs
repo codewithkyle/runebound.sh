@@ -101,7 +101,7 @@ pub fn render_faction_markdown_with_links(
     write_section(&mut out, "True Agenda", &frontmatter.true_agenda, linker);
     write_section(&mut out, "Methods", &frontmatter.methods, linker);
     write_section(&mut out, "Leadership", &frontmatter.leadership, linker);
-    write_text_list_section(
+    write_list_section(
         &mut out,
         "Resources & Assets",
         &frontmatter.resources_assets,
@@ -382,9 +382,14 @@ fn wikilink(value: &str) -> String {
 /// case-insensitive, whole-word, and longest-name-first, and it never links
 /// inside an existing `[[...]]` span.
 pub struct EntityLinker {
-    /// Canonical display names, de-duplicated and sorted longest-first so that
-    /// "Crimson Lantern Syndicate" is matched before "Crimson Lantern".
-    names: Vec<String>,
+    /// Canonical display names paired with their lowercased form, de-duplicated and
+    /// sorted longest-first so that "Crimson Lantern Syndicate" is matched before
+    /// "Crimson Lantern". The lowercased form is the needle [`link_prose`] matches
+    /// against; computing it once here (instead of re-allocating it per text
+    /// position × name in the inner loop) keeps linking linear in the prose length.
+    ///
+    /// [`link_prose`]: EntityLinker::link_prose
+    names: Vec<(String, String)>,
 }
 
 impl EntityLinker {
@@ -394,18 +399,30 @@ impl EntityLinker {
     {
         let self_lower = self_name.trim().to_ascii_lowercase();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut names: Vec<String> = candidate_names
+        let mut names: Vec<(String, String)> = candidate_names
             .into_iter()
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty())
-            // Never link a page to itself.
-            .filter(|name| name.to_ascii_lowercase() != self_lower)
-            // A name with link-unsafe characters can't form a clean target.
-            .filter(|name| !name.contains(WIKILINK_UNSAFE_CHARS))
-            // De-duplicate case-insensitively, keeping the first casing seen.
-            .filter(|name| seen.insert(name.to_ascii_lowercase()))
+            .filter_map(|name| {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let lower = name.to_ascii_lowercase();
+                // Never link a page to itself.
+                if lower == self_lower {
+                    return None;
+                }
+                // A name with link-unsafe characters can't form a clean target.
+                if name.contains(WIKILINK_UNSAFE_CHARS) {
+                    return None;
+                }
+                // De-duplicate case-insensitively, keeping the first casing seen.
+                if !seen.insert(lower.clone()) {
+                    return None;
+                }
+                Some((name, lower))
+            })
             .collect();
-        names.sort_by_key(|name| std::cmp::Reverse(name.len()));
+        names.sort_by_key(|(name, _)| std::cmp::Reverse(name.len()));
         Self { names }
     }
 
@@ -443,12 +460,11 @@ impl EntityLinker {
 
             if boundary_before(text, i) {
                 let mut matched: Option<(&str, usize)> = None;
-                for name in &self.names {
-                    let needle = name.to_ascii_lowercase();
-                    if lowered[i..].starts_with(&needle) {
+                for (name, needle) in &self.names {
+                    if lowered[i..].starts_with(needle.as_str()) {
                         let end = i + needle.len();
                         if boundary_after(text, end) {
-                            matched = Some((name, end));
+                            matched = Some((name.as_str(), end));
                             break;
                         }
                     }
@@ -568,47 +584,6 @@ fn write_linked_list_section(out: &mut String, title: &str, values: &[String]) {
     writeln!(out).ok();
 }
 
-fn write_text_list_section(out: &mut String, title: &str, value: &str) {
-    let normalized = normalize_unknown_text(value);
-    if normalized == "Unknown" {
-        return;
-    }
-
-    let mut items = parse_text_list_items(&normalized);
-
-    if items.is_empty() {
-        items.push(normalized);
-    }
-
-    writeln!(out, "## {title}").ok();
-    for item in items {
-        writeln!(out, "- {}", item).ok();
-    }
-    writeln!(out).ok();
-}
-
-fn parse_text_list_items(value: &str) -> Vec<String> {
-    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(value) {
-        let cleaned: Vec<String> = parsed
-            .into_iter()
-            .map(|item| normalize_unknown_text(&item))
-            .filter(|item| item != "Unknown")
-            .collect();
-        if !cleaned.is_empty() {
-            return cleaned;
-        }
-    }
-
-    value
-        .split(['\n', ';', ','])
-        .map(|chunk| chunk.trim())
-        .map(|chunk| chunk.trim_start_matches(['-', '*', '•', '[', ']']))
-        .map(|chunk| chunk.trim_matches(|c| c == '[' || c == ']'))
-        .map(normalize_unknown_text)
-        .filter(|chunk| chunk != "Unknown")
-        .collect()
-}
-
 fn kind_display(frontmatter: &LocationFrontmatter) -> String {
     let kind = normalize_unknown_text(&frontmatter.kind_type);
     if !kind.eq_ignore_ascii_case("other") {
@@ -689,7 +664,7 @@ mod tests {
             leadership: "Triumvirate".to_string(),
             headquarters: "Smolderkeep".to_string(),
             sphere_of_influence: "Borderlands".to_string(),
-            resources_assets: "Hidden vaults;Arcane scouts".to_string(),
+            resources_assets: vec!["Hidden vaults".to_string(), "Arcane scouts".to_string()],
             allies: vec![],
             rivals_enemies: vec![],
             reputation: "Feared".to_string(),
@@ -704,40 +679,6 @@ mod tests {
 
         let markdown = render_faction_markdown(&frontmatter);
         assert!(markdown.contains("## Resources & Assets"));
-        assert!(markdown.contains("- Hidden vaults"));
-        assert!(markdown.contains("- Arcane scouts"));
-    }
-
-    #[test]
-    fn faction_resources_handle_json_array_string() {
-        let frontmatter = FactionFrontmatter {
-            doc_type: "faction".to_string(),
-            id: "fac_1".to_string(),
-            slug: "ashen-circle".to_string(),
-            name: "Ashen Circle".to_string(),
-            vault_path: "factions/Ashen Circle.md".to_string(),
-            kind_type: "guild".to_string(),
-            kind_custom: None,
-            public_description: "A secretive guild.".to_string(),
-            true_agenda: "Protect forbidden lore.".to_string(),
-            methods: "Shadow operations.".to_string(),
-            leadership: "Triumvirate".to_string(),
-            headquarters: "Smolderkeep".to_string(),
-            sphere_of_influence: "Borderlands".to_string(),
-            resources_assets: "[\"Hidden vaults\", \"Arcane scouts\"]".to_string(),
-            allies: vec![],
-            rivals_enemies: vec![],
-            reputation: "Feared".to_string(),
-            current_tension: "Hunters closing in.".to_string(),
-            goals_short_term: vec![],
-            goals_long_term: vec![],
-            symbol_description: "A burned coin.".to_string(),
-            created_at: "2026-06-15T00:00:00Z".to_string(),
-            updated_at: "2026-06-15T00:00:00Z".to_string(),
-            published_at: None,
-        };
-
-        let markdown = render_faction_markdown(&frontmatter);
         assert!(markdown.contains("- Hidden vaults"));
         assert!(markdown.contains("- Arcane scouts"));
     }
@@ -885,7 +826,7 @@ mod tests {
             leadership: "Triumvirate".to_string(),
             headquarters: "Smolderkeep".to_string(),
             sphere_of_influence: "Borderlands".to_string(),
-            resources_assets: "Hidden vaults".to_string(),
+            resources_assets: vec!["Hidden vaults".to_string()],
             allies: vec!["Crimson Lantern Syndicate".to_string()],
             rivals_enemies: vec!["Harbor Watch".to_string()],
             reputation: "Feared".to_string(),

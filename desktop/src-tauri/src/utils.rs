@@ -162,7 +162,7 @@ pub fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, Stri
     seed.leadership = normalize_unknown_text(&seed.leadership);
     seed.headquarters = normalize_unknown_text(&seed.headquarters);
     seed.sphere_of_influence = normalize_unknown_text(&seed.sphere_of_influence);
-    seed.resources_assets = normalize_unknown_text(&seed.resources_assets);
+    seed.resources_assets = normalize_unknown_list(seed.resources_assets);
     seed.allies = normalize_unknown_list(seed.allies);
     seed.rivals_enemies = normalize_unknown_list(seed.rivals_enemies);
     seed.reputation = normalize_unknown_text(&seed.reputation);
@@ -329,7 +329,7 @@ mod tests {
             leadership: "Unknown".to_string(),
             headquarters: "Unknown".to_string(),
             sphere_of_influence: "Unknown".to_string(),
-            resources_assets: "Unknown".to_string(),
+            resources_assets: vec!["Unknown".to_string()],
             allies: vec!["Unknown".to_string()],
             rivals_enemies: vec!["Unknown".to_string()],
             reputation: "Unknown".to_string(),

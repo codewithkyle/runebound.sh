@@ -231,7 +231,7 @@ impl_entity_persistence! {
         let leadership = normalize_unknown_text(&draft.leadership);
         let headquarters = normalize_unknown_text(&draft.headquarters);
         let sphere_of_influence = normalize_unknown_text(&draft.sphere_of_influence);
-        let resources_assets = normalize_unknown_text(&draft.resources_assets);
+        let resources_assets = normalize_unknown_list(draft.resources_assets.clone());
         let allies = normalize_unknown_list(draft.allies.clone());
         let rivals_enemies = normalize_unknown_list(draft.rivals_enemies.clone());
         let reputation = normalize_unknown_text(&draft.reputation);
@@ -239,6 +239,7 @@ impl_entity_persistence! {
         let goals_short_term = normalize_unknown_list(draft.goals_short_term.clone());
         let goals_long_term = normalize_unknown_list(draft.goals_long_term.clone());
         let symbol_description = normalize_unknown_text(&draft.symbol_description);
+        let resources_assets_db = faction_list_to_db_text(&resources_assets)?;
         let allies_db = faction_list_to_db_text(&allies)?;
         let rivals_db = faction_list_to_db_text(&rivals_enemies)?;
         let goals_short_db = faction_list_to_db_text(&goals_short_term)?;
@@ -271,7 +272,7 @@ impl_entity_persistence! {
         leadership,
         headquarters,
         sphere_of_influence,
-        resources_assets,
+        resources_assets: resources_assets_db,
         allies: allies_db,
         rivals_enemies: rivals_db,
         reputation,

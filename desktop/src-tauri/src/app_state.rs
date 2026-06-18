@@ -604,7 +604,7 @@ mod tests {
             leadership: String::new(),
             headquarters: String::new(),
             sphere_of_influence: String::new(),
-            resources_assets: String::new(),
+            resources_assets: Vec::new(),
             allies: Vec::new(),
             rivals_enemies: Vec::new(),
             reputation: String::new(),

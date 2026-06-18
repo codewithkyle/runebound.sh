@@ -77,7 +77,7 @@ impl EntityDomain for FactionDomain {
             leadership: row.leadership,
             headquarters: row.headquarters,
             sphere_of_influence: row.sphere_of_influence,
-            resources_assets: row.resources_assets,
+            resources_assets: faction_list_from_db_text(&row.resources_assets),
             allies: faction_list_from_db_text(&row.allies),
             rivals_enemies: faction_list_from_db_text(&row.rivals_enemies),
             reputation: row.reputation,
@@ -167,7 +167,9 @@ impl EntityDomain for FactionDomain {
                 "leadership" => draft.leadership = trimmed_value.to_string(),
                 "headquarters" => draft.headquarters = trimmed_value.to_string(),
                 "sphere_of_influence" => draft.sphere_of_influence = trimmed_value.to_string(),
-                "resources_assets" => draft.resources_assets = trimmed_value.to_string(),
+                "resources_assets" => {
+                    draft.resources_assets = normalize_unknown_list(parse_list_csv(trimmed_value));
+                }
                 "allies" => draft.allies = normalize_unknown_list(parse_list_csv(trimmed_value)),
                 "rivals_enemies" => {
                     draft.rivals_enemies = normalize_unknown_list(parse_list_csv(trimmed_value));
@@ -313,7 +315,7 @@ impl EntityDomain for FactionDomain {
                 }
             }
             "resources_assets" => {
-                if let Some(value) = rerolled.value {
+                if let Some(value) = rerolled.list_value {
                     draft.resources_assets = value;
                 }
             }
@@ -416,7 +418,7 @@ pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
         draft.leadership,
         draft.headquarters,
         draft.sphere_of_influence,
-        draft.resources_assets,
+        draft.resources_assets.join(", "),
         draft.allies.join(", "),
         draft.rivals_enemies.join(", "),
         draft.reputation,
@@ -444,7 +446,7 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
         leadership: normalize_unknown_text(&draft.leadership),
         headquarters: normalize_unknown_text(&draft.headquarters),
         sphere_of_influence: normalize_unknown_text(&draft.sphere_of_influence),
-        resources_assets: normalize_unknown_text(&draft.resources_assets),
+        resources_assets: normalize_unknown_list(draft.resources_assets.clone()),
         allies: normalize_unknown_list(draft.allies.clone()),
         rivals_enemies: normalize_unknown_list(draft.rivals_enemies.clone()),
         reputation: normalize_unknown_text(&draft.reputation),
