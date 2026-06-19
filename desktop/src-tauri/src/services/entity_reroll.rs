@@ -1,13 +1,14 @@
 use crate::entities::kind::EntityKind;
-use crate::entities::schema::{FieldAccess, canonical_field_spec, format_valid_field_list};
+use crate::entities::schema::{
+    EntityFieldSpec, FieldAccess, ValueKind, canonical_field_spec, format_valid_field_list,
+};
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
     anchor_mechanic, build_reference_context, describe_recent_npc_occupation_anchors,
     occupation_anchor, parse_recent_npc_seeds, recent_occupation_anchor_set,
 };
 use crate::services::ollama_chat::{
-    attempt_seed, build_chat_client, detail_directive, load_generation_config,
-    post_chat_for_content,
+    ChatClient, OllamaChatClient, attempt_seed, detail_directive, load_generation_config,
 };
 use crate::utils::{
     normalize_exports, normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
@@ -91,16 +92,48 @@ enum RerollStep<T> {
     Fail(String),
 }
 
+/// Build the Ollama `/api/chat` request body for one reroll attempt. Pure (no I/O)
+/// so characterization tests can assert the exact payload a given field produces;
+/// the only per-attempt-varying input is `run_seed`.
+fn build_reroll_payload(
+    model: &str,
+    sampling: &Sampling,
+    num_ctx: Option<u32>,
+    run_seed: i32,
+    schema: &serde_json::Value,
+    system: &str,
+    user: &str,
+) -> serde_json::Value {
+    let mut options = serde_json::json!({
+        "temperature": sampling.temperature,
+        "top_p": sampling.top_p,
+        "repeat_penalty": sampling.repeat_penalty,
+        "seed": run_seed,
+    });
+    if let Some(num_ctx) = num_ctx {
+        options["num_ctx"] = serde_json::json!(num_ctx);
+    }
+    serde_json::json!({
+        "model": model,
+        "stream": false,
+        "format": schema,
+        "options": options,
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user }
+        ]
+    })
+}
+
 /// The shared 0..4 reroll attempt loop. Builds the chat payload from `model`, the
 /// named `sampling` profile, an optional `num_ctx`, and the prebuilt
-/// `system`/`user` messages with `schema` as the JSON `format`; POSTs it; parses
-/// the reply; and hands the parsed value to `accept`, which decides per
-/// [`RerollStep`]. Returns `not_produced()` after four exhausted attempts. This is
-/// the loop every `reroll_*` method used to inline verbatim.
+/// `system`/`user` messages with `schema` as the JSON `format`; POSTs it through the
+/// [`ChatClient`] seam; parses the reply; and hands the parsed value to `accept`,
+/// which decides per [`RerollStep`]. Returns `not_produced()` after four exhausted
+/// attempts. This is the loop every `reroll_*` method used to inline verbatim.
 #[allow(clippy::too_many_arguments)]
 async fn run_reroll_attempts<T>(
-    client: &reqwest::Client,
-    url: &str,
+    client: &dyn ChatClient,
     model: &str,
     sampling: &Sampling,
     num_ctx: Option<u32>,
@@ -112,27 +145,10 @@ async fn run_reroll_attempts<T>(
 ) -> Result<T, String> {
     for attempt in 0..4 {
         let run_seed = attempt_seed(attempt);
-        let mut options = serde_json::json!({
-            "temperature": sampling.temperature,
-            "top_p": sampling.top_p,
-            "repeat_penalty": sampling.repeat_penalty,
-            "seed": run_seed,
-        });
-        if let Some(num_ctx) = num_ctx {
-            options["num_ctx"] = serde_json::json!(num_ctx);
-        }
-        let payload = serde_json::json!({
-            "model": model,
-            "stream": false,
-            "format": schema,
-            "options": options,
-            "messages": [
-                { "role": "system", "content": system },
-                { "role": "user", "content": user }
-            ]
-        });
+        let payload =
+            build_reroll_payload(model, sampling, num_ctx, run_seed, schema, system, user);
 
-        let Some(content) = post_chat_for_content(client, url, &payload).await? else {
+        let Some(content) = client.post_chat(&payload).await? else {
             continue;
         };
         let parsed: serde_json::Value = match serde_json::from_str(&content) {
@@ -157,6 +173,110 @@ fn reroll_unknown_field_error(kind: EntityKind, raw: &str) -> String {
         raw,
         format_valid_field_list(kind, FieldAccess::Reroll)
     )
+}
+
+/// The structured-output JSON `format` for a single rerolled field. List fields
+/// emit an array (under `list_key`) with `minItems: 1` and an optional `maxItems`;
+/// the one enum-in-schema field (`npc sex`) emits a string `enum`; every other
+/// field is a non-empty string under `value`. Other enum-typed fields (`kind_type`,
+/// `rank`, `category`, …) deliberately use the plain string schema and lean on the
+/// normalizer — matching the prior per-kind code, which only spelled `sex` out.
+fn reroll_field_schema(
+    spec: &EntityFieldSpec,
+    list_key: &str,
+    list_max: Option<u32>,
+) -> serde_json::Value {
+    if spec.value_kind == ValueKind::List {
+        let mut array = serde_json::json!({
+            "type": "array",
+            "minItems": 1,
+            "items": { "type": "string", "minLength": 1 }
+        });
+        if let Some(max) = list_max {
+            array["maxItems"] = serde_json::json!(max);
+        }
+        return serde_json::json!({
+            "type": "object",
+            "required": [list_key],
+            "properties": { list_key: array },
+            "additionalProperties": false
+        });
+    }
+    if spec.canonical == "sex" {
+        return serde_json::json!({
+            "type": "object",
+            "required": ["value"],
+            "properties": { "value": { "type": "string", "enum": ["male", "female"] } },
+            "additionalProperties": false
+        });
+    }
+    serde_json::json!({
+        "type": "object",
+        "required": ["value"],
+        "properties": { "value": { "type": "string", "minLength": 1 } },
+        "additionalProperties": false
+    })
+}
+
+/// The reroll system prompt for `kind`. Items carry their own (deliberately
+/// different) framing; the other kinds share one template differing only by the
+/// entity noun, plus the NPC-only occupation-avoidance clause. `reference_suffix`
+/// and the verbosity directive append exactly as the prior inline prompts did.
+fn reroll_system_prompt(
+    kind: EntityKind,
+    field: &str,
+    reference_suffix: &str,
+    verbosity: dnd_core::config::Verbosity,
+) -> String {
+    let detail = detail_directive(verbosity);
+    if kind == EntityKind::Item {
+        return format!(
+            "You update one RPG item field. Return only valid JSON matching the schema.{reference_suffix}{detail}"
+        );
+    }
+    let noun = match kind {
+        EntityKind::Npc => "NPC",
+        EntityKind::Location => "location",
+        EntityKind::Faction => "faction",
+        EntityKind::God => "deity",
+        _ => "entity",
+    };
+    let occupation_clause = if kind == EntityKind::Npc && field == "occupation" {
+        " For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one."
+    } else {
+        ""
+    };
+    format!(
+        "You update one {noun} field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{occupation_clause}{reference_suffix}{detail}"
+    )
+}
+
+/// The reroll user message. Every kind shares the
+/// `<Label> context / Field / Instruction / Optional shaping prompt` shape; NPC
+/// additionally carries a `Recent occupation roots to avoid:` line, passed as
+/// `occupation_line` (always `Some` for NPC — `"(n/a)"` off the occupation field —
+/// and `None` for every other kind, which omits the line).
+fn reroll_user_message(
+    label: &str,
+    context_summary: &str,
+    field: &str,
+    reroll_instruction: &str,
+    extra_prompt: &str,
+    occupation_line: Option<&str>,
+) -> String {
+    let shaping = if extra_prompt.is_empty() {
+        "(none)"
+    } else {
+        extra_prompt
+    };
+    match occupation_line {
+        Some(occupation) => format!(
+            "{label} context: {context_summary}\nField to reroll: {field}\nInstruction: {reroll_instruction}\nRecent occupation roots to avoid: {occupation}\nOptional shaping prompt: {shaping}"
+        ),
+        None => format!(
+            "{label} context: {context_summary}\nField to reroll: {field}\nInstruction: {reroll_instruction}\nOptional shaping prompt: {shaping}"
+        ),
+    }
 }
 
 pub struct EntityRerollService;
@@ -203,72 +323,32 @@ impl EntityRerollService {
         };
         let current_occupation_anchor = occupation_anchor(&input.npc.occupation);
 
-        let schema = if field == "carrying" {
-            serde_json::json!({
-                "type": "object",
-                "required": ["carrying"],
-                "properties": {
-                    "carrying": {
-                        "type": "array",
-                        "minItems": 1,
-                        "items": { "type": "string", "minLength": 1 }
-                    }
-                },
-                "additionalProperties": false
-            })
-        } else if field == "sex" {
-            serde_json::json!({
-                "type": "object",
-                "required": ["value"],
-                "properties": {
-                    "value": { "type": "string", "enum": ["male", "female"] }
-                },
-                "additionalProperties": false
-            })
-        } else {
-            serde_json::json!({
-                "type": "object",
-                "required": ["value"],
-                "properties": {
-                    "value": { "type": "string", "minLength": 1 }
-                },
-                "additionalProperties": false
-            })
-        };
-
-        let system = format!(
-            "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}{}",
-            if field == "occupation" {
-                " For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one."
-            } else {
-                ""
-            },
-            reference_suffix,
-            detail_directive(config.generation.verbosity)
+        let schema = reroll_field_schema(spec, "carrying", None);
+        let system = reroll_system_prompt(
+            EntityKind::Npc,
+            field,
+            &reference_suffix,
+            config.generation.verbosity,
         );
-        let user = format!(
-            "NPC context: {}\nField to reroll: {}\nInstruction: {}\nRecent occupation roots to avoid: {}\nOptional shaping prompt: {}",
-            context_summary,
+        let occupation_line = if field == "occupation" {
+            recent_occupation_context.as_str()
+        } else {
+            "(n/a)"
+        };
+        let user = reroll_user_message(
+            "NPC",
+            &context_summary,
             field,
             spec.reroll_instruction,
-            if field == "occupation" {
-                recent_occupation_context.as_str()
-            } else {
-                "(n/a)"
-            },
-            if extra_prompt.is_empty() {
-                "(none)"
-            } else {
-                extra_prompt
-            }
+            extra_prompt,
+            Some(occupation_line),
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
         let mut seen_attempt_occupation_anchors = HashSet::new();
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &NPC_SAMPLING,
             None,
@@ -373,53 +453,26 @@ impl EntityRerollService {
         let context_summary = location_context_summary(&input.location);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
-        let schema = if field == "exports" {
-            serde_json::json!({
-                "type": "object",
-                "required": ["exports"],
-                "properties": {
-                    "exports": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 3,
-                        "items": { "type": "string", "minLength": 1 }
-                    }
-                },
-                "additionalProperties": false
-            })
-        } else {
-            serde_json::json!({
-                "type": "object",
-                "required": ["value"],
-                "properties": {
-                    "value": { "type": "string", "minLength": 1 }
-                },
-                "additionalProperties": false
-            })
-        };
-
-        let system = format!(
-            "You update one location field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
-            reference_suffix,
-            detail_directive(config.generation.verbosity)
+        let schema = reroll_field_schema(spec, "exports", Some(3));
+        let system = reroll_system_prompt(
+            EntityKind::Location,
+            field,
+            &reference_suffix,
+            config.generation.verbosity,
         );
-        let user = format!(
-            "Location context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
-            context_summary,
+        let user = reroll_user_message(
+            "Location",
+            &context_summary,
             field,
             spec.reroll_instruction,
-            if extra_prompt.is_empty() {
-                "(none)"
-            } else {
-                extra_prompt
-            }
+            extra_prompt,
+            None,
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &LOCATION_SAMPLING,
             None,
@@ -515,61 +568,27 @@ impl EntityRerollService {
         let context_summary = faction_context_summary(&input.faction);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
-        let is_list = [
-            "resources_assets",
-            "allies",
-            "rivals_enemies",
-            "goals_short_term",
-            "goals_long_term",
-        ]
-        .contains(&field);
-        let schema = if is_list {
-            serde_json::json!({
-                "type": "object",
-                "required": ["list"],
-                "properties": {
-                    "list": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 5,
-                        "items": { "type": "string", "minLength": 1 }
-                    }
-                },
-                "additionalProperties": false
-            })
-        } else {
-            serde_json::json!({
-                "type": "object",
-                "required": ["value"],
-                "properties": {
-                    "value": { "type": "string", "minLength": 1 }
-                },
-                "additionalProperties": false
-            })
-        };
-
-        let system = format!(
-            "You update one faction field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
-            reference_suffix,
-            detail_directive(config.generation.verbosity)
+        let is_list = spec.value_kind == ValueKind::List;
+        let schema = reroll_field_schema(spec, "list", Some(5));
+        let system = reroll_system_prompt(
+            EntityKind::Faction,
+            field,
+            &reference_suffix,
+            config.generation.verbosity,
         );
-        let user = format!(
-            "Faction context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
-            context_summary,
+        let user = reroll_user_message(
+            "Faction",
+            &context_summary,
             field,
             spec.reroll_instruction,
-            if extra_prompt.is_empty() {
-                "(none)"
-            } else {
-                extra_prompt
-            }
+            extra_prompt,
+            None,
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &FACTION_SAMPLING,
             None,
@@ -669,54 +688,27 @@ impl EntityRerollService {
         let context_summary = god_context_summary(&input.god);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
-        let is_list = ["domains", "allies", "rivals"].contains(&field);
-        let schema = if is_list {
-            serde_json::json!({
-                "type": "object",
-                "required": ["list"],
-                "properties": {
-                    "list": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 5,
-                        "items": { "type": "string", "minLength": 1 }
-                    }
-                },
-                "additionalProperties": false
-            })
-        } else {
-            serde_json::json!({
-                "type": "object",
-                "required": ["value"],
-                "properties": {
-                    "value": { "type": "string", "minLength": 1 }
-                },
-                "additionalProperties": false
-            })
-        };
-
-        let system = format!(
-            "You update one deity field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}{}",
-            reference_suffix,
-            detail_directive(config.generation.verbosity)
+        let is_list = spec.value_kind == ValueKind::List;
+        let schema = reroll_field_schema(spec, "list", Some(5));
+        let system = reroll_system_prompt(
+            EntityKind::God,
+            field,
+            &reference_suffix,
+            config.generation.verbosity,
         );
-        let user = format!(
-            "God context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
-            context_summary,
+        let user = reroll_user_message(
+            "God",
+            &context_summary,
             field,
             spec.reroll_instruction,
-            if extra_prompt.is_empty() {
-                "(none)"
-            } else {
-                extra_prompt
-            }
+            extra_prompt,
+            None,
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &GOD_SAMPLING,
             None,
@@ -893,11 +885,10 @@ impl EntityRerollService {
             }
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &DUNGEON_BEAT_SAMPLING,
             Some(config.ollama.num_ctx),
@@ -1008,11 +999,10 @@ impl EntityRerollService {
             }
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &DUNGEON_FIELD_SAMPLING,
             None,
@@ -1058,53 +1048,26 @@ impl EntityRerollService {
         let context_summary = item_context_summary(&input.item);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
-        let schema = if field == "materials" {
-            serde_json::json!({
-                "type": "object",
-                "required": ["materials"],
-                "properties": {
-                    "materials": {
-                        "type": "array",
-                        "minItems": 1,
-                        "maxItems": 4,
-                        "items": { "type": "string", "minLength": 1 }
-                    }
-                },
-                "additionalProperties": false
-            })
-        } else {
-            serde_json::json!({
-                "type": "object",
-                "required": ["value"],
-                "properties": {
-                    "value": { "type": "string", "minLength": 1 }
-                },
-                "additionalProperties": false
-            })
-        };
-
-        let system = format!(
-            "You update one RPG item field. Return only valid JSON matching the schema.{}{}",
-            reference_suffix,
-            detail_directive(config.generation.verbosity)
+        let schema = reroll_field_schema(spec, "materials", Some(4));
+        let system = reroll_system_prompt(
+            EntityKind::Item,
+            field,
+            &reference_suffix,
+            config.generation.verbosity,
         );
-        let user = format!(
-            "Item context: {}\nField to reroll: {}\nInstruction: {}\nOptional shaping prompt: {}",
-            context_summary,
+        let user = reroll_user_message(
+            "Item",
+            &context_summary,
             field,
             spec.reroll_instruction,
-            if extra_prompt.is_empty() {
-                "(none)"
-            } else {
-                extra_prompt
-            }
+            extra_prompt,
+            None,
         );
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
 
         run_reroll_attempts(
             &client,
-            &url,
             &model,
             &ITEM_SAMPLING,
             None,
@@ -1527,4 +1490,267 @@ fn item_context_summary(context: &ItemRerollContext) -> String {
         context.value,
         context.location
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::ollama_chat::MockChatClient;
+    use dnd_core::config::Verbosity;
+
+    fn spec(kind: EntityKind, field: &str) -> &'static EntityFieldSpec {
+        canonical_field_spec(kind, field, FieldAccess::Reroll).expect("rerollable field")
+    }
+
+    // --- request-side golden tests: lock the exact schema/system/user/payload the
+    // generic helpers build, so the (later) accept-side collapse can't drift them.
+
+    #[test]
+    fn schema_bounded_list_field_emits_array_under_its_key() {
+        let got = reroll_field_schema(spec(EntityKind::Location, "exports"), "exports", Some(3));
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "type": "object",
+                "required": ["exports"],
+                "properties": {
+                    "exports": {
+                        "type": "array",
+                        "minItems": 1,
+                        "maxItems": 3,
+                        "items": { "type": "string", "minLength": 1 }
+                    }
+                },
+                "additionalProperties": false
+            })
+        );
+    }
+
+    #[test]
+    fn schema_unbounded_list_omits_max_items() {
+        let got = reroll_field_schema(spec(EntityKind::Npc, "carrying"), "carrying", None);
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "type": "object",
+                "required": ["carrying"],
+                "properties": {
+                    "carrying": {
+                        "type": "array",
+                        "minItems": 1,
+                        "items": { "type": "string", "minLength": 1 }
+                    }
+                },
+                "additionalProperties": false
+            })
+        );
+    }
+
+    #[test]
+    fn schema_sex_is_the_only_enum_in_schema() {
+        let got = reroll_field_schema(spec(EntityKind::Npc, "sex"), "n/a", None);
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "type": "object",
+                "required": ["value"],
+                "properties": { "value": { "type": "string", "enum": ["male", "female"] } },
+                "additionalProperties": false
+            })
+        );
+    }
+
+    #[test]
+    fn schema_other_enum_fields_use_a_plain_string() {
+        // `god rank` is value_kind Enum, but the prior code emitted a plain string
+        // schema (the normalizer coerces it) — only `sex` was spelled out.
+        let got = reroll_field_schema(spec(EntityKind::God, "rank"), "n/a", None);
+        assert_eq!(
+            got,
+            serde_json::json!({
+                "type": "object",
+                "required": ["value"],
+                "properties": { "value": { "type": "string", "minLength": 1 } },
+                "additionalProperties": false
+            })
+        );
+    }
+
+    #[test]
+    fn system_prompt_npc_non_occupation_matches_prior_template() {
+        let suffix = "\n\nREF";
+        let got = reroll_system_prompt(EntityKind::Npc, "name", suffix, Verbosity::Brief);
+        assert_eq!(
+            got,
+            format!(
+                "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{suffix}{}",
+                detail_directive(Verbosity::Brief)
+            )
+        );
+    }
+
+    #[test]
+    fn system_prompt_npc_occupation_adds_the_avoidance_clause() {
+        let got = reroll_system_prompt(EntityKind::Npc, "occupation", "", Verbosity::Brief);
+        assert_eq!(
+            got,
+            format!(
+                "You update one NPC field for a game master. Return only valid JSON matching schema. Keep it coherent with context. For occupation rerolls, avoid repeating occupation roots seen in recent NPC generations unless the user explicitly asks for one.{}",
+                detail_directive(Verbosity::Brief)
+            )
+        );
+    }
+
+    #[test]
+    fn system_prompt_uses_the_right_noun_per_kind() {
+        for (kind, noun) in [
+            (EntityKind::Location, "location"),
+            (EntityKind::Faction, "faction"),
+            (EntityKind::God, "deity"),
+        ] {
+            let got = reroll_system_prompt(kind, "name", "", Verbosity::Brief);
+            assert_eq!(
+                got,
+                format!(
+                    "You update one {noun} field for a game master. Return only valid JSON matching schema. Keep it coherent with context.{}",
+                    detail_directive(Verbosity::Brief)
+                ),
+                "kind {kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn system_prompt_item_uses_its_distinct_template() {
+        let got = reroll_system_prompt(EntityKind::Item, "name", "", Verbosity::Brief);
+        assert_eq!(
+            got,
+            format!(
+                "You update one RPG item field. Return only valid JSON matching the schema.{}",
+                detail_directive(Verbosity::Brief)
+            )
+        );
+    }
+
+    #[test]
+    fn user_message_omits_occupation_line_when_none() {
+        let got = reroll_user_message("Location", "name=Foo", "name", "Generate a name.", "", None);
+        assert_eq!(
+            got,
+            "Location context: name=Foo\nField to reroll: name\nInstruction: Generate a name.\nOptional shaping prompt: (none)"
+        );
+    }
+
+    #[test]
+    fn user_message_includes_occupation_line_and_shaping_prompt() {
+        let got = reroll_user_message(
+            "NPC",
+            "name=Foo",
+            "occupation",
+            "Generate one.",
+            "gritty",
+            Some("smith, guard"),
+        );
+        assert_eq!(
+            got,
+            "NPC context: name=Foo\nField to reroll: occupation\nInstruction: Generate one.\nRecent occupation roots to avoid: smith, guard\nOptional shaping prompt: gritty"
+        );
+    }
+
+    #[test]
+    fn payload_wraps_messages_schema_and_sampling() {
+        let schema = reroll_field_schema(spec(EntityKind::Npc, "name"), "n/a", None);
+        let payload =
+            build_reroll_payload("test-model", &NPC_SAMPLING, None, 42, &schema, "SYS", "USR");
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "model": "test-model",
+                "stream": false,
+                "format": schema,
+                "options": {
+                    "temperature": NPC_SAMPLING.temperature,
+                    "top_p": NPC_SAMPLING.top_p,
+                    "repeat_penalty": NPC_SAMPLING.repeat_penalty,
+                    "seed": 42
+                },
+                "messages": [
+                    { "role": "system", "content": "SYS" },
+                    { "role": "user", "content": "USR" }
+                ]
+            })
+        );
+    }
+
+    #[test]
+    fn payload_includes_num_ctx_when_present() {
+        let schema = serde_json::json!({});
+        let payload = build_reroll_payload("m", &ITEM_SAMPLING, Some(4096), 7, &schema, "s", "u");
+        assert_eq!(payload["options"]["num_ctx"], serde_json::json!(4096));
+    }
+
+    // --- loop control-flow tests through the ChatClient seam (hermetic).
+
+    #[tokio::test]
+    async fn run_reroll_attempts_retries_on_empty_then_accepts() {
+        let client = MockChatClient::new(vec![
+            Ok(None),                                  // attempt 0: empty -> retry
+            Ok(Some("{\"value\":\"x\"}".to_string())), // attempt 1: accepted
+        ]);
+        let out: Result<String, String> = run_reroll_attempts(
+            &client,
+            "m",
+            &NPC_SAMPLING,
+            None,
+            "sys",
+            "usr",
+            &serde_json::json!({}),
+            || "not produced".to_string(),
+            |parsed, _attempt| match parsed.get("value").and_then(|v| v.as_str()) {
+                Some(value) => RerollStep::Accept(value.to_string()),
+                None => RerollStep::Retry,
+            },
+        )
+        .await;
+        assert_eq!(out.unwrap(), "x");
+        assert_eq!(client.captured().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn run_reroll_attempts_propagates_fail_immediately() {
+        let client = MockChatClient::with_contents(&["{\"value\":\"bad\"}"]);
+        let out: Result<String, String> = run_reroll_attempts(
+            &client,
+            "m",
+            &NPC_SAMPLING,
+            None,
+            "sys",
+            "usr",
+            &serde_json::json!({}),
+            || "not produced".to_string(),
+            |_parsed, _attempt| RerollStep::Fail("boom".to_string()),
+        )
+        .await;
+        assert_eq!(out.unwrap_err(), "boom");
+        assert_eq!(client.captured().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn run_reroll_attempts_exhausts_after_four_attempts() {
+        let client = MockChatClient::new(vec![]); // queue empty -> always Ok(None)
+        let out: Result<String, String> = run_reroll_attempts(
+            &client,
+            "m",
+            &NPC_SAMPLING,
+            None,
+            "sys",
+            "usr",
+            &serde_json::json!({}),
+            || "not produced".to_string(),
+            |_parsed, _attempt| RerollStep::Retry,
+        )
+        .await;
+        assert_eq!(out.unwrap_err(), "not produced");
+        assert_eq!(client.captured().len(), 4);
+    }
 }

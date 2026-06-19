@@ -8,6 +8,7 @@
 
 use std::time::Duration;
 
+use async_trait::async_trait;
 use dnd_core::config::{AppConfig, Verbosity, load_effective, validate_for_runtime};
 
 /// The detail-level directive appended to every generation and reroll system
@@ -137,6 +138,96 @@ fn interpret_chat_response(value: &serde_json::Value) -> Result<Option<String>, 
         .map(|content| content.to_string()))
 }
 
+/// The single network seam every generation/reroll attempt POSTs through. Taking
+/// the loops' dependency on Ollama as a trait (rather than a bare `reqwest::Client`
+/// + URL) lets the deterministic part of generation/reroll — payload construction
+/// and the dedup/retry control flow — be unit-tested with a mock, without a live
+/// model. The production driver still goes over HTTP via [`OllamaChatClient`].
+#[async_trait]
+pub(crate) trait ChatClient: Send + Sync {
+    /// POST one chat payload, returning the assistant message content. Semantics
+    /// mirror [`post_chat_for_content`]: `Err` aborts the whole call, `Ok(None)` is
+    /// a retryable empty attempt, `Ok(Some(content))` is the reply body.
+    async fn post_chat(&self, payload: &serde_json::Value) -> Result<Option<String>, String>;
+}
+
+/// The production [`ChatClient`]: a timed `reqwest` client bound to the configured
+/// `/api/chat` URL. Built from config so callers hold one object instead of the
+/// `(client, url)` pair the loops used to thread separately.
+pub(crate) struct OllamaChatClient {
+    client: reqwest::Client,
+    url: String,
+}
+
+impl OllamaChatClient {
+    /// Build the client + endpoint from runtime config (same wiring as the former
+    /// inline [`build_chat_client`] call in every loop).
+    pub(crate) fn from_config(config: &AppConfig) -> Result<Self, String> {
+        let (client, url) = build_chat_client(config)?;
+        Ok(Self { client, url })
+    }
+}
+
+#[async_trait]
+impl ChatClient for OllamaChatClient {
+    async fn post_chat(&self, payload: &serde_json::Value) -> Result<Option<String>, String> {
+        post_chat_for_content(&self.client, &self.url, payload).await
+    }
+}
+
+/// A [`ChatClient`] for tests: records every payload it is asked to POST and
+/// replays a queue of canned outcomes. Lets characterization tests assert the exact
+/// request built for an (entity[, field]) and exercise the dedup/retry loop with
+/// scripted collisions, all without a live model.
+#[cfg(test)]
+pub(crate) struct MockChatClient {
+    responses: std::sync::Mutex<std::collections::VecDeque<Result<Option<String>, String>>>,
+    captured: std::sync::Mutex<Vec<serde_json::Value>>,
+}
+
+#[cfg(test)]
+impl MockChatClient {
+    /// A mock returning each outcome in order; once exhausted it yields `Ok(None)`
+    /// (a retryable empty attempt).
+    pub(crate) fn new(responses: Vec<Result<Option<String>, String>>) -> Self {
+        Self {
+            responses: std::sync::Mutex::new(responses.into()),
+            captured: std::sync::Mutex::new(Vec::new()),
+        }
+    }
+
+    /// Convenience: a mock that returns each content string as `Ok(Some(..))`.
+    pub(crate) fn with_contents(contents: &[&str]) -> Self {
+        Self::new(
+            contents
+                .iter()
+                .map(|content| Ok(Some((*content).to_string())))
+                .collect(),
+        )
+    }
+
+    /// Every payload POSTed so far, in order.
+    pub(crate) fn captured(&self) -> Vec<serde_json::Value> {
+        self.captured.lock().expect("mock captured lock").clone()
+    }
+}
+
+#[cfg(test)]
+#[async_trait]
+impl ChatClient for MockChatClient {
+    async fn post_chat(&self, payload: &serde_json::Value) -> Result<Option<String>, String> {
+        self.captured
+            .lock()
+            .expect("mock captured lock")
+            .push(payload.clone());
+        self.responses
+            .lock()
+            .expect("mock responses lock")
+            .pop_front()
+            .unwrap_or(Ok(None))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -187,6 +278,34 @@ mod tests {
         let body = serde_json::json!({ "error": "model 'llama9' not found" });
         let err = interpret_chat_response(&body).unwrap_err();
         assert!(err.contains("model 'llama9' not found"), "got: {err}");
+    }
+
+    #[tokio::test]
+    async fn mock_chat_client_captures_payloads_and_replays_in_order() {
+        // The mock is the test seam used by the reroll/seed characterization tests:
+        // it records every payload and replays canned outcomes, falling back to a
+        // retryable empty attempt once exhausted.
+        let mock =
+            MockChatClient::with_contents(&["{\"value\":\"first\"}", "{\"value\":\"second\"}"]);
+
+        let first_payload = serde_json::json!({ "model": "m", "messages": [] });
+        assert_eq!(
+            mock.post_chat(&first_payload).await.unwrap().as_deref(),
+            Some("{\"value\":\"first\"}")
+        );
+        assert_eq!(
+            mock.post_chat(&serde_json::json!({ "model": "m2" }))
+                .await
+                .unwrap()
+                .as_deref(),
+            Some("{\"value\":\"second\"}")
+        );
+        // Exhausted queue -> Ok(None), the loop's "retryable empty attempt".
+        assert_eq!(mock.post_chat(&serde_json::json!({})).await.unwrap(), None);
+
+        let captured = mock.captured();
+        assert_eq!(captured.len(), 3);
+        assert_eq!(captured[0], first_payload);
     }
 
     #[test]
