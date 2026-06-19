@@ -10,6 +10,11 @@ use std::any::Any;
 /// wizard. Mirrors how `DraftEnvelope` erases entity drafts, but uses `Any` (not
 /// an enum) so the shared `wizard` crate need not know every concrete wizard's
 /// data type.
+///
+/// The `downcast_*` accessors return `Option`, but the concrete type is fixed at
+/// `seed()` time and never changes during a run, so a `None` means a step asked
+/// for the wrong type — a *construction bug* in that wizard, not a runtime
+/// condition. Step/host code may therefore `expect` the downcast.
 pub struct WizardData(Box<dyn Any + Send + Sync>);
 
 impl WizardData {
@@ -26,16 +31,42 @@ impl WizardData {
     }
 }
 
-/// Live state of the active wizard. `Default` is the inactive state (no wizard
-/// running); the runtime resets to `default()` on cancel/complete.
+/// Live state of the wizard engine. Modeled as a two-state enum (P7.4) so "a
+/// wizard is running" and "its accumulator exists" are a single fact rather than a
+/// cross-field invariant the runtime has to assert with `expect`: an [`Active`]
+/// session *always* carries its [`ActiveWizard::data`]. `Default` is [`Inactive`];
+/// the runtime resets to it on cancel/complete.
+///
+/// [`Active`]: WizardSession::Active
+/// [`Inactive`]: WizardSession::Inactive
 #[derive(Default)]
-pub struct WizardSession {
-    /// `Some(id)` while a wizard is active; the `InputContext::Wizard` tag.
-    pub active_id: Option<&'static str>,
+pub enum WizardSession {
+    /// No wizard running — the `InputContext::Default` state.
+    #[default]
+    Inactive,
+    /// A wizard is mid-run, with its cursor, history, and accumulator.
+    Active(ActiveWizard),
+}
+
+/// The state of an in-progress wizard run (the `Active` variant's payload).
+pub struct ActiveWizard {
+    /// The active wizard's id — the `InputContext::Wizard` tag.
+    pub id: &'static str,
     /// Index into the active wizard's `steps()`.
     pub cursor: usize,
     /// Stack of prior cursors, popped by `back`.
     pub history: Vec<usize>,
-    /// The type-erased accumulator for the active wizard.
-    pub data: Option<WizardData>,
+    /// The type-erased accumulator for this run.
+    pub data: WizardData,
+}
+
+impl WizardSession {
+    /// The active wizard's id, or `None` when inactive. The one piece of session
+    /// state read across module boundaries (hosts gate `InputContext` on it).
+    pub fn active_id(&self) -> Option<&'static str> {
+        match self {
+            WizardSession::Active(active) => Some(active.id),
+            WizardSession::Inactive => None,
+        }
+    }
 }

@@ -50,6 +50,17 @@ impl CommandOutput {
             output_doc: Some(output_doc),
         }
     }
+
+    /// Build from a structured doc, deriving the plain-text `output` from it so the
+    /// two can't drift (P7.2). Use this whenever the text is just a flattening of
+    /// the doc — `with_doc` stays for the few cases where the text is built
+    /// independently (e.g. the doctor report).
+    fn from_doc(output_doc: OutputDoc) -> Self {
+        Self {
+            output: output_doc.to_plain_text(),
+            output_doc: Some(output_doc),
+        }
+    }
 }
 
 type CoreHandlerFuture<'a> = Pin<Box<dyn Future<Output = Result<CommandOutput>> + Send + 'a>>;
@@ -82,7 +93,6 @@ impl HandlerBridge for CoreHandler {
 }
 
 struct CoreHandlerInvocation<'a> {
-    workspace_root: &'a Path,
     _tokens: &'a [String],
     lowered: &'a [String],
     manifest: &'a CommandManifest,
@@ -123,9 +133,8 @@ fn status_handler_entry() -> HandlerEntry<CoreHandler> {
         CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match invocation.lowered.len() {
-                    0 | 1 => execute_status(invocation.workspace_root).await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "status"),
+                    0 | 1 => execute_status().await,
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::from_doc(
                         command_help_doc(invocation.manifest, "status", None),
                     )),
                     _ => bail!("unknown status command. use `status help`"),
@@ -166,10 +175,7 @@ pub fn render_help_overview(context: &InputContext) -> CommandOutput {
 }
 
 fn help_overview(manifest: &CommandManifest, context: &InputContext) -> CommandOutput {
-    CommandOutput::with_doc(
-        render_root_help(manifest, context),
-        root_help_doc(manifest, context),
-    )
+    CommandOutput::from_doc(root_help_doc(manifest, context))
 }
 
 /// Whether a command should appear in `context`'s help index. The default
@@ -188,8 +194,7 @@ fn exit_handler_entry() -> HandlerEntry<CoreHandler> {
             Box::pin(async move {
                 match invocation.lowered.len() {
                     0 | 1 => Ok(CommandOutput::text("exiting".to_string())),
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "exit"),
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::from_doc(
                         command_help_doc(invocation.manifest, "exit", None),
                     )),
                     _ => bail!("unknown exit command. use `exit help`"),
@@ -206,9 +211,8 @@ fn ping_handler_entry() -> HandlerEntry<CoreHandler> {
         CoreHandler::new(|invocation| {
             Box::pin(async move {
                 match invocation.lowered.len() {
-                    0 | 1 => execute_ping(invocation.workspace_root).await,
-                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "ping"),
+                    0 | 1 => execute_ping().await,
+                    2 if invocation.lowered[1] == "help" => Ok(CommandOutput::from_doc(
                         command_help_doc(invocation.manifest, "ping", None),
                     )),
                     _ => bail!("unknown ping command. use `ping help`"),
@@ -230,12 +234,13 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
                 // they never reach this handler. What remains is the static help and
                 // the direct `setup verbosity` config write.
                 match invocation.lowered.get(1).map(String::as_str) {
-                    None | Some("help") => Ok(CommandOutput::with_doc(
-                        render_command_help(invocation.manifest, "setup"),
-                        command_help_doc(invocation.manifest, "setup", None),
-                    )),
+                    None | Some("help") => Ok(CommandOutput::from_doc(command_help_doc(
+                        invocation.manifest,
+                        "setup",
+                        None,
+                    ))),
                     Some("verbosity") => {
-                        let loaded = load_effective(invocation.workspace_root)?;
+                        let loaded = load_effective()?;
                         match invocation.lowered.get(2) {
                             None => Ok(CommandOutput::text(format!(
                                 "generation verbosity is '{}'.\nUsage: setup verbosity <brief|medium|verbose>",
@@ -249,7 +254,7 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
                                 };
                                 let mut config = loaded.effective;
                                 config.generation.verbosity = level;
-                                let path = save_config(invocation.workspace_root, &config)?;
+                                let path = save_config(&config)?;
                                 Ok(CommandOutput::text(format!(
                                     "generation verbosity set to '{}' ({}).",
                                     level.as_str(),
@@ -269,24 +274,26 @@ fn setup_handler_entry() -> HandlerEntry<CoreHandler> {
     )
 }
 
-pub async fn execute_line(workspace_root: &Path, input: &str) -> CommandResponse {
+pub async fn execute_line(input: &str) -> CommandResponse {
     let mut session = SessionState::default();
-    execute_line_with_session(workspace_root, input, &mut session).await
+    execute_line_with_session(input, &mut session).await
 }
 
-pub async fn execute_line_with_session(
-    workspace_root: &Path,
-    input: &str,
-    session: &mut SessionState,
-) -> CommandResponse {
+pub async fn execute_line_with_session(input: &str, session: &mut SessionState) -> CommandResponse {
     let trimmed = input.trim();
     if !trimmed.is_empty() {
         session.push_history(trimmed, 50);
     }
 
-    match execute_line_internal(workspace_root, input, session).await {
+    match execute_line_internal(input, session).await {
         Ok(output) => {
             let output_text = output.output.clone();
+            // Every successful response carries a structured doc — the command's
+            // own if it built one, else a single paragraph of its text — so the
+            // frontend renders backend nodes and never has to parse prose.
+            let document = output
+                .output_doc
+                .unwrap_or_else(|| doc().with_block(paragraph_text(output_text.clone())));
             CommandResponse {
                 ok: true,
                 output: output.output,
@@ -297,7 +304,7 @@ pub async fn execute_line_with_session(
                     text: output_text,
                     command_ref: None,
                 }],
-                output_doc: output.output_doc,
+                output_doc: Some(document),
                 client_event: None,
                 wizard: None,
             }
@@ -314,7 +321,7 @@ pub async fn execute_line_with_session(
                     text: error_text,
                     command_ref: None,
                 }],
-                output_doc: Some(output_doc_from_error_text(err.to_string())),
+                output_doc: Some(output_doc_from_error(&err)),
                 client_event: None,
                 wizard: None,
             }
@@ -332,16 +339,16 @@ pub(crate) fn config_vault_path_string(config: &AppConfig) -> Option<String> {
 }
 
 pub(crate) fn expand_tilde_path(input: &str) -> PathBuf {
-    if input == "~" {
-        if let Some(home) = dirs::home_dir() {
-            return home;
-        }
+    if input == "~"
+        && let Some(home) = dirs::home_dir()
+    {
+        return home;
     }
 
-    if let Some(rest) = input.strip_prefix("~/") {
-        if let Some(home) = dirs::home_dir() {
-            return home.join(rest);
-        }
+    if let Some(rest) = input.strip_prefix("~/")
+        && let Some(home) = dirs::home_dir()
+    {
+        return home.join(rest);
     }
 
     PathBuf::from(input)
@@ -391,29 +398,18 @@ pub(crate) async fn probe_ollama_models(
     Ok((detail, probe.models))
 }
 
-pub async fn execute_line_result(workspace_root: &Path, input: &str) -> Result<CommandOutput> {
+pub async fn execute_line_result(input: &str) -> Result<CommandOutput> {
     let mut session = SessionState::default();
-    execute_line_internal(workspace_root, input, &mut session).await
+    execute_line_internal(input, &mut session).await
 }
 
-async fn execute_line_internal(
-    workspace_root: &Path,
-    input: &str,
-    session: &mut SessionState,
-) -> Result<CommandOutput> {
+async fn execute_line_internal(input: &str, session: &mut SessionState) -> Result<CommandOutput> {
     let normalized_input = normalize_command_input(input);
     let parsed_words =
         shell_words::split(&normalized_input).map_err(|e| anyhow!("invalid command input: {e}"))?;
     let manifest = command_manifest();
     let normalized_words = normalize_alias_tokens(&parsed_words, &manifest);
-    execute_dispatched(
-        workspace_root,
-        &normalized_words,
-        &manifest,
-        session,
-        &normalized_input,
-    )
-    .await
+    execute_dispatched(&normalized_words, &manifest, session, &normalized_input).await
 }
 
 /// Reject `-h`/`--help` anywhere in a command, returning the phrase-help hint to
@@ -438,7 +434,6 @@ pub fn reject_help_flags(tokens: &[String]) -> Option<String> {
 }
 
 async fn execute_dispatched(
-    workspace_root: &Path,
     tokens: &[String],
     manifest: &CommandManifest,
     session: &mut SessionState,
@@ -462,7 +457,6 @@ async fn execute_dispatched(
 
     if let Some(entry) = registry.get(handler_name) {
         let invocation = CoreHandlerInvocation {
-            workspace_root,
             _tokens: tokens,
             lowered: &lowered,
             manifest,
@@ -480,26 +474,25 @@ async fn execute_dispatched(
 }
 
 async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result<CommandOutput> {
-    let workspace_root = invocation.workspace_root;
     let lowered = invocation.lowered;
     let manifest = invocation.manifest;
     if lowered.len() == 1 || (lowered.len() == 2 && lowered[1] == "help") {
-        return Ok(CommandOutput::with_doc(
-            render_command_help(manifest, "config"),
-            command_help_doc(manifest, "config", None),
-        ));
+        return Ok(CommandOutput::from_doc(command_help_doc(
+            manifest, "config", None,
+        )));
     }
 
     if lowered.len() == 3 && lowered[2] == "help" {
-        return Ok(CommandOutput::with_doc(
-            render_subcommand_help(manifest, "config", &lowered[1]),
-            command_help_doc(manifest, "config", Some(&lowered[1])),
-        ));
+        return Ok(CommandOutput::from_doc(command_help_doc(
+            manifest,
+            "config",
+            Some(&lowered[1]),
+        )));
     }
 
     match lowered[1].as_str() {
         "show" if lowered.len() == 2 => {
-            let loaded = load_effective(workspace_root)?;
+            let loaded = load_effective()?;
             let mut out = String::new();
             out.push_str(&format!(
                 "global config: {}\n",
@@ -519,8 +512,8 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
             Ok(CommandOutput::text(out.trim_end().to_string()))
         }
         "test" if lowered.len() == 2 => {
-            let loaded = load_effective(workspace_root)?;
-            let report = health::run_doctor_checks(&loaded.effective, workspace_root).await;
+            let loaded = load_effective()?;
+            let report = health::run_doctor_checks(&loaded.effective).await;
             let out = format_report("config test", &report);
             let output_doc = report_output_doc("Config Test", &report);
             if !report.is_ok() {
@@ -530,75 +523,6 @@ async fn execute_config_command(invocation: CoreHandlerInvocation<'_>) -> Result
         }
         _ => bail!("unknown config command. use `config help`"),
     }
-}
-
-fn render_root_help(manifest: &CommandManifest, context: &InputContext) -> String {
-    let mut lines = vec!["## Commands".to_string()];
-    for command in manifest
-        .commands
-        .iter()
-        .filter(|command| command.show_in_autocomplete)
-        .filter(|command| help_lists_command(&command.name, context))
-    {
-        lines.push(format!("{} - {}", command.name, command.summary));
-    }
-    lines.push(String::new());
-    lines.push("Use `<command> help` or `help <command>` for details.".to_string());
-    lines.join("\n")
-}
-
-fn render_command_help(manifest: &CommandManifest, root: &str) -> String {
-    let Some(command) = find_manifest_command(manifest, root) else {
-        return format!("unknown command: {root}. use `help`");
-    };
-
-    let mut lines = vec![format!("## {}", command.name), command.summary.clone()];
-    if !command.subcommands.is_empty() {
-        lines.push(String::new());
-        lines.push("Subcommands:".to_string());
-        for subcommand in &command.subcommands {
-            lines.push(format!(
-                "- {} {} - {}",
-                command.name, subcommand.name, subcommand.summary
-            ));
-        }
-    }
-
-    if !command.examples.is_empty() {
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        for example in &command.examples {
-            lines.push(format!("- {example}"));
-        }
-    }
-
-    lines.join("\n")
-}
-
-fn render_subcommand_help(manifest: &CommandManifest, root: &str, subcommand: &str) -> String {
-    let Some(command) = find_manifest_command(manifest, root) else {
-        return format!("unknown command: {root}. use `help`");
-    };
-    let Some(sub) = command
-        .subcommands
-        .iter()
-        .find(|entry| entry.name.eq_ignore_ascii_case(subcommand))
-    else {
-        return format!("unknown {root} command. use `{root} help`");
-    };
-
-    let mut lines = vec![
-        format!("## {} {}", command.name, sub.name),
-        sub.summary.clone(),
-    ];
-    if !sub.examples.is_empty() {
-        lines.push(String::new());
-        lines.push("Examples:".to_string());
-        for example in &sub.examples {
-            lines.push(format!("- {example}"));
-        }
-    }
-    lines.join("\n")
 }
 
 fn find_manifest_command<'a>(manifest: &'a CommandManifest, root: &str) -> Option<&'a CommandSpec> {
@@ -616,7 +540,8 @@ fn examples_block(examples: &[String]) -> OutputBlock {
     list(items)
 }
 
-/// Structured, clickable counterpart to [`render_root_help`].
+/// The clickable root help index. The plain-text `output` is derived from this doc
+/// via [`OutputDoc::to_plain_text`] (P7.2), so there is one source per help surface.
 fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDoc {
     let items: Vec<Vec<InlineNode>> = manifest
         .commands
@@ -639,13 +564,9 @@ fn root_help_doc(manifest: &CommandManifest, context: &InputContext) -> OutputDo
 }
 
 /// Structured, clickable help for a single command (`subcommand = None`) or one
-/// of its subcommands. Subcommands render as `command_ref`s and examples as
-/// code; the plain-text `render_*_help` functions remain the fallback string.
-fn command_help_doc(
-    manifest: &CommandManifest,
-    root: &str,
-    subcommand: Option<&str>,
-) -> OutputDoc {
+/// of its subcommands. Subcommands render as `command_ref`s and examples as code;
+/// the plain-text fallback is derived from this doc via [`OutputDoc::to_plain_text`].
+fn command_help_doc(manifest: &CommandManifest, root: &str, subcommand: Option<&str>) -> OutputDoc {
     let Some(command) = find_manifest_command(manifest, root) else {
         return doc().with_block(paragraph_with_inlines(vec![
             text_node(format!("unknown command: {root}. use ")),
@@ -705,22 +626,21 @@ fn command_help_doc(
     document
 }
 
-async fn execute_status(workspace_root: &Path) -> Result<CommandOutput> {
-    let loaded = load_effective(workspace_root)?;
+async fn execute_status() -> Result<CommandOutput> {
+    let loaded = load_effective()?;
     let global_config_path = loaded.paths.global.display().to_string();
     let config = loaded.effective;
 
     let issues = required_issues(&config);
     if !issues.is_empty() {
-        bail!(
-            "## First-time setup required\n\
-             \nrunebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.\n\
-             \nRun `start setup` to begin guided setup.\n\
-             \n## Config paths\n\
-             - global: {global_config_path}\n\
-             \n## Missing required values\n- {}",
-            issues.join("\n- ")
-        );
+        // Surface the bootstrap gate as typed data, not a prose string: the
+        // structured doc is built directly from `issues` (see `setup_required_doc`)
+        // instead of being re-parsed out of a rendered message.
+        return Err(SetupRequired {
+            issues,
+            global_config_path,
+        }
+        .into());
     }
 
     validate_for_runtime(&config)?;
@@ -760,8 +680,8 @@ pub(crate) const OLLAMA_SETUP_TIMEOUT_SECONDS: u64 = 15;
 /// Backs the `ping` command (and its `reconnect` alias). Fails (so the spinner
 /// flips to error) when the server is unreachable; reports a warning when the
 /// server answers but the configured model is missing.
-async fn execute_ping(workspace_root: &Path) -> Result<CommandOutput> {
-    let loaded = load_effective(workspace_root)?;
+async fn execute_ping() -> Result<CommandOutput> {
+    let loaded = load_effective()?;
     let config = loaded.effective;
 
     if config.ollama.base_url.trim().is_empty() {
@@ -880,52 +800,83 @@ fn report_list_block(report: &CheckReport) -> OutputBlock {
     list(items)
 }
 
-pub(crate) fn output_doc_from_error_text(message: String) -> OutputDoc {
-    if message.to_lowercase().contains("first-time setup required") {
-        let missing_values = extract_missing_values(&message);
-        let mut output_doc = doc();
-        output_doc.push(heading(2, "First-time setup required"));
-        output_doc.push(paragraph_text(
-            "runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path."
-                .to_string(),
-        ));
-        output_doc.push(paragraph_with_inlines(vec![command_ref(
-            "start setup",
-            "start setup",
-        )]));
-        if !missing_values.is_empty() {
-            output_doc.push(heading(2, "Missing required values"));
-            output_doc.push(list(
-                missing_values
-                    .into_iter()
-                    .map(|value| vec![text_node(value)])
-                    .collect(),
-            ));
-        }
-        return output_doc;
-    }
-
-    doc().with_block(status(StatusTone::Error, message))
+/// The bootstrap gate: required config is missing, so the app can't run yet.
+///
+/// Modeled as a typed error (not a prose string) so the structured `OutputDoc`
+/// is built directly from `issues` rather than re-parsed from a rendered message.
+/// `Display` keeps a readable message for the plain-text `error` field, logs, and
+/// the CLI. Kept `ok:false` (a non-zero exit) by design — this is a gate, but
+/// `status` should still fail for scripting.
+#[derive(Debug)]
+pub(crate) struct SetupRequired {
+    pub issues: Vec<String>,
+    pub global_config_path: String,
 }
 
-fn extract_missing_values(message: &str) -> Vec<String> {
-    let mut values = Vec::new();
-    for line in message.lines() {
-        let trimmed = line.trim();
-        if let Some(value) = trimmed.strip_prefix("- ") {
-            if !value.is_empty() {
-                values.push(value.to_string());
-            }
-        }
+impl std::fmt::Display for SetupRequired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "First-time setup required\n\n\
+             runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.\n\n\
+             Run `start setup` to begin guided setup.\n\n\
+             Config paths\n- global: {}\n\n\
+             Missing required values\n- {}",
+            self.global_config_path,
+            self.issues.join("\n- "),
+        )
     }
-    values
+}
+
+impl std::error::Error for SetupRequired {}
+
+/// Build the structured error doc for a failed command, keying off the typed
+/// error rather than sniffing its rendered text. The bootstrap gate gets a
+/// `Warning`-toned doc with a clickable `start setup`; everything else is a plain
+/// `Error`-toned status block.
+pub(crate) fn output_doc_from_error(err: &anyhow::Error) -> OutputDoc {
+    if let Some(setup) = err.downcast_ref::<SetupRequired>() {
+        return setup_required_doc(setup);
+    }
+    error_status_doc(err.to_string())
+}
+
+/// A plain error doc: a single `Error`-toned status block. Used for ordinary
+/// failures and by the service layer's error responses.
+pub(crate) fn error_status_doc(message: impl Into<String>) -> OutputDoc {
+    doc().with_block(status(StatusTone::Error, message.into()))
+}
+
+fn setup_required_doc(setup: &SetupRequired) -> OutputDoc {
+    let mut document = doc()
+        .with_block(heading(2, "First-time setup required"))
+        .with_block(paragraph_text(
+            "runebound.sh needs two connections before it can run: an Ollama LLM endpoint and an Obsidian vault path.",
+        ))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Run "),
+            command_ref("start setup", "start setup"),
+            text_node(" to begin guided setup."),
+        ]));
+    if !setup.issues.is_empty() {
+        document = document
+            .with_block(heading(3, "Missing required values"))
+            .with_block(list(
+                setup
+                    .issues
+                    .iter()
+                    .map(|issue| vec![text_node(issue.clone())])
+                    .collect(),
+            ));
+    }
+    document
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
-    use super::{build_core_handler_registry, execute_line_result};
+    use super::{
+        SetupRequired, build_core_handler_registry, execute_line_result, output_doc_from_error,
+    };
     use command_specs::{CommandExecution, command_manifest};
 
     /// `model` (and the `setup`/`start` launchers) are dispatched via the wizard
@@ -954,7 +905,7 @@ mod tests {
 
     #[tokio::test]
     async fn rejects_help_flags_in_favor_of_phrase_help() {
-        let result = execute_line_result(Path::new("."), "config --help").await;
+        let result = execute_line_result("config --help").await;
         let error = result.expect_err("expected --help to be rejected");
         assert!(error.to_string().contains("not supported"));
         assert!(error.to_string().contains("config help"));
@@ -962,9 +913,69 @@ mod tests {
 
     #[tokio::test]
     async fn supports_help_prefix_normalization() {
-        let result = execute_line_result(Path::new("."), "help config")
+        let result = execute_line_result("help config")
             .await
             .expect("expected help config to succeed");
         assert!(result.output.contains("## config"));
+    }
+
+    #[test]
+    fn setup_required_error_builds_a_structured_doc_from_issues() {
+        use runebound_models::output::{InlineNode, OutputBlock};
+
+        let err: anyhow::Error = SetupRequired {
+            issues: vec!["vault.path is not configured".to_string()],
+            global_config_path: "/tmp/config.toml".to_string(),
+        }
+        .into();
+        let document = output_doc_from_error(&err);
+
+        // Leads with a heading (not an Error-toned status), so the frontend renders
+        // it as a neutral gate rather than a hard error — keyed off the doc's
+        // structure, not a string match.
+        assert!(matches!(
+            document.blocks.first(),
+            Some(OutputBlock::Heading { level: 2, .. })
+        ));
+        // Offers a clickable `start setup` (a real command_ref, not prose-guessing).
+        let has_start_setup = document.blocks.iter().any(|block| {
+            match block {
+            OutputBlock::Paragraph { inlines } => inlines.iter().any(|node| {
+                matches!(node, InlineNode::CommandRef { command, .. } if command == "start setup")
+            }),
+            _ => false,
+        }
+        });
+        assert!(
+            has_start_setup,
+            "setup doc must offer a clickable start setup"
+        );
+        // The typed issues render structurally as a list (no `- ` re-parse).
+        let has_issue = document.blocks.iter().any(|block| match block {
+            OutputBlock::List { items } => items.iter().any(|item| {
+                item.iter().any(|node| {
+                    matches!(node, InlineNode::Text { text } if text.contains("vault.path is not configured"))
+                })
+            }),
+            _ => false,
+        });
+        assert!(
+            has_issue,
+            "missing-values list must include the typed issue"
+        );
+    }
+
+    #[test]
+    fn ordinary_errors_render_as_an_error_status() {
+        use runebound_models::output::{OutputBlock, StatusTone};
+
+        let document = output_doc_from_error(&anyhow::anyhow!("something broke"));
+        assert!(matches!(
+            document.blocks.as_slice(),
+            [OutputBlock::Status {
+                tone: StatusTone::Error,
+                ..
+            }]
+        ));
     }
 }

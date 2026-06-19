@@ -1,26 +1,35 @@
 use std::collections::HashSet;
-use std::fs;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
 use dnd_core::config::load_effective;
 use dnd_core::entity_store::EntityStore;
-use dnd_core::npc::{DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter, LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp};
+use dnd_core::npc::{
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter, normalize_markdown_file_stem, now_timestamp,
+};
 use dnd_core::serialization::{carrying_to_db_text, exports_to_db_text, faction_list_to_db_text};
 use dnd_core::vault::Vault;
 
 use crate::app_state::AppState;
 use crate::repositories::{
-    db, DocumentRepository, DungeonRepository, EventRepository, FactionRepository, GodRepository,
-    ItemRepository, LocationRepository, NpcRepository,
+    DbTransaction, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
+    GodRepository, ItemRepository, LocationRepository, NpcRepository, db,
 };
 use crate::utils::normalize_relative_path_for_storage;
 
 pub struct VaultSyncService;
 
 impl VaultSyncService {
-    pub async fn sync_from_vault(&self, state: &AppState) -> Result<(), String> {
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    /// Project the canonical TOML entity store into the database + document index
+    /// at startup. The direction is **store → db only**: the store is the source of
+    /// truth, the DB is a rebuildable projection, and the Obsidian `.md` vault is a
+    /// *publish target*, never an input — deleted/renamed `.md` files are not read
+    /// back here (despite this module's historical "reconcile vault ↔ db" framing).
+    /// Each entity's row + index commit atomically, and published records are reaped
+    /// (P6.1/P6.3).
+    pub async fn project_store_into_db(&self, state: &AppState) -> Result<(), String> {
+        let loaded = load_effective().map_err(|err| err.to_string())?;
         if !loaded.effective.vault.autoscan_on_start {
             return Ok(());
         }
@@ -32,7 +41,7 @@ impl VaultSyncService {
         let vault = Vault::new(vault_path);
         vault.ensure_structure().map_err(|err| err.to_string())?;
 
-        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let database = state.database();
         let npc_repo = state.npc_repo();
         let location_repo = state.location_repo();
@@ -53,18 +62,48 @@ impl VaultSyncService {
         let database = database.as_ref();
         let document_repo = document_repo.as_ref();
         sync_entities(&NpcSync(npc_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&LocationSync(location_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&FactionSync(faction_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&ItemSync(item_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&EventSync(event_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(
+            &LocationSync(location_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
+        sync_entities(
+            &FactionSync(faction_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
+        sync_entities(
+            &ItemSync(item_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
+        sync_entities(
+            &EventSync(event_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
         sync_entities(&GodSync(god_repo.as_ref()), &store, database, document_repo).await?;
-        sync_entities(&DungeonSync(dungeon_repo.as_ref()), &store, database, document_repo).await?;
+        sync_entities(
+            &DungeonSync(dungeon_repo.as_ref()),
+            &store,
+            database,
+            document_repo,
+        )
+        .await?;
 
         Ok(())
     }
 }
 
-/// Frontmatter fields the generic reconcile loop reads, normalized across kinds.
+/// Frontmatter fields the generic projection loop reads, normalized across kinds.
 struct StoreView<'a> {
     id: &'a str,
     slug: &'a str,
@@ -84,7 +123,7 @@ struct RowView<'a> {
 
 /// Per-kind glue for [`sync_entities`]. Each impl wraps the kind's repository and
 /// exposes its typed store/DB operations through one uniform interface so the
-/// reconcile logic lives in exactly one place.
+/// store → db projection logic lives in exactly one place.
 #[async_trait]
 trait SyncRepository: Send + Sync {
     type Frontmatter: Send;
@@ -105,9 +144,9 @@ trait SyncRepository: Send + Sync {
     fn frontmatter_view(frontmatter: &Self::Frontmatter) -> StoreView<'_>;
     fn row_view(row: &Self::Row) -> RowView<'_>;
 
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String>;
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String>;
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String>;
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String>;
 }
 
 /// Reconcile one entity kind's canonical TOML store into the database + document
@@ -125,12 +164,16 @@ async fn sync_entities<K: SyncRepository>(
     for frontmatter in &frontmatters {
         let view = K::frontmatter_view(frontmatter);
         // Published entities are reaped: their record lives in Obsidian now, so drop
-        // the DB row, document index, and the backing TOML.
+        // the DB row + document index together (one transaction, P6.1), then remove
+        // the backing TOML. The store entry is flagged `published`, so a partial FS
+        // failure just re-reaps on the next sync.
         if view.published {
-            plan.delete_by_id(database, view.id).await?;
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            plan.delete_by_id_tx(&mut tx, view.id).await?;
             document_repo
-                .delete_by_vault_path(database, view.vault_path)
+                .delete_by_vault_path_tx(&mut tx, view.vault_path)
                 .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
             plan.delete_from_store(store, view.slug)?;
             continue;
         }
@@ -138,10 +181,13 @@ async fn sync_entities<K: SyncRepository>(
         let row = K::row_from_frontmatter(frontmatter)?;
         let row_view = K::row_view(&row);
         synced_ids.insert(row_view.id.to_string());
-        plan.upsert(database, &row).await?;
+        // Project canonical store -> db: upsert the row + its index entry as one
+        // transaction so the index can't be left out of step with the row (P6.1).
+        let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+        plan.upsert_tx(&mut tx, &row).await?;
         document_repo
-            .upsert_index(
-                database,
+            .upsert_index_tx(
+                &mut tx,
                 K::KIND,
                 row_view.slug,
                 Some(row_view.name),
@@ -150,16 +196,21 @@ async fn sync_entities<K: SyncRepository>(
                 row_view.updated_at,
             )
             .await?;
+        tx.commit().await.map_err(|err| err.to_string())?;
     }
 
     let existing = plan.list_all(database).await?;
     for row in &existing {
         let row_view = K::row_view(row);
         if !synced_ids.contains(row_view.id) {
-            plan.delete_by_id(database, row_view.id).await?;
+            // Prune a DB row whose canonical TOML no longer exists: row + index in
+            // one transaction (P6.1).
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            plan.delete_by_id_tx(&mut tx, row_view.id).await?;
             document_repo
-                .delete_by_vault_path(database, row_view.vault_path)
+                .delete_by_vault_path_tx(&mut tx, row_view.vault_path)
                 .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
         }
     }
 
@@ -201,14 +252,14 @@ impl SyncRepository for NpcSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -247,14 +298,14 @@ impl SyncRepository for LocationSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -293,14 +344,14 @@ impl SyncRepository for FactionSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -339,14 +390,14 @@ impl SyncRepository for ItemSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -385,14 +436,14 @@ impl SyncRepository for EventSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -431,14 +482,14 @@ impl SyncRepository for GodSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -477,14 +528,14 @@ impl SyncRepository for DungeonSync<'_> {
             updated_at: &row.updated_at,
         }
     }
-    async fn upsert(&self, database: &db::Database, row: &Self::Row) -> Result<(), String> {
-        self.0.upsert(database, row).await
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &Self::Row) -> Result<(), String> {
+        self.0.upsert_tx(tx, row).await
     }
     async fn list_all(&self, database: &db::Database) -> Result<Vec<Self::Row>, String> {
         self.0.list_all(database).await
     }
-    async fn delete_by_id(&self, database: &db::Database, id: &str) -> Result<(), String> {
-        self.0.delete_by_id(database, id).await
+    async fn delete_by_id_tx(&self, tx: &mut DbTransaction<'_>, id: &str) -> Result<(), String> {
+        self.0.delete_by_id_tx(tx, id).await
     }
 }
 
@@ -524,8 +575,7 @@ pub(crate) fn npc_row_from_frontmatter(frontmatter: &NpcFrontmatter) -> Result<d
         background: frontmatter.background.clone(),
         want_need: frontmatter.want_need.clone(),
         secret_obstacle: frontmatter.secret_obstacle.clone(),
-        carrying: carrying_to_db_text(&frontmatter.carrying)
-            .map_err(|err| err.to_string())?,
+        carrying: carrying_to_db_text(&frontmatter.carrying).map_err(|err| err.to_string())?,
         location: frontmatter.location.clone(),
         vault_path: frontmatter.vault_path.clone(),
         created_at: frontmatter.created_at.clone(),
@@ -571,7 +621,8 @@ pub(crate) fn faction_row_from_frontmatter(
         leadership: frontmatter.leadership.clone(),
         headquarters: frontmatter.headquarters.clone(),
         sphere_of_influence: frontmatter.sphere_of_influence.clone(),
-        resources_assets: frontmatter.resources_assets.clone(),
+        resources_assets: faction_list_to_db_text(&frontmatter.resources_assets)
+            .map_err(|err| err.to_string())?,
         allies: faction_list_to_db_text(&frontmatter.allies).map_err(|err| err.to_string())?,
         rivals_enemies: faction_list_to_db_text(&frontmatter.rivals_enemies)
             .map_err(|err| err.to_string())?,
@@ -587,7 +638,9 @@ pub(crate) fn faction_row_from_frontmatter(
     })
 }
 
-pub(crate) fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result<db::ItemRow, String> {
+pub(crate) fn item_row_from_frontmatter(
+    frontmatter: &ItemFrontmatter,
+) -> Result<db::ItemRow, String> {
     Ok(db::ItemRow {
         id: frontmatter.id.clone(),
         slug: frontmatter.slug.clone(),
@@ -596,7 +649,8 @@ pub(crate) fn item_row_from_frontmatter(frontmatter: &ItemFrontmatter) -> Result
         category: frontmatter.category.clone(),
         rarity: frontmatter.rarity.clone(),
         attunement: frontmatter.attunement.clone(),
-        materials: faction_list_to_db_text(&frontmatter.materials).map_err(|err| err.to_string())?,
+        materials: faction_list_to_db_text(&frontmatter.materials)
+            .map_err(|err| err.to_string())?,
         appearance: frontmatter.appearance.clone(),
         abilities: frontmatter.abilities.clone(),
         drawbacks: frontmatter.drawbacks.clone(),
@@ -644,63 +698,6 @@ pub(crate) fn god_row_from_frontmatter(frontmatter: &GodFrontmatter) -> Result<d
         rivals: faction_list_to_db_text(&frontmatter.rivals).map_err(|err| err.to_string())?,
         created_at: frontmatter.created_at.clone(),
         updated_at: frontmatter.updated_at.clone(),
-    })
-}
-
-pub fn unique_trash_path(
-    vault: &Vault,
-    entity_dir: &str,
-    slug: &str,
-    timestamp: &str,
-) -> Result<String, String> {
-    let base = format!("{}-{}", slug, timestamp.replace(':', "").replace('-', ""));
-    let mut candidate = format!(".trash/{entity_dir}/{base}.md");
-    let mut index = 2;
-
-    loop {
-        let full = vault
-            .resolve_relative(&PathBuf::from(&candidate))
-            .map_err(|err| err.to_string())?;
-        if !full.exists() {
-            return Ok(candidate);
-        }
-        candidate = format!(".trash/{entity_dir}/{base}-{index}.md");
-        index += 1;
-    }
-}
-
-pub fn move_vault_file(
-    vault: &Vault,
-    source_relative: &str,
-    target_relative: &str,
-) -> Result<(), String> {
-    let source_relative = normalize_relative_path_for_storage(source_relative);
-    let target_relative = normalize_relative_path_for_storage(target_relative);
-    let source_full = vault
-        .resolve_relative(&PathBuf::from(&source_relative))
-        .map_err(|err| err.to_string())?;
-    if !source_full.exists() {
-        return Err(format!(
-            "source file does not exist: {}",
-            source_full.display()
-        ));
-    }
-
-    let target_full = vault
-        .resolve_relative(&PathBuf::from(&target_relative))
-        .map_err(|err| err.to_string())?;
-    if let Some(parent) = target_full.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|err| format!("failed to create trash directory {}: {}", parent.display(), err))?;
-    }
-
-    fs::rename(&source_full, &target_full).map_err(|err| {
-        format!(
-            "failed to move file from {} to {}: {}",
-            source_full.display(),
-            target_full.display(),
-            err
-        )
     })
 }
 

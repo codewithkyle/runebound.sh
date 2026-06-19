@@ -5,12 +5,35 @@ use sqlx::migrate::Migrator;
 use sqlx::sqlite::SqliteConnectOptions;
 use sqlx::{ConnectOptions, Row, SqlitePool};
 
+use crate::db_macros::impl_entity_table;
+
 static MIGRATOR: Migrator = sqlx::migrate!("./migrations");
 const APP_DIR_NAME: &str = "runebound.sh";
 
 pub struct Database {
     pub pool: SqlitePool,
     pub path: PathBuf,
+}
+
+/// A SQLite transaction over this app's pool, vended by [`Database::begin`] and
+/// threaded through the executor-generic mutations + the repository `*_tx` methods
+/// so a compound DB change commits atomically (P6.1). Re-exported so the desktop
+/// crate need not depend on `sqlx` directly.
+pub type DbTransaction<'a> = sqlx::Transaction<'a, sqlx::Sqlite>;
+
+impl Database {
+    /// Begin a transaction for an atomic multi-statement unit of work — the basis
+    /// for committing a save's DB projection (row + document index) or a
+    /// soft-delete / reap's deletes as a unit, so a mid-sequence failure can't
+    /// leave the index out of step with its row (P6.1). The canonical TOML store is
+    /// written outside the transaction (it is the source of truth a partial DB
+    /// failure self-heals from on the next `sync`).
+    pub async fn begin(&self) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>> {
+        self.pool
+            .begin()
+            .await
+            .context("failed to begin database transaction")
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -165,479 +188,197 @@ pub struct SoftDeleteRow {
     pub operation: String,
 }
 
-pub async fn search_npcs_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<NpcRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
-         FROM npcs
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search npcs by name")?;
-
-    rows.into_iter().map(row_to_npc).collect()
+impl_entity_table! {
+    table: "npcs",
+    row: NpcRow,
+    upsert: upsert_npc,
+    find_by_id: find_npc_by_id,
+    find_by_slug: find_npc_by_slug,
+    find_by_name_or_slug: find_npc_by_name_or_slug,
+    list: list_npcs,
+    search_by_name: search_npcs_by_name,
+    delete_by_id: delete_npc_by_id,
+    row_to: row_to_npc,
+    columns: [
+        strict slug,
+        strict name,
+        strict race,
+        lenient occupation = "Unknown".to_string(),
+        strict sex,
+        lenient age = "Unknown".to_string(),
+        lenient height = "Unknown".to_string(),
+        lenient weight_lbs = "Unknown".to_string(),
+        lenient background = "Unknown".to_string(),
+        lenient want_need = "Unknown".to_string(),
+        lenient secret_obstacle = "Unknown".to_string(),
+        lenient carrying = "[\"Unknown\"]".to_string(),
+        strict location,
+        strict vault_path,
+    ],
 }
 
-pub async fn search_locations_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<LocationRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
-         FROM locations
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search locations by name")?;
-
-    rows.into_iter().map(row_to_location).collect()
+impl_entity_table! {
+    table: "locations",
+    row: LocationRow,
+    upsert: upsert_location,
+    find_by_id: find_location_by_id,
+    find_by_slug: find_location_by_slug,
+    find_by_name_or_slug: find_location_by_name_or_slug,
+    list: list_locations,
+    search_by_name: search_locations_by_name,
+    delete_by_id: delete_location_by_id,
+    row_to: row_to_location,
+    columns: [
+        strict slug,
+        strict name,
+        strict vault_path,
+        lenient kind_type = "other".to_string(),
+        opt kind_custom,
+        lenient visual_description = "Unknown".to_string(),
+        lenient history_background = "Unknown".to_string(),
+        lenient exports = "[\"Unknown\"]".to_string(),
+        lenient tone = "Unknown".to_string(),
+        lenient authority = "Unknown".to_string(),
+        lenient danger_level = "Unknown".to_string(),
+        lenient current_tension = "Unknown".to_string(),
+    ],
 }
 
-pub async fn search_factions_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<FactionRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
-         FROM factions
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search factions by name")?;
-
-    rows.into_iter().map(row_to_faction).collect()
+impl_entity_table! {
+    table: "factions",
+    row: FactionRow,
+    upsert: upsert_faction,
+    find_by_id: find_faction_by_id,
+    find_by_slug: find_faction_by_slug,
+    find_by_name_or_slug: find_faction_by_name_or_slug,
+    list: list_factions,
+    search_by_name: search_factions_by_name,
+    delete_by_id: delete_faction_by_id,
+    row_to: row_to_faction,
+    columns: [
+        strict slug,
+        strict name,
+        strict vault_path,
+        lenient kind_type = "other".to_string(),
+        opt kind_custom,
+        lenient public_description = "Unknown".to_string(),
+        lenient true_agenda = "Unknown".to_string(),
+        lenient methods = "Unknown".to_string(),
+        lenient leadership = "Unknown".to_string(),
+        lenient headquarters = "Unknown".to_string(),
+        lenient sphere_of_influence = "Unknown".to_string(),
+        lenient resources_assets = "[\"Unknown\"]".to_string(),
+        lenient allies = "[\"Unknown\"]".to_string(),
+        lenient rivals_enemies = "[\"Unknown\"]".to_string(),
+        lenient reputation = "Unknown".to_string(),
+        lenient current_tension = "Unknown".to_string(),
+        lenient goals_short_term = "[\"Unknown\"]".to_string(),
+        lenient goals_long_term = "[\"Unknown\"]".to_string(),
+        lenient symbol_description = "Unknown".to_string(),
+    ],
 }
 
-pub async fn search_items_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<ItemRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location, created_at, updated_at
-         FROM items
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search items by name")?;
-
-    rows.into_iter().map(row_to_item).collect()
+impl_entity_table! {
+    table: "gods",
+    row: GodRow,
+    upsert: upsert_god,
+    find_by_id: find_god_by_id,
+    find_by_slug: find_god_by_slug,
+    find_by_name_or_slug: find_god_by_name_or_slug,
+    list: list_gods,
+    search_by_name: search_gods_by_name,
+    delete_by_id: delete_god_by_id,
+    row_to: row_to_god,
+    columns: [
+        strict slug,
+        strict name,
+        strict vault_path,
+        lenient epithet = "Unknown".to_string(),
+        lenient rank = "other".to_string(),
+        opt rank_custom,
+        lenient alignment = "TN".to_string(),
+        lenient domains = "[\"Unknown\"]".to_string(),
+        lenient symbol = "Unknown".to_string(),
+        lenient appearance = "Unknown".to_string(),
+        lenient dogma = "Unknown".to_string(),
+        lenient realm = "Unknown".to_string(),
+        lenient worshippers = "Unknown".to_string(),
+        lenient clergy = "Unknown".to_string(),
+        lenient allies = "[\"Unknown\"]".to_string(),
+        lenient rivals = "[\"Unknown\"]".to_string(),
+    ],
 }
 
-pub async fn find_npc_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<NpcRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
-         FROM npcs
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find npc by name or slug")?;
-
-    row.map(row_to_npc).transpose()
+impl_entity_table! {
+    table: "dungeons",
+    row: DungeonRow,
+    upsert: upsert_dungeon,
+    find_by_id: find_dungeon_by_id,
+    find_by_slug: find_dungeon_by_slug,
+    find_by_name_or_slug: find_dungeon_by_name_or_slug,
+    list: list_dungeons,
+    search_by_name: search_dungeons_by_name,
+    delete_by_id: delete_dungeon_by_id,
+    row_to: row_to_dungeon,
+    columns: [
+        strict slug,
+        strict name,
+        strict vault_path,
+        lenient location = String::new(),
+        lenient story = String::new(),
+        lenient premise = "Unknown".to_string(),
+        lenient topology = "none".to_string(),
+        lenient tone = "tragedy".to_string(),
+        lenient twist = "neither".to_string(),
+        lenient beats_json = "[]".to_string(),
+    ],
 }
 
-pub async fn list_npcs(pool: &SqlitePool) -> Result<Vec<NpcRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at
-         FROM npcs",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list npcs")?;
-
-    rows.into_iter().map(row_to_npc).collect()
+impl_entity_table! {
+    table: "items",
+    row: ItemRow,
+    upsert: upsert_item,
+    find_by_id: find_item_by_id,
+    find_by_slug: find_item_by_slug,
+    find_by_name_or_slug: find_item_by_name_or_slug,
+    list: list_items,
+    search_by_name: search_items_by_name,
+    delete_by_id: delete_item_by_id,
+    row_to: row_to_item,
+    columns: [
+        strict slug,
+        strict name,
+        strict vault_path,
+        lenient category = "other".to_string(),
+        lenient rarity = "unknown".to_string(),
+        lenient attunement = "Unknown".to_string(),
+        lenient materials = "[\"Unknown\"]".to_string(),
+        lenient appearance = "Unknown".to_string(),
+        lenient abilities = "Unknown".to_string(),
+        lenient drawbacks = "Unknown".to_string(),
+        lenient history = "Unknown".to_string(),
+        lenient value = "Unknown".to_string(),
+        lenient location = "Unknown".to_string(),
+    ],
 }
 
-pub async fn find_location_by_name_or_slug(
-    pool: &SqlitePool,
-    input: &str,
-) -> Result<Option<LocationRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
-         FROM locations
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find location by name or slug")?;
-
-    row.map(row_to_location).transpose()
-}
-
-pub async fn find_faction_by_name_or_slug(
-    pool: &SqlitePool,
-    input: &str,
-) -> Result<Option<FactionRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
-         FROM factions
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find faction by name or slug")?;
-
-    row.map(row_to_faction).transpose()
-}
-
-pub async fn find_item_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<ItemRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location, created_at, updated_at
-         FROM items
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find item by name or slug")?;
-
-    row.map(row_to_item).transpose()
-}
-
-pub async fn list_locations(pool: &SqlitePool) -> Result<Vec<LocationRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at
-         FROM locations",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list locations")?;
-
-    rows.into_iter().map(row_to_location).collect()
-}
-
-pub async fn list_factions(pool: &SqlitePool) -> Result<Vec<FactionRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at
-         FROM factions",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list factions")?;
-
-    rows.into_iter().map(row_to_faction).collect()
-}
-
-pub async fn list_items(pool: &SqlitePool) -> Result<Vec<ItemRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location, created_at, updated_at
-         FROM items",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list items")?;
-
-    rows.into_iter().map(row_to_item).collect()
-}
-
-pub async fn search_gods_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<GodRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at
-         FROM gods
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search gods by name")?;
-
-    rows.into_iter().map(row_to_god).collect()
-}
-
-pub async fn find_god_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<GodRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at
-         FROM gods
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find god by name or slug")?;
-
-    row.map(row_to_god).transpose()
-}
-
-pub async fn find_god_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<GodRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at FROM gods WHERE slug = ?1",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query god by slug")?;
-
-    row.map(row_to_god).transpose()
-}
-
-pub async fn find_god_by_id(pool: &SqlitePool, id: &str) -> Result<Option<GodRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at FROM gods WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query god by id")?;
-
-    row.map(row_to_god).transpose()
-}
-
-pub async fn list_gods(pool: &SqlitePool) -> Result<Vec<GodRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at
-         FROM gods",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list gods")?;
-
-    rows.into_iter().map(row_to_god).collect()
-}
-
-pub async fn upsert_god(pool: &SqlitePool, god: &GodRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO gods (id, slug, name, vault_path, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            vault_path = excluded.vault_path,
-            epithet = excluded.epithet,
-            rank = excluded.rank,
-            rank_custom = excluded.rank_custom,
-            alignment = excluded.alignment,
-            domains = excluded.domains,
-            symbol = excluded.symbol,
-            appearance = excluded.appearance,
-            dogma = excluded.dogma,
-            realm = excluded.realm,
-            worshippers = excluded.worshippers,
-            clergy = excluded.clergy,
-            allies = excluded.allies,
-            rivals = excluded.rivals,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&god.id)
-    .bind(&god.slug)
-    .bind(&god.name)
-    .bind(&god.vault_path)
-    .bind(&god.epithet)
-    .bind(&god.rank)
-    .bind(&god.rank_custom)
-    .bind(&god.alignment)
-    .bind(&god.domains)
-    .bind(&god.symbol)
-    .bind(&god.appearance)
-    .bind(&god.dogma)
-    .bind(&god.realm)
-    .bind(&god.worshippers)
-    .bind(&god.clergy)
-    .bind(&god.allies)
-    .bind(&god.rivals)
-    .bind(&god.created_at)
-    .bind(&god.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert god")?;
-
-    Ok(())
-}
-
-pub async fn delete_god_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM gods WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete god row")?;
-
-    Ok(())
-}
-
-pub async fn search_dungeons_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<DungeonRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at
-         FROM dungeons
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search dungeons by name")?;
-
-    rows.into_iter().map(row_to_dungeon).collect()
-}
-
-pub async fn find_dungeon_by_name_or_slug(
-    pool: &SqlitePool,
-    input: &str,
-) -> Result<Option<DungeonRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at
-         FROM dungeons
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find dungeon by name or slug")?;
-
-    row.map(row_to_dungeon).transpose()
-}
-
-pub async fn find_dungeon_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<DungeonRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE slug = ?1",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query dungeon by slug")?;
-
-    row.map(row_to_dungeon).transpose()
-}
-
-pub async fn find_dungeon_by_id(pool: &SqlitePool, id: &str) -> Result<Option<DungeonRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at FROM dungeons WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query dungeon by id")?;
-
-    row.map(row_to_dungeon).transpose()
-}
-
-pub async fn list_dungeons(pool: &SqlitePool) -> Result<Vec<DungeonRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at
-         FROM dungeons",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list dungeons")?;
-
-    rows.into_iter().map(row_to_dungeon).collect()
-}
-
-pub async fn upsert_dungeon(pool: &SqlitePool, dungeon: &DungeonRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO dungeons (id, slug, name, vault_path, location, story, premise, topology, tone, twist, beats_json, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            vault_path = excluded.vault_path,
-            location = excluded.location,
-            story = excluded.story,
-            premise = excluded.premise,
-            topology = excluded.topology,
-            tone = excluded.tone,
-            twist = excluded.twist,
-            beats_json = excluded.beats_json,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&dungeon.id)
-    .bind(&dungeon.slug)
-    .bind(&dungeon.name)
-    .bind(&dungeon.vault_path)
-    .bind(&dungeon.location)
-    .bind(&dungeon.story)
-    .bind(&dungeon.premise)
-    .bind(&dungeon.topology)
-    .bind(&dungeon.tone)
-    .bind(&dungeon.twist)
-    .bind(&dungeon.beats_json)
-    .bind(&dungeon.created_at)
-    .bind(&dungeon.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert dungeon")?;
-
-    Ok(())
-}
-
-pub async fn delete_dungeon_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM dungeons WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete dungeon row")?;
-
-    Ok(())
+impl_entity_table! {
+    table: "events",
+    row: EventRow,
+    upsert: upsert_event,
+    find_by_id: find_event_by_id,
+    find_by_slug: find_event_by_slug,
+    find_by_name_or_slug: find_event_by_name_or_slug,
+    list: list_events,
+    search_by_name: search_events_by_name,
+    delete_by_id: delete_event_by_id,
+    row_to: row_to_event,
+    columns: [
+        strict slug,
+        strict name,
+        strict vault_path,
+        strict body,
+    ],
 }
 
 pub async fn init_database() -> Result<Database> {
@@ -694,262 +435,6 @@ pub fn default_database_path() -> Result<PathBuf> {
     Ok(data_dir.join(APP_DIR_NAME).join("app.db"))
 }
 
-pub async fn find_location_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<LocationRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at FROM locations WHERE slug = ?1",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query location by slug")?;
-
-    row.map(row_to_location).transpose()
-}
-
-pub async fn find_location_by_id(pool: &SqlitePool, id: &str) -> Result<Option<LocationRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at FROM locations WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query location by id")?;
-
-    row.map(row_to_location).transpose()
-}
-
-pub async fn find_faction_by_slug(pool: &SqlitePool, slug: &str) -> Result<Option<FactionRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at FROM factions WHERE slug = ?1",
-    )
-    .bind(slug)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query faction by slug")?;
-
-    row.map(row_to_faction).transpose()
-}
-
-pub async fn find_faction_by_id(pool: &SqlitePool, id: &str) -> Result<Option<FactionRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at FROM factions WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query faction by id")?;
-
-    row.map(row_to_faction).transpose()
-}
-
-pub async fn find_item_by_id(pool: &SqlitePool, id: &str) -> Result<Option<ItemRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location, created_at, updated_at FROM items WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query item by id")?;
-
-    row.map(row_to_item).transpose()
-}
-
-pub async fn upsert_location(pool: &SqlitePool, location: &LocationRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO locations (id, slug, name, vault_path, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            vault_path = excluded.vault_path,
-            kind_type = excluded.kind_type,
-            kind_custom = excluded.kind_custom,
-            visual_description = excluded.visual_description,
-            history_background = excluded.history_background,
-            exports = excluded.exports,
-            tone = excluded.tone,
-            authority = excluded.authority,
-            danger_level = excluded.danger_level,
-            current_tension = excluded.current_tension,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&location.id)
-    .bind(&location.slug)
-    .bind(&location.name)
-    .bind(&location.vault_path)
-    .bind(&location.kind_type)
-    .bind(&location.kind_custom)
-    .bind(&location.visual_description)
-    .bind(&location.history_background)
-    .bind(&location.exports)
-    .bind(&location.tone)
-    .bind(&location.authority)
-    .bind(&location.danger_level)
-    .bind(&location.current_tension)
-    .bind(&location.created_at)
-    .bind(&location.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert location")?;
-
-    Ok(())
-}
-
-pub async fn upsert_faction(pool: &SqlitePool, faction: &FactionRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO factions (id, slug, name, vault_path, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            vault_path = excluded.vault_path,
-            kind_type = excluded.kind_type,
-            kind_custom = excluded.kind_custom,
-            public_description = excluded.public_description,
-            true_agenda = excluded.true_agenda,
-            methods = excluded.methods,
-            leadership = excluded.leadership,
-            headquarters = excluded.headquarters,
-            sphere_of_influence = excluded.sphere_of_influence,
-            resources_assets = excluded.resources_assets,
-            allies = excluded.allies,
-            rivals_enemies = excluded.rivals_enemies,
-            reputation = excluded.reputation,
-            current_tension = excluded.current_tension,
-            goals_short_term = excluded.goals_short_term,
-            goals_long_term = excluded.goals_long_term,
-            symbol_description = excluded.symbol_description,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&faction.id)
-    .bind(&faction.slug)
-    .bind(&faction.name)
-    .bind(&faction.vault_path)
-    .bind(&faction.kind_type)
-    .bind(&faction.kind_custom)
-    .bind(&faction.public_description)
-    .bind(&faction.true_agenda)
-    .bind(&faction.methods)
-    .bind(&faction.leadership)
-    .bind(&faction.headquarters)
-    .bind(&faction.sphere_of_influence)
-    .bind(&faction.resources_assets)
-    .bind(&faction.allies)
-    .bind(&faction.rivals_enemies)
-    .bind(&faction.reputation)
-    .bind(&faction.current_tension)
-    .bind(&faction.goals_short_term)
-    .bind(&faction.goals_long_term)
-    .bind(&faction.symbol_description)
-    .bind(&faction.created_at)
-    .bind(&faction.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert faction")?;
-
-    Ok(())
-}
-
-pub async fn find_npc_by_id(pool: &SqlitePool, id: &str) -> Result<Option<NpcRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at FROM npcs WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query npc by id")?;
-
-    row.map(row_to_npc).transpose()
-}
-
-pub async fn upsert_npc(pool: &SqlitePool, npc: &NpcRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO npcs (id, slug, name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying, location, vault_path, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            race = excluded.race,
-            occupation = excluded.occupation,
-            sex = excluded.sex,
-            age = excluded.age,
-            height = excluded.height,
-            weight_lbs = excluded.weight_lbs,
-            background = excluded.background,
-            want_need = excluded.want_need,
-            secret_obstacle = excluded.secret_obstacle,
-            carrying = excluded.carrying,
-            location = excluded.location,
-            vault_path = excluded.vault_path,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&npc.id)
-    .bind(&npc.slug)
-    .bind(&npc.name)
-    .bind(&npc.race)
-    .bind(&npc.occupation)
-    .bind(&npc.sex)
-    .bind(&npc.age)
-    .bind(&npc.height)
-    .bind(&npc.weight_lbs)
-    .bind(&npc.background)
-    .bind(&npc.want_need)
-    .bind(&npc.secret_obstacle)
-    .bind(&npc.carrying)
-    .bind(&npc.location)
-    .bind(&npc.vault_path)
-    .bind(&npc.created_at)
-    .bind(&npc.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert npc")?;
-
-    Ok(())
-}
-
-pub async fn upsert_item(pool: &SqlitePool, item: &ItemRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO items (id, slug, name, vault_path, category, rarity, attunement, materials, appearance, abilities, drawbacks, history, value, location, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            vault_path = excluded.vault_path,
-            category = excluded.category,
-            rarity = excluded.rarity,
-            attunement = excluded.attunement,
-            materials = excluded.materials,
-            appearance = excluded.appearance,
-            abilities = excluded.abilities,
-            drawbacks = excluded.drawbacks,
-            history = excluded.history,
-            value = excluded.value,
-            location = excluded.location,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&item.id)
-    .bind(&item.slug)
-    .bind(&item.name)
-    .bind(&item.vault_path)
-    .bind(&item.category)
-    .bind(&item.rarity)
-    .bind(&item.attunement)
-    .bind(&item.materials)
-    .bind(&item.appearance)
-    .bind(&item.abilities)
-    .bind(&item.drawbacks)
-    .bind(&item.history)
-    .bind(&item.value)
-    .bind(&item.location)
-    .bind(&item.created_at)
-    .bind(&item.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert item")?;
-
-    Ok(())
-}
-
 pub async fn find_document_by_vault_path(
     pool: &SqlitePool,
     vault_path: &str,
@@ -963,15 +448,20 @@ pub async fn find_document_by_vault_path(
     Ok(row.map(|r| r.get::<String, _>("slug")))
 }
 
-pub async fn upsert_document_index(
-    pool: &SqlitePool,
+// Executor-generic (pool or `&mut Transaction`) so the document index can be
+// upserted in the same transaction as its entity row (P6.1).
+pub async fn upsert_document_index<'e, E>(
+    executor: E,
     doc_type: &str,
     slug: &str,
     title: Option<&str>,
     vault_path: &str,
     created_at: &str,
     updated_at: &str,
-) -> Result<()> {
+) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query(
         "INSERT INTO documents (doc_type, slug, title, vault_path, tags, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6)
@@ -988,156 +478,21 @@ pub async fn upsert_document_index(
     .bind(vault_path)
     .bind(created_at)
     .bind(updated_at)
-    .execute(pool)
+    .execute(executor)
     .await
     .context("failed to upsert documents index")?;
 
     Ok(())
 }
 
-pub async fn delete_npc_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM npcs WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete npc row")?;
-
-    Ok(())
-}
-
-pub async fn delete_location_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM locations WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete location row")?;
-
-    Ok(())
-}
-
-pub async fn delete_faction_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM factions WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete faction row")?;
-
-    Ok(())
-}
-
-pub async fn delete_item_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM items WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete item row")?;
-
-    Ok(())
-}
-
-pub async fn search_events_by_name(
-    pool: &SqlitePool,
-    query: &str,
-    limit: i64,
-) -> Result<Vec<EventRow>> {
-    let pattern = format!("%{}%", query.trim().to_ascii_lowercase());
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, body, created_at, updated_at
-         FROM events
-         WHERE lower(name) LIKE ?1
-         ORDER BY name COLLATE NOCASE ASC
-         LIMIT ?2",
-    )
-    .bind(pattern)
-    .bind(limit)
-    .fetch_all(pool)
-    .await
-    .context("failed to search events by name")?;
-
-    rows.into_iter().map(row_to_event).collect()
-}
-
-pub async fn find_event_by_name_or_slug(pool: &SqlitePool, input: &str) -> Result<Option<EventRow>> {
-    let normalized = input.trim().to_ascii_lowercase();
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, body, created_at, updated_at
-         FROM events
-         WHERE lower(name) = ?1 OR lower(slug) = ?2
-         ORDER BY CASE WHEN lower(name) = ?1 THEN 0 ELSE 1 END
-         LIMIT 1",
-    )
-    .bind(&normalized)
-    .bind(&normalized)
-    .fetch_optional(pool)
-    .await
-    .context("failed to find event by name or slug")?;
-
-    row.map(row_to_event).transpose()
-}
-
-pub async fn find_event_by_id(pool: &SqlitePool, id: &str) -> Result<Option<EventRow>> {
-    let row = sqlx::query(
-        "SELECT id, slug, name, vault_path, body, created_at, updated_at FROM events WHERE id = ?1",
-    )
-    .bind(id)
-    .fetch_optional(pool)
-    .await
-    .context("failed to query event by id")?;
-
-    row.map(row_to_event).transpose()
-}
-
-pub async fn list_events(pool: &SqlitePool) -> Result<Vec<EventRow>> {
-    let rows = sqlx::query(
-        "SELECT id, slug, name, vault_path, body, created_at, updated_at
-         FROM events",
-    )
-    .fetch_all(pool)
-    .await
-    .context("failed to list events")?;
-
-    rows.into_iter().map(row_to_event).collect()
-}
-
-pub async fn upsert_event(pool: &SqlitePool, event: &EventRow) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO events (id, slug, name, vault_path, body, created_at, updated_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
-         ON CONFLICT(id) DO UPDATE SET
-            slug = excluded.slug,
-            name = excluded.name,
-            vault_path = excluded.vault_path,
-            body = excluded.body,
-            updated_at = excluded.updated_at",
-    )
-    .bind(&event.id)
-    .bind(&event.slug)
-    .bind(&event.name)
-    .bind(&event.vault_path)
-    .bind(&event.body)
-    .bind(&event.created_at)
-    .bind(&event.updated_at)
-    .execute(pool)
-    .await
-    .context("failed to upsert event")?;
-
-    Ok(())
-}
-
-pub async fn delete_event_by_id(pool: &SqlitePool, id: &str) -> Result<()> {
-    sqlx::query("DELETE FROM events WHERE id = ?1")
-        .bind(id)
-        .execute(pool)
-        .await
-        .context("failed to delete event row")?;
-
-    Ok(())
-}
-
-pub async fn delete_document_by_vault_path(pool: &SqlitePool, vault_path: &str) -> Result<()> {
+// Executor-generic (pool or `&mut Transaction`) — see `upsert_document_index` (P6.1).
+pub async fn delete_document_by_vault_path<'e, E>(executor: E, vault_path: &str) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
     sqlx::query("DELETE FROM documents WHERE vault_path = ?1")
         .bind(vault_path)
-        .execute(pool)
+        .execute(executor)
         .await
         .context("failed to delete document index row")?;
 
@@ -1205,12 +560,13 @@ pub async fn mark_soft_delete_undone(pool: &SqlitePool, id: i64, undone_at: &str
 /// Finalizes any still-pending `publish` recovery records so they can no longer be
 /// undone (a publish that survives to a restart is permanent). Returns the count.
 pub async fn finalize_pending_publishes(pool: &SqlitePool, finalized_at: &str) -> Result<u64> {
-    let result =
-        sqlx::query("UPDATE soft_deletes SET undone_at = ?1 WHERE operation = 'publish' AND undone_at IS NULL")
-            .bind(finalized_at)
-            .execute(pool)
-            .await
-            .context("failed to finalize pending publishes")?;
+    let result = sqlx::query(
+        "UPDATE soft_deletes SET undone_at = ?1 WHERE operation = 'publish' AND undone_at IS NULL",
+    )
+    .bind(finalized_at)
+    .execute(pool)
+    .await
+    .context("failed to finalize pending publishes")?;
 
     Ok(result.rows_affected())
 }
@@ -1258,306 +614,6 @@ pub async fn recent_generation_prompts(
         .collect()
 }
 
-fn row_to_location(row: sqlx::sqlite::SqliteRow) -> Result<LocationRow> {
-    Ok(LocationRow {
-        id: row.try_get("id").context("locations.id missing")?,
-        slug: row.try_get("slug").context("locations.slug missing")?,
-        name: row.try_get("name").context("locations.name missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("locations.vault_path missing")?,
-        kind_type: row
-            .try_get("kind_type")
-            .unwrap_or_else(|_| "other".to_string()),
-        kind_custom: row.try_get("kind_custom").ok(),
-        visual_description: row
-            .try_get("visual_description")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        history_background: row
-            .try_get("history_background")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        exports: row
-            .try_get("exports")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        tone: row
-            .try_get("tone")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        authority: row
-            .try_get("authority")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        danger_level: row
-            .try_get("danger_level")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        current_tension: row
-            .try_get("current_tension")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        created_at: row
-            .try_get("created_at")
-            .context("locations.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("locations.updated_at missing")?,
-    })
-}
-
-fn row_to_faction(row: sqlx::sqlite::SqliteRow) -> Result<FactionRow> {
-    Ok(FactionRow {
-        id: row.try_get("id").context("factions.id missing")?,
-        slug: row.try_get("slug").context("factions.slug missing")?,
-        name: row.try_get("name").context("factions.name missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("factions.vault_path missing")?,
-        kind_type: row
-            .try_get("kind_type")
-            .unwrap_or_else(|_| "other".to_string()),
-        kind_custom: row.try_get("kind_custom").ok(),
-        public_description: row
-            .try_get("public_description")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        true_agenda: row
-            .try_get("true_agenda")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        methods: row
-            .try_get("methods")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        leadership: row
-            .try_get("leadership")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        headquarters: row
-            .try_get("headquarters")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        sphere_of_influence: row
-            .try_get("sphere_of_influence")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        resources_assets: row
-            .try_get("resources_assets")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        allies: row
-            .try_get("allies")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        rivals_enemies: row
-            .try_get("rivals_enemies")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        reputation: row
-            .try_get("reputation")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        current_tension: row
-            .try_get("current_tension")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        goals_short_term: row
-            .try_get("goals_short_term")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        goals_long_term: row
-            .try_get("goals_long_term")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        symbol_description: row
-            .try_get("symbol_description")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        created_at: row
-            .try_get("created_at")
-            .context("factions.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("factions.updated_at missing")?,
-    })
-}
-
-fn row_to_god(row: sqlx::sqlite::SqliteRow) -> Result<GodRow> {
-    Ok(GodRow {
-        id: row.try_get("id").context("gods.id missing")?,
-        slug: row.try_get("slug").context("gods.slug missing")?,
-        name: row.try_get("name").context("gods.name missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("gods.vault_path missing")?,
-        epithet: row
-            .try_get("epithet")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        rank: row.try_get("rank").unwrap_or_else(|_| "other".to_string()),
-        rank_custom: row.try_get("rank_custom").ok(),
-        alignment: row
-            .try_get("alignment")
-            .unwrap_or_else(|_| "TN".to_string()),
-        domains: row
-            .try_get("domains")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        symbol: row
-            .try_get("symbol")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        appearance: row
-            .try_get("appearance")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        dogma: row
-            .try_get("dogma")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        realm: row
-            .try_get("realm")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        worshippers: row
-            .try_get("worshippers")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        clergy: row
-            .try_get("clergy")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        allies: row
-            .try_get("allies")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        rivals: row
-            .try_get("rivals")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        created_at: row
-            .try_get("created_at")
-            .context("gods.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("gods.updated_at missing")?,
-    })
-}
-
-fn row_to_dungeon(row: sqlx::sqlite::SqliteRow) -> Result<DungeonRow> {
-    Ok(DungeonRow {
-        id: row.try_get("id").context("dungeons.id missing")?,
-        slug: row.try_get("slug").context("dungeons.slug missing")?,
-        name: row.try_get("name").context("dungeons.name missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("dungeons.vault_path missing")?,
-        location: row.try_get("location").unwrap_or_default(),
-        story: row.try_get("story").unwrap_or_default(),
-        premise: row
-            .try_get("premise")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        topology: row
-            .try_get("topology")
-            .unwrap_or_else(|_| "none".to_string()),
-        tone: row
-            .try_get("tone")
-            .unwrap_or_else(|_| "tragedy".to_string()),
-        twist: row
-            .try_get("twist")
-            .unwrap_or_else(|_| "neither".to_string()),
-        beats_json: row
-            .try_get("beats_json")
-            .unwrap_or_else(|_| "[]".to_string()),
-        created_at: row
-            .try_get("created_at")
-            .context("dungeons.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("dungeons.updated_at missing")?,
-    })
-}
-
-fn row_to_npc(row: sqlx::sqlite::SqliteRow) -> Result<NpcRow> {
-    Ok(NpcRow {
-        id: row.try_get("id").context("npcs.id missing")?,
-        slug: row.try_get("slug").context("npcs.slug missing")?,
-        name: row.try_get("name").context("npcs.name missing")?,
-        race: row.try_get("race").context("npcs.race missing")?,
-        occupation: row
-            .try_get("occupation")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        sex: row.try_get("sex").context("npcs.sex missing")?,
-        age: row.try_get("age").unwrap_or_else(|_| "Unknown".to_string()),
-        height: row
-            .try_get("height")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        weight_lbs: row
-            .try_get("weight_lbs")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        background: row
-            .try_get("background")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        want_need: row
-            .try_get("want_need")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        secret_obstacle: row
-            .try_get("secret_obstacle")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        carrying: row
-            .try_get("carrying")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        location: row.try_get("location").context("npcs.location missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("npcs.vault_path missing")?,
-        created_at: row
-            .try_get("created_at")
-            .context("npcs.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("npcs.updated_at missing")?,
-    })
-}
-
-fn row_to_item(row: sqlx::sqlite::SqliteRow) -> Result<ItemRow> {
-    Ok(ItemRow {
-        id: row.try_get("id").context("items.id missing")?,
-        slug: row.try_get("slug").context("items.slug missing")?,
-        name: row.try_get("name").context("items.name missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("items.vault_path missing")?,
-        category: row
-            .try_get("category")
-            .unwrap_or_else(|_| "other".to_string()),
-        rarity: row
-            .try_get("rarity")
-            .unwrap_or_else(|_| "unknown".to_string()),
-        attunement: row
-            .try_get("attunement")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        materials: row
-            .try_get("materials")
-            .unwrap_or_else(|_| "[\"Unknown\"]".to_string()),
-        appearance: row
-            .try_get("appearance")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        abilities: row
-            .try_get("abilities")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        drawbacks: row
-            .try_get("drawbacks")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        history: row
-            .try_get("history")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        value: row
-            .try_get("value")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        location: row
-            .try_get("location")
-            .unwrap_or_else(|_| "Unknown".to_string()),
-        created_at: row
-            .try_get("created_at")
-            .context("items.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("items.updated_at missing")?,
-    })
-}
-
-fn row_to_event(row: sqlx::sqlite::SqliteRow) -> Result<EventRow> {
-    Ok(EventRow {
-        id: row.try_get("id").context("events.id missing")?,
-        slug: row.try_get("slug").context("events.slug missing")?,
-        name: row.try_get("name").context("events.name missing")?,
-        vault_path: row
-            .try_get("vault_path")
-            .context("events.vault_path missing")?,
-        // The body is the whole record, so a missing column is a hard error
-        // rather than a defaulted placeholder.
-        body: row.try_get("body").context("events.body missing")?,
-        created_at: row
-            .try_get("created_at")
-            .context("events.created_at missing")?,
-        updated_at: row
-            .try_get("updated_at")
-            .context("events.updated_at missing")?,
-    })
-}
-
 fn row_to_soft_delete(row: sqlx::sqlite::SqliteRow) -> Result<SoftDeleteRow> {
     Ok(SoftDeleteRow {
         id: row.try_get("id").context("soft_deletes.id missing")?,
@@ -1596,11 +652,8 @@ mod tests {
     async fn temp_db() -> Database {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!(
-            "dnd_db_test_{}_{}.sqlite",
-            std::process::id(),
-            n
-        ));
+        let path =
+            std::env::temp_dir().join(format!("dnd_db_test_{}_{}.sqlite", std::process::id(), n));
         let _ = std::fs::remove_file(&path);
         init_database_at_path(&path).await.expect("init test db")
     }
@@ -1784,9 +837,12 @@ mod tests {
     async fn search_npcs_by_name_is_substring_case_insensitive_and_sorted() {
         let database = temp_db().await;
         let pool = &database.pool;
-        upsert_npc(pool, &sample_npc("npc_1", "Bram Stoneford", "bram-stoneford"))
-            .await
-            .expect("upsert");
+        upsert_npc(
+            pool,
+            &sample_npc("npc_1", "Bram Stoneford", "bram-stoneford"),
+        )
+        .await
+        .expect("upsert");
         upsert_npc(pool, &sample_npc("npc_2", "Aldric Vane", "aldric-vane"))
             .await
             .expect("upsert");
@@ -1807,7 +863,11 @@ mod tests {
         for i in 0..5 {
             upsert_npc(
                 pool,
-                &sample_npc(&format!("npc_{i}"), &format!("Guard {i}"), &format!("guard-{i}")),
+                &sample_npc(
+                    &format!("npc_{i}"),
+                    &format!("Guard {i}"),
+                    &format!("guard-{i}"),
+                ),
             )
             .await
             .expect("upsert");
@@ -1830,8 +890,18 @@ mod tests {
 
         delete_npc_by_id(pool, "npc_1").await.expect("delete");
 
-        assert!(find_npc_by_id(pool, "npc_1").await.expect("query").is_none());
-        assert!(find_npc_by_id(pool, "npc_2").await.expect("query").is_some());
+        assert!(
+            find_npc_by_id(pool, "npc_1")
+                .await
+                .expect("query")
+                .is_none()
+        );
+        assert!(
+            find_npc_by_id(pool, "npc_2")
+                .await
+                .expect("query")
+                .is_some()
+        );
         assert_eq!(list_npcs(pool).await.expect("list").len(), 1);
     }
 
@@ -1839,9 +909,12 @@ mod tests {
     async fn location_find_by_slug_round_trips() {
         let database = temp_db().await;
         let pool = &database.pool;
-        upsert_location(pool, &sample_location("loc_1", "Neverwinter Harbor", "neverwinter-harbor"))
-            .await
-            .expect("upsert location");
+        upsert_location(
+            pool,
+            &sample_location("loc_1", "Neverwinter Harbor", "neverwinter-harbor"),
+        )
+        .await
+        .expect("upsert location");
 
         let found = find_location_by_slug(pool, "neverwinter-harbor")
             .await
@@ -1852,6 +925,288 @@ mod tests {
         assert_eq!(found.exports, "smoked eel, river pearls");
 
         // A non-matching slug returns nothing.
-        assert!(find_location_by_slug(pool, "missing").await.expect("query").is_none());
+        assert!(
+            find_location_by_slug(pool, "missing")
+                .await
+                .expect("query")
+                .is_none()
+        );
+    }
+
+    // The 6 non-npc tables are generated by `impl_entity_table!` from a single
+    // column list, so bind / SELECT / row_to order can't diverge. A round-trip per
+    // table still guards the things the macro can't: a mistyped column name (would
+    // be a runtime SQL error) and the `opt` columns (`kind_custom`/`rank_custom`).
+    // A forgotten column is already a compile error (struct-literal completeness).
+
+    #[tokio::test]
+    async fn faction_round_trips_including_optional_kind_custom() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let faction = FactionRow {
+            id: "fac_1".to_string(),
+            slug: "ashen-pact".to_string(),
+            name: "The Ashen Pact".to_string(),
+            vault_path: "factions/ashen-pact.md".to_string(),
+            kind_type: "other".to_string(),
+            kind_custom: Some("doomsday cult".to_string()),
+            public_description: "Charitable almshouse.".to_string(),
+            true_agenda: "Summon the ash god.".to_string(),
+            methods: "Bribery and arson.".to_string(),
+            leadership: "The Cinder Matron".to_string(),
+            headquarters: "Old crematorium".to_string(),
+            sphere_of_influence: "The lower wards".to_string(),
+            resources_assets: "[\"smuggling routes\", \"blackmail\"]".to_string(),
+            allies: "[\"Dust Choir\"]".to_string(),
+            rivals_enemies: "[\"City Watch\"]".to_string(),
+            reputation: "feared".to_string(),
+            current_tension: "A founder turned informant.".to_string(),
+            goals_short_term: "[\"Burn the archive\"]".to_string(),
+            goals_long_term: "[\"Eternal winter\"]".to_string(),
+            symbol_description: "A grey hand.".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+        upsert_faction(pool, &faction).await.expect("upsert");
+
+        let found = find_faction_by_id(pool, "fac_1")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.name, "The Ashen Pact");
+        assert_eq!(found.kind_custom, Some("doomsday cult".to_string()));
+        assert_eq!(found.symbol_description, "A grey hand.");
+        assert_eq!(found.goals_long_term, "[\"Eternal winter\"]");
+        // by_slug + by_name_or_slug share the macro's column list.
+        assert_eq!(
+            find_faction_by_slug(pool, "ashen-pact")
+                .await
+                .expect("query")
+                .map(|f| f.id),
+            Some("fac_1".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_commit_persists_and_rollback_discards() {
+        let database = temp_db().await;
+
+        // A committed transaction persists the row — exercising the executor-generic
+        // upsert over a `&mut Transaction` that the atomic save/reap paths rely on
+        // (P6.1).
+        let mut tx = database.begin().await.expect("begin");
+        upsert_npc(&mut *tx, &sample_npc("npc_commit", "Mara", "mara"))
+            .await
+            .expect("upsert in tx");
+        tx.commit().await.expect("commit");
+        assert!(
+            find_npc_by_id(&database.pool, "npc_commit")
+                .await
+                .expect("query")
+                .is_some()
+        );
+
+        // A dropped (un-committed) transaction rolls back — nothing persists, so a
+        // mid-sequence failure can't leave a half-written projection behind.
+        let mut tx = database.begin().await.expect("begin");
+        upsert_npc(&mut *tx, &sample_npc("npc_rollback", "Vex", "vex"))
+            .await
+            .expect("upsert in tx");
+        drop(tx);
+        assert!(
+            find_npc_by_id(&database.pool, "npc_rollback")
+                .await
+                .expect("query")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn god_round_trips_including_optional_rank_custom() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let god = GodRow {
+            id: "god_1".to_string(),
+            slug: "the-tidemother".to_string(),
+            name: "The Tidemother".to_string(),
+            vault_path: "gods/the-tidemother.md".to_string(),
+            epithet: "She Who Drowns".to_string(),
+            rank: "other".to_string(),
+            rank_custom: Some("primordial".to_string()),
+            alignment: "CN".to_string(),
+            domains: "[\"sea\",\"storms\"]".to_string(),
+            symbol: "A cresting wave".to_string(),
+            appearance: "A woman of green glass.".to_string(),
+            dogma: "Give the sea its due.".to_string(),
+            realm: "The Drowned Hall".to_string(),
+            worshippers: "sailors, smugglers".to_string(),
+            clergy: "The Salt Wardens".to_string(),
+            allies: "[\"Storm Lord\"]".to_string(),
+            rivals: "[\"The Sun King\"]".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+        upsert_god(pool, &god).await.expect("upsert");
+
+        let found = find_god_by_id(pool, "god_1")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.epithet, "She Who Drowns");
+        assert_eq!(found.rank_custom, Some("primordial".to_string()));
+        assert_eq!(found.rivals, "[\"The Sun King\"]");
+    }
+
+    #[tokio::test]
+    async fn item_round_trips_every_column() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let item = ItemRow {
+            id: "item_1".to_string(),
+            slug: "sunfang".to_string(),
+            name: "Sunfang".to_string(),
+            vault_path: "items/sunfang.md".to_string(),
+            category: "weapon".to_string(),
+            rarity: "rare".to_string(),
+            attunement: "required".to_string(),
+            materials: "[\"meteoric iron\"]".to_string(),
+            appearance: "A blade that holds the dawn.".to_string(),
+            abilities: "Sheds sunlight on command.".to_string(),
+            drawbacks: "Cold to undead touch.".to_string(),
+            history: "Forged for a fallen paladin.".to_string(),
+            value: "4500 gp".to_string(),
+            location: "Vault of Embers".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+        upsert_item(pool, &item).await.expect("upsert");
+
+        let found = find_item_by_id(pool, "item_1")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.category, "weapon");
+        assert_eq!(found.materials, "[\"meteoric iron\"]");
+        assert_eq!(found.location, "Vault of Embers");
+    }
+
+    #[tokio::test]
+    async fn dungeon_round_trips_beats_and_dials() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let dungeon = DungeonRow {
+            id: "dun_1".to_string(),
+            slug: "the-sunken-crypt".to_string(),
+            name: "The Sunken Crypt".to_string(),
+            vault_path: "dungeons/the-sunken-crypt.md".to_string(),
+            location: "Under the harbor".to_string(),
+            story: "A drowned king stirs.".to_string(),
+            premise: "Recover the tide-pearl.".to_string(),
+            topology: "linear".to_string(),
+            tone: "tragedy".to_string(),
+            twist: "ally".to_string(),
+            beats_json: "[{\"name\":\"Entrance\"}]".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+        upsert_dungeon(pool, &dungeon).await.expect("upsert");
+
+        let found = find_dungeon_by_id(pool, "dun_1")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.topology, "linear");
+        assert_eq!(found.beats_json, "[{\"name\":\"Entrance\"}]");
+        assert_eq!(found.story, "A drowned king stirs.");
+    }
+
+    #[tokio::test]
+    async fn event_round_trips_body() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let event = EventRow {
+            id: "evt_1".to_string(),
+            slug: "the-long-night".to_string(),
+            name: "The Long Night".to_string(),
+            vault_path: "events/the-long-night.md".to_string(),
+            body: "The sun failed to rise for a tenday.".to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+        };
+        upsert_event(pool, &event).await.expect("upsert");
+
+        let found = find_event_by_name_or_slug(pool, "the long night")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.id, "evt_1");
+        assert_eq!(found.body, "The sun failed to rise for a tenday.");
+    }
+
+    #[tokio::test]
+    async fn search_escapes_like_wildcards_in_the_query() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        // A name containing no wildcard chars that an *unescaped* `%`/`_` query
+        // would wrongly match.
+        upsert_npc(pool, &sample_npc("npc_1", "505 Regiment", "regiment-505"))
+            .await
+            .expect("upsert");
+
+        // `50%` must be treated literally (escaped), so it does NOT match "505...".
+        assert!(
+            search_npcs_by_name(pool, "50%", 10)
+                .await
+                .expect("search")
+                .is_empty(),
+            "`%` in the query should be escaped, not act as a wildcard"
+        );
+        // A literal substring still matches.
+        assert_eq!(
+            search_npcs_by_name(pool, "505", 10)
+                .await
+                .expect("search")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn like_contains_escapes_sql_wildcards() {
+        assert_eq!(crate::db_macros::like_contains("50%"), "%50\\%%");
+        assert_eq!(crate::db_macros::like_contains("a_b"), "%a\\_b%");
+        assert_eq!(crate::db_macros::like_contains("c\\d"), "%c\\\\d%");
+        // Trims + lowercases like the old inline pattern did.
+        assert_eq!(crate::db_macros::like_contains("  RAVEN "), "%raven%");
+    }
+
+    #[tokio::test]
+    async fn same_named_rows_resolve_deterministically_by_id() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        // Two npcs share a (lowercased) name but differ by id/slug/path.
+        let mut raven_b = sample_npc("npc_b", "Raven", "raven-2");
+        raven_b.vault_path = "npcs/raven-2.md".to_string();
+        let mut raven_a = sample_npc("npc_a", "Raven", "raven-1");
+        raven_a.vault_path = "npcs/raven-1.md".to_string();
+        upsert_npc(pool, &raven_b).await.expect("upsert");
+        upsert_npc(pool, &raven_a).await.expect("upsert");
+
+        // The `, id ASC` tie-break makes the name resolution deterministic.
+        assert_eq!(
+            find_npc_by_name_or_slug(pool, "Raven")
+                .await
+                .expect("query")
+                .map(|n| n.id),
+            Some("npc_a".to_string())
+        );
+        // search is ordered by (name, id), so the lower id comes first.
+        let hits = search_npcs_by_name(pool, "Raven", 10)
+            .await
+            .expect("search");
+        assert_eq!(
+            hits.iter().map(|n| n.id.as_str()).collect::<Vec<_>>(),
+            vec!["npc_a", "npc_b"]
+        );
     }
 }

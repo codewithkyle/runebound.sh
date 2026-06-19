@@ -1,4 +1,4 @@
-use dnd_core::calendar::{self, moon_phase_info, MoonPhaseKind, StoredCalendar};
+use dnd_core::calendar::{self, MoonPhaseKind, StoredCalendar, moon_phase_info};
 use runebound_models::{doc, entity_card, entity_row};
 
 use crate::commands::{
@@ -7,9 +7,7 @@ use crate::commands::{
 
 use super::date_commands::CommandResult;
 
-pub async fn handle_moon(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_moon(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
@@ -67,13 +65,20 @@ pub async fn handle_moon(
         ));
         rows.push(entity_row(
             &info.name,
-            format!("{} · Day {} of {}", display_phase, day_display, info.cycle_length),
+            format!(
+                "{} · Day {} of {}",
+                display_phase, day_display, info.cycle_length
+            ),
         ));
     }
 
     let doc = doc().with_block(entity_card("Moon Phases", rows));
 
-    Ok(Some(ok_response_with_doc(lines.join("\n"), Some(doc), None)))
+    Ok(Some(ok_response_with_doc(
+        lines.join("\n"),
+        Some(doc),
+        None,
+    )))
 }
 
 fn moon_help() -> CommandResult {

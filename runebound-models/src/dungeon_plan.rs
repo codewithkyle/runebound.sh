@@ -78,12 +78,7 @@ const SETBACK: &[Weight] = &[
     ("ability_check", 10),
 ];
 const CLIMAX: &[Weight] = &[("combat", 60), ("puzzle", 16), ("oddity", 24)];
-const RESOLUTION: &[Weight] = &[
-    ("cache", 76),
-    ("oddity", 8),
-    ("offshoot", 12),
-    ("forge", 4),
-];
+const RESOLUTION: &[Weight] = &[("cache", 76), ("oddity", 8), ("offshoot", 12), ("forge", 4)];
 
 /// The five per-beat anchor tables, indexed by beat (0 = Entrance … 4 = Resolution).
 pub const BEAT_TABLES: [&[Weight]; 5] = [ENTRANCE, PUZZLE, SETBACK, CLIMAX, RESOLUTION];
@@ -174,7 +169,11 @@ pub fn roll_dungeon_content_plan(seed: u64) -> DungeonContentPlan {
     let mut anchors: Vec<String> = Vec::with_capacity(5);
     for (i, table) in BEAT_TABLES.iter().enumerate() {
         // Forbid repeating the previous beat's type, unless it was combat.
-        let prev = if i > 0 { Some(anchors[i - 1].clone()) } else { None };
+        let prev = if i > 0 {
+            Some(anchors[i - 1].clone())
+        } else {
+            None
+        };
         let exclude = prev.as_deref().filter(|p| *p != "combat");
         anchors.push(weighted_pick(&mut rng, table, exclude));
     }
@@ -220,11 +219,24 @@ mod tests {
         // Peaks at the Puzzle beat (1), tapers either side, absent from the Climax
         // and Resolution where a skill check is no longer the point.
         let weight = |table: &[Weight], t: &str| {
-            table.iter().find(|(n, _)| *n == t).map(|(_, w)| *w).unwrap_or(0)
+            table
+                .iter()
+                .find(|(n, _)| *n == t)
+                .map(|(_, w)| *w)
+                .unwrap_or(0)
         };
-        let curve: Vec<u32> = BEAT_TABLES.iter().map(|t| weight(t, "ability_check")).collect();
-        assert!(curve[1] > curve[0], "ability_check should peak at the Puzzle beat");
-        assert!(curve[1] > curve[2], "ability_check should peak at the Puzzle beat");
+        let curve: Vec<u32> = BEAT_TABLES
+            .iter()
+            .map(|t| weight(t, "ability_check"))
+            .collect();
+        assert!(
+            curve[1] > curve[0],
+            "ability_check should peak at the Puzzle beat"
+        );
+        assert!(
+            curve[1] > curve[2],
+            "ability_check should peak at the Puzzle beat"
+        );
         assert_eq!(curve[3], 0, "no ability_check at the Climax");
         assert_eq!(curve[4], 0, "no ability_check at the Resolution");
     }
@@ -234,10 +246,17 @@ mod tests {
         // The model can't reliably hold a sidekick to a later beat, so it is
         // allowed ONLY at the entrance (beat 0) and nowhere else.
         let weight = |table: &[Weight], t: &str| {
-            table.iter().find(|(n, _)| *n == t).map(|(_, w)| *w).unwrap_or(0)
+            table
+                .iter()
+                .find(|(n, _)| *n == t)
+                .map(|(_, w)| *w)
+                .unwrap_or(0)
         };
         let per_beat: Vec<u32> = BEAT_TABLES.iter().map(|t| weight(t, "sidekick")).collect();
-        assert!(per_beat[0] > 0, "sidekick should be available at the entrance");
+        assert!(
+            per_beat[0] > 0,
+            "sidekick should be available at the entrance"
+        );
         for (i, w) in per_beat.iter().enumerate().skip(1) {
             assert_eq!(*w, 0, "sidekick must not appear at beat {i}: {per_beat:?}");
         }
@@ -326,7 +345,14 @@ mod tests {
 
         eprintln!(
             "RATES combat={:.1} puzzle={:.1} cache={:.1} oddity={:.1} forge={:.1} ability={:.1} overlay={:.1} factions={:.1}",
-            pct(combat), pct(puzzle), pct(cache), pct(oddity), pct(forge), pct(ability), pct(overlay), pct(factions)
+            pct(combat),
+            pct(puzzle),
+            pct(cache),
+            pct(oddity),
+            pct(forge),
+            pct(ability),
+            pct(overlay),
+            pct(factions)
         );
         // Targets are the emergent rates these weights actually produce (the
         // adjacency rule renormalizes excluded weight onto the heaviest type, so
@@ -334,11 +360,23 @@ mod tests {
         // artifact; these assertions guard against accidental retuning.
         assert!(within(pct(combat), 93.0, 3.0), "combat {:.1}%", pct(combat));
         assert!(within(pct(puzzle), 70.0, 4.0), "puzzle {:.1}%", pct(puzzle));
-        assert!(within(pct(ability), 39.0, 4.0), "ability_check {:.1}%", pct(ability));
+        assert!(
+            within(pct(ability), 39.0, 4.0),
+            "ability_check {:.1}%",
+            pct(ability)
+        );
         assert!(within(pct(cache), 77.0, 4.0), "cache {:.1}%", pct(cache));
         assert!(within(pct(oddity), 42.0, 4.0), "oddity {:.1}%", pct(oddity));
         assert!(within(pct(forge), 12.0, 3.0), "forge {:.1}%", pct(forge));
-        assert!(within(pct(overlay), 45.0, 4.0), "overlay {:.1}%", pct(overlay));
-        assert!(within(pct(factions), 25.0, 4.0), "factions {:.1}%", pct(factions));
+        assert!(
+            within(pct(overlay), 45.0, 4.0),
+            "overlay {:.1}%",
+            pct(overlay)
+        );
+        assert!(
+            within(pct(factions), 25.0, 4.0),
+            "factions {:.1}%",
+            pct(factions)
+        );
     }
 }

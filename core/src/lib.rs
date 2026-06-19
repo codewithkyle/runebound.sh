@@ -4,6 +4,7 @@ pub mod command_manifest;
 pub mod command_parse;
 pub mod config;
 pub mod db;
+mod db_macros;
 pub mod entity_store;
 pub mod health;
 pub mod npc;

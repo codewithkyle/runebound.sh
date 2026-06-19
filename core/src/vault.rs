@@ -3,14 +3,19 @@ use std::path::{Component, Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-const REQUIRED_TOP_LEVEL_DIRS: [&str; 7] = [
+/// The entity-kind directory names that make up a vault's skeleton.
+/// `ensure_structure` creates each of these plus a matching `.trash/<kind>`.
+/// Kept in lockstep with the entity kinds; centralizing this list across crates
+/// (it is mirrored by `EntityStore`'s dir constants) is tracked in the v0.5.0
+/// cleanup, Phase 5.
+pub const ENTITY_DIRS: [&str; 7] = [
     "npcs",
     "locations",
     "items",
     "factions",
-    ".trash/npcs",
-    ".trash/locations",
-    ".trash/factions",
+    "events",
+    "gods",
+    "dungeons",
 ];
 
 #[derive(Debug, Clone)]
@@ -40,10 +45,12 @@ impl Vault {
     pub fn ensure_structure(&self) -> Result<()> {
         self.ensure_root_exists()?;
 
-        for dir in REQUIRED_TOP_LEVEL_DIRS {
-            let path = self.root.join(dir);
-            fs::create_dir_all(&path)
-                .with_context(|| format!("failed to create vault directory {}", path.display()))?;
+        for dir in ENTITY_DIRS {
+            for path in [self.root.join(dir), self.root.join(".trash").join(dir)] {
+                fs::create_dir_all(&path).with_context(|| {
+                    format!("failed to create vault directory {}", path.display())
+                })?;
+            }
         }
 
         Ok(())

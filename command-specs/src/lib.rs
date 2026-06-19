@@ -1,5 +1,6 @@
 use command_handler::{ExecutionTarget as HandlerExecutionTarget, HandlerMetadata};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 #[derive(Debug, Clone)]
 pub struct HandlerMetadataDescriptor {
@@ -27,13 +28,27 @@ impl From<HandlerMetadataDescriptor> for HandlerMetadata {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandManifest {
     pub commands: Vec<CommandSpec>,
     pub aliases: Vec<CommandAlias>,
+    /// Spinner/latency hints, so the frontend picks a progress label by looking up
+    /// the typed command instead of re-deriving the command taxonomy from input
+    /// strings. See [`spinner_hints`].
+    pub spinner_hints: Vec<SpinnerHint>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+/// A spinner label for a command, keyed by its space-joined normalized command
+/// prefix (`"create npc"`, `"npc reroll"`, `"publish"`, …). The frontend matches
+/// the longest prefix of the user's input and shows `label` while the command
+/// runs. Single source of truth so the spinner taxonomy lives with the manifest.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
+pub struct SpinnerHint {
+    pub command: String,
+    pub label: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandSpec {
     pub name: String,
     pub summary: String,
@@ -46,7 +61,7 @@ pub struct CommandSpec {
     pub show_in_autocomplete: bool,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SubcommandSpec {
     pub name: String,
     pub summary: String,
@@ -54,7 +69,7 @@ pub struct SubcommandSpec {
     pub examples: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct OptionSpec {
     pub name: String,
     pub short: Option<String>,
@@ -64,7 +79,7 @@ pub struct OptionSpec {
     pub completion: CompletionHint,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum ValueHint {
     Path,
@@ -74,7 +89,7 @@ pub enum ValueHint {
     Text,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CompletionHint {
     None,
@@ -82,7 +97,7 @@ pub enum CompletionHint {
     DynamicProvider(String),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum CommandExecution {
     Core,
@@ -98,7 +113,7 @@ impl From<CommandExecution> for HandlerExecutionTarget {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandAlias {
     pub from: Vec<String>,
     pub to: Vec<String>,
@@ -191,6 +206,78 @@ pub fn command_availability(name: &str) -> CommandAvailability {
         "help" | "clear" => CommandAvailability::Always,
         _ => CommandAvailability::Default,
     }
+}
+
+/// The shape of a command's trailing argument.
+///
+/// Used by autocomplete to extract the user's query by stripping the parsed
+/// command root, instead of hand-counted byte offsets that break silently on a
+/// rename. Mirrors [`command_availability`] as the single source of truth.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArgumentKind {
+    /// Free-text matched against saved entity names: `load`/`delete`/`show`/
+    /// `preview`/`publish <name>`. The query is everything after the root token.
+    EntitySearch,
+}
+
+/// The argument shape for a command's trailing tokens, or `None` if the command
+/// takes no entity-search argument. Single source of truth so the suggestion
+/// service derives the query by stripping the root token, never by byte offset.
+pub fn command_argument_kind(name: &str) -> Option<ArgumentKind> {
+    match name {
+        "load" | "delete" | "show" | "preview" | "publish" => Some(ArgumentKind::EntitySearch),
+        _ => None,
+    }
+}
+
+/// The spinner labels for commands that run an LLM/server call, keyed by command
+/// prefix. The frontend matches the longest prefix of the user's input. Commands
+/// driven by a wizard (e.g. `create dungeon`) are absent — the wizard supplies its
+/// own `awaiting_llm_label`. Single source of truth: changing a label or adding a
+/// generating command happens here, not in the frontend.
+pub fn spinner_hints() -> Vec<SpinnerHint> {
+    const HINTS: &[(&str, &str)] = &[
+        // `create <kind>` generation (dungeon is wizard-driven, so it is omitted).
+        ("create npc", "generating npc"),
+        ("create location", "generating location"),
+        ("create faction", "generating faction"),
+        ("create item", "generating item"),
+        ("create event", "generating event"),
+        ("create god", "generating god"),
+        // `<kind> reroll` regeneration (dungeon reroll targets a single beat).
+        ("npc reroll", "rerolling npc"),
+        ("location reroll", "rerolling location"),
+        ("faction reroll", "rerolling faction"),
+        ("item reroll", "rerolling item"),
+        ("event reroll", "rerolling event"),
+        ("god reroll", "rerolling god"),
+        ("dungeon reroll", "rerolling beat"),
+        // Bare `reroll` is the active-kind regenerate; a single label covers it.
+        ("reroll", "rerolling draft"),
+        // Saving any draft writes to the vault + runs entity linking.
+        ("save", "saving draft"),
+        ("npc save", "saving draft"),
+        ("location save", "saving draft"),
+        ("faction save", "saving draft"),
+        ("item save", "saving draft"),
+        ("event save", "saving draft"),
+        ("god save", "saving draft"),
+        ("dungeon save", "saving draft"),
+        ("publish", "publishing document"),
+        // Commands that probe the Ollama server (`reconnect` is the `ping` alias).
+        ("ping", "testing ollama connection"),
+        ("reconnect", "testing ollama connection"),
+        ("config test", "testing ollama connection"),
+        ("model", "testing ollama connection"),
+        ("setup model", "testing ollama connection"),
+    ];
+    HINTS
+        .iter()
+        .map(|(command, label)| SpinnerHint {
+            command: (*command).to_string(),
+            label: (*label).to_string(),
+        })
+        .collect()
 }
 
 pub fn handler_metadata_for(root: &str) -> Option<HandlerMetadataDescriptor> {
@@ -1227,13 +1314,15 @@ pub fn command_manifest() -> CommandManifest {
                 summary: "setup start alias".to_string(),
             },
         ],
+        spinner_hints: spinner_hints(),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::{
-        CommandAvailability, CommandExecution, InputContext, command_availability, command_manifest,
+        ArgumentKind, CommandAvailability, CommandExecution, InputContext, command_argument_kind,
+        command_availability, command_manifest,
     };
     use std::collections::HashSet;
 
@@ -1301,7 +1390,9 @@ mod tests {
     #[test]
     fn entity_roots_are_scoped_to_their_own_editor() {
         // Regression guard: these must NOT silently fall through to `Default`.
-        for root in ["npc", "location", "faction", "item", "event", "god", "dungeon"] {
+        for root in [
+            "npc", "location", "faction", "item", "event", "god", "dungeon",
+        ] {
             assert_eq!(
                 command_availability(root),
                 CommandAvailability::EntityScoped(root),
@@ -1313,7 +1404,9 @@ mod tests {
         assert!(command_availability("npc").is_visible_in(&npc_editor()));
         assert!(!command_availability("npc").is_visible_in(&location_editor()));
         assert!(!command_availability("npc").is_visible_in(&InputContext::Default));
-        assert!(!command_availability("npc").is_visible_in(&InputContext::Wizard("setup".to_string())));
+        assert!(
+            !command_availability("npc").is_visible_in(&InputContext::Wizard("setup".to_string()))
+        );
     }
 
     #[test]
@@ -1325,7 +1418,10 @@ mod tests {
         assert!(command_availability("reroll").is_visible_in(&npc_editor()));
         assert!(command_availability("reroll").is_visible_in(&location_editor()));
         assert!(!command_availability("reroll").is_visible_in(&InputContext::Default));
-        assert!(!command_availability("reroll").is_visible_in(&InputContext::Wizard("setup".to_string())));
+        assert!(
+            !command_availability("reroll")
+                .is_visible_in(&InputContext::Wizard("setup".to_string()))
+        );
     }
 
     #[test]
@@ -1333,7 +1429,10 @@ mod tests {
         // `save` writes an entity draft; `cancel` exits an entity editor or a
         // wizard. (Onboarding's `save`/`cancel` are handled by the wizard route,
         // not these manifest commands.)
-        assert_eq!(command_availability("save"), CommandAvailability::EntityEditorOnly);
+        assert_eq!(
+            command_availability("save"),
+            CommandAvailability::EntityEditorOnly
+        );
         assert_eq!(
             command_availability("cancel"),
             CommandAvailability::AnyEditorOrWizard
@@ -1368,7 +1467,10 @@ mod tests {
         assert!(command_availability("publish").is_visible_in(&InputContext::Default));
         assert!(command_availability("publish").is_visible_in(&npc_editor()));
         // Not inside a wizard.
-        assert!(!command_availability("publish").is_visible_in(&InputContext::Wizard("setup".to_string())));
+        assert!(
+            !command_availability("publish")
+                .is_visible_in(&InputContext::Wizard("setup".to_string()))
+        );
     }
 
     #[test]
@@ -1464,6 +1566,72 @@ mod tests {
         }
     }
 
+    #[test]
+    fn entity_search_argument_kinds_match_real_command_roots() {
+        // The roots that take an entity-name query must all be real commands, so
+        // suggestion stripping (`trimmed[root.len()..]`) lands on an actual root.
+        let roots = manifest_roots();
+        for root in ["load", "delete", "show", "preview", "publish"] {
+            assert_eq!(
+                command_argument_kind(root),
+                Some(ArgumentKind::EntitySearch),
+                "{root} should declare an EntitySearch argument",
+            );
+            assert!(
+                roots.iter().any(|name| name.as_str() == root),
+                "{root} declares an argument kind but is not a manifest command",
+            );
+        }
+    }
+
+    #[test]
+    fn menu_style_roots_take_no_entity_search_argument() {
+        // `history` takes a numeric index, not a name; menu roots take subcommands.
+        for root in ["history", "create", "config", "npc", "calendar"] {
+            assert_eq!(
+                command_argument_kind(root),
+                None,
+                "{root} must not be an entity-search argument context",
+            );
+        }
+    }
+
+    #[test]
+    fn spinner_hints_reference_real_commands() {
+        let manifest = command_manifest();
+        let mut known: HashSet<String> = manifest.commands.iter().map(|c| c.name.clone()).collect();
+        for alias in &manifest.aliases {
+            if let Some(first) = alias.from.first() {
+                known.insert(first.clone());
+            }
+        }
+
+        assert!(!manifest.spinner_hints.is_empty());
+        for hint in &manifest.spinner_hints {
+            let root = hint.command.split(' ').next().unwrap_or("");
+            assert!(
+                known.contains(root),
+                "spinner hint `{}` has root `{root}` that is not a command or alias",
+                hint.command,
+            );
+            assert!(
+                !hint.label.is_empty(),
+                "spinner hint `{}` has no label",
+                hint.command
+            );
+        }
+
+        // `create dungeon` is wizard-driven (its spinner comes from the wizard's
+        // awaiting_llm_label), so it must not carry a manifest spinner hint.
+        assert!(
+            !manifest
+                .spinner_hints
+                .iter()
+                .any(|hint| hint.command == "create dungeon"),
+            "create dungeon is wizard-driven and must not have a manifest spinner hint",
+        );
+    }
+
     // ----------------------------------------------------------------------
     // Manifest structural integrity.
     // ----------------------------------------------------------------------
@@ -1472,7 +1640,11 @@ mod tests {
     fn command_roots_are_unique() {
         let roots = manifest_roots();
         let unique: HashSet<&String> = roots.iter().collect();
-        assert_eq!(unique.len(), roots.len(), "duplicate command root in manifest");
+        assert_eq!(
+            unique.len(),
+            roots.len(),
+            "duplicate command root in manifest"
+        );
     }
 
     #[test]
@@ -1523,11 +1695,7 @@ mod tests {
     fn alias_targets_resolve_to_real_roots() {
         let roots: HashSet<String> = manifest_roots().into_iter().collect();
         for alias in command_manifest().aliases {
-            let target = alias
-                .to
-                .first()
-                .expect("alias must have a target")
-                .clone();
+            let target = alias.to.first().expect("alias must have a target").clone();
             assert!(
                 roots.contains(&target),
                 "alias {:?} targets unknown root {target}",
@@ -1547,6 +1715,9 @@ mod tests {
             .map(|command| command.name)
             .collect();
         let expected: HashSet<String> = ["+", "-"].into_iter().map(String::from).collect();
-        assert_eq!(hidden, expected, "unexpected change to autocomplete-hidden roots");
+        assert_eq!(
+            hidden, expected,
+            "unexpected change to autocomplete-hidden roots"
+        );
     }
 }

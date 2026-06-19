@@ -4,9 +4,9 @@ use runebound_models::CommandResponse;
 use tauri::State;
 
 use crate::app_state::AppState;
-use crate::commands::{desktop_handler_registry, ok_response, DesktopHandlerInvocation};
 use crate::commands::entity_commands::build_load_response;
-use crate::services::entity_admin::{EntityAdminService, EntityDetails};
+use crate::commands::{DesktopHandlerInvocation, desktop_handler_registry, ok_response};
+use crate::services::entity_admin::EntityAdminService;
 use crate::services::suggestions::starts_with_known_command_root;
 
 pub(crate) async fn dispatch_desktop_command(
@@ -48,8 +48,7 @@ pub(crate) async fn dispatch_desktop_command(
             .resolve_entity(trimmed.to_string(), state.inner())
             .await?
         {
-            let load_entity: EntityDetails = entity;
-            let (output, event) = build_load_response(load_entity, state).await;
+            let (output, event) = build_load_response(entity, state).await;
             return Ok(Some(ok_response(output, event)));
         }
     }

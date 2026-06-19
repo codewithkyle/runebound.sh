@@ -1,19 +1,20 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use crate::dungeon_plan::{DungeonContentPlan, PlannedOverlay};
 
 /// Stamp a content plan's overlay + faction tint onto freshly-built beats so they
 /// persist with the dungeon. The overlay marks the single beat it layers onto; the
-/// dungeon-wide faction tint is mirrored on every beat. Call after `into_beats`.
+/// dungeon-wide faction tint is mirrored on every beat. Call after `to_beats`.
 pub fn apply_plan_meta_to_beats(beats: &mut [DungeonBeat], plan: &DungeonContentPlan) {
     for beat in beats.iter_mut() {
         beat.overlay = None;
         beat.factions = plan.factions;
     }
-    if let Some(overlay) = &plan.overlay {
-        if let Some(beat) = beats.get_mut(overlay.beat_index) {
-            beat.overlay = Some(overlay.overlay_type.clone());
-        }
+    if let Some(overlay) = &plan.overlay
+        && let Some(beat) = beats.get_mut(overlay.beat_index)
+    {
+        beat.overlay = Some(overlay.overlay_type.clone());
     }
 }
 
@@ -31,12 +32,15 @@ pub fn plan_meta_from_beats(beats: &[DungeonBeat]) -> (Option<PlannedOverlay>, b
     (overlay, factions)
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct NpcDraft {
     pub id: String,
     #[serde(default)]
     pub seed_prompt: Option<String>,
     pub name: String,
+    // `#[serde(default)]` only tolerates pre-slug TOML on *read*; a `String` is
+    // always serialized, so a draft crossing to the frontend always carries a
+    // slug. The generated TS therefore keeps `slug` required (not optional).
     #[serde(default)]
     pub slug: String,
     pub race: String,
@@ -53,7 +57,7 @@ pub struct NpcDraft {
     pub location: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct LocationDraft {
     pub id: String,
     #[serde(default)]
@@ -74,7 +78,7 @@ pub struct LocationDraft {
     pub current_tension: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct FactionDraft {
     pub id: String,
     #[serde(default)]
@@ -91,7 +95,8 @@ pub struct FactionDraft {
     pub leadership: String,
     pub headquarters: String,
     pub sphere_of_influence: String,
-    pub resources_assets: String,
+    #[serde(default)]
+    pub resources_assets: Vec<String>,
     #[serde(default)]
     pub allies: Vec<String>,
     #[serde(default)]
@@ -105,7 +110,7 @@ pub struct FactionDraft {
     pub symbol_description: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ItemDraft {
     pub id: String,
     #[serde(default)]
@@ -126,18 +131,19 @@ pub struct ItemDraft {
     pub location: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct EventDraft {
     pub id: String,
     #[serde(default)]
     pub seed_prompt: Option<String>,
     pub name: String,
+    // See `NpcDraft::slug`: lenient on read, always present on the wire.
     #[serde(default)]
     pub slug: String,
     pub body: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct GodDraft {
     pub id: String,
     #[serde(default)]
@@ -164,7 +170,7 @@ pub struct GodDraft {
     pub rivals: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DungeonBeat {
     pub function: String, // fixed skeleton: Entrance|Puzzle|Setback|Climax|Resolution
     pub content_type: String, // one of DUNGEON_CONTENT_TYPES (the 11)
@@ -186,7 +192,7 @@ pub struct DungeonBeat {
     pub factions: bool, // dungeon-wide faction tint
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DungeonDraft {
     pub id: String,
     #[serde(default)]
@@ -198,10 +204,10 @@ pub struct DungeonDraft {
     pub location: String, // the single bounded place all five beats sit inside
     #[serde(default)]
     pub story: String, // the Pass-1 micro-story the dungeon was generated from
-    pub premise: String, // the spine / top-line (feature-dungeons.md §6)
+    pub premise: String,  // the spine / top-line (feature-dungeons.md §6)
     pub topology: String, // one of DUNGEON_TOPOLOGIES, or "none"
-    pub tone: String,    // "tragedy" | "comedy"
-    pub twist: String,   // "false_victory" | "false_defeat" | "neither"
+    pub tone: String,     // "tragedy" | "comedy"
+    pub twist: String,    // "false_victory" | "false_defeat" | "neither"
     #[serde(default)]
     pub beats: Vec<DungeonBeat>, // exactly 5, fixed order
 }
@@ -272,7 +278,8 @@ pub struct FactionFrontmatter {
     pub leadership: String,
     pub headquarters: String,
     pub sphere_of_influence: String,
-    pub resources_assets: String,
+    #[serde(deserialize_with = "crate::utils::string_or_seq_list")]
+    pub resources_assets: Vec<String>,
     pub allies: Vec<String>,
     pub rivals_enemies: Vec<String>,
     pub reputation: String,
@@ -382,6 +389,16 @@ use super::output::{
 };
 use super::utils::{normalize_unknown_list, normalize_unknown_text};
 
+/// Whether an entity card appends its `save`/`reroll` action footer (and, for
+/// dungeons, the per-beat reroll hints). The active-draft editor flow shows it —
+/// those commands act on the open draft; the read-only `show`/`preview` flow
+/// hides it, since there is no draft for them to act on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardFooter {
+    Show,
+    Hide,
+}
+
 fn title_case_sex(value: &str) -> String {
     match value.to_lowercase().as_str() {
         "male" => "Male".to_string(),
@@ -403,7 +420,7 @@ fn location_kind_display(kind_type: &str, kind_custom: &Option<String>) -> Strin
     format!("Other ({})", custom_norm)
 }
 
-pub fn npc_entity_card(draft: &NpcDraft) -> OutputDoc {
+pub fn npc_entity_card(draft: &NpcDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![
         entity_row("Slug:", normalize_unknown_text(&draft.slug)),
         entity_row("Race:", normalize_unknown_text(&draft.race)),
@@ -424,18 +441,20 @@ pub fn npc_entity_card(draft: &NpcDraft) -> OutputDoc {
         ),
         entity_row("Location:", normalize_unknown_text(&draft.location)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this NPC, or "),
             command_ref("reroll", "reroll"),
             text_node(" to generate again."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn location_entity_card(draft: &LocationDraft) -> OutputDoc {
+pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![
         entity_row(
             "Kind:",
@@ -456,18 +475,20 @@ pub fn location_entity_card(draft: &LocationDraft) -> OutputDoc {
         entity_row("Tension:", normalize_unknown_text(&draft.current_tension)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this location, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
+pub fn faction_entity_card(draft: &FactionDraft, footer: CardFooter) -> OutputDoc {
     let kind_custom_display = draft
         .kind_custom
         .as_deref()
@@ -500,7 +521,7 @@ pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
         ),
         entity_row(
             "Resources:",
-            normalize_unknown_text(&draft.resources_assets),
+            normalize_unknown_list(draft.resources_assets.clone()).join(", "),
         ),
         entity_row(
             "Allies:",
@@ -526,18 +547,20 @@ pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
         entity_row("Symbol:", normalize_unknown_text(&draft.symbol_description)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this faction, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn god_entity_card(draft: &GodDraft) -> OutputDoc {
+pub fn god_entity_card(draft: &GodDraft, footer: CardFooter) -> OutputDoc {
     let rank_custom_display = draft
         .rank_custom
         .as_deref()
@@ -578,18 +601,20 @@ pub fn god_entity_card(draft: &GodDraft) -> OutputDoc {
         ),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this god, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
+pub fn item_entity_card(draft: &ItemDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![
         entity_row("Slug:", normalize_unknown_text(&draft.slug)),
         entity_row("Category:", normalize_unknown_text(&draft.category)),
@@ -607,18 +632,20 @@ pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
         entity_row("Location:", normalize_unknown_text(&draft.location)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this item, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
+pub fn event_entity_card(draft: &EventDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![entity_row("Slug:", normalize_unknown_text(&draft.slug))];
     let mut output = doc().with_block(entity_card(&draft.name, rows));
     // The body is narrative prose, not an attribute. Render each paragraph
@@ -629,17 +656,19 @@ pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
             output.push(paragraph_text(trimmed.to_string()));
         }
     }
-    output.push(paragraph_with_inlines(vec![
-        text_node("Use "),
-        command_ref("save", "save"),
-        text_node(" to persist this event, or "),
-        command_ref("reroll", "reroll"),
-        text_node(" to regenerate the narrative."),
-    ]));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this event, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to regenerate the narrative."),
+        ]));
+    }
     output
 }
 
-pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
+pub fn dungeon_entity_card(draft: &DungeonDraft, footer: CardFooter) -> OutputDoc {
     let mut out = doc();
     // 1. spine / premise top-line (feature-dungeons.md §6)
     out.push(heading(
@@ -662,8 +691,8 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
         format!("Topology: {}", draft.topology)
     };
     out.push(status(StatusTone::Info, topo));
-    // 3b. the rolled overlay + faction tint, recovered from the beats.
-    let (overlay, factions) = plan_meta_from_beats(&draft.beats);
+    // 3b. the rolled overlay, recovered from the beats.
+    let (overlay, _) = plan_meta_from_beats(&draft.beats);
     if let Some(overlay) = overlay {
         out.push(status(
             StatusTone::Info,
@@ -671,12 +700,6 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
                 "Overlay: {} (on the {})",
                 overlay.overlay_type, draft.beats[overlay.beat_index].function
             ),
-        ));
-    }
-    if factions {
-        out.push(status(
-            StatusTone::Info,
-            "Faction tint: a faction presence colors the whole dungeon".to_string(),
         ));
     }
     // 4. five beat cards, each followed by its own reroll Paragraph
@@ -687,34 +710,35 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
             entity_row("Player Goals:", normalize_unknown_text(&beat.player_goals)),
             entity_row("Lever:", normalize_unknown_text(&beat.lever)),
         ];
-        if let Some(loot) = &beat.loot {
-            if !loot.trim().is_empty() {
-                rows.push(entity_row("Loot:", loot.clone()));
-            }
+        if let Some(loot) = &beat.loot
+            && !loot.trim().is_empty()
+        {
+            rows.push(entity_row("Loot:", loot.clone()));
         }
-        rows.push(entity_row("Design:", normalize_unknown_text(&beat.design_note)));
-        out.push(entity_card(
-            format!("{}. {}", i + 1, beat.function),
-            rows,
+        rows.push(entity_row(
+            "Design:",
+            normalize_unknown_text(&beat.design_note),
         ));
-        let key = beat.function.to_lowercase();
-        out.push(paragraph_with_inlines(vec![
-            text_node("Reroll this beat: "),
-            command_ref(
-                format!("reroll {key}"),
-                format!("dungeon reroll {key}"),
-            ),
-        ]));
+        out.push(entity_card(format!("{}. {}", i + 1, beat.function), rows));
+        if footer == CardFooter::Show {
+            let key = beat.function.to_lowercase();
+            out.push(paragraph_with_inlines(vec![
+                text_node("Reroll this beat: "),
+                command_ref(format!("reroll {key}"), format!("dungeon reroll {key}")),
+            ]));
+        }
     }
     // 4. footer actions
-    out.push(paragraph_with_inlines(vec![
-        text_node("Use "),
-        command_ref("save", "save"),
-        text_node(", "),
-        command_ref("reroll", "reroll"),
-        text_node(" for a whole new dungeon, or "),
-        command_ref("cancel", "cancel"),
-        text_node(" to discard."),
-    ]));
+    if footer == CardFooter::Show {
+        out.push(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(", "),
+            command_ref("reroll", "reroll"),
+            text_node(" for a whole new dungeon, or "),
+            command_ref("cancel", "cancel"),
+            text_node(" to discard."),
+        ]));
+    }
     out
 }

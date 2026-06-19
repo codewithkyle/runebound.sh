@@ -1,6 +1,7 @@
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ollama_chat::{
-    attempt_seed, build_chat_client, detail_directive, load_generation_config, post_chat_for_content,
+    ChatClient, OllamaChatClient, attempt_seed, build_chat_client, detail_directive,
+    load_generation_config, post_chat_for_content,
 };
 use crate::services::vault_ref::{
     VaultReferenceEntry, extract_prompt_reference_keys, load_vault_reference_entries,
@@ -21,7 +22,7 @@ use runebound_models::utils::{
     ITEM_RARITIES, LOCATION_DANGER_LEVELS, LOCATION_KIND_TYPES,
 };
 use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 /// Tokens reserved within the context window for the model's own output, so the
 /// capacity warning fires before the prompt crowds out room to respond.
@@ -54,25 +55,179 @@ fn capacity_notice(estimated_tokens: usize, num_ctx: u32) -> Option<String> {
 /// missing or unreadable vault by returning empty context. Shared by seed
 /// generation and field reroll so a custom prompt's `@references` resolve the same
 /// way in both flows.
-pub(crate) fn build_reference_context(
+pub(crate) async fn build_reference_context(
     config: &AppConfig,
     user_prompt: &str,
-    workspace_root: &Path,
 ) -> PromptReferenceContext {
     let Some(vault_path) = config.vault.path.clone() else {
         return PromptReferenceContext::default();
     };
-    let vault = Vault::new(vault_path);
-    if vault.ensure_root_exists().is_err() {
-        return PromptReferenceContext::default();
+    let user_prompt = user_prompt.to_string();
+    // read_dir + TOML loads + referenced-file reads are blocking IO; keep them off
+    // the async runtime worker (P6.2). A panicked task degrades to empty context.
+    tokio::task::spawn_blocking(move || {
+        let vault = Vault::new(vault_path);
+        if vault.ensure_root_exists().is_err() {
+            return PromptReferenceContext::default();
+        }
+        match load_vault_reference_entries(&vault) {
+            Ok(entries) => build_prompt_reference_context(&user_prompt, &entries, &vault),
+            Err(err) => {
+                eprintln!("reference context warning: {err}");
+                PromptReferenceContext::default()
+            }
+        }
+    })
+    .await
+    .unwrap_or_default()
+}
+
+/// LLM sampling knobs for a seed-generation request. Hoisted from the per-kind
+/// literals each generator inlined in its payload; the values differ by kind on
+/// purpose (NPCs run hottest, items coolest).
+struct SeedSampling {
+    temperature: f64,
+    top_p: f64,
+    repeat_penalty: f64,
+}
+
+const NPC_GEN_SAMPLING: SeedSampling = SeedSampling {
+    temperature: 1.1,
+    top_p: 0.92,
+    repeat_penalty: 1.15,
+};
+const LOCATION_GEN_SAMPLING: SeedSampling = SeedSampling {
+    temperature: 1.08,
+    top_p: 0.93,
+    repeat_penalty: 1.14,
+};
+const FACTION_GEN_SAMPLING: SeedSampling = SeedSampling {
+    temperature: 1.08,
+    top_p: 0.93,
+    repeat_penalty: 1.12,
+};
+const GOD_GEN_SAMPLING: SeedSampling = SeedSampling {
+    temperature: 1.08,
+    top_p: 0.93,
+    repeat_penalty: 1.12,
+};
+const ITEM_GEN_SAMPLING: SeedSampling = SeedSampling {
+    temperature: 1.05,
+    top_p: 0.92,
+    repeat_penalty: 1.1,
+};
+const EVENT_GEN_SAMPLING: SeedSampling = SeedSampling {
+    temperature: 1.05,
+    top_p: 0.93,
+    repeat_penalty: 1.12,
+};
+
+/// The `\n\n`-prefixed reference block appended to a generator's system prompt, or
+/// empty when no `@references` resolved — the formatting every generator repeated
+/// inline.
+fn reference_system_suffix(reference_context: &PromptReferenceContext) -> String {
+    if reference_context.system_context.is_empty() {
+        String::new()
+    } else {
+        format!("\n\n{}", reference_context.system_context)
     }
-    match load_vault_reference_entries(&vault) {
-        Ok(entries) => build_prompt_reference_context(user_prompt, &entries, &vault, workspace_root),
-        Err(err) => {
-            eprintln!("reference context warning: {err}");
-            PromptReferenceContext::default()
+}
+
+/// Build the Ollama `/api/chat` request body for one seed-generation attempt. Pure
+/// (no I/O) so the payload shape is unit-testable; `run_seed` is the only
+/// per-attempt-varying input.
+fn build_seed_payload(
+    model: &str,
+    sampling: &SeedSampling,
+    num_ctx: u32,
+    run_seed: i32,
+    schema: &serde_json::Value,
+    system: &str,
+    user_prompt: &str,
+) -> serde_json::Value {
+    serde_json::json!({
+        "model": model,
+        "stream": false,
+        "format": schema,
+        "options": {
+            "temperature": sampling.temperature,
+            "top_p": sampling.top_p,
+            "repeat_penalty": sampling.repeat_penalty,
+            "seed": run_seed,
+            "num_ctx": num_ctx,
+        },
+        "messages": [
+            { "role": "system", "content": system },
+            { "role": "user", "content": user_prompt }
+        ]
+    })
+}
+
+/// An attempt's verdict from the parsed seed: a good seed to persist, a soft miss to
+/// retry, or a hard failure (a closed-enum violation) to surface.
+enum SeedStep<T> {
+    Accept(T),
+    Retry,
+    Fail(String),
+}
+
+/// The shared 0..5 seed-generation attempt loop. For each attempt it builds the
+/// payload (a fresh RNG seed and, after the first, the per-kind `repair_note`), POSTs
+/// it through the [`ChatClient`] seam, parses the reply into `T`, and hands it to
+/// `accept` for per-kind normalize/validate/dedup. On `Accept` it persists the seed
+/// under `entity_key` (so future generations dedup against it) and returns it; after
+/// five misses it returns `not_produced()`. This is the loop every `generate_*_seed`
+/// used to inline verbatim. (Payload construction is split into the pure, testable
+/// [`build_seed_payload`]; the loop's control flow mirrors `run_reroll_attempts`.)
+#[allow(clippy::too_many_arguments)]
+async fn run_seed_attempts<T: serde::Serialize + serde::de::DeserializeOwned>(
+    client: &dyn ChatClient,
+    model: &str,
+    sampling: &SeedSampling,
+    num_ctx: u32,
+    schema: &serde_json::Value,
+    user_prompt: &str,
+    repair_note: &str,
+    entity_key: &str,
+    database: &Database,
+    generation_repo: &dyn GenerationRepository,
+    system_prompt: impl Fn(&str) -> String,
+    not_produced: impl Fn() -> String,
+    mut accept: impl FnMut(T) -> SeedStep<T>,
+) -> Result<T, String> {
+    for attempt in 0..5 {
+        let run_seed = attempt_seed(attempt);
+        let note = if attempt == 0 { "" } else { repair_note };
+        let system = system_prompt(note);
+        let payload = build_seed_payload(
+            model,
+            sampling,
+            num_ctx,
+            run_seed,
+            schema,
+            &system,
+            user_prompt,
+        );
+
+        let Some(content) = client.post_chat(&payload).await? else {
+            continue;
+        };
+        let Ok(seed) = serde_json::from_str::<T>(&content) else {
+            continue;
+        };
+        match accept(seed) {
+            SeedStep::Accept(seed) => {
+                let serialized = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
+                generation_repo
+                    .insert(database, entity_key, None, &serialized)
+                    .await?;
+                return Ok(seed);
+            }
+            SeedStep::Fail(err) => return Err(err),
+            SeedStep::Retry => continue,
         }
     }
+    Err(not_produced())
 }
 
 pub struct AiGenerationService;
@@ -81,21 +236,23 @@ impl AiGenerationService {
     pub async fn generate_npc_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<NpcSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one D&D NPC for a fantasy campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "npc_seed", 20)
             .await?;
-        let recent_seeds = parse_recent_npc_seeds(recent_payloads);
+        let recent_seeds = parse_recent_seeds::<NpcSeed>(recent_payloads);
         let recent_names = recent_name_set(&recent_seeds);
         let recent_context = describe_recent_npc_seeds(&recent_seeds);
         let recent_occupation_anchors = recent_occupation_anchor_set(&recent_seeds);
@@ -127,88 +284,90 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let (client, url) = build_chat_client(&config)?;
-
+        let client = OllamaChatClient::from_config(&config)?;
+        let reference_suffix = reference_system_suffix(&reference_context);
+        let verbosity = config.generation.verbosity;
         let mut seen_attempt_names = HashSet::new();
         let mut seen_attempt_occupation_anchors = HashSet::new();
 
-        for attempt in 0..5 {
-            let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations." };
+        let seed = run_seed_attempts(
+            &client,
+            &model,
+            &NPC_GEN_SAMPLING,
+            config.ollama.num_ctx,
+            &schema,
+            user_prompt,
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names and occupations.",
+            "npc_seed",
+            database,
+            generation_repo,
+            |note| format!(
+                "You generate D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. carrying must be an array of item strings. Age must be numeric text with no commas, separators, or trailing punctuation (e.g., '133', not '1,133' or '133,'). Height should be imperial like 5'11\", weight_lbs should be lbs as text like 180 with no commas. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}{}",
+                recent_occupation_context, recent_context, note, reference_suffix, detail_directive(verbosity)
+            ),
+            || "failed to generate valid structured NPC output from ollama".to_string(),
+            |mut seed: NpcSeed| {
+                seed.name = seed.name.trim().to_string();
+                seed.race = seed.race.trim().to_string();
+                seed.occupation = normalize_unknown_text(&seed.occupation);
+                seed.sex = match normalize_sex(&seed.sex) {
+                    Ok(value) => value,
+                    Err(err) => return SeedStep::Fail(err),
+                };
+                seed.age = normalize_unknown_text(&seed.age);
+                seed.height = normalize_unknown_text(&seed.height);
+                seed.weight_lbs = normalize_unknown_text(&seed.weight_lbs);
+                seed.background = normalize_unknown_text(&seed.background);
+                seed.want_need = normalize_unknown_text(&seed.want_need);
+                seed.secret_obstacle = normalize_unknown_text(&seed.secret_obstacle);
+                seed.carrying = normalize_unknown_list(seed.carrying);
 
-            let payload = serde_json::json!({
-                "model": model,
-                "stream": false,
-                "format": schema,
-                "options": { "temperature": 1.1, "top_p": 0.92, "repeat_penalty": 1.15, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
-                "messages": [{
-                    "role": "system",
-                    "content": format!(
-                        "You generate D&D NPC seeds for a game master. Each result must be novel and different from recent NPCs. Return only JSON with fields name, race, occupation, sex, age, height, weight_lbs, background, want_need, secret_obstacle, carrying. carrying must be an array of item strings. Age must be numeric text with no commas, separators, or trailing punctuation (e.g., '133', not '1,133' or '133,'). Height should be imperial like 5'11\", weight_lbs should be lbs as text like 180 with no commas. Prefer occupations different from recent occupations and avoid occupation roots in this list unless explicitly requested: {}. Avoid these recent seeds: {}.{}{}{}",
-                        recent_occupation_context, recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
-                        detail_directive(config.generation.verbosity)
-                    )
-                }, { "role": "user", "content": user_prompt }]
-            });
+                if seed.name.is_empty() || seed.race.is_empty() {
+                    return SeedStep::Retry;
+                }
+                let normalized_name = seed.name.to_ascii_lowercase();
+                if recent_names.contains(&normalized_name)
+                    || seen_attempt_names.contains(&normalized_name)
+                {
+                    return SeedStep::Retry;
+                }
+                let anchor = occupation_anchor(&seed.occupation);
+                if anchor != "unknown"
+                    && (recent_occupation_anchors.contains(&anchor)
+                        || seen_attempt_occupation_anchors.contains(&anchor))
+                {
+                    return SeedStep::Retry;
+                }
+                seen_attempt_names.insert(normalized_name);
+                seen_attempt_occupation_anchors.insert(anchor);
+                SeedStep::Accept(seed)
+            },
+        )
+        .await?;
 
-            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
-                continue;
-            };
-
-            let parsed: Result<NpcSeed, _> = serde_json::from_str(&content);
-            let Ok(mut seed) = parsed else { continue };
-
-            seed.name = seed.name.trim().to_string();
-            seed.race = seed.race.trim().to_string();
-            seed.occupation = normalize_unknown_text(&seed.occupation);
-            seed.sex = normalize_sex(&seed.sex)?;
-            seed.age = normalize_unknown_text(&seed.age);
-            seed.height = normalize_unknown_text(&seed.height);
-            seed.weight_lbs = normalize_unknown_text(&seed.weight_lbs);
-            seed.background = normalize_unknown_text(&seed.background);
-            seed.want_need = normalize_unknown_text(&seed.want_need);
-            seed.secret_obstacle = normalize_unknown_text(&seed.secret_obstacle);
-            seed.carrying = normalize_unknown_list(seed.carrying);
-
-            if seed.name.is_empty() || seed.race.is_empty() { continue; }
-
-            let normalized_name = seed.name.to_ascii_lowercase();
-            if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) { continue; }
-            let occupation_anchor = occupation_anchor(&seed.occupation);
-            if occupation_anchor != "unknown" && (recent_occupation_anchors.contains(&occupation_anchor) || seen_attempt_occupation_anchors.contains(&occupation_anchor)) { continue; }
-            seen_attempt_names.insert(normalized_name);
-            seen_attempt_occupation_anchors.insert(occupation_anchor);
-
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "npc_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
-        }
-
-        Err("failed to generate valid structured NPC output from ollama".to_string())
+        Ok(SeedGeneration { seed, notice })
     }
 
     pub async fn generate_location_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<LocationSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy location for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "location_seed", 20)
             .await?;
-        let recent_seeds = parse_recent_location_seeds(recent_payloads);
+        let recent_seeds = parse_recent_seeds::<LocationSeed>(recent_payloads);
         let recent_names = recent_location_name_set(&recent_seeds);
         let recent_context = describe_recent_location_seeds(&recent_seeds);
 
@@ -236,76 +395,70 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let (client, url) = build_chat_client(&config)?;
-
+        let client = OllamaChatClient::from_config(&config)?;
+        let reference_suffix = reference_system_suffix(&reference_context);
+        let verbosity = config.generation.verbosity;
         let mut seen_attempt_names = HashSet::new();
 
-        for attempt in 0..5 {
-            let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
+        let seed = run_seed_attempts(
+            &client,
+            &model,
+            &LOCATION_GEN_SAMPLING,
+            config.ollama.num_ctx,
+            &schema,
+            user_prompt,
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names.",
+            "location_seed",
+            database,
+            generation_repo,
+            |note| format!(
+                "You generate usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. exports must have 1-3 short items. tone must be 2-5 words. If kind_type is not other, kind_custom must be null. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {}.{}{}{}",
+                recent_context, note, reference_suffix, detail_directive(verbosity)
+            ),
+            || "failed to generate valid structured location output from ollama".to_string(),
+            |seed: LocationSeed| {
+                let seed = match normalize_location_seed(seed) {
+                    Ok(seed) => seed,
+                    Err(_) => return SeedStep::Retry,
+                };
+                if validate_location_details(&seed).is_err() {
+                    return SeedStep::Retry;
+                }
+                let normalized_name = seed.name.to_ascii_lowercase();
+                if recent_names.contains(&normalized_name)
+                    || seen_attempt_names.contains(&normalized_name)
+                {
+                    return SeedStep::Retry;
+                }
+                seen_attempt_names.insert(normalized_name);
+                SeedStep::Accept(seed)
+            },
+        )
+        .await?;
 
-            let payload = serde_json::json!({
-                "model": model,
-                "stream": false,
-                "format": schema,
-                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.14, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
-                "messages": [{
-                    "role": "system",
-                    "content": format!(
-                        "You generate usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. exports must have 1-3 short items. tone must be 2-5 words. If kind_type is not other, kind_custom must be null. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {}.{}{}{}",
-                        recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
-                        detail_directive(config.generation.verbosity)
-                    )
-                }, { "role": "user", "content": user_prompt }]
-            });
-
-            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
-                continue;
-            };
-
-            let parsed: Result<LocationSeed, _> = serde_json::from_str(&content);
-            let Ok(seed) = parsed else { continue };
-
-            let seed = match normalize_location_seed(seed) {
-                Ok(seed) => seed,
-                Err(_) => continue,
-            };
-            if validate_location_details(&seed).is_err() { continue; }
-
-            let normalized_name = seed.name.to_ascii_lowercase();
-            if recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name) { continue; }
-            seen_attempt_names.insert(normalized_name);
-
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "location_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
-        }
-
-        Err("failed to generate valid structured location output from ollama".to_string())
+        Ok(SeedGeneration { seed, notice })
     }
 
     pub async fn generate_faction_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<FactionSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy faction for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "faction_seed", 20)
             .await?;
-        let recent_seeds = parse_recent_faction_seeds(recent_payloads);
+        let recent_seeds = parse_recent_seeds::<FactionSeed>(recent_payloads);
         let recent_names = recent_faction_name_set(&recent_seeds);
         let recent_context = describe_recent_faction_seeds(&recent_seeds);
 
@@ -329,7 +482,7 @@ impl AiGenerationService {
                 "leadership": { "type": "string", "minLength": 1 },
                 "headquarters": { "type": "string", "minLength": 1 },
                 "sphere_of_influence": { "type": "string", "minLength": 1 },
-                "resources_assets": { "type": "string", "minLength": 1 },
+                "resources_assets": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
                 "allies": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
                 "rivals_enemies": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
                 "reputation": { "type": "string", "minLength": 1 },
@@ -341,76 +494,73 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let (client, url) = build_chat_client(&config)?;
-
+        let client = OllamaChatClient::from_config(&config)?;
+        let reference_suffix = reference_system_suffix(&reference_context);
+        let verbosity = config.generation.verbosity;
         let mut seen_attempt_names = HashSet::new();
 
-        for attempt in 0..5 {
-            let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
+        let seed = run_seed_attempts(
+            &client,
+            &model,
+            &FACTION_GEN_SAMPLING,
+            config.ollama.num_ctx,
+            &schema,
+            user_prompt,
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names.",
+            "faction_seed",
+            database,
+            generation_repo,
+            |note| format!(
+                "You generate usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}{}",
+                recent_context, note, reference_suffix, detail_directive(verbosity)
+            ),
+            || "failed to generate valid structured faction output from ollama".to_string(),
+            |seed: FactionSeed| {
+                let seed = match normalize_faction_seed(seed) {
+                    Ok(seed) => seed,
+                    Err(_) => return SeedStep::Retry,
+                };
+                if validate_faction_details(&seed).is_err() {
+                    return SeedStep::Retry;
+                }
+                let normalized_name = seed.name.to_ascii_lowercase();
+                if enforce_unique_name
+                    && (recent_names.contains(&normalized_name)
+                        || seen_attempt_names.contains(&normalized_name))
+                {
+                    return SeedStep::Retry;
+                }
+                if enforce_unique_name {
+                    seen_attempt_names.insert(normalized_name);
+                }
+                SeedStep::Accept(seed)
+            },
+        )
+        .await?;
 
-            let payload = serde_json::json!({
-                "model": model,
-                "stream": false,
-                "format": schema,
-                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
-                "messages": [{
-                    "role": "system",
-                    "content": format!(
-                        "You generate usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}{}",
-                        recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
-                        detail_directive(config.generation.verbosity)
-                    )
-                }, { "role": "user", "content": user_prompt }]
-            });
-
-            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
-                continue;
-            };
-
-            let parsed: Result<FactionSeed, _> = serde_json::from_str(&content);
-            let Ok(seed) = parsed else { continue };
-
-            let seed = match normalize_faction_seed(seed) {
-                Ok(seed) => seed,
-                Err(_) => continue,
-            };
-            if validate_faction_details(&seed).is_err() { continue; }
-
-            let normalized_name = seed.name.to_ascii_lowercase();
-            if enforce_unique_name && (recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name)) { continue; }
-            if enforce_unique_name { seen_attempt_names.insert(normalized_name); }
-
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "faction_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
-        }
-
-        Err("failed to generate valid structured faction output from ollama".to_string())
+        Ok(SeedGeneration { seed, notice })
     }
 
     pub async fn generate_god_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<GodSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
-        let user_prompt = prompt.as_ref().map(|value| value.trim()).filter(|value| !value.is_empty())
+        let user_prompt = prompt
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
             .unwrap_or("Generate one distinct fantasy deity for a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "god_seed", 20)
             .await?;
-        let recent_seeds = parse_recent_god_seeds(recent_payloads);
+        let recent_seeds = parse_recent_seeds::<GodSeed>(recent_payloads);
         let recent_names = recent_god_name_set(&recent_seeds);
         let recent_context = describe_recent_god_seeds(&recent_seeds);
 
@@ -443,67 +593,61 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let (client, url) = build_chat_client(&config)?;
-
+        let client = OllamaChatClient::from_config(&config)?;
+        let reference_suffix = reference_system_suffix(&reference_context);
+        let verbosity = config.generation.verbosity;
         let mut seen_attempt_names = HashSet::new();
 
-        for attempt in 0..5 {
-            let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 { "" } else { " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names." };
+        let seed = run_seed_attempts(
+            &client,
+            &model,
+            &GOD_GEN_SAMPLING,
+            config.ollama.num_ctx,
+            &schema,
+            user_prompt,
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior names.",
+            "god_seed",
+            database,
+            generation_repo,
+            |note| format!(
+                "You generate usable D&D deity seeds. Return only JSON with fields name, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals. rank must be one of: {}. alignment must be one of: {}. If rank is not other, rank_custom must be null. symbol should be exactly 1 sentence describing the holy symbol/sigil/iconography. domains is a list of spheres the deity governs (e.g. war, death, harvest). If referenced vault metadata includes an established name for a god or power, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}{}",
+                GOD_RANKS.join(", "), GOD_ALIGNMENTS.join(", "),
+                recent_context, note, reference_suffix, detail_directive(verbosity)
+            ),
+            || "failed to generate valid structured god output from ollama".to_string(),
+            |seed: GodSeed| {
+                let seed = match normalize_god_seed(seed) {
+                    Ok(seed) => seed,
+                    Err(_) => return SeedStep::Retry,
+                };
+                if validate_god_details(&seed).is_err() {
+                    return SeedStep::Retry;
+                }
+                let normalized_name = seed.name.to_ascii_lowercase();
+                if enforce_unique_name
+                    && (recent_names.contains(&normalized_name)
+                        || seen_attempt_names.contains(&normalized_name))
+                {
+                    return SeedStep::Retry;
+                }
+                if enforce_unique_name {
+                    seen_attempt_names.insert(normalized_name);
+                }
+                SeedStep::Accept(seed)
+            },
+        )
+        .await?;
 
-            let payload = serde_json::json!({
-                "model": model,
-                "stream": false,
-                "format": schema,
-                "options": { "temperature": 1.08, "top_p": 0.93, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
-                "messages": [{
-                    "role": "system",
-                    "content": format!(
-                        "You generate usable D&D deity seeds. Return only JSON with fields name, epithet, rank, rank_custom, alignment, domains, symbol, appearance, dogma, realm, worshippers, clergy, allies, rivals. rank must be one of: {}. alignment must be one of: {}. If rank is not other, rank_custom must be null. symbol should be exactly 1 sentence describing the holy symbol/sigil/iconography. domains is a list of spheres the deity governs (e.g. war, death, harvest). If referenced vault metadata includes an established name for a god or power, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}{}",
-                        GOD_RANKS.join(", "), GOD_ALIGNMENTS.join(", "),
-                        recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
-                        detail_directive(config.generation.verbosity)
-                    )
-                }, { "role": "user", "content": user_prompt }]
-            });
-
-            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
-                continue;
-            };
-
-            let parsed: Result<GodSeed, _> = serde_json::from_str(&content);
-            let Ok(seed) = parsed else { continue };
-
-            let seed = match normalize_god_seed(seed) {
-                Ok(seed) => seed,
-                Err(_) => continue,
-            };
-            if validate_god_details(&seed).is_err() { continue; }
-
-            let normalized_name = seed.name.to_ascii_lowercase();
-            if enforce_unique_name && (recent_names.contains(&normalized_name) || seen_attempt_names.contains(&normalized_name)) { continue; }
-            if enforce_unique_name { seen_attempt_names.insert(normalized_name); }
-
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "god_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
-        }
-
-        Err("failed to generate valid structured god output from ollama".to_string())
+        Ok(SeedGeneration { seed, notice })
     }
 
     pub async fn generate_item_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<ItemSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -511,7 +655,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Generate one magical or legendary item.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let estimated_tokens = SYSTEM_BOILERPLATE_TOKENS
             + estimate_tokens(&reference_context.system_context)
@@ -549,76 +693,63 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let (client, url) = build_chat_client(&config)?;
+        let client = OllamaChatClient::from_config(&config)?;
+        let reference_suffix = reference_system_suffix(&reference_context);
+        let verbosity = config.generation.verbosity;
 
-        for attempt in 0..5 {
-            let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 {
-                ""
-            } else {
-                " Previous response was invalid or repeated. Return only valid JSON."
-            };
+        let seed = run_seed_attempts(
+            &client,
+            &model,
+            &ITEM_GEN_SAMPLING,
+            config.ollama.num_ctx,
+            &schema,
+            user_prompt,
+            " Previous response was invalid or repeated. Return only valid JSON.",
+            "item_seed",
+            database,
+            generation_repo,
+            |note| format!(
+                "You generate tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance, abilities, drawbacks (or 'None'), history, value in format like '1000gp' or '250sp' or '50cp', and location. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any person, place, or organization instead of inventing new ones.{}{}{}",
+                ITEM_CATEGORIES.join(", "), ITEM_RARITIES.join(", "), note, reference_suffix, detail_directive(verbosity)
+            ),
+            || "failed to generate valid structured item output from ollama".to_string(),
+            |mut seed: ItemSeed| {
+                seed.name = seed.name.trim().to_string();
+                seed.category = match normalize_item_category(&seed.category) {
+                    Ok(value) => value,
+                    Err(err) => return SeedStep::Fail(err),
+                };
+                seed.rarity = match normalize_item_rarity(&seed.rarity) {
+                    Ok(value) => value,
+                    Err(err) => return SeedStep::Fail(err),
+                };
+                seed.attunement = normalize_unknown_text(&seed.attunement);
+                seed.materials = normalize_unknown_list(seed.materials);
+                seed.appearance = normalize_unknown_text(&seed.appearance);
+                seed.abilities = normalize_unknown_text(&seed.abilities);
+                seed.drawbacks = normalize_unknown_text(&seed.drawbacks);
+                seed.history = normalize_unknown_text(&seed.history);
+                seed.value = normalize_unknown_text(&seed.value);
+                seed.location = normalize_unknown_text(&seed.location);
 
-            let payload = serde_json::json!({
-                "model": model,
-                "stream": false,
-                "format": schema,
-                "options": { "temperature": 1.05, "top_p": 0.92, "repeat_penalty": 1.1, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
-                "messages": [{
-                    "role": "system",
-                    "content": format!(
-                        "You generate tabletop RPG items. Category choices: {}. Rarity choices: {}. Provide appearance, abilities, drawbacks (or 'None'), history, value in format like '1000gp' or '250sp' or '50cp', and location. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any person, place, or organization instead of inventing new ones.{}{}{}",
-                        ITEM_CATEGORIES.join(", "),
-                        ITEM_RARITIES.join(", "),
-                        repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
-                        detail_directive(config.generation.verbosity)
-                    )
-                }, { "role": "user", "content": user_prompt }]
-            });
+                if seed.name.is_empty() {
+                    return SeedStep::Retry;
+                }
+                SeedStep::Accept(seed)
+            },
+        )
+        .await?;
 
-            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
-                continue;
-            };
-
-            let parsed: Result<ItemSeed, _> = serde_json::from_str(&content);
-            let Ok(mut seed) = parsed else { continue };
-
-            seed.name = seed.name.trim().to_string();
-            seed.category = normalize_item_category(&seed.category)?;
-            seed.rarity = normalize_item_rarity(&seed.rarity)?;
-            seed.attunement = normalize_unknown_text(&seed.attunement);
-            seed.materials = normalize_unknown_list(seed.materials);
-            seed.appearance = normalize_unknown_text(&seed.appearance);
-            seed.abilities = normalize_unknown_text(&seed.abilities);
-            seed.drawbacks = normalize_unknown_text(&seed.drawbacks);
-            seed.history = normalize_unknown_text(&seed.history);
-            seed.value = normalize_unknown_text(&seed.value);
-            seed.location = normalize_unknown_text(&seed.location);
-
-            if seed.name.is_empty() {
-                continue;
-            }
-
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "item_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
-        }
-
-        Err("failed to generate valid structured item output from ollama".to_string())
+        Ok(SeedGeneration { seed, notice })
     }
 
     pub async fn generate_event_seed(
         &self,
         prompt: Option<String>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<EventSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let user_prompt = prompt
             .as_ref()
@@ -626,12 +757,12 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty())
             .unwrap_or("Write a short piece of lore about a notable event in a D&D campaign.");
 
-        let reference_context = build_reference_context(&config, user_prompt, workspace_root);
+        let reference_context = build_reference_context(&config, user_prompt).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "event_seed", 20)
             .await?;
-        let recent_seeds = parse_recent_event_seeds(recent_payloads);
+        let recent_seeds = parse_recent_seeds::<EventSeed>(recent_payloads);
         let recent_titles = recent_event_title_set(&recent_seeds);
         let recent_context = describe_recent_event_seeds(&recent_seeds);
 
@@ -651,65 +782,47 @@ impl AiGenerationService {
             "additionalProperties": false
         });
 
-        let (client, url) = build_chat_client(&config)?;
-
+        let client = OllamaChatClient::from_config(&config)?;
+        let reference_suffix = reference_system_suffix(&reference_context);
+        let verbosity = config.generation.verbosity;
         let mut seen_attempt_titles = HashSet::new();
 
-        for attempt in 0..5 {
-            let run_seed = attempt_seed(attempt);
-            let repair_note = if attempt == 0 {
-                ""
-            } else {
-                " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior titles."
-            };
+        let seed = run_seed_attempts(
+            &client,
+            &model,
+            &EVENT_GEN_SAMPLING,
+            config.ollama.num_ctx,
+            &schema,
+            user_prompt,
+            " Previous response was invalid or repeated. Return only valid JSON that matches the schema and avoid prior titles.",
+            "event_seed",
+            database,
+            generation_repo,
+            |note| format!(
+                "You write evocative D&D campaign lore about an event — a battle, a betrayal, a founding, a disaster, a discovery. Return only JSON with fields title and body. title is a short evocative name for the event. body is several paragraphs of narrative prose (separated by blank lines) telling the story of what happened, who was involved, and why it matters. Write it as flowing narrative lore, not as bullet points or labeled attributes. If referenced vault metadata is provided, treat it as authoritative setting context and weave in those established people, places, and organizations by their exact canonical names instead of inventing new ones. Avoid these recent event titles: {}.{}{}{}",
+                recent_context, note, reference_suffix, detail_directive(verbosity)
+            ),
+            || "failed to generate valid structured event output from ollama".to_string(),
+            |mut seed: EventSeed| {
+                seed.title = seed.title.trim().to_string();
+                seed.body = seed.body.trim().to_string();
 
-            let payload = serde_json::json!({
-                "model": model,
-                "stream": false,
-                "format": schema,
-                "options": { "temperature": 1.05, "top_p": 0.93, "repeat_penalty": 1.12, "seed": run_seed, "num_ctx": config.ollama.num_ctx },
-                "messages": [{
-                    "role": "system",
-                    "content": format!(
-                        "You write evocative D&D campaign lore about an event — a battle, a betrayal, a founding, a disaster, a discovery. Return only JSON with fields title and body. title is a short evocative name for the event. body is several paragraphs of narrative prose (separated by blank lines) telling the story of what happened, who was involved, and why it matters. Write it as flowing narrative lore, not as bullet points or labeled attributes. If referenced vault metadata is provided, treat it as authoritative setting context and weave in those established people, places, and organizations by their exact canonical names instead of inventing new ones. Avoid these recent event titles: {}.{}{}{}",
-                        recent_context, repair_note,
-                        if reference_context.system_context.is_empty() { String::new() } else { format!("\n\n{}", reference_context.system_context) },
-                        detail_directive(config.generation.verbosity)
-                    )
-                }, { "role": "user", "content": user_prompt }]
-            });
+                if seed.title.is_empty() || seed.body.is_empty() {
+                    return SeedStep::Retry;
+                }
+                let normalized_title = seed.title.to_ascii_lowercase();
+                if recent_titles.contains(&normalized_title)
+                    || seen_attempt_titles.contains(&normalized_title)
+                {
+                    return SeedStep::Retry;
+                }
+                seen_attempt_titles.insert(normalized_title);
+                SeedStep::Accept(seed)
+            },
+        )
+        .await?;
 
-            let Some(content) = post_chat_for_content(&client, &url, &payload).await? else {
-                continue;
-            };
-
-            let parsed: Result<EventSeed, _> = serde_json::from_str(&content);
-            let Ok(mut seed) = parsed else { continue };
-
-            seed.title = seed.title.trim().to_string();
-            seed.body = seed.body.trim().to_string();
-
-            if seed.title.is_empty() || seed.body.is_empty() {
-                continue;
-            }
-
-            let normalized_title = seed.title.to_ascii_lowercase();
-            if recent_titles.contains(&normalized_title)
-                || seen_attempt_titles.contains(&normalized_title)
-            {
-                continue;
-            }
-            seen_attempt_titles.insert(normalized_title);
-
-            let serialized_seed = serde_json::to_string(&seed).map_err(|err| err.to_string())?;
-            generation_repo
-                .insert(database, "event_seed", None, &serialized_seed)
-                .await?;
-
-            return Ok(SeedGeneration { seed, notice: notice.clone() });
-        }
-
-        Err("failed to generate valid structured event output from ollama".to_string())
+        Ok(SeedGeneration { seed, notice })
     }
 
     /// Pass 1 of dungeon generation: write the short story the GM reviews. The
@@ -726,11 +839,10 @@ impl AiGenerationService {
         twist: &str,
         topology: &str,
         extra_prompt: Option<&str>,
-        workspace_root: &PathBuf,
         database: &Database,
         generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<DungeonStory>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let premise = premise
             .as_ref()
@@ -742,8 +854,7 @@ impl AiGenerationService {
             .filter(|value| !value.is_empty());
 
         let reference_probe = format!("{} {}", premise.unwrap_or(""), context);
-        let reference_context =
-            build_reference_context(&config, reference_probe.trim(), workspace_root);
+        let reference_context = build_reference_context(&config, reference_probe.trim()).await;
 
         let recent_payloads = generation_repo
             .recent_prompts(database, "dungeon_story", 12)
@@ -769,7 +880,10 @@ impl AiGenerationService {
 
         let premise_directive = match premise {
             Some(value) => format!("Build the story to honor this premise: \"{value}\"."),
-            None => "Invent a small, self-contained story that needs nothing outside this one place.".to_string(),
+            None => {
+                "Invent a small, self-contained story that needs nothing outside this one place."
+                    .to_string()
+            }
         };
         let context_directive = if context.is_empty() {
             String::new()
@@ -791,7 +905,9 @@ impl AiGenerationService {
         };
         let topology_directive = match topology_shape(topology) {
             Some(shape) => {
-                format!("The space is shaped like {shape}; let that guide how the party moves deeper. ")
+                format!(
+                    "The space is shaped like {shape}; let that guide how the party moves deeper. "
+                )
             }
             None => String::new(),
         };
@@ -877,7 +993,10 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
                 .insert(database, "dungeon_story", None, &serialized)
                 .await?;
 
-            return Ok(SeedGeneration { seed: story, notice });
+            return Ok(SeedGeneration {
+                seed: story,
+                notice,
+            });
         }
 
         Err("failed to generate a valid dungeon story from ollama".to_string())
@@ -887,7 +1006,7 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
     /// cards. Extractive — the model maps the story it is given, applies the field
     /// leashes, and writes a one-line spine. The per-beat `content_type` is NOT
     /// requested; it is injected from the deterministic `plan` so the tag can never
-    /// disagree with the content. `function` is assigned by position in `into_beats`.
+    /// disagree with the content. `function` is assigned by position in `to_beats`.
     #[allow(clippy::too_many_arguments)]
     pub async fn structure_dungeon_story(
         &self,
@@ -896,11 +1015,10 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
         tone: &str,
         twist: &str,
         topology: &str,
-        workspace_root: &PathBuf,
         _database: &Database,
         _generation_repo: &dyn GenerationRepository,
     ) -> Result<SeedGeneration<DungeonSeed>, String> {
-        let (config, model) = load_generation_config(workspace_root)?;
+        let (config, model) = load_generation_config()?;
 
         let beat_schema = serde_json::json!({
             "type": "object",
@@ -932,7 +1050,9 @@ Return only JSON: name (a short evocative title), location (the one place, a sho
         };
         let topology_note = match topology_shape(topology) {
             Some(shape) => {
-                format!("Spatial layout: {shape}; let it inform how the beats connect (especially whether the Setback loops the party back toward the entrance). ")
+                format!(
+                    "Spatial layout: {shape}; let it inform how the beats connect (especially whether the Setback loops the party back toward the entrance). "
+                )
             }
             None => String::new(),
         };
@@ -1075,7 +1195,7 @@ pub struct FactionSeed {
     pub leadership: String,
     pub headquarters: String,
     pub sphere_of_influence: String,
-    pub resources_assets: String,
+    pub resources_assets: Vec<String>,
     pub allies: Vec<String>,
     pub rivals_enemies: Vec<String>,
     pub reputation: String,
@@ -1149,7 +1269,7 @@ pub struct DungeonSeed {
 
 impl DungeonSeed {
     /// Normalize narrative fields and the conditional loot line. `function` is
-    /// assigned later in `into_beats`, not here, so the skeleton stays ours.
+    /// assigned later in `to_beats`, not here, so the skeleton stays ours.
     fn normalize(&mut self) {
         self.name = self.name.trim().to_string();
         self.location = normalize_unknown_text(&self.location);
@@ -1170,7 +1290,7 @@ impl DungeonSeed {
 
     /// Convert to persistable beats, assigning the fixed function skeleton by
     /// position (beat 0 = Entrance … beat 4 = Resolution).
-    pub fn into_beats(&self) -> Vec<DungeonBeat> {
+    pub fn to_beats(&self) -> Vec<DungeonBeat> {
         self.beats
             .iter()
             .enumerate()
@@ -1255,11 +1375,19 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
         "combat" => "a hostile force or dangerous creature that must be fought or slipped past",
         "cache" => "a cache of treasure or reward waiting to be found",
         "forge" => "a forge, crucible, or workshop where something can be made or repaired",
-        "puzzle" => "a sealed way forward — a barred door or mechanism — that opens only once the party finds the right key or condition",
-        "offshoot" => "an optional branching path: a side chamber, a hidden room, or a tempting dead end",
-        "sidekick" => "a lone ally met here who joins the party and travels deeper with them through the rest of this place",
+        "puzzle" => {
+            "a sealed way forward — a barred door or mechanism — that opens only once the party finds the right key or condition"
+        }
+        "offshoot" => {
+            "an optional branching path: a side chamber, a hidden room, or a tempting dead end"
+        }
+        "sidekick" => {
+            "a lone ally met here who joins the party and travels deeper with them through the rest of this place"
+        }
         "oddity" => "a strange and significant object that is the very reason this place exists",
-        "ability_check" => "a feat of skill or nerve to get past — a climb, a leap, a steady hand, or a test of will",
+        "ability_check" => {
+            "a feat of skill or nerve to get past — a climb, a leap, a steady hand, or a test of will"
+        }
         _ => "something noteworthy",
     }
 }
@@ -1269,14 +1397,24 @@ fn anchor_story_phrase(content_type: &str) -> &'static str {
 /// which holds the rolled type fixed and only regenerates the prose.
 pub(crate) fn anchor_mechanic(content_type: &str) -> &'static str {
     match content_type {
-        "combat" => "a fight; convey the enemy's tactics, behavior, and use of terrain, and NEVER name specific creatures (the GM picks them)",
+        "combat" => {
+            "a fight; convey the enemy's tactics, behavior, and use of terrain, and NEVER name specific creatures (the GM picks them)"
+        }
         "cache" => "a stash of loot or rewards",
-        "forge" => "a place to craft or repair magic items; the idea must involve that crafting or repair",
-        "puzzle" => "a locked-door->key obstacle of one or more steps; never a riddle or logic puzzle",
+        "forge" => {
+            "a place to craft or repair magic items; the idea must involve that crafting or repair"
+        }
+        "puzzle" => {
+            "a locked-door->key obstacle of one or more steps; never a riddle or logic puzzle"
+        }
         "offshoot" => "an optional side passage, hidden room, or dead end off the main path",
-        "sidekick" => "a dungeon-only ally introduced here who joins the party and stays with them through the later beats, leaving only when the dungeon ends",
+        "sidekick" => {
+            "a dungeon-only ally introduced here who joins the party and stays with them through the later beats, leaving only when the dungeon ends"
+        }
         "oddity" => "the world-significant object that is the reason this dungeon exists",
-        "ability_check" => "an ability/skill check the party must pass — name the check (athletics, perception, persuasion, sleight of hand…) and what failure costs; not a riddle",
+        "ability_check" => {
+            "an ability/skill check the party must pass — name the check (athletics, perception, persuasion, sleight of hand…) and what failure costs; not a riddle"
+        }
         _ => "a noteworthy room",
     }
 }
@@ -1285,7 +1423,9 @@ fn overlay_phrase(overlay_type: &str) -> &'static str {
     match overlay_type {
         "foreshadowing" => "a hint of something still to come, here or out in the wider campaign",
         "history" => "a piece of lore about this place, its people, or its makers",
-        "map" => "a glimpse of the surrounding world — a route, a landmark, or a link to somewhere else",
+        "map" => {
+            "a glimpse of the surrounding world — a route, a landmark, or a link to somewhere else"
+        }
         _ => "a telling detail",
     }
 }
@@ -1297,7 +1437,9 @@ fn topology_shape(topology: &str) -> Option<&'static str> {
     match topology {
         "The Railroad" => Some("a straight sequence of rooms, each leading to the next"),
         "The Moose" => Some("a short dead-end branch near the entrance off a longer main passage"),
-        "The V for Vendetta" => Some("two passages branching in opposite directions from the entrance"),
+        "The V for Vendetta" => {
+            Some("two passages branching in opposite directions from the entrance")
+        }
         "The Arrow" => Some("a three-way junction near the entrance"),
         "The Fauchard Fork" => Some("an early fork into one short path and one longer path"),
         "The Evil Mule" => Some("a branch that soon forks again into two"),
@@ -1310,7 +1452,9 @@ fn topology_shape(topology: &str) -> Option<&'static str> {
 
 fn twist_directive(twist: &str) -> &'static str {
     match twist {
-        "false_victory" => "in the middle, hand the party an apparent win that then curdles — they think they've succeeded, then lose it",
+        "false_victory" => {
+            "in the middle, hand the party an apparent win that then curdles — they think they've succeeded, then lose it"
+        }
         "false_defeat" => "in the middle, stage an apparent loss the party then claws back from",
         _ => "play the arc straight — no fake-out in the middle",
     }
@@ -1371,14 +1515,14 @@ fn pass2_assignment_block(plan: &DungeonContentPlan) -> String {
             anchor_mechanic(anchor),
             loot_rule,
         ));
-        if let Some(overlay) = &plan.overlay {
-            if overlay.beat_index == i {
-                out.push_str(&format!(
-                    " Also layer in {}: {}.",
-                    overlay.overlay_type,
-                    overlay_phrase(&overlay.overlay_type)
-                ));
-            }
+        if let Some(overlay) = &plan.overlay
+            && overlay.beat_index == i
+        {
+            out.push_str(&format!(
+                " Also layer in {}: {}.",
+                overlay.overlay_type,
+                overlay_phrase(&overlay.overlay_type)
+            ));
         }
         out.push('\n');
     }
@@ -1390,108 +1534,183 @@ pub struct PromptReferenceContext {
     pub system_context: String,
 }
 
-
-pub(crate) fn parse_recent_npc_seeds(payloads: Vec<String>) -> Vec<NpcSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<NpcSeed>(&payload).ok()).collect()
-}
-
-fn parse_recent_location_seeds(payloads: Vec<String>) -> Vec<LocationSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<LocationSeed>(&payload).ok()).collect()
-}
-
-fn parse_recent_faction_seeds(payloads: Vec<String>) -> Vec<FactionSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<FactionSeed>(&payload).ok()).collect()
-}
-
-fn parse_recent_event_seeds(payloads: Vec<String>) -> Vec<EventSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<EventSeed>(&payload).ok()).collect()
+/// Parse the recent-seed payloads (raw JSON strings from the generation log) into
+/// typed seeds for dedup/context, dropping any that no longer deserialize. One
+/// generic replaces the former per-kind `parse_recent_*_seeds` fan-out.
+pub(crate) fn parse_recent_seeds<T: serde::de::DeserializeOwned>(payloads: Vec<String>) -> Vec<T> {
+    payloads
+        .into_iter()
+        .filter_map(|payload| serde_json::from_str::<T>(&payload).ok())
+        .collect()
 }
 
 fn recent_event_title_set(seeds: &[EventSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.title.trim().to_ascii_lowercase()).filter(|title| !title.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.title.trim().to_ascii_lowercase())
+        .filter(|title| !title.is_empty())
+        .collect()
 }
 
 fn describe_recent_event_seeds(seeds: &[EventSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| seed.title.clone()).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| seed.title.clone())
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn recent_faction_name_set(seeds: &[FactionSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn describe_recent_faction_seeds(seeds: &[FactionSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.reputation)).collect::<Vec<_>>().join("; ")
-}
-
-fn parse_recent_god_seeds(payloads: Vec<String>) -> Vec<GodSeed> {
-    payloads.into_iter().filter_map(|payload| serde_json::from_str::<GodSeed>(&payload).ok()).collect()
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.reputation))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn recent_god_name_set(seeds: &[GodSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn describe_recent_god_seeds(seeds: &[GodSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {}", seed.name, seed.rank, seed.alignment)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.rank, seed.alignment))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn describe_recent_location_seeds(seeds: &[LocationSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.danger_level)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| format!("{} | {} | {}", seed.name, seed.kind_type, seed.danger_level))
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 fn recent_name_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn occupation_tokens(value: &str) -> Vec<String> {
-    const STOP_WORDS: &[&str] = &["a", "an", "and", "as", "at", "by", "deceased", "ex", "for", "former", "from", "in", "of", "on", "retired", "the", "to", "under", "with"];
-    value.chars().map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' }).collect::<String>()
-        .split_whitespace().map(|token| token.trim().to_ascii_lowercase()).filter(|token| !token.is_empty() && !STOP_WORDS.contains(&token.as_str())).collect()
+    const STOP_WORDS: &[&str] = &[
+        "a", "an", "and", "as", "at", "by", "deceased", "ex", "for", "former", "from", "in", "of",
+        "on", "retired", "the", "to", "under", "with",
+    ];
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { ' ' })
+        .collect::<String>()
+        .split_whitespace()
+        .map(|token| token.trim().to_ascii_lowercase())
+        .filter(|token| !token.is_empty() && !STOP_WORDS.contains(&token.as_str()))
+        .collect()
 }
 
 pub(crate) fn occupation_anchor(value: &str) -> String {
-    occupation_tokens(value).into_iter().next().unwrap_or_else(|| "unknown".to_string())
+    occupation_tokens(value)
+        .into_iter()
+        .next()
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 pub(crate) fn recent_occupation_anchor_set(seeds: &[NpcSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| occupation_anchor(&seed.occupation)).filter(|anchor| !anchor.is_empty() && anchor != "unknown").collect()
+    seeds
+        .iter()
+        .map(|seed| occupation_anchor(&seed.occupation))
+        .filter(|anchor| !anchor.is_empty() && anchor != "unknown")
+        .collect()
 }
 
 fn recent_location_name_set(seeds: &[LocationSeed]) -> std::collections::HashSet<String> {
-    seeds.iter().map(|seed| seed.name.trim().to_ascii_lowercase()).filter(|name| !name.is_empty()).collect()
+    seeds
+        .iter()
+        .map(|seed| seed.name.trim().to_ascii_lowercase())
+        .filter(|name| !name.is_empty())
+        .collect()
 }
 
 fn describe_recent_npc_seeds(seeds: &[NpcSeed]) -> String {
-    if seeds.is_empty() { return "none".to_string(); }
-    seeds.iter().take(10).map(|seed| format!("{} | {} | {} | {}", seed.name, seed.race, seed.sex, seed.occupation)).collect::<Vec<_>>().join("; ")
+    if seeds.is_empty() {
+        return "none".to_string();
+    }
+    seeds
+        .iter()
+        .take(10)
+        .map(|seed| {
+            format!(
+                "{} | {} | {} | {}",
+                seed.name, seed.race, seed.sex, seed.occupation
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
 pub(crate) fn describe_recent_npc_occupation_anchors(seeds: &[NpcSeed]) -> String {
     let mut anchors: Vec<String> = recent_occupation_anchor_set(seeds).into_iter().collect();
-    if anchors.is_empty() { return "none".to_string(); }
+    if anchors.is_empty() {
+        return "none".to_string();
+    }
     anchors.sort();
     anchors.truncate(12);
     anchors.join(", ")
 }
 
-
 fn build_prompt_reference_context(
     prompt: &str,
     entries: &[VaultReferenceEntry],
     vault: &Vault,
-    workspace_root: &Path,
 ) -> PromptReferenceContext {
     let keys = extract_prompt_reference_keys(prompt, entries);
-    if keys.is_empty() { return PromptReferenceContext::default(); }
+    if keys.is_empty() {
+        return PromptReferenceContext::default();
+    }
 
-    let path_by_key: std::collections::HashMap<String, String> = entries.iter().filter_map(|entry| entry.markdown_path.as_ref().map(|path| (entry.key.to_lowercase(), path.clone()))).collect();
+    let path_by_key: std::collections::HashMap<String, String> = entries
+        .iter()
+        .filter_map(|entry| {
+            entry
+                .markdown_path
+                .as_ref()
+                .map(|path| (entry.key.to_lowercase(), path.clone()))
+        })
+        .collect();
     let mut blocks = Vec::new();
 
-    let canonical_metadata = match EntityStore::new(workspace_root) {
+    let canonical_metadata = match EntityStore::new() {
         Ok(store) => canonical_metadata_map(&store),
         Err(err) => {
             eprintln!("reference context warning: failed to load canonical entities: {err}");
@@ -1500,19 +1719,40 @@ fn build_prompt_reference_context(
     };
 
     for key in keys.into_iter() {
-        let Some(path) = path_by_key.get(&key.to_lowercase()) else { continue };
+        let Some(path) = path_by_key.get(&key.to_lowercase()) else {
+            continue;
+        };
         let normalized_path = normalize_relative_path_for_storage(path);
         let metadata = if let Some(canonical) = canonical_metadata.get(&normalized_path) {
             canonical.clone()
         } else {
-            let contents = match vault.read_relative(Path::new(path)) { Ok(value) => value, Err(err) => { eprintln!("reference context warning: failed reading {}: {}", path, err); continue; } };
-            match reference_payload_from_markdown(&contents) { Some(value) => value, None => continue }
+            let contents = match vault.read_relative(Path::new(path)) {
+                Ok(value) => value,
+                Err(err) => {
+                    eprintln!(
+                        "reference context warning: failed reading {}: {}",
+                        path, err
+                    );
+                    continue;
+                }
+            };
+            match reference_payload_from_markdown(&contents) {
+                Some(value) => value,
+                None => continue,
+            }
         };
         blocks.push(format!("@{key}\npath: {path}\n```toml\n{metadata}\n```"));
     }
 
-    if blocks.is_empty() { return PromptReferenceContext::default(); }
-    PromptReferenceContext { system_context: format!("Referenced vault metadata (treat as authoritative setting context):\n\n{}", blocks.join("\n\n")) }
+    if blocks.is_empty() {
+        return PromptReferenceContext::default();
+    }
+    PromptReferenceContext {
+        system_context: format!(
+            "Referenced vault metadata (treat as authoritative setting context):\n\n{}",
+            blocks.join("\n\n")
+        ),
+    }
 }
 
 fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
@@ -1521,7 +1761,10 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
     if let Ok(npcs) = store.list_npcs() {
         for npc in npcs {
             if let Ok(serialized) = toml::to_string_pretty(&npc) {
-                map.insert(normalize_relative_path_for_storage(&npc.vault_path), serialized);
+                map.insert(
+                    normalize_relative_path_for_storage(&npc.vault_path),
+                    serialized,
+                );
             }
         }
     }
@@ -1551,7 +1794,10 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
     if let Ok(items) = store.list_items() {
         for item in items {
             if let Ok(serialized) = toml::to_string_pretty(&item) {
-                map.insert(normalize_relative_path_for_storage(&item.vault_path), serialized);
+                map.insert(
+                    normalize_relative_path_for_storage(&item.vault_path),
+                    serialized,
+                );
             }
         }
     }
@@ -1573,10 +1819,18 @@ fn canonical_metadata_map(store: &EntityStore) -> HashMap<String, String> {
 fn extract_runebound_toml(contents: &str) -> Option<String> {
     let start = contents.find("```runebound")?;
     let mut body = &contents[start + "```runebound".len()..];
-    if let Some(rest) = body.strip_prefix("\r\n") { body = rest; } else if let Some(rest) = body.strip_prefix('\n') { body = rest; }
+    if let Some(rest) = body.strip_prefix("\r\n") {
+        body = rest;
+    } else if let Some(rest) = body.strip_prefix('\n') {
+        body = rest;
+    }
     let end = body.find("\n```").or_else(|| body.find("```"))?;
     let block = body[..end].trim();
-    if block.is_empty() { None } else { Some(block.to_string()) }
+    if block.is_empty() {
+        None
+    } else {
+        Some(block.to_string())
+    }
 }
 
 fn reference_payload_from_markdown(contents: &str) -> Option<String> {
@@ -1584,12 +1838,54 @@ fn reference_payload_from_markdown(contents: &str) -> Option<String> {
         return Some(block);
     }
     let trimmed = contents.trim();
-    if trimmed.is_empty() { None } else { Some(trimmed.to_string()) }
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{capacity_notice, describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown, NpcSeed, OUTPUT_RESERVE_TOKENS};
+    use super::{
+        NPC_GEN_SAMPLING, NpcSeed, OUTPUT_RESERVE_TOKENS, build_seed_payload, capacity_notice,
+        describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set,
+        reference_payload_from_markdown,
+    };
+
+    #[test]
+    fn seed_payload_wraps_messages_schema_and_sampling_with_num_ctx() {
+        // Generation payloads always carry num_ctx (unlike reroll's optional one).
+        let schema = serde_json::json!({ "type": "object" });
+        let payload = build_seed_payload(
+            "test-model",
+            &NPC_GEN_SAMPLING,
+            8192,
+            42,
+            &schema,
+            "SYS",
+            "USR",
+        );
+        assert_eq!(
+            payload,
+            serde_json::json!({
+                "model": "test-model",
+                "stream": false,
+                "format": schema,
+                "options": {
+                    "temperature": NPC_GEN_SAMPLING.temperature,
+                    "top_p": NPC_GEN_SAMPLING.top_p,
+                    "repeat_penalty": NPC_GEN_SAMPLING.repeat_penalty,
+                    "seed": 42,
+                    "num_ctx": 8192
+                },
+                "messages": [
+                    { "role": "system", "content": "SYS" },
+                    { "role": "user", "content": "USR" }
+                ]
+            })
+        );
+    }
 
     #[test]
     fn capacity_notice_none_when_comfortably_under_budget() {
@@ -1613,7 +1909,10 @@ mod tests {
             occupation_anchor("former cartographer, current wanderer"),
             "cartographer"
         );
-        assert_eq!(occupation_anchor("Cartographer & explorer (deceased)"), "cartographer");
+        assert_eq!(
+            occupation_anchor("Cartographer & explorer (deceased)"),
+            "cartographer"
+        );
     }
 
     #[test]
@@ -1688,7 +1987,8 @@ mod tests {
     }
     #[test]
     fn reference_payload_prefers_runebound_block() {
-        let markdown = "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Jimmy\"\n```\n\nExtra text";
+        let markdown =
+            "# Notes\n\n```runebound\ntype = \"npc\"\nname = \"Jimmy\"\n```\n\nExtra text";
         let payload = reference_payload_from_markdown(markdown).expect("payload");
         assert!(payload.contains("type = \"npc\""));
         assert!(!payload.contains("Extra text"));

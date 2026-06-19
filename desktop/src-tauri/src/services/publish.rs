@@ -7,6 +7,7 @@ use runebound_models::{
 
 use crate::utils::normalize_unknown_text;
 
+#[cfg(test)]
 pub fn render_npc_markdown(frontmatter: &NpcFrontmatter) -> String {
     render_npc_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -56,11 +57,17 @@ pub fn render_location_markdown_with_links(
     );
     write_section(&mut out, "History", &frontmatter.history_background, linker);
     write_list_section(&mut out, "Exports", &frontmatter.exports);
-    write_section(&mut out, "Current Tension", &frontmatter.current_tension, linker);
+    write_section(
+        &mut out,
+        "Current Tension",
+        &frontmatter.current_tension,
+        linker,
+    );
 
     out
 }
 
+#[cfg(test)]
 pub fn render_faction_markdown(frontmatter: &FactionFrontmatter) -> String {
     render_faction_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -71,10 +78,10 @@ pub fn render_faction_markdown_with_links(
 ) -> String {
     let mut out = String::new();
     write_attr_line(&mut out, "Kind", &frontmatter.kind_type);
-    if let Some(custom) = &frontmatter.kind_custom {
-        if !custom.trim().is_empty() {
-            write_attr_line(&mut out, "Kind (custom)", custom);
-        }
+    if let Some(custom) = &frontmatter.kind_custom
+        && !custom.trim().is_empty()
+    {
+        write_attr_line(&mut out, "Kind (custom)", custom);
     }
     writeln!(&mut out).ok();
     write_section(&mut out, "Headquarters", &frontmatter.headquarters, linker);
@@ -85,14 +92,28 @@ pub fn render_faction_markdown_with_links(
         linker,
     );
     write_section(&mut out, "Reputation", &frontmatter.reputation, linker);
-    write_section(&mut out, "Public Description", &frontmatter.public_description, linker);
+    write_section(
+        &mut out,
+        "Public Description",
+        &frontmatter.public_description,
+        linker,
+    );
     write_section(&mut out, "True Agenda", &frontmatter.true_agenda, linker);
     write_section(&mut out, "Methods", &frontmatter.methods, linker);
     write_section(&mut out, "Leadership", &frontmatter.leadership, linker);
-    write_text_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
+    write_list_section(
+        &mut out,
+        "Resources & Assets",
+        &frontmatter.resources_assets,
+    );
     write_linked_list_section(&mut out, "Allies", &frontmatter.allies);
     write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
-    write_section(&mut out, "Current Tension", &frontmatter.current_tension, linker);
+    write_section(
+        &mut out,
+        "Current Tension",
+        &frontmatter.current_tension,
+        linker,
+    );
     write_list_section(&mut out, "Short-Term Goals", &frontmatter.goals_short_term);
     write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
     write_section(&mut out, "Symbol", &frontmatter.symbol_description, linker);
@@ -100,6 +121,7 @@ pub fn render_faction_markdown_with_links(
     out
 }
 
+#[cfg(test)]
 pub fn render_item_markdown(frontmatter: &ItemFrontmatter) -> String {
     render_item_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -113,7 +135,10 @@ pub fn render_item_markdown_with_links(
     write_attr_line(&mut out, "Rarity", &frontmatter.rarity);
     write_attr_line(&mut out, "Attunement", &frontmatter.attunement);
     write_attr_line(&mut out, "Value", &frontmatter.value);
-    write_attr_line_linked(&mut out, "Location", &frontmatter.location);
+    // The item Location is free-text describing where the item is (the LLM writes
+    // a phrase like "buried beneath the old mill"), not a reference to a known
+    // location entity — so it's rendered as plain text, not a `[[wikilink]]`.
+    write_attr_line(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Appearance", &frontmatter.appearance, linker);
@@ -123,10 +148,6 @@ pub fn render_item_markdown_with_links(
     write_list_section(&mut out, "Materials", &frontmatter.materials);
 
     out
-}
-
-pub fn render_god_markdown(frontmatter: &GodFrontmatter) -> String {
-    render_god_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
 
 pub fn render_god_markdown_with_links(
@@ -152,6 +173,7 @@ pub fn render_god_markdown_with_links(
     out
 }
 
+#[cfg(test)]
 pub fn render_dungeon_markdown(frontmatter: &DungeonFrontmatter) -> String {
     render_dungeon_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
@@ -204,7 +226,12 @@ pub fn render_dungeon_markdown_with_links(
         }
         let player_goals = normalize_unknown_text(&beat.player_goals);
         if player_goals != "Unknown" {
-            writeln!(&mut out, "**Player Goals:** {}", linker.link_prose(&player_goals)).ok();
+            writeln!(
+                &mut out,
+                "**Player Goals:** {}",
+                linker.link_prose(&player_goals)
+            )
+            .ok();
         }
         let lever = normalize_unknown_text(&beat.lever);
         if lever != "Unknown" {
@@ -240,10 +267,6 @@ pub fn dungeon_prose(frontmatter: &DungeonFrontmatter) -> String {
         }
     }
     join_prose(&parts)
-}
-
-pub fn render_event_markdown(frontmatter: &EventFrontmatter) -> String {
-    render_event_markdown_with_links(frontmatter, &EntityLinker::empty())
 }
 
 /// An event publishes as its narrative body run through the prose linker — no
@@ -329,7 +352,8 @@ fn join_prose(fields: &[&str]) -> String {
 /// Characters with special meaning inside an Obsidian `[[wikilink]]` target
 /// (`|` alias, `#` heading, `^` block, and the brackets themselves). If a value
 /// contains any of them we leave it unlinked rather than emit a broken link.
-const WIKILINK_UNSAFE: &[char] = &['[', ']', '|', '#', '^'];
+/// Shared with `mention_extraction` so both link layers agree on what's unsafe.
+pub(crate) const WIKILINK_UNSAFE_CHARS: &[char] = &['[', ']', '|', '#', '^'];
 
 /// Wrap a single entity name in an Obsidian `[[wikilink]]`. This is what lets a
 /// relational reference resolve to — or stub out — another entity's page, even
@@ -347,7 +371,7 @@ fn wikilink(value: &str) -> String {
     if trimmed.starts_with("[[") && trimmed.ends_with("]]") {
         return trimmed.to_string();
     }
-    if trimmed.contains(WIKILINK_UNSAFE) {
+    if trimmed.contains(WIKILINK_UNSAFE_CHARS) {
         return trimmed.to_string();
     }
     format!("[[{trimmed}]]")
@@ -361,9 +385,14 @@ fn wikilink(value: &str) -> String {
 /// case-insensitive, whole-word, and longest-name-first, and it never links
 /// inside an existing `[[...]]` span.
 pub struct EntityLinker {
-    /// Canonical display names, de-duplicated and sorted longest-first so that
-    /// "Crimson Lantern Syndicate" is matched before "Crimson Lantern".
-    names: Vec<String>,
+    /// Canonical display names paired with their lowercased form, de-duplicated and
+    /// sorted longest-first so that "Crimson Lantern Syndicate" is matched before
+    /// "Crimson Lantern". The lowercased form is the needle [`link_prose`] matches
+    /// against; computing it once here (instead of re-allocating it per text
+    /// position × name in the inner loop) keeps linking linear in the prose length.
+    ///
+    /// [`link_prose`]: EntityLinker::link_prose
+    names: Vec<(String, String)>,
 }
 
 impl EntityLinker {
@@ -373,18 +402,30 @@ impl EntityLinker {
     {
         let self_lower = self_name.trim().to_ascii_lowercase();
         let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
-        let mut names: Vec<String> = candidate_names
+        let mut names: Vec<(String, String)> = candidate_names
             .into_iter()
-            .map(|name| name.trim().to_string())
-            .filter(|name| !name.is_empty())
-            // Never link a page to itself.
-            .filter(|name| name.to_ascii_lowercase() != self_lower)
-            // A name with link-unsafe characters can't form a clean target.
-            .filter(|name| !name.contains(WIKILINK_UNSAFE))
-            // De-duplicate case-insensitively, keeping the first casing seen.
-            .filter(|name| seen.insert(name.to_ascii_lowercase()))
+            .filter_map(|name| {
+                let name = name.trim().to_string();
+                if name.is_empty() {
+                    return None;
+                }
+                let lower = name.to_ascii_lowercase();
+                // Never link a page to itself.
+                if lower == self_lower {
+                    return None;
+                }
+                // A name with link-unsafe characters can't form a clean target.
+                if name.contains(WIKILINK_UNSAFE_CHARS) {
+                    return None;
+                }
+                // De-duplicate case-insensitively, keeping the first casing seen.
+                if !seen.insert(lower.clone()) {
+                    return None;
+                }
+                Some((name, lower))
+            })
             .collect();
-        names.sort_by(|a, b| b.len().cmp(&a.len()));
+        names.sort_by_key(|(name, _)| std::cmp::Reverse(name.len()));
         Self { names }
     }
 
@@ -411,23 +452,22 @@ impl EntityLinker {
 
         while i < text.len() {
             // Copy through an existing wikilink span verbatim.
-            if text[i..].starts_with("[[") {
-                if let Some(rel_end) = text[i..].find("]]") {
-                    let end = i + rel_end + 2;
-                    result.push_str(&text[i..end]);
-                    i = end;
-                    continue;
-                }
+            if text[i..].starts_with("[[")
+                && let Some(rel_end) = text[i..].find("]]")
+            {
+                let end = i + rel_end + 2;
+                result.push_str(&text[i..end]);
+                i = end;
+                continue;
             }
 
             if boundary_before(text, i) {
                 let mut matched: Option<(&str, usize)> = None;
-                for name in &self.names {
-                    let needle = name.to_ascii_lowercase();
-                    if lowered[i..].starts_with(&needle) {
+                for (name, needle) in &self.names {
+                    if lowered[i..].starts_with(needle.as_str()) {
                         let end = i + needle.len();
                         if boundary_after(text, end) {
-                            matched = Some((name, end));
+                            matched = Some((name.as_str(), end));
                             break;
                         }
                     }
@@ -454,15 +494,36 @@ impl EntityLinker {
 
 /// A left word boundary exists at byte `i` when the preceding char is absent or
 /// not alphanumeric (so we match whole words, not substrings inside a word).
-fn boundary_before(text: &str, i: usize) -> bool {
-    text[..i].chars().next_back().is_none_or(|c| !c.is_alphanumeric())
+pub(crate) fn boundary_before(text: &str, i: usize) -> bool {
+    text[..i]
+        .chars()
+        .next_back()
+        .is_none_or(|c| !c.is_alphanumeric())
 }
 
 /// A right word boundary exists at byte `end` when the following char is absent
 /// or not alphanumeric. This keeps possessives working: matching "Waterdeep" in
 /// "Waterdeep's" ends before the apostrophe, yielding `[[Waterdeep]]'s`.
-fn boundary_after(text: &str, end: usize) -> bool {
-    text[end..].chars().next().is_none_or(|c| !c.is_alphanumeric())
+pub(crate) fn boundary_after(text: &str, end: usize) -> bool {
+    text[end..]
+        .chars()
+        .next()
+        .is_none_or(|c| !c.is_alphanumeric())
+}
+
+/// Whole-word containment: true iff `needle` occurs in `haystack` bounded by a
+/// word boundary on both sides. Both inputs must already be lowercased
+/// (`to_ascii_lowercase` is byte-preserving, so byte offsets line up — the same
+/// invariant [`EntityLinker::link_prose`] relies on). This is the grounding check
+/// the mention extractor shares with the prose linker, so "Vex" is not treated as
+/// present just because the text contains "Vexley".
+pub(crate) fn contains_word_boundary(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return false;
+    }
+    haystack.match_indices(needle).any(|(idx, _)| {
+        boundary_before(haystack, idx) && boundary_after(haystack, idx + needle.len())
+    })
 }
 
 fn write_attr_line(out: &mut String, label: &str, value: &str) {
@@ -526,50 +587,9 @@ fn write_linked_list_section(out: &mut String, title: &str, values: &[String]) {
     writeln!(out).ok();
 }
 
-fn write_text_list_section(out: &mut String, title: &str, value: &str) {
-    let normalized = normalize_unknown_text(value);
-    if normalized == "Unknown" {
-        return;
-    }
-
-    let mut items = parse_text_list_items(&normalized);
-
-    if items.is_empty() {
-        items.push(normalized);
-    }
-
-    writeln!(out, "## {title}").ok();
-    for item in items {
-        writeln!(out, "- {}", item).ok();
-    }
-    writeln!(out).ok();
-}
-
-fn parse_text_list_items(value: &str) -> Vec<String> {
-    if let Ok(parsed) = serde_json::from_str::<Vec<String>>(value) {
-        let cleaned: Vec<String> = parsed
-            .into_iter()
-            .map(|item| normalize_unknown_text(&item))
-            .filter(|item| item != "Unknown")
-            .collect();
-        if !cleaned.is_empty() {
-            return cleaned;
-        }
-    }
-
-    value
-        .split(|ch| matches!(ch, '\n' | ';' | ','))
-        .map(|chunk| chunk.trim())
-        .map(|chunk| chunk.trim_start_matches(|c| matches!(c, '-' | '*' | '•' | '[' | ']')))
-        .map(|chunk| chunk.trim_matches(|c| c == '[' || c == ']'))
-        .map(|chunk| normalize_unknown_text(chunk))
-        .filter(|chunk| chunk != "Unknown")
-        .collect()
-}
-
 fn kind_display(frontmatter: &LocationFrontmatter) -> String {
     let kind = normalize_unknown_text(&frontmatter.kind_type);
-    if kind.to_ascii_lowercase() != "other" {
+    if !kind.eq_ignore_ascii_case("other") {
         return kind;
     }
     match frontmatter
@@ -584,7 +604,7 @@ fn kind_display(frontmatter: &LocationFrontmatter) -> String {
 
 fn rank_display(frontmatter: &GodFrontmatter) -> String {
     let rank = normalize_unknown_text(&frontmatter.rank);
-    if rank.to_ascii_lowercase() != "other" {
+    if !rank.eq_ignore_ascii_case("other") {
         return rank;
     }
     match frontmatter
@@ -647,7 +667,7 @@ mod tests {
             leadership: "Triumvirate".to_string(),
             headquarters: "Smolderkeep".to_string(),
             sphere_of_influence: "Borderlands".to_string(),
-            resources_assets: "Hidden vaults;Arcane scouts".to_string(),
+            resources_assets: vec!["Hidden vaults".to_string(), "Arcane scouts".to_string()],
             allies: vec![],
             rivals_enemies: vec![],
             reputation: "Feared".to_string(),
@@ -662,40 +682,6 @@ mod tests {
 
         let markdown = render_faction_markdown(&frontmatter);
         assert!(markdown.contains("## Resources & Assets"));
-        assert!(markdown.contains("- Hidden vaults"));
-        assert!(markdown.contains("- Arcane scouts"));
-    }
-
-    #[test]
-    fn faction_resources_handle_json_array_string() {
-        let frontmatter = FactionFrontmatter {
-            doc_type: "faction".to_string(),
-            id: "fac_1".to_string(),
-            slug: "ashen-circle".to_string(),
-            name: "Ashen Circle".to_string(),
-            vault_path: "factions/Ashen Circle.md".to_string(),
-            kind_type: "guild".to_string(),
-            kind_custom: None,
-            public_description: "A secretive guild.".to_string(),
-            true_agenda: "Protect forbidden lore.".to_string(),
-            methods: "Shadow operations.".to_string(),
-            leadership: "Triumvirate".to_string(),
-            headquarters: "Smolderkeep".to_string(),
-            sphere_of_influence: "Borderlands".to_string(),
-            resources_assets: "[\"Hidden vaults\", \"Arcane scouts\"]".to_string(),
-            allies: vec![],
-            rivals_enemies: vec![],
-            reputation: "Feared".to_string(),
-            current_tension: "Hunters closing in.".to_string(),
-            goals_short_term: vec![],
-            goals_long_term: vec![],
-            symbol_description: "A burned coin.".to_string(),
-            created_at: "2026-06-15T00:00:00Z".to_string(),
-            updated_at: "2026-06-15T00:00:00Z".to_string(),
-            published_at: None,
-        };
-
-        let markdown = render_faction_markdown(&frontmatter);
         assert!(markdown.contains("- Hidden vaults"));
         assert!(markdown.contains("- Arcane scouts"));
     }
@@ -730,7 +716,10 @@ mod tests {
     fn wikilink_skips_values_with_link_unsafe_characters() {
         // A `|`, `#`, `^`, or stray bracket would produce a broken link target,
         // so the value is left as-is rather than corrupted.
-        assert_eq!(wikilink("Waterdeep | Sword Coast"), "Waterdeep | Sword Coast");
+        assert_eq!(
+            wikilink("Waterdeep | Sword Coast"),
+            "Waterdeep | Sword Coast"
+        );
         assert_eq!(wikilink("Vault #3"), "Vault #3");
         assert_eq!(wikilink("[redacted]"), "[redacted]");
     }
@@ -793,7 +782,9 @@ mod tests {
     }
 
     #[test]
-    fn item_location_is_rendered_as_a_wikilink() {
+    fn item_location_is_rendered_as_plain_text() {
+        // The item Location is a free-text description of where the item rests, not
+        // a reference to a known location entity, so it must not be wikilinked.
         let frontmatter = ItemFrontmatter {
             doc_type: "item".to_string(),
             id: "item_1".to_string(),
@@ -809,19 +800,19 @@ mod tests {
             drawbacks: "Hums in the rain.".to_string(),
             history: "Forged in the old wars.".to_string(),
             value: "1000gp".to_string(),
-            location: "Smolderkeep".to_string(),
+            location: "Buried in the vaults beneath Smolderkeep.".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
             published_at: None,
         };
         let markdown = render_item_markdown(&frontmatter);
         assert!(
-            markdown.contains("**Location:** [[Smolderkeep]]"),
-            "expected linked item location, got:\n{markdown}"
+            markdown.contains("**Location:** Buried in the vaults beneath Smolderkeep."),
+            "expected plain-text item location, got:\n{markdown}"
         );
-        // Materials are substances, not entities — not linked.
+        // Neither the location description nor the materials are entity references.
         assert!(markdown.contains("- stormglass"));
-        assert!(!markdown.contains("[[stormglass]]"));
+        assert!(!markdown.contains("[["));
     }
 
     #[test]
@@ -840,7 +831,7 @@ mod tests {
             leadership: "Triumvirate".to_string(),
             headquarters: "Smolderkeep".to_string(),
             sphere_of_influence: "Borderlands".to_string(),
-            resources_assets: "Hidden vaults".to_string(),
+            resources_assets: vec!["Hidden vaults".to_string()],
             allies: vec!["Crimson Lantern Syndicate".to_string()],
             rivals_enemies: vec!["Harbor Watch".to_string()],
             reputation: "Feared".to_string(),
@@ -954,10 +945,7 @@ mod tests {
     fn prose_link_respects_word_boundaries() {
         // "Ash" must not match inside "ashes"; only the standalone word links.
         let linker = make_linker(&["Ash"], "Branwen");
-        assert_eq!(
-            linker.link_prose("ashes and Ash"),
-            "ashes and [[Ash]]"
-        );
+        assert_eq!(linker.link_prose("ashes and Ash"), "ashes and [[Ash]]");
     }
 
     #[test]
@@ -998,7 +986,10 @@ mod tests {
     #[test]
     fn empty_linker_leaves_prose_untouched() {
         let linker = EntityLinker::empty();
-        assert_eq!(linker.link_prose("Nothing to link here."), "Nothing to link here.");
+        assert_eq!(
+            linker.link_prose("Nothing to link here."),
+            "Nothing to link here."
+        );
     }
 
     #[test]

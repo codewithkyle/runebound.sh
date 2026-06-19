@@ -54,7 +54,12 @@ pub fn normalize_command_input(input: &str) -> String {
 }
 
 pub fn normalize_alias_tokens(tokens: &[String], manifest: &CommandManifest) -> Vec<String> {
-    let aliased = normalize_alias_tokens_only(tokens, manifest);
+    // Expand a leading inline roll delta (`+1d` → `+ 1d`) here so every token
+    // consumer — both the parse view (`parse_command_input`) and core dispatch
+    // (`execute_line_internal`) — sees the same split (P7.6). Idempotent: a token
+    // already split to a bare `+`/`-` isn't re-expanded.
+    let expanded = expand_inline_delta_root_tokens(tokens.to_vec());
+    let aliased = normalize_alias_tokens_only(&expanded, manifest);
     normalize_help_tokens(&aliased)
 }
 
@@ -154,6 +159,10 @@ pub fn parse_command_input_with_manifest(input: &str, manifest: &CommandManifest
         }
     };
 
+    // Expand here too so the `ParseResult.raw_tokens` field below carries the split
+    // form (`+`, `1d`); `normalize_alias_tokens` re-applies it idempotently for the
+    // canonical tokens, and (P7.6) for core dispatch which calls it without this
+    // pre-pass.
     let raw_tokens = expand_inline_delta_root_tokens(raw_tokens);
 
     let normalized_tokens = normalize_alias_tokens(&raw_tokens, manifest);
@@ -337,7 +346,22 @@ fn is_quote_start_boundary(prev: Option<char>) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_command_input, parse_command_input, ParseStage};
+    use super::{
+        ParseStage, command_manifest, normalize_alias_tokens, normalize_command_input,
+        parse_command_input,
+    };
+
+    #[test]
+    fn normalize_alias_tokens_expands_inline_delta_for_core_dispatch() {
+        // Core dispatch (`execute_line_internal`) calls normalize_alias_tokens
+        // without the parse-view's pre-pass, so the inline-delta split must live
+        // inside it (P7.6): `+1d` → `+`, `1d`, matching the parse view.
+        let manifest = command_manifest();
+        assert_eq!(
+            normalize_alias_tokens(&["+1d".to_string()], &manifest),
+            vec!["+".to_string(), "1d".to_string()]
+        );
+    }
 
     #[test]
     fn parses_quoted_arguments() {

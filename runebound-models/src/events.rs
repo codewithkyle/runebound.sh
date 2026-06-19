@@ -1,11 +1,12 @@
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 
 use super::drafts::{
     DungeonDraft, EventDraft, FactionDraft, GodDraft, ItemDraft, LocationDraft, NpcDraft,
 };
 use super::output::OutputDoc;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum CommandClientEvent {
     LoadNpcDraftWithCard {
@@ -43,7 +44,7 @@ pub enum CommandClientEvent {
     ExitRequested,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResponse {
     pub ok: bool,
     pub output: String,
@@ -59,7 +60,7 @@ pub struct CommandResponse {
 
 /// Structured view of the active wizard step, returned alongside a wizard
 /// prompt. Drives the frontend spinner label without prompt-text sniffing.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct WizardView {
     /// Active wizard id, e.g. "dungeon".
     pub id: String,
@@ -69,14 +70,14 @@ pub struct WizardView {
     pub awaiting_llm_label: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct OutputSegment {
     pub kind: OutputSegmentKind,
     pub text: String,
     pub command_ref: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum OutputSegmentKind {
     Text,

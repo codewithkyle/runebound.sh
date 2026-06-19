@@ -9,7 +9,6 @@
 //! See docs/architecture.md §4 (Wizard Framework) and §8D for the design and the
 //! entity↔wizard parallel.
 
-use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -73,10 +72,7 @@ impl WizardHost for AppState {
     }
 }
 
-/// Provide the onboarding steps' host capabilities on the desktop: the workspace
-/// root for config I/O (the picker comes from `perform_native` above).
-impl OnboardingHost for AppState {
-    fn workspace_root(&self) -> &Path {
-        &self.workspace_root
-    }
-}
+/// Marks `AppState` as a host that can run the onboarding wizard on the desktop.
+/// The only host capability beyond [`WizardHost`] is the native folder picker,
+/// provided by `perform_native` above.
+impl OnboardingHost for AppState {}

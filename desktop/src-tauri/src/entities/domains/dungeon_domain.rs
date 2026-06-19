@@ -1,16 +1,15 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, DungeonDraftSession};
-use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    canonical_field_name, format_valid_field_list, DUNGEON_SCHEMA, FieldAccess,
-};
+use crate::app_state::{AppState, DraftEnvelope, DungeonDraftSession};
 use crate::entities::EntityKind;
-use crate::services::entity_persistence::{EntityPersistenceService, SaveDungeonDraftInput};
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::{
+    DUNGEON_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
+};
 use crate::services::entity_reroll::{
     DungeonRerollContext, EntityRerollService, RerollDungeonBeatInput, RerollDungeonFieldInput,
 };
@@ -20,7 +19,7 @@ use crate::utils::{
 };
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
-use runebound_models::utils::{normalize_dungeon_content_type, DUNGEON_FUNCTIONS};
+use runebound_models::utils::{DUNGEON_FUNCTIONS, normalize_dungeon_content_type};
 
 pub struct DungeonDomain;
 
@@ -45,8 +44,14 @@ pub fn beat_index_from_token(token: &str) -> Option<usize> {
         .position(|func| func.eq_ignore_ascii_case(trimmed))
 }
 
-const BEAT_FIELDS: [&str; 6] =
-    ["content_type", "idea", "player_goals", "lever", "loot", "design_note"];
+const BEAT_FIELDS: [&str; 6] = [
+    "content_type",
+    "idea",
+    "player_goals",
+    "lever",
+    "loot",
+    "design_note",
+];
 
 fn canonical_beat_field(raw: &str) -> Option<&'static str> {
     let normalized = raw.trim().to_ascii_lowercase().replace('-', "_");
@@ -88,13 +93,45 @@ impl EntityDomain for DungeonDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .dungeon_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = DungeonDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            location: row.location,
+            story: row.story,
+            premise: row.premise,
+            topology: row.topology,
+            tone: row.tone,
+            twist: row.twist,
+            beats: serde_json::from_str(&row.beats_json).unwrap_or_default(),
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::Dungeon(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
             editor.get_dungeon().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Dungeon));
+            return entity_no_active_draft(EntityKind::Dungeon);
         };
 
         entity_response_with_event(
@@ -116,9 +153,7 @@ impl EntityDomain for DungeonDomain {
             })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Dungeon);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -157,26 +192,25 @@ impl EntityDomain for DungeonDomain {
                     format!("beat {} is not present on this dungeon.", beat_index + 1)
                 })?;
                 match beat_field {
-                    "content_type" => beat.content_type = normalize_dungeon_content_type(beat_value)?,
+                    "content_type" => {
+                        beat.content_type = normalize_dungeon_content_type(beat_value)?
+                    }
                     "idea" => beat.idea = beat_value.to_string(),
                     "lever" => beat.lever = beat_value.to_string(),
                     "loot" => {
                         // "none"/empty clears the conditional loot line.
-                        beat.loot = if beat_value.is_empty()
-                            || beat_value.eq_ignore_ascii_case("none")
-                        {
-                            None
-                        } else {
-                            Some(beat_value.to_string())
-                        };
+                        beat.loot =
+                            if beat_value.is_empty() || beat_value.eq_ignore_ascii_case("none") {
+                                None
+                            } else {
+                                Some(beat_value.to_string())
+                            };
                     }
                     "player_goals" => beat.player_goals = beat_value.to_string(),
                     "design_note" => beat.design_note = beat_value.to_string(),
                     _ => {}
                 }
-                let snapshot = draft.clone();
-                editor.activate(EntityKind::Dungeon);
-                snapshot
+                draft.clone()
             };
 
             return entity_response_with_event(
@@ -217,9 +251,7 @@ impl EntityDomain for DungeonDomain {
                 _ => {}
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Dungeon);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -235,31 +267,29 @@ impl EntityDomain for DungeonDomain {
         state: &AppState,
     ) -> EntityDomainResult {
         if field.trim().is_empty() {
-            return entity_message_response(
-                "usage: dungeon reroll <beat>|premise|name [prompt]",
-            );
+            return entity_message_response("usage: dungeon reroll <beat>|premise|name [prompt]");
         }
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
             editor.get_dungeon().cloned()
         }
-        .ok_or_else(|| {
-            "no active dungeon draft. run create dungeon or load <name>.".to_string()
-        })?;
+        .ok_or_else(|| "no active dungeon draft. run create dungeon or load <name>.".to_string())?;
 
         let prompt = normalize_optional_prompt(prompt).map(|value| value.to_string());
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let database = state.database();
         let generation_repo = state.generation_repo();
 
         // Per-beat reroll: `<beat>` resolves to one of the five fixed beats.
         if let Some(beat_index) = beat_index_from_token(field) {
             if draft.beats.len() != DUNGEON_FUNCTIONS.len() {
-                return Err("dungeon does not have its five beats; reroll the whole dungeon first.".to_string());
+                return Err(
+                    "dungeon does not have its five beats; reroll the whole dungeon first."
+                        .to_string(),
+                );
             }
             let rerolled = reroll_service
                 .reroll_dungeon_beat(
@@ -268,7 +298,6 @@ impl EntityDomain for DungeonDomain {
                         prompt,
                         dungeon: DungeonRerollContext::from_draft(&draft),
                     },
-                    &workspace_root,
                     database.as_ref(),
                     generation_repo.as_ref(),
                 )
@@ -303,7 +332,6 @@ impl EntityDomain for DungeonDomain {
                     prompt,
                     dungeon: DungeonRerollContext::from_draft(&draft),
                 },
-                &workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )
@@ -332,64 +360,16 @@ impl EntityDomain for DungeonDomain {
         )
     }
 
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_dungeon().cloned()
-        }
-        .ok_or_else(|| {
-            "no active dungeon draft. run create dungeon or load <name>.".to_string()
-        })?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_dungeon_draft(
-                SaveDungeonDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    location: draft.location.clone(),
-                    story: draft.story.clone(),
-                    premise: draft.premise.clone(),
-                    topology: draft.topology.clone(),
-                    tone: draft.tone.clone(),
-                    twist: draft.twist.clone(),
-                    beats: draft.beats.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Dungeon saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
-    }
-
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
         let removed = {
             let mut editor = state.editor_session.lock().await;
             editor.take_dungeon()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Dungeon));
+            return entity_no_active_draft(EntityKind::Dungeon);
         }
 
-        entity_response_with_event(
-            "dungeon draft discarded.",
-            CommandClientEvent::ClearDrafts,
-        )
+        entity_response_with_event("dungeon draft discarded.", CommandClientEvent::ClearDrafts)
     }
 }
 
@@ -422,7 +402,7 @@ pub fn dungeon_summary_text(draft: &DungeonDraftSession) -> String {
 }
 
 pub fn dungeon_event_from_draft(draft: &DungeonDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::dungeon_entity_card;
+    use runebound_models::drafts::{CardFooter, dungeon_entity_card};
 
     let mut normalized_draft = draft.clone();
     normalized_draft.location = normalize_unknown_text(&draft.location);
@@ -439,7 +419,7 @@ pub fn dungeon_event_from_draft(draft: &DungeonDraftSession) -> CommandClientEve
             .map(|loot| loot.trim().to_string())
             .filter(|loot| !loot.is_empty());
     }
-    let entity_card_doc = dungeon_entity_card(&normalized_draft);
+    let entity_card_doc = dungeon_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadDungeonDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

@@ -6,12 +6,12 @@
 //! step values run on every host: the desktop `AppState` (with a real folder
 //! picker via `WizardHost::perform_native`) and a core/CLI [`CoreOnboardingCtx`]
 //! (which degrades the picker gracefully). The four entry points are four `Wizard`
-//! registrations that share those step values; each wizard's `seed` sets its flow
-//! + pre-fills from effective config, and its `finalize` writes the right config
+//! registrations that share those step values; each wizard's `seed` sets its flow,
+//! pre-fills from effective config, and its `finalize` writes the right config
 //! section — see docs/command-contexts.md §4-§5 and docs/config.md for the
 //! dispatch route, seed invariants, and config keys.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -39,13 +39,11 @@ use anyhow::{Result, anyhow, bail};
 // Host capability trait
 // ---------------------------------------------------------------------------
 
-/// What an onboarding step needs from its host beyond the base [`WizardHost`]:
-/// the workspace root used for config I/O. The native folder picker is provided
-/// through `WizardHost::perform_native` (overridden on the desktop, degraded by
-/// the default elsewhere), so it is not part of this trait.
-pub trait OnboardingHost: WizardHost + 'static {
-    fn workspace_root(&self) -> &Path;
-}
+/// Marker for a host that can run the onboarding wizard. It adds nothing beyond
+/// [`WizardHost`] (config I/O is global, no longer host-scoped); the native folder
+/// picker is provided through `WizardHost::perform_native` (overridden on the
+/// desktop, degraded by the default elsewhere).
+pub trait OnboardingHost: WizardHost + 'static {}
 
 // ---------------------------------------------------------------------------
 // Accumulator
@@ -72,8 +70,7 @@ fn data(d: &WizardData) -> &OnboardingData {
 }
 
 fn data_mut(d: &mut WizardData) -> &mut OnboardingData {
-    d.downcast_mut::<OnboardingData>()
-        .expect("onboarding data")
+    d.downcast_mut::<OnboardingData>().expect("onboarding data")
 }
 
 // ---------------------------------------------------------------------------
@@ -133,7 +130,7 @@ fn vault_menu_choices(d: &OnboardingData) -> Vec<WizardChoice> {
 }
 
 fn vault_menu_doc(d: &OnboardingData) -> OutputDoc {
-    let mut document = doc().with_block(heading(2, "Vault setup"));
+    let mut document = doc().with_block(heading(2, "Step 1: Vault setup"));
     if !d.vault_path.trim().is_empty() {
         document = document.with_block(paragraph_text(format!("current vault: {}", d.vault_path)));
     }
@@ -166,7 +163,9 @@ impl<H: OnboardingHost> WizardStep<H> for VaultMenuStep {
                 resubmit_to: "vault_path",
             })),
             "2" => Ok(WizardTransition::Next),
-            "3" | "continue" if !data(d).vault_path.trim().is_empty() => Ok(vault_done(data(d).flow)),
+            "3" | "continue" if !data(d).vault_path.trim().is_empty() => {
+                Ok(vault_done(data(d).flow))
+            }
             other => {
                 data_mut(d).notice = Some(format!("invalid choice: {other}"));
                 Ok(WizardTransition::Stay)
@@ -189,10 +188,12 @@ impl<H: OnboardingHost> WizardStep<H> for VaultPathStep {
     fn prompt(&self, d: &WizardData) -> OutputDoc {
         with_notice(
             data(d),
-            doc().with_block(heading(3, "Vault path")).with_block(list(vec![
-                vec![text_node("Enter the path to your vault and press Enter.")],
-                vec![text_node("Example: /path/to/your/Obsidian/Vault")],
-            ])),
+            doc()
+                .with_block(heading(3, "Vault path"))
+                .with_block(list(vec![
+                    vec![text_node("Enter the path to your vault and press Enter.")],
+                    vec![text_node("Example: /path/to/your/Obsidian/Vault")],
+                ])),
         )
     }
     async fn accept(
@@ -250,7 +251,10 @@ impl<H: OnboardingHost> WizardStep<H> for OllamaMenuStep {
             d,
             doc()
                 .with_block(heading(2, "Step 2: Ollama server"))
-                .with_block(paragraph_text(format!("current server: {}", d.ollama_base_url)))
+                .with_block(paragraph_text(format!(
+                    "current server: {}",
+                    d.ollama_base_url
+                )))
                 .with_block(choice_lines(&ollama_menu_choices(d))),
         )
     }
@@ -295,10 +299,12 @@ impl<H: OnboardingHost> WizardStep<H> for OllamaUrlStep {
     fn prompt(&self, d: &WizardData) -> OutputDoc {
         with_notice(
             data(d),
-            doc().with_block(heading(3, "Ollama server")).with_block(list(vec![
-                vec![text_node("Enter your Ollama URL and press Enter.")],
-                vec![text_node("Example: http://127.0.0.1:11434")],
-            ])),
+            doc()
+                .with_block(heading(3, "Ollama server"))
+                .with_block(list(vec![
+                    vec![text_node("Enter your Ollama URL and press Enter.")],
+                    vec![text_node("Example: http://127.0.0.1:11434")],
+                ])),
         )
     }
     async fn accept(
@@ -344,7 +350,9 @@ fn model_choices(d: &OnboardingData) -> Vec<WizardChoice> {
         .ollama_models
         .iter()
         .enumerate()
-        .map(|(index, model)| WizardChoice::new(format!("{}: {}", index + 1, model), (index + 1).to_string()))
+        .map(|(index, model)| {
+            WizardChoice::new(format!("{}: {}", index + 1, model), (index + 1).to_string())
+        })
         .collect();
     if matches!(d.flow, OnboardingFlow::Llm | OnboardingFlow::Model)
         && !d.selected_model.trim().is_empty()
@@ -376,7 +384,10 @@ impl<H: OnboardingHost> WizardStep<H> for ModelStep {
         if matches!(d.flow, OnboardingFlow::Llm | OnboardingFlow::Model)
             && !d.selected_model.trim().is_empty()
         {
-            blocks.push(paragraph_text(format!("Or type continue to keep {}.", d.selected_model)));
+            blocks.push(paragraph_text(format!(
+                "Or type continue to keep {}.",
+                d.selected_model
+            )));
         }
         if d.ollama_models.is_empty() {
             blocks.push(paragraph_text("(no models returned)".to_string()));
@@ -436,7 +447,10 @@ impl<H: OnboardingHost> WizardStep<H> for SaveStep {
         with_notice(
             d,
             doc()
-                .with_block(paragraph_text(format!("model set to: {}", d.selected_model)))
+                .with_block(paragraph_text(format!(
+                    "model set to: {}",
+                    d.selected_model
+                )))
                 .with_block(heading(2, "Step 4: Save config"))
                 .with_block(paragraph_with_inlines(vec![
                     text_node("Type "),
@@ -469,7 +483,7 @@ impl<H: OnboardingHost> WizardStep<H> for SaveStep {
 
 /// The full save: vault + ollama + (optional) model, ensure vault structure,
 /// init the database, run quick health checks. Mirrors the former `save` block.
-async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_full(d: &OnboardingData) -> Result<CommandResponse> {
     if d.vault_path.trim().is_empty() {
         bail!("vault path is missing. run set vault <path>.");
     }
@@ -478,7 +492,7 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
     }
     let missing_model = d.selected_model.trim().is_empty();
 
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.vault.path = Some(PathBuf::from(&d.vault_path));
     config.ollama.base_url = d.ollama_base_url.clone();
@@ -491,7 +505,7 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
         bail!("missing required config:\n- {}", issues.join("\n- "));
     }
 
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
     let vault_path = config
         .vault
         .path
@@ -518,8 +532,14 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
     let mut document = doc()
         .with_block(heading(2, "Onboarding complete"))
         .with_block(list(vec![
-            vec![text_node(format!("config saved: {}", config_path.display()))],
-            vec![text_node(format!("vault ready: {}", vault.root().display()))],
+            vec![text_node(format!(
+                "config saved: {}",
+                config_path.display()
+            ))],
+            vec![text_node(format!(
+                "vault ready: {}",
+                vault.root().display()
+            ))],
             vec![text_node(format!("database ready: {}", db.path.display()))],
         ]));
     if missing_model {
@@ -536,7 +556,10 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
         document = document
             .with_block(heading(3, "Setup warnings"))
             .with_block(list(
-                warnings.iter().map(|warning| vec![text_node(warning.clone())]).collect(),
+                warnings
+                    .iter()
+                    .map(|warning| vec![text_node(warning.clone())])
+                    .collect(),
             ));
     }
 
@@ -544,15 +567,15 @@ async fn finalize_full(root: &Path, d: &OnboardingData) -> Result<CommandRespons
 }
 
 /// Save only the vault section. Mirrors the former `save_vault_section`.
-async fn finalize_vault(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_vault(d: &OnboardingData) -> Result<CommandResponse> {
     if d.vault_path.trim().is_empty() {
         bail!("vault path is missing.");
     }
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.vault.path = Some(PathBuf::from(&d.vault_path));
 
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
     let vault_path = config
         .vault
         .path
@@ -569,25 +592,31 @@ async fn finalize_vault(root: &Path, d: &OnboardingData) -> Result<CommandRespon
     let document = doc()
         .with_block(heading(2, "Vault updated"))
         .with_block(list(vec![
-            vec![text_node(format!("config saved: {}", config_path.display()))],
-            vec![text_node(format!("vault ready: {}", vault.root().display()))],
+            vec![text_node(format!(
+                "config saved: {}",
+                config_path.display()
+            ))],
+            vec![text_node(format!(
+                "vault ready: {}",
+                vault.root().display()
+            ))],
         ]));
     Ok(ok_response(lines.join("\n"), document))
 }
 
 /// Save the ollama server + (optional) model. Mirrors `save_llm_section`.
-async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_llm(d: &OnboardingData) -> Result<CommandResponse> {
     if d.ollama_base_url.trim().is_empty() {
         bail!("ollama URL is missing. run set ollama <url>.");
     }
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.ollama.base_url = d.ollama_base_url.clone();
     let missing_model = d.selected_model.trim().is_empty();
     if !missing_model {
         config.ollama.model = Some(d.selected_model.clone());
     }
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
 
     let mut lines = vec![
         "## LLM updated".to_string(),
@@ -595,7 +624,10 @@ async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse
         format!("ollama: {}", config.ollama.base_url),
     ];
     let mut rows = vec![
-        vec![text_node(format!("config saved: {}", config_path.display()))],
+        vec![text_node(format!(
+            "config saved: {}",
+            config_path.display()
+        ))],
         vec![text_node(format!("ollama: {}", config.ollama.base_url))],
     ];
     let mut model_note = None;
@@ -611,7 +643,9 @@ async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse
         rows.push(vec![text_node(format!("model: {}", d.selected_model))]);
     }
 
-    let mut document = doc().with_block(heading(2, "LLM updated")).with_block(list(rows));
+    let mut document = doc()
+        .with_block(heading(2, "LLM updated"))
+        .with_block(list(rows));
     if let Some(note) = model_note {
         document = document.with_block(note);
     }
@@ -619,14 +653,14 @@ async fn finalize_llm(root: &Path, d: &OnboardingData) -> Result<CommandResponse
 }
 
 /// Save only the selected model. Mirrors `save_model_section`.
-async fn finalize_model(root: &Path, d: &OnboardingData) -> Result<CommandResponse> {
+async fn finalize_model(d: &OnboardingData) -> Result<CommandResponse> {
     if d.selected_model.trim().is_empty() {
         bail!("no model is selected. choose a model first.");
     }
-    let loaded = load_effective(root)?;
+    let loaded = load_effective()?;
     let mut config = loaded.effective;
     config.ollama.model = Some(d.selected_model.clone());
-    let config_path = save_config(root, &config)?;
+    let config_path = save_config(&config)?;
 
     let lines = [
         "## Model updated".to_string(),
@@ -636,7 +670,10 @@ async fn finalize_model(root: &Path, d: &OnboardingData) -> Result<CommandRespon
     let document = doc()
         .with_block(heading(2, "Model updated"))
         .with_block(list(vec![
-            vec![text_node(format!("config saved: {}", config_path.display()))],
+            vec![text_node(format!(
+                "config saved: {}",
+                config_path.display()
+            ))],
             vec![text_node(format!("model: {}", d.selected_model))],
         ]));
     Ok(ok_response(lines.join("\n"), document))
@@ -650,8 +687,8 @@ async fn finalize_model(root: &Path, d: &OnboardingData) -> Result<CommandRespon
 /// `ollama_base_url` *unconditionally* from effective config (the documented
 /// "continue with 127.0.0.1" invariant — see docs/command-contexts.md §5). The
 /// Model flow starts at the model step, so it probes the configured server here.
-async fn seed_data(root: &Path, flow: OnboardingFlow) -> Result<OnboardingData> {
-    let loaded = load_effective(root)?;
+async fn seed_data(flow: OnboardingFlow) -> Result<OnboardingData> {
+    let loaded = load_effective()?;
     let mut d = OnboardingData {
         flow,
         ollama_base_url: loaded.effective.ollama.base_url.clone(),
@@ -695,16 +732,12 @@ macro_rules! onboarding_wizard {
             fn steps(&self) -> &[Arc<dyn WizardStep<H>>] {
                 &self.steps
             }
-            async fn seed(&self, host: &H) -> std::result::Result<WizardData, String> {
-                let acc = seed_data(host.workspace_root(), $flow)
-                    .await
-                    .map_err(|e| e.to_string())?;
+            async fn seed(&self, _host: &H) -> std::result::Result<WizardData, String> {
+                let acc = seed_data($flow).await.map_err(|e| e.to_string())?;
                 Ok(WizardData::new(acc))
             }
-            async fn finalize(&self, host: &H, d: &WizardData) -> CommandResult {
-                let response = $finalize(host.workspace_root(), data(d))
-                    .await
-                    .map_err(|e| e.to_string())?;
+            async fn finalize(&self, _host: &H, d: &WizardData) -> CommandResult {
+                let response = $finalize(data(d)).await.map_err(|e| e.to_string())?;
                 Ok(Some(response))
             }
         }
@@ -716,7 +749,14 @@ onboarding_wizard!(
     "setup",
     "Setup",
     OnboardingFlow::Full,
-    [VaultMenuStep, VaultPathStep, OllamaMenuStep, OllamaUrlStep, ModelStep, SaveStep],
+    [
+        VaultMenuStep,
+        VaultPathStep,
+        OllamaMenuStep,
+        OllamaUrlStep,
+        ModelStep,
+        SaveStep
+    ],
     finalize_full
 );
 onboarding_wizard!(
@@ -775,23 +815,21 @@ pub fn register_onboarding_wizards<H: OnboardingHost>(registry: &mut WizardRegis
 // Core/CLI host
 // ---------------------------------------------------------------------------
 
-/// The core/CLI onboarding host: owns the workspace root, the live wizard session
-/// (moved in and out of the long-lived `CommandService` around each dispatch),
-/// and the registry. `perform_native` uses the default (`Cancelled`), so the
-/// folder picker degrades gracefully on the CLI.
+/// The core/CLI onboarding host: owns the live wizard session (moved in and out
+/// of the long-lived `CommandService` around each dispatch) and the registry.
+/// `perform_native` uses the default (`Cancelled`), so the folder picker degrades
+/// gracefully on the CLI.
 pub struct CoreOnboardingCtx {
-    workspace_root: PathBuf,
     session: tokio::sync::Mutex<WizardSession>,
     registry: WizardRegistry<CoreOnboardingCtx>,
 }
 
 impl CoreOnboardingCtx {
     /// Build a host taking ownership of `session` (restore it with `into_session`).
-    pub fn new(workspace_root: PathBuf, session: WizardSession) -> Self {
+    pub fn new(session: WizardSession) -> Self {
         let mut registry = WizardRegistry::new();
         register_onboarding_wizards(&mut registry);
         Self {
-            workspace_root,
             session: tokio::sync::Mutex::new(session),
             registry,
         }
@@ -813,11 +851,7 @@ impl WizardHost for CoreOnboardingCtx {
     // perform_native defaults to Cancelled — the CLI degradation path.
 }
 
-impl OnboardingHost for CoreOnboardingCtx {
-    fn workspace_root(&self) -> &Path {
-        &self.workspace_root
-    }
-}
+impl OnboardingHost for CoreOnboardingCtx {}
 
 #[cfg(test)]
 mod tests {
@@ -827,7 +861,7 @@ mod tests {
     use super::*;
 
     fn host() -> CoreOnboardingCtx {
-        CoreOnboardingCtx::new(std::env::temp_dir(), WizardSession::default())
+        CoreOnboardingCtx::new(WizardSession::default())
     }
     fn wd(d: OnboardingData) -> WizardData {
         WizardData::new(d)
@@ -845,8 +879,14 @@ mod tests {
 
     #[test]
     fn vault_done_completes_for_vault_flow_else_advances_to_ollama() {
-        assert!(matches!(vault_done(OnboardingFlow::Vault), WizardTransition::Complete));
-        assert!(matches!(vault_done(OnboardingFlow::Full), WizardTransition::Goto("ollama_menu")));
+        assert!(matches!(
+            vault_done(OnboardingFlow::Vault),
+            WizardTransition::Complete
+        ));
+        assert!(matches!(
+            vault_done(OnboardingFlow::Full),
+            WizardTransition::Goto("ollama_menu")
+        ));
     }
 
     #[tokio::test]
@@ -864,7 +904,13 @@ mod tests {
         let mut d = wd(OnboardingData::default());
         let t = VaultMenuStep.accept("9", &mut d, &host()).await.unwrap();
         assert!(matches!(t, WizardTransition::Stay));
-        assert!(data(&d).notice.as_deref().unwrap().contains("invalid choice"));
+        assert!(
+            data(&d)
+                .notice
+                .as_deref()
+                .unwrap()
+                .contains("invalid choice")
+        );
     }
 
     #[tokio::test]
@@ -917,14 +963,22 @@ mod tests {
             flow: OnboardingFlow::Llm,
             ..Default::default()
         });
-        assert!(ModelStep.accept("continue", &mut empty, &host()).await.is_err());
+        assert!(
+            ModelStep
+                .accept("continue", &mut empty, &host())
+                .await
+                .is_err()
+        );
         let mut set = wd(OnboardingData {
             flow: OnboardingFlow::Llm,
             selected_model: "x".into(),
             ..Default::default()
         });
         assert!(matches!(
-            ModelStep.accept("continue", &mut set, &host()).await.unwrap(),
+            ModelStep
+                .accept("continue", &mut set, &host())
+                .await
+                .unwrap(),
             WizardTransition::Next
         ));
     }

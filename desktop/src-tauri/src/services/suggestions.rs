@@ -1,21 +1,22 @@
 use std::collections::HashSet;
 
-use dnd_core::command_manifest::{self, CommandManifest, CommandSpec};
+use dnd_core::command_manifest::{self, ArgumentKind, CommandManifest, CommandSpec};
 use dnd_core::command_parse::{self, ParseResult, ParseStage};
 use dnd_core::config::{Verbosity, load_effective};
 use dnd_core::vault::Vault;
+use runebound_models::utils::DUNGEON_FUNCTIONS;
 use serde::Serialize;
+use ts_rs::TS;
 
 use dnd_core::command_manifest::InputContext;
 
 use crate::app_state::AppState;
 use crate::entities::{EntityKind, rerollable_fields, settable_fields};
-use crate::services::entity_admin::EntityType;
-use crate::wizards::WizardChoice;
 use crate::services::vault_ref::{
     VaultReferenceEntry, can_start_reference_at, load_vault_reference_entries,
 };
 use crate::utils::normalize_relative_path_for_storage;
+use crate::wizards::WizardChoice;
 
 pub struct SuggestionService;
 
@@ -40,15 +41,23 @@ impl SuggestionService {
             }
 
             if !active_ref.query.trim().starts_with('-') {
-                let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+                let loaded = load_effective().map_err(|err| err.to_string())?;
                 if let Some(vault_path) = loaded.effective.vault.path {
-                    let vault = Vault::new(vault_path);
-                    if vault.ensure_root_exists().is_ok() {
-                        let entries = load_vault_reference_entries(&vault)?;
-                        let suggestions =
-                            build_reference_suggestions_from_entries(&input, &active_ref, &entries);
-                        return Ok(suggestions);
-                    }
+                    // Recursive read_dir + TOML loads are blocking IO; run them off
+                    // the async runtime so a large vault can't stall this per-keystroke
+                    // autocomplete path (P6.2).
+                    let entries = tokio::task::spawn_blocking(move || {
+                        let vault = Vault::new(vault_path);
+                        if vault.ensure_root_exists().is_err() {
+                            return Ok(Vec::new());
+                        }
+                        load_vault_reference_entries(&vault)
+                    })
+                    .await
+                    .map_err(|err| err.to_string())??;
+                    let suggestions =
+                        build_reference_suggestions_from_entries(&input, &active_ref, &entries);
+                    return Ok(suggestions);
                 }
 
                 return Ok(Vec::new());
@@ -99,49 +108,30 @@ impl SuggestionService {
 
         let trimmed = input.trim();
         let lowered = trimmed.to_ascii_lowercase();
-        let is_load_context = lowered == "load" || lowered.starts_with("load ");
-        let is_delete_context = lowered == "delete" || lowered.starts_with("delete ");
-        let is_show_context = lowered == "show" || lowered.starts_with("show ");
-        let is_preview_context = lowered == "preview" || lowered.starts_with("preview ");
-        let is_publish_help = lowered.starts_with("publish help");
-        let is_publish_context = !is_publish_help
-            && (lowered == "publish" || lowered.starts_with("publish "));
-        let search_query = if is_load_context {
-            trimmed[4..].trim()
-        } else if is_delete_context {
-            trimmed[6..].trim()
-        } else if is_show_context {
-            trimmed[4..].trim()
-        } else if is_preview_context {
-            trimmed[7..].trim()
-        } else if is_publish_context {
-            trimmed["publish".len()..].trim()
-        } else {
-            trimmed
+        // The command root is the first token; its byte length is the same in the
+        // original-cased `trimmed` (roots are ASCII). `publish help` is docs, not
+        // an entity-search context.
+        let root = lowered.split_whitespace().next().unwrap_or("");
+        let is_publish_help = root == "publish" && lowered.starts_with("publish help");
+        let entity_search_root = match (
+            is_publish_help,
+            command_manifest::command_argument_kind(root),
+        ) {
+            (false, Some(ArgumentKind::EntitySearch)) => Some(root),
+            _ => None,
+        };
+        // Derive the search query by stripping the root token — never a
+        // hand-counted byte offset, so a command rename can't silently desync it.
+        let search_query = match entity_search_root {
+            Some(root) => trimmed[root.len()..].trim(),
+            None => trimmed,
         };
 
         if !search_query.is_empty()
-            && (is_load_context
-                || is_delete_context
-                || is_show_context
-                || is_preview_context
-                || is_publish_context
-                || !starts_with_known_command_root(trimmed, &manifest))
+            && (entity_search_root.is_some() || !starts_with_known_command_root(trimmed, &manifest))
         {
             let entity_results = search_entities(state, search_query.to_string(), Some(6)).await?;
-            let prefix = if is_load_context {
-                Some("load")
-            } else if is_delete_context {
-                Some("delete")
-            } else if is_show_context {
-                Some("show")
-            } else if is_preview_context {
-                Some("preview")
-            } else if is_publish_context {
-                Some("publish")
-            } else {
-                None
-            };
+            let prefix = entity_search_root;
 
             for entity in entity_results {
                 let completion = match prefix {
@@ -152,28 +142,26 @@ impl SuggestionService {
                     label: entity.name,
                     completion,
                     helper_text: Some(match entity.entity_type {
-                        EntityType::Npc => SuggestionHelperText::Npc,
-                        EntityType::Location => SuggestionHelperText::Location,
-                        EntityType::Faction => SuggestionHelperText::Faction,
-                        EntityType::Item => SuggestionHelperText::Item,
-                        EntityType::Event => SuggestionHelperText::Event,
-                        EntityType::God => SuggestionHelperText::God,
-                        EntityType::Dungeon => SuggestionHelperText::Dungeon,
+                        EntityKind::Npc => SuggestionHelperText::Npc,
+                        EntityKind::Location => SuggestionHelperText::Location,
+                        EntityKind::Faction => SuggestionHelperText::Faction,
+                        EntityKind::Item => SuggestionHelperText::Item,
+                        EntityKind::Event => SuggestionHelperText::Event,
+                        EntityKind::God => SuggestionHelperText::God,
+                        EntityKind::Dungeon => SuggestionHelperText::Dungeon,
                     }),
                 });
             }
         }
 
-        if is_npc {
-            if let Some(location_query) = npc_travel_location_query(trimmed) {
-                let location_names = search_location_names(state, location_query, Some(8)).await?;
-                for location_name in location_names {
-                    suggestions.push(CommandSuggestion {
-                        label: location_name.clone(),
-                        completion: format!("npc travel to {} ", location_name),
-                        helper_text: Some(SuggestionHelperText::Location),
-                    });
-                }
+        if is_npc && let Some(location_query) = npc_travel_location_query(trimmed) {
+            let location_names = search_location_names(state, location_query, Some(8)).await?;
+            for location_name in location_names {
+                suggestions.push(CommandSuggestion {
+                    label: location_name.clone(),
+                    completion: format!("npc travel to {} ", location_name),
+                    helper_text: Some(SuggestionHelperText::Location),
+                });
             }
         }
 
@@ -182,14 +170,11 @@ impl SuggestionService {
         // root, so it isn't completed by build_command_suggestions; finish it here
         // from the active draft's rerollable fields. (`<kind> reroll <field>` is
         // already handled via the entity root.)
-        if let Some(kind) = active_kind {
-            if lowered.starts_with("reroll ") {
-                if let Some(field_suggestions) =
-                    build_active_reroll_suggestions(kind, &parsed, &input)
-                {
-                    suggestions.extend(field_suggestions);
-                }
-            }
+        if let Some(kind) = active_kind
+            && lowered.starts_with("reroll ")
+            && let Some(field_suggestions) = build_active_reroll_suggestions(kind, &parsed, &input)
+        {
+            suggestions.extend(field_suggestions);
         }
 
         let mut seen = HashSet::new();
@@ -202,14 +187,15 @@ impl SuggestionService {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
 pub struct CommandSuggestion {
     pub label: String,
     pub completion: String,
     pub helper_text: Option<SuggestionHelperText>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, TS)]
+#[serde(rename_all = "snake_case")]
 pub enum SuggestionHelperText {
     Command,
     Npc,
@@ -224,7 +210,7 @@ pub enum SuggestionHelperText {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct EntitySuggestion {
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub name: String,
     pub slug: String,
 }
@@ -234,7 +220,6 @@ struct ActiveReferenceQuery {
     at_index: usize,
     query: String,
 }
-
 
 async fn search_entities(
     state: &AppState,
@@ -281,43 +266,43 @@ async fn search_entities(
     let mut items: Vec<EntitySuggestion> = npcs
         .into_iter()
         .map(|npc| EntitySuggestion {
-            entity_type: EntityType::Npc,
+            entity_type: EntityKind::Npc,
             name: npc.name,
             slug: npc.slug,
         })
         .chain(locations.into_iter().map(|location| EntitySuggestion {
-            entity_type: EntityType::Location,
+            entity_type: EntityKind::Location,
             name: location.name,
             slug: location.slug,
         }))
         .chain(factions.into_iter().map(|faction| EntitySuggestion {
-            entity_type: EntityType::Faction,
+            entity_type: EntityKind::Faction,
             name: faction.name,
             slug: faction.slug,
         }))
         .chain(items.into_iter().map(|item| EntitySuggestion {
-            entity_type: EntityType::Item,
+            entity_type: EntityKind::Item,
             name: item.name,
             slug: item.slug,
         }))
         .chain(events.into_iter().map(|event| EntitySuggestion {
-            entity_type: EntityType::Event,
+            entity_type: EntityKind::Event,
             name: event.name,
             slug: event.slug,
         }))
         .chain(gods.into_iter().map(|god| EntitySuggestion {
-            entity_type: EntityType::God,
+            entity_type: EntityKind::God,
             name: god.name,
             slug: god.slug,
         }))
         .chain(dungeons.into_iter().map(|dungeon| EntitySuggestion {
-            entity_type: EntityType::Dungeon,
+            entity_type: EntityKind::Dungeon,
             name: dungeon.name,
             slug: dungeon.slug,
         }))
         .collect();
 
-    items.sort_by(|left, right| left.name.to_lowercase().cmp(&right.name.to_lowercase()));
+    items.sort_by_key(|left| left.name.to_lowercase());
     items.truncate(limit as usize);
     Ok(items)
 }
@@ -356,26 +341,24 @@ fn build_command_suggestions(
     input: &str,
 ) -> Vec<CommandSuggestion> {
     if matches!(parsed.completion.stage, ParseStage::Root) {
-        if let Some(root_name) = parsed.completion.root.as_deref() {
-            if let Some(command) = find_command(manifest, root_name) {
-                if command.requires_subcommand
-                    && parsed
-                        .completion
-                        .current_token
-                        .eq_ignore_ascii_case(root_name)
-                {
-                    let mut hydrated_input = input.to_string();
-                    if !hydrated_input.ends_with(' ') {
-                        hydrated_input.push(' ');
-                    }
-                    return build_subcommand_suggestions(
-                        manifest,
-                        parsed.completion.root.as_deref(),
-                        &hydrated_input,
-                        "",
-                    );
-                }
+        if let Some(root_name) = parsed.completion.root.as_deref()
+            && let Some(command) = find_command(manifest, root_name)
+            && command.requires_subcommand
+            && parsed
+                .completion
+                .current_token
+                .eq_ignore_ascii_case(root_name)
+        {
+            let mut hydrated_input = input.to_string();
+            if !hydrated_input.ends_with(' ') {
+                hydrated_input.push(' ');
             }
+            return build_subcommand_suggestions(
+                manifest,
+                parsed.completion.root.as_deref(),
+                &hydrated_input,
+                "",
+            );
         }
 
         return build_root_suggestions(manifest, &parsed.completion.current_token);
@@ -470,28 +453,23 @@ fn build_argument_suggestions(
         }
     }
 
-    if command.name == "date" {
-        if let Some(suggestions) = build_date_argument_suggestions(subcommand_name, parsed, input) {
-            return suggestions;
-        }
+    if command.name == "date"
+        && let Some(suggestions) = build_date_argument_suggestions(subcommand_name, parsed, input)
+    {
+        return suggestions;
     }
 
-    if command.name == "setup" {
-        if let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input) {
-            return suggestions;
-        }
+    if command.name == "setup"
+        && let Some(suggestions) = build_setup_argument_suggestions(subcommand_name, parsed, input)
+    {
+        return suggestions;
     }
 
-    if let Some(kind) = entity_kind_for_root(command.name.as_str()) {
-        if let Some(suggestions) = build_entity_field_argument_suggestions(
-            kind,
-            command,
-            subcommand_name,
-            parsed,
-            input,
-        ) {
-            return suggestions;
-        }
+    if let Some(kind) = entity_kind_for_root(command.name.as_str())
+        && let Some(suggestions) =
+            build_entity_field_argument_suggestions(kind, command, subcommand_name, parsed, input)
+    {
+        return suggestions;
     }
 
     let options = match subcommand {
@@ -580,17 +558,25 @@ fn build_field_suggestions(
 
     let prefix = parsed.completion.current_token.to_ascii_lowercase();
     let base = replace_current_token(input, &parsed.completion.current_token);
-    let mut field_names: Vec<&'static str> = if verb == "set" {
-        settable_fields(kind).map(|spec| spec.display_name).collect()
+    let mut field_names: Vec<String> = if verb == "set" {
+        settable_fields(kind)
+            .map(|spec| spec.display_name.to_string())
+            .collect()
     } else {
         rerollable_fields(kind)
-            .map(|spec| spec.display_name)
+            .map(|spec| spec.display_name.to_string())
             .collect()
     };
     // Dungeon beats are addressed by their function name (a beat target), which
     // the flat schema can't supply: `dungeon reroll setback`, `dungeon set climax`.
+    // Derive the lowercase beat keys from the shared `DUNGEON_FUNCTIONS` constant
+    // so they can't drift from the canonical beat list.
     if kind == EntityKind::Dungeon {
-        field_names.extend(["entrance", "puzzle", "setback", "climax", "resolution"]);
+        field_names.extend(
+            DUNGEON_FUNCTIONS
+                .iter()
+                .map(|beat| beat.to_ascii_lowercase()),
+        );
     }
 
     Some(
@@ -656,7 +642,8 @@ fn build_date_argument_suggestions(
     let is_known_target = target_token_lower
         .as_deref()
         .is_some_and(|value| matches!(value, "year" | "month" | "day" | "time"));
-    let selecting_component = !has_target_token || !is_known_target || (typed_after_set == 1 && !ends_with_space);
+    let selecting_component =
+        !has_target_token || !is_known_target || (typed_after_set == 1 && !ends_with_space);
 
     if selecting_component {
         let base = base_for_date_component_selection(input, typed_after_set);
@@ -802,7 +789,8 @@ fn replace_current_token(input: &str, current_token: &str) -> String {
 }
 
 fn completion_suffix(command: &CommandSpec) -> &'static str {
-    if !command.subcommands.is_empty() || !command.options.is_empty() || command.requires_subcommand {
+    if !command.subcommands.is_empty() || !command.options.is_empty() || command.requires_subcommand
+    {
         " "
     } else {
         ""
@@ -819,7 +807,10 @@ pub(crate) fn starts_with_known_command_root(input: &str, manifest: &CommandMani
         return false;
     };
     let lowered = first.to_ascii_lowercase();
-    manifest.commands.iter().any(|command| command.name == lowered)
+    manifest
+        .commands
+        .iter()
+        .any(|command| command.name == lowered)
 }
 
 fn extract_active_reference_query(input: &str) -> Option<ActiveReferenceQuery> {
@@ -886,32 +877,35 @@ fn build_reference_suggestions_from_entries(
 }
 
 fn npc_travel_location_query(input: &str) -> Option<String> {
+    // The prefix is ASCII, so its byte length is the strip offset in the
+    // original-cased input — derived from the literal, not a magic number.
+    const PREFIX: &str = "npc travel to";
     let trimmed = input.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
-    if lowered == "npc travel to" {
+    if lowered == PREFIX {
         return Some(String::new());
     }
-    if lowered.starts_with("npc travel to ") {
-        return Some(trimmed[14..].trim().to_string());
+    let prefix_with_space = format!("{PREFIX} ");
+    if lowered.starts_with(&prefix_with_space) {
+        return Some(trimmed[prefix_with_space.len()..].trim().to_string());
     }
 
     None
 }
 
 #[cfg(test)]
-#[cfg(test)]
 mod tests {
     use super::{
+        ActiveReferenceQuery, SuggestionHelperText, VaultReferenceEntry,
         build_active_reroll_suggestions, build_command_suggestions,
         build_entity_field_argument_suggestions, build_reference_suggestions_from_entries,
         entity_kind_for_root, extract_active_reference_query, find_command,
-        npc_travel_location_query, wizard_choices_to_suggestions, ActiveReferenceQuery,
-        SuggestionHelperText, VaultReferenceEntry,
+        npc_travel_location_query, wizard_choices_to_suggestions,
     };
     use crate::entities::EntityKind;
-    use crate::wizards::WizardChoice;
     use crate::services::vault_ref::extract_prompt_reference_keys;
+    use crate::wizards::WizardChoice;
     use dnd_core::{command_manifest, command_parse};
 
     #[test]
@@ -1010,10 +1004,14 @@ mod tests {
             at_index: 11,
             query: String::new(),
         };
-        let suggestions = build_reference_suggestions_from_entries("create npc @", &active, &entries);
+        let suggestions =
+            build_reference_suggestions_from_entries("create npc @", &active, &entries);
         let labels: Vec<String> = suggestions.into_iter().map(|item| item.label).collect();
 
-        assert_eq!(labels, vec!["@locations/".to_string(), "@npcs/".to_string()]);
+        assert_eq!(
+            labels,
+            vec!["@locations/".to_string(), "@npcs/".to_string()]
+        );
     }
 
     #[test]
@@ -1022,7 +1020,10 @@ mod tests {
             npc_travel_location_query("npc travel to Aegis Isle"),
             Some("Aegis Isle".to_string())
         );
-        assert_eq!(npc_travel_location_query("npc travel to"), Some(String::new()));
+        assert_eq!(
+            npc_travel_location_query("npc travel to"),
+            Some(String::new())
+        );
         assert_eq!(npc_travel_location_query("npc travel"), None);
     }
 
@@ -1297,7 +1298,11 @@ mod tests {
             "missing bare reroll beat suggestion"
         );
         // The label is the bare form, not `dungeon reroll …`.
-        assert!(suggestions.iter().all(|item| item.label.starts_with("reroll ")));
+        assert!(
+            suggestions
+                .iter()
+                .all(|item| item.label.starts_with("reroll "))
+        );
     }
 
     #[test]

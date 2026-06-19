@@ -58,8 +58,8 @@ fn boot_task_infos() -> Vec<BootTaskInfo> {
 
 /// Return the ordered boot tasks, or signal that first-time setup is required.
 #[tauri::command]
-pub fn boot_plan(state: State<'_, AppState>) -> Result<BootPlan, String> {
-    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+pub fn boot_plan() -> Result<BootPlan, String> {
+    let loaded = load_effective().map_err(|err| err.to_string())?;
     let needs_setup = !required_issues(&loaded.effective).is_empty();
     let tasks = if needs_setup {
         Vec::new()
@@ -78,8 +78,11 @@ pub async fn run_boot_task(
     match id.as_str() {
         "cleanup" => {
             // Migrations already ran at `init_database`; this finalizes pending
-            // publishes and reaps soft-deleted entities / TOML via the vault sync.
-            VaultSyncService.sync_from_vault(state.inner()).await?;
+            // publishes and projects the canonical TOML store into the db + index
+            // (reaping published records), the source of truth for a rebuilt db.
+            VaultSyncService
+                .project_store_into_db(state.inner())
+                .await?;
             Ok(BootTaskResult {
                 ok: true,
                 tone: "success".to_string(),
@@ -104,9 +107,8 @@ pub async fn run_boot_task(
             }
         }
         "llm" => {
-            let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-            let health =
-                check_ollama_health(&loaded.effective, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
+            let loaded = load_effective().map_err(|err| err.to_string())?;
+            let health = check_ollama_health(&loaded.effective, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
 
             let tone = if health.reachable && health.model_available {
                 "success"
@@ -131,7 +133,7 @@ pub async fn run_boot_task(
 /// cached boot probe result where available.
 #[tauri::command]
 pub async fn boot_motd(state: State<'_, AppState>) -> Result<CommandResponse, String> {
-    let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+    let loaded = load_effective().map_err(|err| err.to_string())?;
     let config = loaded.effective;
 
     let health = {

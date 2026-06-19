@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::Mutex;
@@ -10,12 +8,12 @@ use runebound_models::{
 };
 
 use crate::entities::{EntityDomainRegistry, EntityKind};
-use crate::wizards::{WizardRegistry, WizardSession};
 use crate::repositories::{
     Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
     GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
     SoftDeleteRepository, VaultRepository,
 };
+use crate::wizards::{WizardRegistry, WizardSession};
 
 pub type NpcDraftSession = NpcDraft;
 pub type LocationDraftSession = LocationDraft;
@@ -46,6 +44,42 @@ impl DraftEnvelope {
             DraftEnvelope::Event(_) => EntityKind::Event,
             DraftEnvelope::God(_) => EntityKind::God,
             DraftEnvelope::Dungeon(_) => EntityKind::Dungeon,
+        }
+    }
+
+    pub(crate) fn id(&self) -> &str {
+        match self {
+            DraftEnvelope::Npc(d) => &d.id,
+            DraftEnvelope::Location(d) => &d.id,
+            DraftEnvelope::Faction(d) => &d.id,
+            DraftEnvelope::Item(d) => &d.id,
+            DraftEnvelope::Event(d) => &d.id,
+            DraftEnvelope::God(d) => &d.id,
+            DraftEnvelope::Dungeon(d) => &d.id,
+        }
+    }
+
+    pub(crate) fn name(&self) -> &str {
+        match self {
+            DraftEnvelope::Npc(d) => &d.name,
+            DraftEnvelope::Location(d) => &d.name,
+            DraftEnvelope::Faction(d) => &d.name,
+            DraftEnvelope::Item(d) => &d.name,
+            DraftEnvelope::Event(d) => &d.name,
+            DraftEnvelope::God(d) => &d.name,
+            DraftEnvelope::Dungeon(d) => &d.name,
+        }
+    }
+
+    pub(crate) fn slug(&self) -> &str {
+        match self {
+            DraftEnvelope::Npc(d) => &d.slug,
+            DraftEnvelope::Location(d) => &d.slug,
+            DraftEnvelope::Faction(d) => &d.slug,
+            DraftEnvelope::Item(d) => &d.slug,
+            DraftEnvelope::Event(d) => &d.slug,
+            DraftEnvelope::God(d) => &d.slug,
+            DraftEnvelope::Dungeon(d) => &d.slug,
         }
     }
 
@@ -206,46 +240,48 @@ impl From<DungeonDraftSession> for DraftEnvelope {
 
 #[derive(Debug, Default)]
 pub(crate) struct EditorSession {
-    active_kind: Option<EntityKind>,
-    drafts: HashMap<EntityKind, DraftEnvelope>,
+    // The editor holds at most ONE draft at a time. Opening, creating, or loading
+    // any entity replaces whatever was open (single-draft UX — the frontend only
+    // ever renders one card). The active kind is derived from the live draft.
+    draft: Option<DraftEnvelope>,
 }
 
 impl EditorSession {
     pub(crate) fn active_kind(&self) -> Option<EntityKind> {
-        self.active_kind
+        self.draft.as_ref().map(DraftEnvelope::kind)
     }
 
+    /// The single active draft of any kind, if one is open. Used by the generic
+    /// save (publish auto-save) which persists whatever the editor currently holds.
+    pub(crate) fn active_draft(&self) -> Option<&DraftEnvelope> {
+        self.draft.as_ref()
+    }
+
+    /// Set the single active draft, replacing any draft of any other kind.
     pub(crate) fn set_active_draft(&mut self, draft: DraftEnvelope) {
-        let kind = draft.kind();
-        self.drafts.insert(kind, draft);
-        self.active_kind = Some(kind);
-    }
-
-    pub(crate) fn activate(&mut self, kind: EntityKind) {
-        if self.drafts.contains_key(&kind) {
-            self.active_kind = Some(kind);
-        }
+        self.draft = Some(draft);
     }
 
     pub(crate) fn draft(&self, kind: EntityKind) -> Option<&DraftEnvelope> {
-        self.drafts.get(&kind)
+        self.draft.as_ref().filter(|draft| draft.kind() == kind)
     }
 
     pub(crate) fn draft_mut(&mut self, kind: EntityKind) -> Option<&mut DraftEnvelope> {
-        self.drafts.get_mut(&kind)
+        self.draft.as_mut().filter(|draft| draft.kind() == kind)
     }
 
+    /// Remove the active draft iff it is of `kind`, returning it. A no-op when the
+    /// active draft is a different kind (or there is none).
     pub(crate) fn clear_kind(&mut self, kind: EntityKind) -> Option<DraftEnvelope> {
-        let removed = self.drafts.remove(&kind);
-        if self.active_kind == Some(kind) {
-            self.active_kind = self.next_active_after(kind);
+        if self.active_kind() == Some(kind) {
+            self.draft.take()
+        } else {
+            None
         }
-        removed
     }
 
     pub(crate) fn clear_all(&mut self) {
-        self.drafts.clear();
-        self.active_kind = None;
+        self.draft = None;
     }
 
     pub(crate) fn get_npc(&self) -> Option<&NpcDraftSession> {
@@ -314,7 +350,8 @@ impl EditorSession {
     }
 
     pub(crate) fn get_item(&self) -> Option<&ItemDraftSession> {
-        self.draft(EntityKind::Item).and_then(DraftEnvelope::as_item)
+        self.draft(EntityKind::Item)
+            .and_then(DraftEnvelope::as_item)
     }
 
     pub(crate) fn get_item_mut(&mut self) -> Option<&mut ItemDraftSession> {
@@ -399,76 +436,9 @@ impl EditorSession {
                 _ => None,
             })
     }
-
-    fn next_active_after(&self, cleared: EntityKind) -> Option<EntityKind> {
-        let search_order: &[EntityKind] = match cleared {
-            EntityKind::Npc => &[
-                EntityKind::Location,
-                EntityKind::Faction,
-                EntityKind::Item,
-                EntityKind::Event,
-                EntityKind::God,
-                EntityKind::Dungeon,
-            ],
-            EntityKind::Location => &[
-                EntityKind::Npc,
-                EntityKind::Faction,
-                EntityKind::Item,
-                EntityKind::Event,
-                EntityKind::God,
-                EntityKind::Dungeon,
-            ],
-            EntityKind::Faction => &[
-                EntityKind::Npc,
-                EntityKind::Location,
-                EntityKind::Item,
-                EntityKind::Event,
-                EntityKind::God,
-                EntityKind::Dungeon,
-            ],
-            EntityKind::Item => &[
-                EntityKind::Npc,
-                EntityKind::Location,
-                EntityKind::Faction,
-                EntityKind::Event,
-                EntityKind::God,
-                EntityKind::Dungeon,
-            ],
-            EntityKind::Event => &[
-                EntityKind::Npc,
-                EntityKind::Location,
-                EntityKind::Faction,
-                EntityKind::Item,
-                EntityKind::God,
-                EntityKind::Dungeon,
-            ],
-            EntityKind::God => &[
-                EntityKind::Npc,
-                EntityKind::Location,
-                EntityKind::Faction,
-                EntityKind::Item,
-                EntityKind::Event,
-                EntityKind::Dungeon,
-            ],
-            EntityKind::Dungeon => &[
-                EntityKind::Npc,
-                EntityKind::Location,
-                EntityKind::Faction,
-                EntityKind::Item,
-                EntityKind::Event,
-                EntityKind::God,
-            ],
-        };
-
-        search_order
-            .iter()
-            .copied()
-            .find(|kind| self.drafts.contains_key(kind))
-    }
 }
 
 pub(crate) struct AppState {
-    pub(crate) workspace_root: PathBuf,
     pub(crate) command_service: Mutex<dnd_core::service::CommandService>,
     pub(crate) editor_session: Mutex<EditorSession>,
     pub(crate) database: Arc<Database>,
@@ -564,7 +534,7 @@ impl AppState {
         if let Some(kind) = active_kind {
             return InputContext::EntityEditor(kind.as_str().to_string());
         }
-        if let Some(id) = self.wizard_session.lock().await.active_id {
+        if let Some(id) = self.wizard_session.lock().await.active_id() {
             return InputContext::Wizard(id.to_string());
         }
         InputContext::Default
@@ -634,7 +604,7 @@ mod tests {
             leadership: String::new(),
             headquarters: String::new(),
             sphere_of_influence: String::new(),
-            resources_assets: String::new(),
+            resources_assets: Vec::new(),
             allies: Vec::new(),
             rivals_enemies: Vec::new(),
             reputation: String::new(),
@@ -675,14 +645,14 @@ mod tests {
     }
 
     #[test]
-    fn opening_a_second_draft_switches_active_but_keeps_both() {
+    fn opening_a_second_draft_replaces_the_first() {
         let mut session = EditorSession::default();
         session.set_npc(npc_draft("Lirael"));
         session.set_location(location_draft("Harbor"));
-        // Newest draft is active...
+        // Single-draft: the newest draft is the *only* draft. Opening the
+        // location discards the npc — the editor holds one draft at a time.
         assert_eq!(session.active_kind(), Some(EntityKind::Location));
-        // ...but the npc draft is still retained, not clobbered.
-        assert!(session.get_npc().is_some());
+        assert!(session.get_npc().is_none());
         assert!(session.get_location().is_some());
     }
 
@@ -696,40 +666,24 @@ mod tests {
     }
 
     #[test]
-    fn activate_only_switches_to_a_kind_with_an_open_draft() {
+    fn clearing_a_different_kind_is_a_no_op() {
         let mut session = EditorSession::default();
-        session.set_npc(npc_draft("Lirael"));
         session.set_location(location_draft("Harbor"));
-        session.activate(EntityKind::Npc);
-        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
-        // No faction draft is open, so activate is a no-op.
-        session.activate(EntityKind::Faction);
-        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
+        // The active draft is a location; clearing some *other* kind does
+        // nothing and leaves the live draft intact.
+        assert!(session.clear_kind(EntityKind::Npc).is_none());
+        assert_eq!(session.active_kind(), Some(EntityKind::Location));
+        assert!(session.get_location().is_some());
     }
 
     #[test]
-    fn clearing_the_active_draft_falls_back_to_another_open_draft() {
+    fn clearing_the_active_kind_removes_the_draft() {
         let mut session = EditorSession::default();
-        session.set_npc(npc_draft("Lirael"));
         session.set_location(location_draft("Harbor"));
-        assert_eq!(session.active_kind(), Some(EntityKind::Location));
-        // Clearing the active (location) draft should not leave active_kind
-        // dangling — it falls back to the still-open npc draft.
         let removed = session.clear_kind(EntityKind::Location);
         assert!(removed.is_some());
-        assert_eq!(session.active_kind(), Some(EntityKind::Npc));
+        assert_eq!(session.active_kind(), None);
         assert!(session.get_location().is_none());
-    }
-
-    #[test]
-    fn clearing_a_non_active_draft_leaves_active_kind_unchanged() {
-        let mut session = EditorSession::default();
-        session.set_npc(npc_draft("Lirael"));
-        session.set_location(location_draft("Harbor"));
-        // Location is active; clear the background npc draft.
-        session.clear_kind(EntityKind::Npc);
-        assert_eq!(session.active_kind(), Some(EntityKind::Location));
-        assert!(session.get_npc().is_none());
     }
 
     #[test]

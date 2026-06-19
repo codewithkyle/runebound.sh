@@ -5,19 +5,15 @@ use runebound_models::output::{
     paragraph_with_inlines, strong, text_node,
 };
 
+use crate::app_state::AppState;
 use crate::commands::{ok_response, ok_response_with_doc};
 use crate::entities::domain::EntityDomainResult;
 use crate::entities::kind::EntityKind;
-use crate::entities::schema::{
-    FieldAccess, format_field_help, rerollable_fields, settable_fields,
-};
+use crate::entities::schema::{FieldAccess, format_field_help, rerollable_fields, settable_fields};
+use crate::services::entity_persistence::EntityPersistenceService;
 use crate::utils::normalize_optional_prompt;
 
-pub use crate::utils::{
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
-};
+pub use crate::utils::{normalize_unknown_list, normalize_unknown_text, parse_list_csv};
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
@@ -47,7 +43,26 @@ pub fn merge_seed_and_reroll_prompt(
 
 pub fn no_active_draft_message(kind: EntityKind) -> String {
     let root = kind.command_root();
-    format!("no active {} draft. run create {} or load <name>.", root, root)
+    format!(
+        "no active {} draft. run create {} or load <name>.",
+        root, root
+    )
+}
+
+/// Structured form of [`no_active_draft_message`]: the prose plus a clickable
+/// `create <root>` and a `load <name>` placeholder, so the suggested next actions
+/// are backend-authored `command_ref`s rather than words the frontend guesses at.
+pub fn no_active_draft_doc(kind: EntityKind) -> OutputDoc {
+    let root = kind.command_root();
+    doc()
+        .with_block(paragraph_text(format!("No active {root} draft.")))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Start one with "),
+            command_ref(format!("create {root}"), format!("create {root}")),
+            text_node(" or "),
+            code("load <name>"),
+            text_node("."),
+        ]))
 }
 
 pub fn command_message_response(message: impl Into<String>) -> CommandResult {
@@ -59,7 +74,11 @@ pub fn command_message_response_with_doc(
     message: impl Into<String>,
     output_doc: OutputDoc,
 ) -> CommandResult {
-    Ok(Some(ok_response_with_doc(message.into(), Some(output_doc), None)))
+    Ok(Some(ok_response_with_doc(
+        message.into(),
+        Some(output_doc),
+        None,
+    )))
 }
 
 pub fn command_response_with_event(
@@ -70,7 +89,11 @@ pub fn command_response_with_event(
 }
 
 pub fn command_no_active_draft(kind: EntityKind) -> CommandResult {
-    command_message_response(no_active_draft_message(kind))
+    Ok(Some(ok_response_with_doc(
+        no_active_draft_message(kind),
+        Some(no_active_draft_doc(kind)),
+        None,
+    )))
 }
 
 /// Help for `<entity> set` listing the settable fields and their descriptions.
@@ -125,7 +148,10 @@ fn field_help_doc(kind: EntityKind, access: FieldAccess) -> OutputDoc {
                 .filter(|alias| *alias != spec.display_name)
                 .collect();
             if !extra_aliases.is_empty() {
-                inlines.push(text_node(format!(" (aliases: {})", extra_aliases.join(", "))));
+                inlines.push(text_node(format!(
+                    " (aliases: {})",
+                    extra_aliases.join(", ")
+                )));
             }
             inlines
         })
@@ -134,7 +160,10 @@ fn field_help_doc(kind: EntityKind, access: FieldAccess) -> OutputDoc {
     let mut document = doc()
         .with_block(heading(2, title))
         .with_block(paragraph_text(intro))
-        .with_block(paragraph_with_inlines(vec![text_node("Usage: "), code(usage)]));
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Usage: "),
+            code(usage),
+        ]));
     if let Some(note) = note {
         document = document.with_block(paragraph_text(note));
     }
@@ -191,6 +220,16 @@ pub fn entity_message_response(message: impl Into<String>) -> EntityDomainResult
     entity_ok_response(message, None)
 }
 
+/// `<entity> show`/`set`/etc. with no draft open: the structured no-active-draft
+/// doc (clickable `create <root>`) plus its plain-text fallback.
+pub fn entity_no_active_draft(kind: EntityKind) -> EntityDomainResult {
+    Ok(Some(ok_response_with_doc(
+        no_active_draft_message(kind),
+        Some(no_active_draft_doc(kind)),
+        None,
+    )))
+}
+
 pub fn entity_response_with_event(
     message: impl Into<String>,
     event: CommandClientEvent,
@@ -198,6 +237,50 @@ pub fn entity_response_with_event(
     entity_ok_response(message, Some(event))
 }
 
+/// Persist the active draft of `kind` and report it. Shared by every domain's
+/// `save` (the default [`EntityDomain::save`] body): the seven per-kind `save`
+/// methods were mechanically identical — fetch the typed draft, persist it via
+/// [`EntityPersistenceService::save`], clear the editor, and render the
+/// `<Kind> saved` confirmation doc — diverging only in the kind heading and the
+/// no-active-draft message, both now derived from `kind`.
+pub async fn save_active_draft(kind: EntityKind, state: &AppState) -> EntityDomainResult {
+    let draft = {
+        let editor = state.editor_session.lock().await;
+        editor.draft(kind).cloned()
+    }
+    .ok_or_else(|| no_active_draft_message(kind))?;
+
+    let outcome = EntityPersistenceService.save(&draft, state).await?;
+
+    {
+        let mut editor = state.editor_session.lock().await;
+        editor.clear_all();
+    }
+
+    // Saving persists to the local store only — it does not write the Obsidian
+    // vault (that's `publish`), so the confirmation reports just the saved
+    // identifiers. Build a structured doc so the heading actually renders rather
+    // than surfacing literal `##` markdown.
+    let heading_text = format!("{} saved", kind.display_name());
+    let document = doc()
+        .with_block(heading(2, heading_text.clone()))
+        .with_block(list(vec![
+            vec![strong("id"), text_node(format!(": {}", outcome.id))],
+            vec![strong("slug"), text_node(format!(": {}", outcome.slug))],
+        ]));
+    let plain = format!("{heading_text}\nid: {}\nslug: {}", outcome.id, outcome.slug);
+
+    Ok(Some(ok_response_with_doc(
+        plain,
+        Some(document),
+        Some(CommandClientEvent::ClearDrafts),
+    )))
+}
+
+// P5.2 (cleanup-0.5.0): this helper returns a `CommandResult` as its `Err` to
+// short-circuit command parsing; that response type is part of the entity
+// fan-out P5.2 reworks. Remove this allow when that lands.
+#[allow(clippy::result_large_err)]
 pub fn parse_reroll_field_and_prompt(
     trimmed: &str,
     prefix: &str,

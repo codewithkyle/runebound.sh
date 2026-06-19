@@ -6,29 +6,21 @@ use crate::commands::{
     npc_event_from_draft, npc_summary_text,
 };
 use crate::entities::common::{
-    command_message_response,
-    command_response_with_event,
-    CommandResult,
+    CommandResult, command_message_response, command_response_with_event,
 };
-use crate::entities::EntityKind;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::{
-    normalize_optional_prompt,
-    normalize_sex,
-    normalize_unknown_list,
-    normalize_unknown_text,
+    normalize_optional_prompt, normalize_sex, normalize_unknown_list, normalize_unknown_text,
     prepend_notice,
 };
 use dnd_core::npc::UNKNOWN_LOCATION;
 
 use crate::app_state::{
-    EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession, LocationDraftSession,
-    NpcDraftSession,
+    EventDraftSession, FactionDraftSession, GodDraftSession, ItemDraftSession,
+    LocationDraftSession, NpcDraftSession,
 };
 
-pub async fn handle_create(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_create(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     if trimmed.is_empty() {
         return Ok(None);
@@ -37,22 +29,25 @@ pub async fn handle_create(
     let lowered = trimmed.to_ascii_lowercase();
 
     if lowered == "create help" {
-        return command_message_response([
-            "## Create commands",
-            "create npc",
-            "create npc <prompt text>",
-            "create location",
-            "create location <prompt text>",
-            "create faction",
-            "create faction <prompt text>",
-            "create item",
-            "create item <prompt text>",
-            "create event",
-            "create event <prompt text>",
-            "create god",
-            "create god <prompt text>",
-            "create dungeon",
-        ].join("\n"));
+        return command_message_response(
+            [
+                "## Create commands",
+                "create npc",
+                "create npc <prompt text>",
+                "create location",
+                "create location <prompt text>",
+                "create faction",
+                "create faction <prompt text>",
+                "create item",
+                "create item <prompt text>",
+                "create event",
+                "create event <prompt text>",
+                "create god",
+                "create god <prompt text>",
+                "create dungeon",
+            ]
+            .join("\n"),
+        );
     }
 
     if lowered == "create dungeon" || lowered.starts_with("create dungeon ") {
@@ -93,10 +88,7 @@ pub async fn handle_create(
     )))
 }
 
-async fn create_npc(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_npc(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 10 {
@@ -116,19 +108,14 @@ async fn create_npc(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_npc_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_npc_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = NpcDraftSession {
         id: make_entity_id("npc"),
         seed_prompt: prompt,
         name: seed.name.trim().to_string(),
-        slug: slugify(&seed.name.trim()),
+        slug: slugify(seed.name.trim()),
         race: seed.race.trim().to_string(),
         occupation: normalize_unknown_text(&seed.occupation),
         sex: normalize_sex(&seed.sex)?,
@@ -145,7 +132,6 @@ async fn create_npc(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_npc(draft.clone());
-        editor.clear_kind(EntityKind::Location);
     }
 
     command_response_with_event(
@@ -154,10 +140,7 @@ async fn create_npc(
     )
 }
 
-async fn create_location(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_location(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 15 {
@@ -177,12 +160,7 @@ async fn create_location(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_location_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_location_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = LocationDraftSession {
@@ -205,7 +183,6 @@ async fn create_location(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_location(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
     }
 
     command_response_with_event(
@@ -214,10 +191,7 @@ async fn create_location(
     )
 }
 
-async fn create_faction(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_faction(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 14 {
@@ -237,12 +211,7 @@ async fn create_faction(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_faction_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_faction_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = FactionDraftSession {
@@ -272,8 +241,6 @@ async fn create_faction(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_faction(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
     }
 
     command_response_with_event(
@@ -282,10 +249,7 @@ async fn create_faction(
     )
 }
 
-async fn create_item(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_item(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     let prompt = if trimmed.len() > 11 {
@@ -305,12 +269,7 @@ async fn create_item(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_item_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_item_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let slug = slugify(&seed.name);
@@ -335,9 +294,6 @@ async fn create_item(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_item(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
-        editor.clear_kind(EntityKind::Faction);
     }
 
     command_response_with_event(
@@ -346,10 +302,7 @@ async fn create_item(
     )
 }
 
-async fn create_event(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_event(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     // "create event" is 12 chars; anything after it is a free-form guidance prompt.
@@ -370,12 +323,7 @@ async fn create_event(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_event_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_event_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let title = seed.title.trim();
@@ -390,10 +338,6 @@ async fn create_event(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_event(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
-        editor.clear_kind(EntityKind::Faction);
-        editor.clear_kind(EntityKind::Item);
     }
 
     command_response_with_event(
@@ -402,10 +346,7 @@ async fn create_event(
     )
 }
 
-async fn create_god(
-    trimmed: &str,
-    state: tauri::State<'_, AppState>,
-) -> CommandResult {
+async fn create_god(trimmed: &str, state: tauri::State<'_, AppState>) -> CommandResult {
     use dnd_core::npc::slugify;
 
     // "create god" is 10 chars; anything after it is a free-form guidance prompt.
@@ -426,12 +367,7 @@ async fn create_god(
     let database = state.database();
     let generation_repo = state.generation_repo();
     let SeedGeneration { seed, notice } = ai
-        .generate_god_seed(
-            prompt.clone(),
-            &state.workspace_root,
-            database.as_ref(),
-            generation_repo.as_ref(),
-        )
+        .generate_god_seed(prompt.clone(), database.as_ref(), generation_repo.as_ref())
         .await?;
 
     let draft = GodDraftSession {
@@ -458,11 +394,6 @@ async fn create_god(
     {
         let mut editor = state.editor_session.lock().await;
         editor.set_god(draft.clone());
-        editor.clear_kind(EntityKind::Npc);
-        editor.clear_kind(EntityKind::Location);
-        editor.clear_kind(EntityKind::Faction);
-        editor.clear_kind(EntityKind::Item);
-        editor.clear_kind(EntityKind::Event);
     }
 
     command_response_with_event(

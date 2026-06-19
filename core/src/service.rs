@@ -1,5 +1,3 @@
-use std::path::{Path, PathBuf};
-
 use runebound_models::{OutputSegment, OutputSegmentKind};
 use wizard::{WizardSession, start_wizard, try_execute_active_wizard};
 
@@ -9,8 +7,8 @@ use crate::command_parse::{ParseResult, normalize_command_input, parse_command_i
 use crate::onboarding_wizard::{CoreOnboardingCtx, onboarding_entry_wizard_id};
 use crate::session::SessionState;
 
+#[derive(Default)]
 pub struct CommandService {
-    workspace_root: PathBuf,
     session: SessionState,
     /// Live state of the active onboarding wizard. Held here (not in the
     /// serializable `SessionState`) so it persists across commands; moved into a
@@ -19,16 +17,8 @@ pub struct CommandService {
 }
 
 impl CommandService {
-    pub fn new(workspace_root: PathBuf) -> Self {
-        Self {
-            workspace_root,
-            session: SessionState::default(),
-            wizard_session: WizardSession::default(),
-        }
-    }
-
-    pub fn workspace_root(&self) -> &Path {
-        &self.workspace_root
+    pub fn new() -> Self {
+        Self::default()
     }
 
     pub fn session(&self) -> &SessionState {
@@ -56,14 +46,14 @@ impl CommandService {
         // owns the session for the duration of the call (moved in, restored
         // after); on the CLI the folder picker degrades via the default
         // `perform_native`.
-        let active = self.wizard_session.active_id.is_some();
+        let active = self.wizard_session.active_id().is_some();
         let entry = onboarding_entry_wizard_id(trimmed);
         if active || entry.is_some() {
             if !trimmed.is_empty() {
                 self.session.push_history(trimmed, 50);
             }
             let session = std::mem::take(&mut self.wizard_session);
-            let ctx = CoreOnboardingCtx::new(self.workspace_root.clone(), session);
+            let ctx = CoreOnboardingCtx::new(session);
             let result = if active {
                 try_execute_active_wizard(trimmed, &ctx).await
             } else {
@@ -78,7 +68,7 @@ impl CommandService {
             }
         }
 
-        command::execute_line_with_session(&self.workspace_root, input, &mut self.session).await
+        command::execute_line_with_session(input, &mut self.session).await
     }
 }
 
@@ -95,7 +85,7 @@ fn error_response(message: String) -> CommandResponse {
             text: message.clone(),
             command_ref: None,
         }],
-        output_doc: Some(command::output_doc_from_error_text(message)),
+        output_doc: Some(command::error_status_doc(message)),
         client_event: None,
         wizard: None,
     }
@@ -110,17 +100,20 @@ mod tests {
 
     #[tokio::test]
     async fn start_setup_launches_the_onboarding_wizard() {
-        let mut service = CommandService::new(std::env::temp_dir());
+        let mut service = CommandService::new();
         let response = service.execute_line("start setup").await;
         assert!(response.ok, "start setup failed: {:?}", response.error);
         assert!(response.output.contains("Vault setup"));
-        assert_eq!(response.wizard.as_ref().map(|w| w.id.as_str()), Some("setup"));
-        assert_eq!(service.wizard_session.active_id, Some("setup"));
+        assert_eq!(
+            response.wizard.as_ref().map(|w| w.id.as_str()),
+            Some("setup")
+        );
+        assert_eq!(service.wizard_session.active_id(), Some("setup"));
     }
 
     #[tokio::test]
     async fn setup_vault_launches_the_vault_subflow() {
-        let mut service = CommandService::new(std::env::temp_dir());
+        let mut service = CommandService::new();
         let response = service.execute_line("setup vault").await;
         assert_eq!(
             response.wizard.as_ref().map(|w| w.id.as_str()),
@@ -130,19 +123,19 @@ mod tests {
 
     #[tokio::test]
     async fn cancel_exits_the_active_onboarding_wizard() {
-        let mut service = CommandService::new(std::env::temp_dir());
+        let mut service = CommandService::new();
         service.execute_line("start setup").await;
         let response = service.execute_line("cancel").await;
         assert!(response.output.to_lowercase().contains("cancel"));
-        assert_eq!(service.wizard_session.active_id, None);
+        assert_eq!(service.wizard_session.active_id(), None);
     }
 
     #[tokio::test]
     async fn invalid_menu_choice_keeps_the_wizard_active_and_reprompts() {
-        let mut service = CommandService::new(std::env::temp_dir());
+        let mut service = CommandService::new();
         service.execute_line("start setup").await;
         let response = service.execute_line("99").await;
         assert!(response.output.contains("invalid choice"));
-        assert_eq!(service.wizard_session.active_id, Some("setup"));
+        assert_eq!(service.wizard_session.active_id(), Some("setup"));
     }
 }

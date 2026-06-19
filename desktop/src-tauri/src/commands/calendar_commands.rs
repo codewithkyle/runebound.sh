@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use dnd_core::calendar::{self, StoredCalendar};
 use runebound_models::{
-    doc, entity_card, entity_row, heading, paragraph_text, CommandResponse, OutputDoc,
+    CommandResponse, OutputDoc, doc, entity_card, entity_row, heading, paragraph_text,
 };
 use tauri_plugin_dialog::DialogExt;
 
@@ -12,9 +12,7 @@ use crate::commands::{
 
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
-pub async fn handle_calendar(
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+pub async fn handle_calendar(invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let trimmed = invocation.raw_input.trim();
     let lowered = trimmed.to_ascii_lowercase();
 
@@ -52,10 +50,7 @@ Examples:
     Ok(Some(ok_response(output.to_string(), None)))
 }
 
-async fn calendar_import(
-    trimmed: &str,
-    invocation: DesktopHandlerInvocation<'_>,
-) -> CommandResult {
+async fn calendar_import(trimmed: &str, invocation: DesktopHandlerInvocation<'_>) -> CommandResult {
     let path = if trimmed.len() > "calendar import".len() {
         let remainder = trimmed["calendar import".len()..].trim();
         if remainder.is_empty() {
@@ -97,8 +92,8 @@ async fn calendar_import(
     };
 
     let path_string = path.to_string_lossy().into_owned();
-    let expanded = shellexpand::full(&path_string)
-        .map_err(|e| format!("failed to expand path: {}", e))?;
+    let expanded =
+        shellexpand::full(&path_string).map_err(|e| format!("failed to expand path: {}", e))?;
     let path = PathBuf::from(expanded.as_ref());
 
     if !path.exists() {
@@ -110,18 +105,22 @@ async fn calendar_import(
 
     let content = match std::fs::read_to_string(&path) {
         Ok(c) => c,
-        Err(e) => return Ok(Some(ok_response(
-            format!("failed to read file: {}", e),
-            None,
-        ))),
+        Err(e) => {
+            return Ok(Some(ok_response(
+                format!("failed to read file: {}", e),
+                None,
+            )));
+        }
     };
 
     let stored: StoredCalendar = match calendar::import_donjon_json(&content) {
         Ok(c) => c,
-        Err(e) => return Ok(Some(ok_response(
-            format!("failed to parse calendar JSON: {}", e),
-            None,
-        ))),
+        Err(e) => {
+            return Ok(Some(ok_response(
+                format!("failed to parse calendar JSON: {}", e),
+                None,
+            )));
+        }
     };
 
     let month_count = stored.definition.months.len();
@@ -151,9 +150,17 @@ async fn calendar_import(
         month_count,
         stored.definition.months.join(", "),
         week_len,
-        if moon_count > 0 { stored.definition.moons.join(", ") } else { "none".to_string() },
+        if moon_count > 0 {
+            stored.definition.moons.join(", ")
+        } else {
+            "none".to_string()
+        },
         first_day,
-        stored.definition.months.first().unwrap_or(&"Unknown".to_string())
+        stored
+            .definition
+            .months
+            .first()
+            .unwrap_or(&"Unknown".to_string())
     );
 
     let doc = build_calendar_import_doc(&stored);
@@ -163,10 +170,16 @@ async fn calendar_import(
 
 fn build_calendar_import_doc(calendar: &StoredCalendar) -> OutputDoc {
     let mut rows = vec![
-        entity_row("year length", format!("{} days", calendar.definition.year_len)),
+        entity_row(
+            "year length",
+            format!("{} days", calendar.definition.year_len),
+        ),
         entity_row("months", format!("{}", calendar.definition.months.len())),
         entity_row("month names", calendar.definition.months.join(", ")),
-        entity_row("week length", format!("{} days", calendar.definition.week_len)),
+        entity_row(
+            "week length",
+            format!("{} days", calendar.definition.week_len),
+        ),
         entity_row("weekdays", calendar.definition.weekdays.join(", ")),
     ];
 
@@ -174,16 +187,30 @@ fn build_calendar_import_doc(calendar: &StoredCalendar) -> OutputDoc {
         rows.push(entity_row("moons", calendar.definition.moons.join(", ")));
     }
 
-    rows.push(entity_row("first day", format!("{}", calendar.definition.first_day)));
-    rows.push(entity_row("state", format!("Year {}, {} {}, Day {}",
-        calendar.state.year,
-        calendar.definition.months.get(calendar.state.month_index).unwrap_or(&"Unknown".to_string()),
-        calendar.state.day,
-        format!("{:02}:{:02}", calendar.state.hour_24, calendar.state.minute)
-    )));
+    rows.push(entity_row(
+        "first day",
+        format!("{}", calendar.definition.first_day),
+    ));
+    rows.push(entity_row(
+        "state",
+        format!(
+            "Year {}, {} {}, Day {:02}:{:02}",
+            calendar.state.year,
+            calendar
+                .definition
+                .months
+                .get(calendar.state.month_index)
+                .unwrap_or(&"Unknown".to_string()),
+            calendar.state.day,
+            calendar.state.hour_24,
+            calendar.state.minute
+        ),
+    ));
 
     doc()
         .with_block(entity_card("Calendar Imported", rows))
         .with_block(heading(3, "Active State Reset"))
-        .with_block(paragraph_text("The calendar state has been reset to year 0, first month, day 1, midnight."))
+        .with_block(paragraph_text(
+            "The calendar state has been reset to year 0, first month, day 1, midnight.",
+        ))
 }

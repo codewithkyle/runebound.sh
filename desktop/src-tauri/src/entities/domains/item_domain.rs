@@ -1,28 +1,23 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, ItemDraftSession};
-use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    canonical_field_name,
-    format_valid_field_list,
-    FieldAccess,
-    ITEM_SCHEMA,
-};
+use crate::app_state::{AppState, DraftEnvelope, ItemDraftSession};
 use crate::entities::EntityKind;
-use crate::services::entity_persistence::{EntityPersistenceService, SaveItemDraftInput};
-use crate::services::entity_reroll::{EntityRerollService, ItemRerollContext, RerollItemFieldInput};
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, no_active_draft_message, normalize_unknown_list,
+    normalize_unknown_text, parse_list_csv,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::{
+    FieldAccess, ITEM_SCHEMA, canonical_field_name, format_valid_field_list,
+};
+use crate::services::entity_reroll::{
+    EntityRerollService, ItemRerollContext, RerollItemFieldInput,
+};
 use crate::utils::{normalize_item_category, normalize_item_rarity, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::faction_list_from_db_text;
 
 pub struct ItemDomain;
 
@@ -56,6 +51,41 @@ impl EntityDomain for ItemDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .item_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = ItemDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            category: row.category,
+            rarity: row.rarity,
+            attunement: row.attunement,
+            materials: faction_list_from_db_text(&row.materials),
+            appearance: row.appearance,
+            abilities: row.abilities,
+            drawbacks: row.drawbacks,
+            history: row.history,
+            value: row.value,
+            location: row.location,
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::Item(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
@@ -63,7 +93,7 @@ impl EntityDomain for ItemDomain {
         };
 
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Item));
+            return entity_no_active_draft(EntityKind::Item);
         };
 
         entity_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
@@ -82,9 +112,7 @@ impl EntityDomain for ItemDomain {
                 .ok_or_else(|| no_active_draft_message(EntityKind::Item))?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Item);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(item_summary_text(&updated), item_event_from_draft(&updated))
@@ -96,7 +124,8 @@ impl EntityDomain for ItemDomain {
             return entity_message_response("item set value cannot be empty.");
         }
 
-        let Some(canonical) = canonical_field_name(EntityKind::Item, field, FieldAccess::Set) else {
+        let Some(canonical) = canonical_field_name(EntityKind::Item, field, FieldAccess::Set)
+        else {
             let valid_fields = format_valid_field_list(EntityKind::Item, FieldAccess::Set);
             return entity_message_response(format!(
                 "unknown item field: {}. valid fields: {}",
@@ -118,7 +147,9 @@ impl EntityDomain for ItemDomain {
                 "category" => draft.category = normalize_item_category(trimmed_value)?,
                 "rarity" => draft.rarity = normalize_item_rarity(trimmed_value)?,
                 "attunement" => draft.attunement = normalize_unknown_text(trimmed_value),
-                "materials" => draft.materials = normalize_unknown_list(parse_list_csv(trimmed_value)),
+                "materials" => {
+                    draft.materials = normalize_unknown_list(parse_list_csv(trimmed_value))
+                }
                 "appearance" => draft.appearance = normalize_unknown_text(trimmed_value),
                 "abilities" => draft.abilities = normalize_unknown_text(trimmed_value),
                 "drawbacks" => draft.drawbacks = normalize_unknown_text(trimmed_value),
@@ -128,9 +159,7 @@ impl EntityDomain for ItemDomain {
                 _ => {}
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Item);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(item_summary_text(&updated), item_event_from_draft(&updated))
@@ -155,7 +184,6 @@ impl EntityDomain for ItemDomain {
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let rerolled = reroll_service
             .reroll_item_field(
                 RerollItemFieldInput {
@@ -175,7 +203,6 @@ impl EntityDomain for ItemDomain {
                         location: draft.location.clone(),
                     },
                 },
-                &workspace_root,
                 state.database().as_ref(),
                 state.generation_repo().as_ref(),
             )
@@ -249,51 +276,6 @@ impl EntityDomain for ItemDomain {
         entity_response_with_event(item_summary_text(&draft), item_event_from_draft(&draft))
     }
 
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_item().cloned()
-        }
-        .ok_or_else(|| no_active_draft_message(EntityKind::Item))?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_item_draft(
-                SaveItemDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    category: draft.category.clone(),
-                    rarity: draft.rarity.clone(),
-                    attunement: draft.attunement.clone(),
-                    materials: draft.materials.clone(),
-                    appearance: draft.appearance.clone(),
-                    abilities: draft.abilities.clone(),
-                    drawbacks: draft.drawbacks.clone(),
-                    history: draft.history.clone(),
-                    value: draft.value.clone(),
-                    location: draft.location.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Item saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
-    }
-
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
         let removed = {
             let mut editor = state.editor_session.lock().await;
@@ -301,7 +283,7 @@ impl EntityDomain for ItemDomain {
         };
 
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Item));
+            return entity_no_active_draft(EntityKind::Item);
         }
 
         entity_response_with_event("item draft discarded.", CommandClientEvent::ClearDrafts)
@@ -327,7 +309,7 @@ pub fn item_summary_text(draft: &ItemDraftSession) -> String {
 }
 
 pub fn item_event_from_draft(draft: &ItemDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::item_entity_card;
+    use runebound_models::drafts::{CardFooter, item_entity_card};
 
     let normalized = ItemDraftSession {
         id: draft.id.clone(),
@@ -346,7 +328,7 @@ pub fn item_event_from_draft(draft: &ItemDraftSession) -> CommandClientEvent {
         value: normalize_unknown_text(&draft.value),
         location: normalize_unknown_text(&draft.location),
     };
-    let entity_card = item_entity_card(&normalized);
+    let entity_card = item_entity_card(&normalized, CardFooter::Show);
     CommandClientEvent::LoadItemDraftWithCard {
         draft: normalized,
         entity_card,

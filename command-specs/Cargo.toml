@@ -5,4 +5,5 @@ edition.workspace = true
 
 [dependencies]
 serde.workspace = true
+ts-rs.workspace = true
 command-handler = { path = "../command-handler" }

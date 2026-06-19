@@ -1,20 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
 import { For, Show, createEffect, createMemo, createSignal, onMount } from "solid-js";
-import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion } from "./command/parser-client";
-import { parseOutputEntry } from "./output/markdown";
+import { loadManifest, suggestInput, type CommandManifest, type CommandSuggestion, type SuggestionHelperText } from "./command/parser-client";
+import { buildEntryDoc } from "./output/entry-doc";
 import { OutputRenderer } from "./output/renderer";
 import type {
   OutputDoc,
   CommandClientEvent,
   CommandResponse,
   OutputSegment,
-  NpcDraft,
-  LocationDraft,
-  FactionDraft,
-  ItemDraft,
-  EventDraft,
-  GodDraft,
-  DungeonDraft,
   WizardView,
 } from "./generated/models";
 
@@ -27,20 +20,10 @@ type HistoryEntry = {
   outputDoc?: OutputDoc | null;
 };
 
-type InlineCommandMeta = {
-  commandMap: Map<string, CommandSpecMeta>;
-};
-
-type CommandSpecMeta = {
-  subcommands: Set<string>;
-  requiresSubcommand: boolean;
-  canonicalHelpCommand: string | null;
-};
-
 type SuggestionViewItem = {
   label: string;
   completion: string;
-  helperText?: "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon" | "reference";
+  helperText?: SuggestionHelperText;
 };
 
 const SPINNER_FRAMES = ["⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷"];
@@ -59,8 +42,38 @@ const BANNER_TEXT =
   "\n" +
   "Type help to see available commands.\n";
 
-const bannerResolver = (candidate: string): string | null =>
-  candidate.trim().toLowerCase() === "help" ? "help" : null;
+// The banner is authored as a structured doc (not parsed from BANNER_TEXT): the
+// ASCII art is a code block, and `help` is a real command_ref. Clickability never
+// comes from guessing the rendered text.
+const BANNER_DOC: OutputDoc = {
+  blocks: [
+    {
+      kind: "code",
+      language: null,
+      text:
+        "╦═╗╦ ╦╔╗╔╔═╗╔╗ ╔═╗╦ ╦╔╗╔╔╦╗\n" +
+        "╠╦╝║ ║║║║║╣ ╠╩╗║ ║║ ║║║║ ║║\n" +
+        "╩╚═╚═╝╝╚╝╚═╝╚═╝╚═╝╚═╝╝╚╝═╩╝"
+    },
+    {
+      kind: "paragraph",
+      inlines: [
+        {
+          kind: "text",
+          text: "runebound.sh is an AI-assisted command console for game masters, lore keepers, and world builders."
+        }
+      ]
+    },
+    {
+      kind: "paragraph",
+      inlines: [
+        { kind: "text", text: "Type " },
+        { kind: "command_ref", label: "help", command: "help" },
+        { kind: "text", text: " to see available commands." }
+      ]
+    }
+  ]
+};
 
 type BootTaskInfo = { id: string; label: string };
 type BootPlan = { needs_setup: boolean; tasks: BootTaskInfo[] };
@@ -77,35 +90,22 @@ export default function App() {
       id: 1,
       kind: "banner",
       text: BANNER_TEXT,
-      outputDoc: parseOutputEntry("banner", BANNER_TEXT, bannerResolver)
+      outputDoc: BANNER_DOC
     }
   ]);
   const [command, setCommand] = createSignal("");
   const [running, setRunning] = createSignal(false);
-  // Tracks which Ollama setup prompt is currently shown so we can show a
-  // "testing connection" spinner when the next input triggers a server probe.
-  const [ollamaPrompt, setOllamaPrompt] = createSignal<"menu" | "url" | null>(null);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
   const [commandHistory, setCommandHistory] = createSignal<string[]>([]);
   const [historyCursor, setHistoryCursor] = createSignal<number | null>(null);
   const [historyDraft, setHistoryDraft] = createSignal("");
   const [manifest, setManifest] = createSignal<CommandManifest | null>(null);
-  const [editorMode, setEditorMode] = createSignal<"none" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon">("none");
-  const [npcDraft, setNpcDraft] = createSignal<NpcDraft | null>(null);
-  const [locationDraft, setLocationDraft] = createSignal<LocationDraft | null>(null);
-  const [factionDraft, setFactionDraft] = createSignal<FactionDraft | null>(null);
-  const [itemDraft, setItemDraft] = createSignal<ItemDraft | null>(null);
-  const [eventDraft, setEventDraft] = createSignal<EventDraft | null>(null);
-  const [godDraft, setGodDraft] = createSignal<GodDraft | null>(null);
-  const [dungeonDraft, setDungeonDraft] = createSignal<DungeonDraft | null>(null);
   // The structured wizard view from the backend's last response, so the next
   // `continue`/`reroll` shows the right generation spinner. null = no wizard active.
   const [wizardView, setWizardView] = createSignal<WizardView | null>(null);
   const [suggestions, setSuggestions] = createSignal<SuggestionViewItem[]>([]);
   const [scrollbarCompensationPx, setScrollbarCompensationPx] = createSignal(0);
-
-  const commandMeta = createMemo(() => buildCommandMeta(manifest()));
 
   const suggestionList = createMemo(() => suggestions());
 
@@ -225,7 +225,7 @@ export default function App() {
         outputDoc:
           kind === "input"
             ? null
-            : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
+            : outputDoc ?? buildEntryDoc(kind, text)
       }
     ]);
     queueMicrotask(() => {
@@ -251,7 +251,7 @@ export default function App() {
           outputDoc:
             kind === "input"
               ? null
-              : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
+              : outputDoc ?? buildEntryDoc(kind, text)
         }
       ];
     });
@@ -279,7 +279,7 @@ export default function App() {
           outputDoc:
             kind === "input"
               ? null
-              : outputDoc ?? parseOutputEntry(kind, text, (candidate) => resolveClickableCommandTarget(candidate, commandMeta()))
+              : outputDoc ?? buildEntryDoc(kind, text)
         };
       })
     );
@@ -358,7 +358,7 @@ export default function App() {
     const raw = rawInput;
     appendEntry("input", `> ${raw}`);
 
-    const spinnerLabel = commandSpinnerLabel(raw, ollamaPrompt(), wizardView());
+    const spinnerLabel = commandSpinnerLabel(raw, wizardView(), manifest());
     const spinnerId = spinnerLabel ? appendEntryWithId("spinner", `${SPINNER_FRAMES[0]} ${spinnerLabel} ...`) : null;
     let spinnerFrame = 0;
     const spinnerTimer = spinnerId
@@ -371,15 +371,11 @@ export default function App() {
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
-      const rendered = responseToRenderableModel(response, commandMeta());
+      const rendered = responseToRenderableModel(response);
       if (response.ok) {
         if (spinnerId !== null) {
           updateEntry(spinnerId, "spinner", `OK ${spinnerLabel}`);
         }
-        // Track the Ollama prompt context so the next probe-triggering input
-        // shows the connection-test spinner. Only update on success; on error we
-        // keep the prior context so a retry still shows the spinner.
-        setOllamaPrompt(detectOllamaPrompt(rendered.text));
         // Track the active wizard step from the structured signal so the next
         // `continue`/`reroll` shows the right spinner (story vs. dungeon). Clears
         // itself when the response carries no wizard (the flow finalized/cancelled
@@ -398,11 +394,13 @@ export default function App() {
           updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
         }
         const errorText = response.error || rendered.text || "command failed";
-        if (isBootstrapSetupMessage(errorText)) {
-          appendEntry("output", errorText, rendered.outputDoc);
-        } else {
-          appendEntry("error", errorText, rendered.outputDoc);
-        }
+        // Only a doc that leads with an Error-toned status is a hard failure (red).
+        // Anything else — e.g. the first-time-setup gate, which leads with a heading
+        // — is a soft gate rendered neutrally. Keyed off the doc's structure, not the
+        // rendered English.
+        const leadBlock = rendered.outputDoc?.blocks[0];
+        const isHardError = leadBlock?.kind === "status" && leadBlock.tone === "error";
+        appendEntry(isHardError ? "error" : "output", errorText, rendered.outputDoc);
       }
     } catch (error) {
       if (spinnerId !== null) {
@@ -471,7 +469,7 @@ export default function App() {
 
       if (plan.needs_setup) {
         const response = await invoke<CommandResponse>("run_command", { input: "status" });
-        const rendered = responseToRenderableModel(response, commandMeta());
+        const rendered = responseToRenderableModel(response);
         const text = response.error || rendered.text || "first-time setup required";
         appendEntry("output", text, rendered.outputDoc);
         return;
@@ -511,9 +509,9 @@ export default function App() {
       // Clear the boot spinners and show the welcome banner + accurate status,
       // then re-surface any failures that the MOTD doesn't already cover.
       setEntries([]);
-      appendEntry("banner", BANNER_TEXT);
+      appendEntry("banner", BANNER_TEXT, BANNER_DOC);
       const motd = await invoke<CommandResponse>("boot_motd");
-      const rendered = responseToRenderableModel(motd, commandMeta());
+      const rendered = responseToRenderableModel(motd);
       appendEntry("output", rendered.text || "(ok)", rendered.outputDoc);
       for (const notice of failureNotices) {
         appendEntry("error", notice);
@@ -531,86 +529,6 @@ export default function App() {
     }
 
     switch (event.kind) {
-      case "load_npc_draft_with_card":
-        setNpcDraft(event.draft);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("npc");
-        return;
-      case "load_location_draft_with_card":
-        setLocationDraft(event.draft);
-        setNpcDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("location");
-        return;
-      case "load_faction_draft_with_card":
-        setFactionDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("faction");
-        return;
-      case "load_item_draft_with_card":
-        setItemDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("item");
-        return;
-      case "load_event_draft_with_card":
-        setEventDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("event");
-        return;
-      case "load_god_draft_with_card":
-        setGodDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("god");
-        return;
-      case "load_dungeon_draft_with_card":
-        setDungeonDraft(event.draft);
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setEditorMode("dungeon");
-        return;
-      case "clear_drafts":
-        setNpcDraft(null);
-        setLocationDraft(null);
-        setFactionDraft(null);
-        setItemDraft(null);
-        setEventDraft(null);
-        setGodDraft(null);
-        setDungeonDraft(null);
-        setEditorMode("none");
-        return;
       case "clear_terminal":
         setEntries([]);
         if (event.clear_history) {
@@ -621,10 +539,8 @@ export default function App() {
       case "exit_requested":
         void invoke("exit_app");
         return;
-      default: {
-        const exhaustiveCheck: never = event;
-        return exhaustiveCheck;
-      }
+      default:
+        return;
     }
   };
 
@@ -914,11 +830,13 @@ function segmentsToText(segments: OutputSegment[] | undefined, fallback: string)
   return segments.map((segment) => segment.text).join("\n");
 }
 
-function responseToRenderableModel(response: CommandResponse, meta: InlineCommandMeta): { text: string; outputDoc: OutputDoc | null } {
+function responseToRenderableModel(response: CommandResponse): { text: string; outputDoc: OutputDoc | null } {
   const text = segmentsToText(response.segments, response.output);
   return {
     text,
-    outputDoc: response.output_doc ?? parseOutputEntry(response.ok ? "output" : "error", text, (candidate) => resolveClickableCommandTarget(candidate, meta))
+    // Backend responses always carry a doc now; the fallback is purely defensive
+    // (and non-parsing) for the rare case one doesn't.
+    outputDoc: response.output_doc ?? buildEntryDoc(response.ok ? "output" : "error", text)
   };
 }
 
@@ -942,72 +860,6 @@ function entryClass(kind: EntryKind): string {
   return `${base} text-text`;
 }
 
-function resolveClickableCommandTarget(candidate: string, meta: InlineCommandMeta): string | null {
-  const trimmed = candidate.trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  if (isValidCommandLike(trimmed, meta)) {
-    return trimmed;
-  }
-
-  const lowered = trimmed.toLowerCase();
-  const command = meta.commandMap.get(lowered);
-  if (command && command.requiresSubcommand && command.canonicalHelpCommand) {
-    return command.canonicalHelpCommand;
-  }
-
-  return null;
-}
-
-function isValidCommandLike(input: string, meta: InlineCommandMeta): boolean {
-  const trimmed = input.trim();
-  if (!trimmed) {
-    return false;
-  }
-
-  const tokens = trimmed.split(/\s+/);
-  const lowered = tokens.map((token) => token.toLowerCase());
-  const root = lowered[0];
-  const command = meta.commandMap.get(root);
-  if (!command) {
-    return false;
-  }
-
-  if (lowered.length === 1 && !command.requiresSubcommand) {
-    return true;
-  }
-
-  if (root === "history") {
-    if (lowered.length === 2 && lowered[1] === "clear") {
-      return true;
-    }
-
-    if (lowered.length === 2 && /^\d+$/.test(lowered[1])) {
-      return true;
-    }
-  }
-
-  if (root === "setup") {
-    return lowered.length === 2 && lowered[1] === "help";
-  }
-
-  if (lowered.length >= 2 && command.subcommands.has(lowered[1])) {
-    return true;
-  }
-
-  if (lowered.length >= 2 && lowered[1] === "--help") {
-    return true;
-  }
-
-  if (root === "clear") {
-    return lowered.length === 2 && lowered[1] === "--history";
-  }
-
-  return false;
-}
-
 function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem {
   return {
     label: suggestion.label,
@@ -1018,26 +870,6 @@ function toSuggestionViewItem(suggestion: CommandSuggestion): SuggestionViewItem
 
 function normalizeSubmittedCommand(value: string): string {
   return value.replace(/\r?\n/g, " ").trim();
-}
-function buildCommandMeta(manifest: CommandManifest | null): InlineCommandMeta {
-  if (!manifest) {
-    return {
-      commandMap: new Map<string, CommandSpecMeta>()
-    };
-  }
-
-  const commandMap = new Map<string, CommandSpecMeta>();
-  for (const command of manifest.commands) {
-    commandMap.set(command.name.toLowerCase(), {
-      subcommands: new Set(command.subcommands.map((subcommand) => subcommand.name.toLowerCase())),
-      requiresSubcommand: command.requires_subcommand,
-      canonicalHelpCommand: command.canonical_help_command ?? null
-    });
-  }
-
-  return {
-    commandMap
-  };
 }
 
 function isEditableTarget(target: EventTarget | null): boolean {
@@ -1050,24 +882,6 @@ function isEditableTarget(target: EventTarget | null): boolean {
   }
 
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement;
-}
-
-function isBootstrapSetupMessage(message: string): boolean {
-  return message.toLowerCase().includes("first-time setup required");
-}
-
-const OLLAMA_TEST_LABEL = "testing ollama connection";
-
-// Infer which Ollama setup prompt the backend just rendered so a follow-up
-// input that probes the server can show the connection-test spinner.
-function detectOllamaPrompt(text: string): "menu" | "url" | null {
-  if (text.includes("## Step 2: Ollama server") && text.includes("1: Configure a new server")) {
-    return "menu";
-  }
-  if (text.includes("Enter your Ollama URL")) {
-    return "url";
-  }
-  return null;
 }
 
 // Pick the spinner label for a submission made inside a wizard, from the
@@ -1100,8 +914,8 @@ function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null 
 
 function commandSpinnerLabel(
   raw: string,
-  ollamaPrompt: "menu" | "url" | null,
   wizard: WizardView | null,
+  manifest: CommandManifest | null,
 ): string | null {
   const lowered = raw.trim().toLowerCase();
   // Inside a wizard, every submission is intercepted by the wizard runtime, so
@@ -1109,97 +923,25 @@ function commandSpinnerLabel(
   if (wizard) {
     return wizardSpinnerLabel(wizard, lowered);
   }
-  // Commands that always probe the Ollama server.
-  if (lowered === "test ollama") {
-    return OLLAMA_TEST_LABEL;
+  const tokens = lowered.split(/\s+/).filter(Boolean);
+  // Help/usage invocations spend no LLM or server call, so they get no spinner.
+  if (tokens.includes("help")) {
+    return null;
   }
-  if (lowered === "ping" || lowered === "reconnect") {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (lowered === "config test") {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (lowered === "model" || lowered === "setup model") {
-    return OLLAMA_TEST_LABEL;
-  }
-  // In-flow probes: typing a URL, or continuing with the current server.
-  if (ollamaPrompt === "url" && lowered.length > 0) {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (ollamaPrompt === "menu" && (lowered === "2" || lowered === "continue")) {
-    return OLLAMA_TEST_LABEL;
-  }
-  if (lowered === "create npc" || lowered.startsWith("create npc ")) {
-    return "generating npc";
-  }
-  if (lowered === "create location" || lowered.startsWith("create location ")) {
-    return "generating location";
-  }
-  if (lowered === "create faction" || lowered.startsWith("create faction ")) {
-    return "generating faction";
-  }
-  if (lowered === "create item" || lowered.startsWith("create item ")) {
-    return "generating item";
-  }
-  if (lowered === "create event" || lowered.startsWith("create event ")) {
-    return "generating event";
-  }
-  if (lowered === "create god" || lowered.startsWith("create god ")) {
-    return "generating god";
-  }
-  if (lowered === "reroll" || lowered.startsWith("reroll ")) {
-    // `reroll <beat>` on a dungeon regenerates a single card, not the whole draft.
-    const arg = lowered.slice("reroll".length).trim().split(/\s+/)[0];
-    if (["entrance", "puzzle", "setback", "climax", "resolution", "1", "2", "3", "4", "5"].includes(arg)) {
-      return "rerolling beat";
+  // The spinner taxonomy (which commands generate, and their labels) lives in the
+  // manifest; the frontend just matches the longest command prefix. No command
+  // names or labels are re-encoded here.
+  let best: { length: number; label: string } | null = null;
+  for (const hint of manifest?.spinner_hints ?? []) {
+    const hintTokens = hint.command.split(" ");
+    if (hintTokens.length > tokens.length) {
+      continue;
     }
-    return "rerolling draft";
+    if (hintTokens.every((token, index) => token === tokens[index])) {
+      if (!best || hintTokens.length > best.length) {
+        best = { length: hintTokens.length, label: hint.label };
+      }
+    }
   }
-  if (lowered === "npc reroll" || lowered.startsWith("npc reroll ")) {
-    return "rerolling npc";
-  }
-  if (lowered === "location reroll" || lowered.startsWith("location reroll ")) {
-    return "rerolling location";
-  }
-  if (lowered === "faction reroll" || lowered.startsWith("faction reroll ")) {
-    return "rerolling faction";
-  }
-  if (lowered === "item reroll" || lowered.startsWith("item reroll ")) {
-    return "rerolling item";
-  }
-  if (lowered === "event reroll" || lowered.startsWith("event reroll ")) {
-    return "rerolling event";
-  }
-  if (lowered === "god reroll" || lowered.startsWith("god reroll ")) {
-    return "rerolling god";
-  }
-  // A per-beat reroll regenerates one beat. (Whole-dungeon `reroll` is covered by
-  // the generic "rerolling draft" branch above.)
-  if (lowered === "dungeon reroll" || lowered.startsWith("dungeon reroll ")) {
-    return "rerolling beat";
-  }
-  if (
-    lowered.startsWith("npc save") ||
-    lowered.startsWith("location save") ||
-    lowered.startsWith("item save") ||
-    lowered.startsWith("event save") ||
-    lowered.startsWith("god save") ||
-    lowered.startsWith("dungeon save") ||
-    lowered === "save"
-  ) {
-    return "saving draft";
-  }
-  if (lowered.startsWith("faction save")) {
-    return "saving draft";
-  }
-  // `publish` writes to the vault and runs LLM-assisted entity linking, which
-  // can take a few seconds. `publish help` is just text, so exclude it.
-  if (
-    (lowered === "publish" || lowered.startsWith("publish ")) &&
-    lowered !== "publish help" &&
-    !lowered.startsWith("publish help ")
-  ) {
-    return "publishing document";
-  }
-  return null;
+  return best?.label ?? null;
 }

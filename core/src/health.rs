@@ -1,4 +1,3 @@
-use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Result, anyhow};
@@ -96,7 +95,10 @@ pub async fn probe_ollama(base_url: &str, timeout_seconds: u64) -> OllamaProbe {
             models
                 .iter()
                 .filter_map(|model| {
-                    model.get("name").and_then(|name| name.as_str()).map(String::from)
+                    model
+                        .get("name")
+                        .and_then(|name| name.as_str())
+                        .map(String::from)
                 })
                 .collect::<Vec<_>>()
         })
@@ -227,17 +229,9 @@ pub async fn run_quick_checks(config: &AppConfig) -> CheckReport {
     CheckReport { items }
 }
 
-pub async fn run_doctor_checks(config: &AppConfig, workspace_root: &Path) -> CheckReport {
+pub async fn run_doctor_checks(config: &AppConfig) -> CheckReport {
     let mut report = run_quick_checks(config).await;
-
-    report.items.push(CheckItem {
-        name: "workspace root".to_string(),
-        ok: true,
-        detail: workspace_root.display().to_string(),
-    });
-
     report.items.push(check_vault_structure(config));
-
     report
 }
 
@@ -350,8 +344,10 @@ fn check_vault_structure(config: &AppConfig) -> CheckItem {
         Ok(()) => CheckItem {
             name: "vault directories".to_string(),
             ok: true,
-            detail: "npcs, locations, items, factions, .trash/npcs, .trash/locations, .trash/factions ensured"
-                .to_string(),
+            detail: format!(
+                "{} (+ matching .trash) ensured",
+                crate::vault::ENTITY_DIRS.join(", ")
+            ),
         },
         Err(err) => CheckItem {
             name: "vault directories".to_string(),

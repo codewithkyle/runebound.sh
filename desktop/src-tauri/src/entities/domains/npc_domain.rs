@@ -1,22 +1,20 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, NpcDraftSession};
-use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, NPC_SCHEMA};
+use crate::app_state::{AppState, DraftEnvelope, NpcDraftSession};
 use crate::entities::EntityKind;
-use crate::services::entity_persistence::{EntityPersistenceService, SaveNpcDraftInput};
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::{
+    FieldAccess, NPC_SCHEMA, canonical_field_name, format_valid_field_list,
+};
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
-use crate::utils::{normalize_sex, parse_carrying_csv, path_for_display};
+use crate::utils::{normalize_sex, parse_carrying_csv};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::carrying_from_db_text;
 
 pub struct NpcDomain;
 
@@ -51,6 +49,41 @@ impl EntityDomain for NpcDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .npc_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = NpcDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            race: row.race,
+            occupation: row.occupation,
+            sex: normalize_sex(&row.sex).unwrap_or_else(|_| "male".to_string()),
+            age: row.age,
+            height: row.height,
+            weight_lbs: row.weight_lbs,
+            background: row.background,
+            want_need: row.want_need,
+            secret_obstacle: row.secret_obstacle,
+            carrying: carrying_from_db_text(&row.carrying),
+            location: row.location,
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::Npc(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
@@ -58,7 +91,7 @@ impl EntityDomain for NpcDomain {
         };
 
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Npc));
+            return entity_no_active_draft(EntityKind::Npc);
         };
 
         entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
@@ -77,10 +110,7 @@ impl EntityDomain for NpcDomain {
                 .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(npc_summary_text(&updated), npc_event_from_draft(&updated))
@@ -124,10 +154,7 @@ impl EntityDomain for NpcDomain {
                 _ => {}
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(npc_summary_text(&updated), npc_event_from_draft(&updated))
@@ -145,15 +172,13 @@ impl EntityDomain for NpcDomain {
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_npc()
-                .cloned()
-        }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
+            editor.get_npc().cloned()
+        }
+        .ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
 
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let database = state.database();
         let generation_repo = state.generation_repo();
         let rerolled = reroll_service
@@ -176,7 +201,6 @@ impl EntityDomain for NpcDomain {
                         location: draft.location.clone(),
                     },
                 },
-                &workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )
@@ -245,57 +269,9 @@ impl EntityDomain for NpcDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_npc(draft.clone());
-            editor.clear_kind(EntityKind::Location);
         }
 
         entity_response_with_event(npc_summary_text(&draft), npc_event_from_draft(&draft))
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor
-                .get_npc()
-                .cloned()
-        }.ok_or_else(|| "no active npc draft. run create npc or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_npc_draft(
-                SaveNpcDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    race: draft.race.clone(),
-                    occupation: draft.occupation.clone(),
-                    sex: draft.sex.clone(),
-                    age: draft.age.clone(),
-                    height: draft.height.clone(),
-                    weight_lbs: draft.weight_lbs.clone(),
-                    background: draft.background.clone(),
-                    want_need: draft.want_need.clone(),
-                    secret_obstacle: draft.secret_obstacle.clone(),
-                    carrying: draft.carrying.clone(),
-                    location: draft.location.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## NPC saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
@@ -305,7 +281,7 @@ impl EntityDomain for NpcDomain {
         };
 
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Npc));
+            return entity_no_active_draft(EntityKind::Npc);
         }
 
         entity_response_with_event("npc draft discarded.", CommandClientEvent::ClearDrafts)
@@ -332,7 +308,7 @@ pub fn npc_summary_text(draft: &NpcDraftSession) -> String {
 }
 
 pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::npc_entity_card;
+    use runebound_models::drafts::{CardFooter, npc_entity_card};
 
     let normalized_draft = NpcDraftSession {
         id: draft.id.clone(),
@@ -355,7 +331,7 @@ pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
         location: normalize_unknown_text(&draft.location),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = npc_entity_card(&normalized_draft);
+    let entity_card_doc = npc_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadNpcDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

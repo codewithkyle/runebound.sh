@@ -1,16 +1,15 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, EventDraftSession};
-use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::EVENT_SCHEMA;
+use crate::app_state::{AppState, DraftEnvelope, EventDraftSession};
 use crate::entities::EntityKind;
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, no_active_draft_message,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::EVENT_SCHEMA;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
-use crate::services::entity_persistence::{EntityPersistenceService, SaveEventDraftInput};
-use crate::utils::{path_for_display, prepend_notice};
+use crate::utils::prepend_notice;
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 
@@ -44,6 +43,31 @@ impl EntityDomain for EventDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .event_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = EventDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            body: row.body,
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::Event(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
@@ -51,7 +75,7 @@ impl EntityDomain for EventDomain {
         };
 
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Event));
+            return entity_no_active_draft(EntityKind::Event);
         };
 
         entity_response_with_event(event_summary_text(&draft), event_event_from_draft(&draft))
@@ -70,12 +94,13 @@ impl EntityDomain for EventDomain {
                 .ok_or_else(|| no_active_draft_message(EntityKind::Event))?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Event);
-            snapshot
+            draft.clone()
         };
 
-        entity_response_with_event(event_summary_text(&updated), event_event_from_draft(&updated))
+        entity_response_with_event(
+            event_summary_text(&updated),
+            event_event_from_draft(&updated),
+        )
     }
 
     async fn set_field(&self, _field: &str, _value: &str, _state: &AppState) -> EntityDomainResult {
@@ -106,7 +131,6 @@ impl EntityDomain for EventDomain {
         let SeedGeneration { seed, notice } = ai
             .generate_event_seed(
                 merged_prompt,
-                &state.workspace_root,
                 state.database().as_ref(),
                 state.generation_repo().as_ref(),
             )
@@ -131,42 +155,6 @@ impl EntityDomain for EventDomain {
         )
     }
 
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_event().cloned()
-        }
-        .ok_or_else(|| no_active_draft_message(EntityKind::Event))?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_event_draft(
-                SaveEventDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    body: draft.body.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Event saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
-    }
-
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
         let removed = {
             let mut editor = state.editor_session.lock().await;
@@ -174,7 +162,7 @@ impl EntityDomain for EventDomain {
         };
 
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Event));
+            return entity_no_active_draft(EntityKind::Event);
         }
 
         entity_response_with_event("event draft discarded.", CommandClientEvent::ClearDrafts)
@@ -189,9 +177,9 @@ pub fn event_summary_text(draft: &EventDraftSession) -> String {
 }
 
 pub fn event_event_from_draft(draft: &EventDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::event_entity_card;
+    use runebound_models::drafts::{CardFooter, event_entity_card};
 
-    let entity_card = event_entity_card(draft);
+    let entity_card = event_entity_card(draft, CardFooter::Show);
     CommandClientEvent::LoadEventDraftWithCard {
         draft: draft.clone(),
         entity_card,

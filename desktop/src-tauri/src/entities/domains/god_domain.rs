@@ -1,20 +1,22 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, GodDraftSession};
-use crate::entities::common::{
-    entity_message_response, entity_response_with_event, merge_seed_and_reroll_prompt,
-    no_active_draft_message, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    canonical_field_name, format_valid_field_list, FieldAccess, GOD_SCHEMA,
-};
+use crate::app_state::{AppState, DraftEnvelope, GodDraftSession};
 use crate::entities::EntityKind;
-use crate::services::entity_persistence::{EntityPersistenceService, SaveGodDraftInput};
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::{
+    FieldAccess, GOD_SCHEMA, canonical_field_name, format_valid_field_list,
+};
 use crate::services::entity_reroll::{EntityRerollService, GodRerollContext, RerollGodFieldInput};
-use crate::utils::{normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display};
+use crate::utils::{
+    normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::faction_list_from_db_text;
 
 pub struct GodDomain;
 
@@ -48,13 +50,51 @@ impl EntityDomain for GodDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .god_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = GodDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            epithet: row.epithet,
+            rank: row.rank,
+            rank_custom: row.rank_custom,
+            alignment: row.alignment,
+            domains: faction_list_from_db_text(&row.domains),
+            symbol: row.symbol,
+            appearance: row.appearance,
+            dogma: row.dogma,
+            realm: row.realm,
+            worshippers: row.worshippers,
+            clergy: row.clergy,
+            allies: faction_list_from_db_text(&row.allies),
+            rivals: faction_list_from_db_text(&row.rivals),
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::God(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
             editor.get_god().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::God));
+            return entity_no_active_draft(EntityKind::God);
         };
 
         entity_response_with_event(god_summary_text(&draft), god_event_from_draft(&draft))
@@ -73,11 +113,7 @@ impl EntityDomain for GodDomain {
                 .ok_or_else(|| "no active god draft. run create god or load <name>.".to_string())?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::God);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(god_summary_text(&updated), god_event_from_draft(&updated))
@@ -89,8 +125,8 @@ impl EntityDomain for GodDomain {
             return entity_message_response("god set value cannot be empty.");
         }
 
-        let canonical = canonical_field_name(EntityKind::God, field, FieldAccess::Set)
-            .ok_or_else(|| {
+        let canonical =
+            canonical_field_name(EntityKind::God, field, FieldAccess::Set).ok_or_else(|| {
                 let valid_fields = format_valid_field_list(EntityKind::God, FieldAccess::Set);
                 format!(
                     "unknown god set field: {}. valid fields: {}",
@@ -144,11 +180,7 @@ impl EntityDomain for GodDomain {
                 draft.rank_custom = None;
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::God);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(god_summary_text(&updated), god_event_from_draft(&updated))
@@ -175,7 +207,6 @@ impl EntityDomain for GodDomain {
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let database = state.database();
         let generation_repo = state.generation_repo();
         let rerolled = reroll_service
@@ -200,7 +231,6 @@ impl EntityDomain for GodDomain {
                         rivals: draft.rivals.clone(),
                     },
                 },
-                &workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )
@@ -289,60 +319,9 @@ impl EntityDomain for GodDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_god(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
         }
 
         entity_response_with_event(god_summary_text(&draft), god_event_from_draft(&draft))
-    }
-
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor.get_god().cloned()
-        }
-        .ok_or_else(|| "no active god draft. run create god or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_god_draft(
-                SaveGodDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    epithet: draft.epithet.clone(),
-                    rank: draft.rank.clone(),
-                    rank_custom: draft.rank_custom.clone(),
-                    alignment: draft.alignment.clone(),
-                    domains: draft.domains.clone(),
-                    symbol: draft.symbol.clone(),
-                    appearance: draft.appearance.clone(),
-                    dogma: draft.dogma.clone(),
-                    realm: draft.realm.clone(),
-                    worshippers: draft.worshippers.clone(),
-                    clergy: draft.clergy.clone(),
-                    allies: draft.allies.clone(),
-                    rivals: draft.rivals.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## God saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
     }
 
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
@@ -351,7 +330,7 @@ impl EntityDomain for GodDomain {
             editor.take_god()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::God));
+            return entity_no_active_draft(EntityKind::God);
         }
 
         entity_response_with_event("god draft discarded.", CommandClientEvent::ClearDrafts)
@@ -381,7 +360,7 @@ pub fn god_summary_text(draft: &GodDraftSession) -> String {
 }
 
 pub fn god_event_from_draft(draft: &GodDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::god_entity_card;
+    use runebound_models::drafts::{CardFooter, god_entity_card};
 
     let normalized_draft = GodDraftSession {
         id: draft.id.clone(),
@@ -403,7 +382,7 @@ pub fn god_event_from_draft(draft: &GodDraftSession) -> CommandClientEvent {
         rivals: normalize_unknown_list(draft.rivals.clone()),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = god_entity_card(&normalized_draft);
+    let entity_card_doc = god_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadGodDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

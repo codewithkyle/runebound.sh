@@ -1,51 +1,24 @@
 import { invoke } from "@tauri-apps/api/core";
 
-export type CommandManifest = {
-  commands: CommandSpec[];
-  aliases: CommandAlias[];
-};
+// The manifest + suggestion types are generated from the Rust definitions
+// (`command-specs` + `services::suggestions`) via ts-rs. Re-exported here so the
+// command API and its types live behind one module. Regenerate with:
+//   UPDATE_MODELS=1 cargo test --manifest-path desktop/src-tauri/Cargo.toml
+export type {
+  CommandManifest,
+  CommandSpec,
+  SubcommandSpec,
+  OptionSpec,
+  CommandAlias,
+  SpinnerHint,
+  ValueHint,
+  CompletionHint,
+  CommandExecution,
+  CommandSuggestion,
+  SuggestionHelperText,
+} from "../generated/manifest";
 
-export type CommandSpec = {
-  name: string;
-  summary: string;
-  examples: string[];
-  subcommands: SubcommandSpec[];
-  options: OptionSpec[];
-  requires_subcommand: boolean;
-  canonical_help_command?: string | null;
-  execution: "core" | "desktop";
-  show_in_autocomplete: boolean;
-};
-
-export type SubcommandSpec = {
-  name: string;
-  summary: string;
-  options: OptionSpec[];
-  examples: string[];
-};
-
-export type OptionSpec = {
-  name: string;
-  short?: string | null;
-  takes_value: boolean;
-  value_hint?: "path" | "url" | "model" | "integer" | "text" | null;
-  summary: string;
-  completion: { static_choices?: string[] } | "none" | { dynamic_provider: string };
-};
-
-export type CommandAlias = {
-  from: string[];
-  to: string[];
-  summary: string;
-};
-
-export type SuggestionHelperText = "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "reference";
-
-export type CommandSuggestion = {
-  label: string;
-  completion: string;
-  helper_text?: SuggestionHelperText | null;
-};
+import type { CommandManifest, CommandSuggestion } from "../generated/manifest";
 
 export async function loadManifest(): Promise<CommandManifest> {
   return invoke<CommandManifest>("get_command_manifest");

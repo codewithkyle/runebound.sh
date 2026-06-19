@@ -1,23 +1,22 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, FactionDraftSession};
-use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, FACTION_SCHEMA};
+use crate::app_state::{AppState, DraftEnvelope, FactionDraftSession};
 use crate::entities::EntityKind;
-use crate::services::entity_persistence::{EntityPersistenceService, SaveFactionDraftInput};
-use crate::services::entity_reroll::{EntityRerollService, FactionRerollContext, RerollFactionFieldInput};
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::{
+    FACTION_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
+};
+use crate::services::entity_reroll::{
+    EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
+};
 use crate::utils::{normalize_optional_prompt, path_for_display};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::faction_list_from_db_text;
 
 pub struct FactionDomain;
 
@@ -51,13 +50,54 @@ impl EntityDomain for FactionDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .faction_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = FactionDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            kind_type: row.kind_type,
+            kind_custom: row.kind_custom,
+            public_description: row.public_description,
+            true_agenda: row.true_agenda,
+            methods: row.methods,
+            leadership: row.leadership,
+            headquarters: row.headquarters,
+            sphere_of_influence: row.sphere_of_influence,
+            resources_assets: faction_list_from_db_text(&row.resources_assets),
+            allies: faction_list_from_db_text(&row.allies),
+            rivals_enemies: faction_list_from_db_text(&row.rivals_enemies),
+            reputation: row.reputation,
+            current_tension: row.current_tension,
+            goals_short_term: faction_list_from_db_text(&row.goals_short_term),
+            goals_long_term: faction_list_from_db_text(&row.goals_long_term),
+            symbol_description: row.symbol_description,
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::Faction(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
             editor.get_faction().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Faction));
+            return entity_no_active_draft(EntityKind::Faction);
         };
 
         entity_response_with_event(
@@ -74,16 +114,12 @@ impl EntityDomain for FactionDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_faction_mut()
-                .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            let draft = editor.get_faction_mut().ok_or_else(|| {
+                "no active faction draft. run create faction or load <name>.".to_string()
+            })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Faction);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -109,9 +145,9 @@ impl EntityDomain for FactionDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_faction_mut()
-                .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            let draft = editor.get_faction_mut().ok_or_else(|| {
+                "no active faction draft. run create faction or load <name>.".to_string()
+            })?;
 
             match canonical {
                 "name" => {
@@ -131,7 +167,9 @@ impl EntityDomain for FactionDomain {
                 "leadership" => draft.leadership = trimmed_value.to_string(),
                 "headquarters" => draft.headquarters = trimmed_value.to_string(),
                 "sphere_of_influence" => draft.sphere_of_influence = trimmed_value.to_string(),
-                "resources_assets" => draft.resources_assets = trimmed_value.to_string(),
+                "resources_assets" => {
+                    draft.resources_assets = normalize_unknown_list(parse_list_csv(trimmed_value));
+                }
                 "allies" => draft.allies = normalize_unknown_list(parse_list_csv(trimmed_value)),
                 "rivals_enemies" => {
                     draft.rivals_enemies = normalize_unknown_list(parse_list_csv(trimmed_value));
@@ -162,11 +200,7 @@ impl EntityDomain for FactionDomain {
                 draft.kind_custom = None;
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Faction);
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -187,17 +221,15 @@ impl EntityDomain for FactionDomain {
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_faction()
-                .cloned()
-        }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
+            editor.get_faction().cloned()
+        }
+        .ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
 
         let prompt = normalize_optional_prompt(prompt).map(|value| value.to_string());
 
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let database = state.database();
         let generation_repo = state.generation_repo();
         let rerolled = reroll_service
@@ -225,7 +257,6 @@ impl EntityDomain for FactionDomain {
                         symbol_description: draft.symbol_description.clone(),
                     },
                 },
-                &workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )
@@ -284,7 +315,7 @@ impl EntityDomain for FactionDomain {
                 }
             }
             "resources_assets" => {
-                if let Some(value) = rerolled.value {
+                if let Some(value) = rerolled.list_value {
                     draft.resources_assets = value;
                 }
             }
@@ -329,8 +360,6 @@ impl EntityDomain for FactionDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_faction(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
-            editor.clear_kind(EntityKind::Location);
         }
 
         entity_response_with_event(
@@ -339,66 +368,13 @@ impl EntityDomain for FactionDomain {
         )
     }
 
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor
-                .get_faction()
-                .cloned()
-        }.ok_or_else(|| "no active faction draft. run create faction or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_faction_draft(
-                SaveFactionDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    kind_type: draft.kind_type.clone(),
-                    kind_custom: draft.kind_custom.clone(),
-                    public_description: draft.public_description.clone(),
-                    true_agenda: draft.true_agenda.clone(),
-                    methods: draft.methods.clone(),
-                    leadership: draft.leadership.clone(),
-                    headquarters: draft.headquarters.clone(),
-                    sphere_of_influence: draft.sphere_of_influence.clone(),
-                    resources_assets: draft.resources_assets.clone(),
-                    allies: draft.allies.clone(),
-                    rivals_enemies: draft.rivals_enemies.clone(),
-                    reputation: draft.reputation.clone(),
-                    current_tension: draft.current_tension.clone(),
-                    goals_short_term: draft.goals_short_term.clone(),
-                    goals_long_term: draft.goals_long_term.clone(),
-                    symbol_description: draft.symbol_description.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Faction saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
-    }
-
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
         let removed = {
             let mut editor = state.editor_session.lock().await;
             editor.take_faction()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Faction));
+            return entity_no_active_draft(EntityKind::Faction);
         }
 
         entity_response_with_event("faction draft discarded.", CommandClientEvent::ClearDrafts)
@@ -442,7 +418,7 @@ pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
         draft.leadership,
         draft.headquarters,
         draft.sphere_of_influence,
-        draft.resources_assets,
+        draft.resources_assets.join(", "),
         draft.allies.join(", "),
         draft.rivals_enemies.join(", "),
         draft.reputation,
@@ -455,7 +431,7 @@ pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
 }
 
 pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::faction_entity_card;
+    use runebound_models::drafts::{CardFooter, faction_entity_card};
 
     let normalized_draft = FactionDraftSession {
         id: draft.id.clone(),
@@ -470,7 +446,7 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
         leadership: normalize_unknown_text(&draft.leadership),
         headquarters: normalize_unknown_text(&draft.headquarters),
         sphere_of_influence: normalize_unknown_text(&draft.sphere_of_influence),
-        resources_assets: normalize_unknown_text(&draft.resources_assets),
+        resources_assets: normalize_unknown_list(draft.resources_assets.clone()),
         allies: normalize_unknown_list(draft.allies.clone()),
         rivals_enemies: normalize_unknown_list(draft.rivals_enemies.clone()),
         reputation: normalize_unknown_text(&draft.reputation),
@@ -480,7 +456,7 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
         symbol_description: normalize_unknown_text(&draft.symbol_description),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = faction_entity_card(&normalized_draft);
+    let entity_card_doc = faction_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadFactionDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

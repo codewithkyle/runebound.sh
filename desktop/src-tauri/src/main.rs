@@ -10,7 +10,6 @@ mod services;
 mod utils;
 mod wizards;
 
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use dnd_core::command::{CommandClientEvent, CommandResponse, reject_help_flags};
@@ -21,15 +20,16 @@ use tokio::sync::Mutex;
 
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
-use crate::wizards::build_default_wizard_registry;
 use crate::repositories::{
-    DocumentRepository, EventRepository, FactionRepository, GenerationRepository, GodRepository,
-    ItemRepository, LocationRepository, NpcRepository, ProdDocumentRepository, ProdEventRepository,
-    DungeonRepository, ProdDungeonRepository, ProdFactionRepository, ProdGenerationRepository,
-    ProdGodRepository, ProdItemRepository, ProdLocationRepository, ProdNpcRepository,
-    ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository, VaultRepository,
+    DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
+    GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
+    ProdDocumentRepository, ProdDungeonRepository, ProdEventRepository, ProdFactionRepository,
+    ProdGenerationRepository, ProdGodRepository, ProdItemRepository, ProdLocationRepository,
+    ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository,
+    VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
+use crate::wizards::build_default_wizard_registry;
 
 #[tauri::command]
 async fn suggest_command_input(
@@ -82,15 +82,15 @@ async fn run_command(
     // `AppState::perform_native`. Active-onboarding input is consumed by the generic
     // wizard route above; `setup verbosity`/`setup help` are not entry commands and
     // fall through to the core handlers.
-    if let Some(id) = dnd_core::onboarding_wizard::onboarding_entry_wizard_id(&normalized_input) {
-        if let Some(response) = crate::wizards::start_wizard(id, state.inner()).await? {
-            let trimmed = normalized_input.trim();
-            if !trimmed.is_empty() {
-                let mut service = state.command_service.lock().await;
-                service.session_mut().push_history(trimmed, 50);
-            }
-            return Ok(response);
+    if let Some(id) = dnd_core::onboarding_wizard::onboarding_entry_wizard_id(&normalized_input)
+        && let Some(response) = crate::wizards::start_wizard(id, state.inner()).await?
+    {
+        let trimmed = normalized_input.trim();
+        if !trimmed.is_empty() {
+            let mut service = state.command_service.lock().await;
+            service.session_mut().push_history(trimmed, 50);
         }
+        return Ok(response);
     }
 
     // Reject `-h`/`--help` uniformly for desktop dispatch and the core fallthrough,
@@ -99,9 +99,13 @@ async fn run_command(
         return Err(message);
     }
 
-    if let Some(response) =
-        router::dispatch_desktop_command(&normalized_input, &parsed.normalized_tokens, state.clone(), app_handle.clone())
-            .await?
+    if let Some(response) = router::dispatch_desktop_command(
+        &normalized_input,
+        &parsed.normalized_tokens,
+        state.clone(),
+        app_handle.clone(),
+    )
+    .await?
     {
         let skip_history_push = matches!(
             response.client_event,
@@ -134,11 +138,9 @@ fn exit_app(app: tauri::AppHandle) {
 }
 
 fn main() {
-    let workspace_root = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-
     // Backfill config sections added since the user's config was written (e.g.
     // `[generation]`) so they are visible and editable on disk. Best-effort.
-    if let Err(err) = dnd_core::config::ensure_config_sections_persisted(&workspace_root) {
+    if let Err(err) = dnd_core::config::ensure_config_sections_persisted() {
         eprintln!("config migration warning: {err:#}");
     }
 
@@ -158,13 +160,12 @@ fn main() {
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
 
-    let command_service = dnd_core::service::CommandService::new(workspace_root.clone());
+    let command_service = dnd_core::service::CommandService::new();
 
     let domains = Arc::new(build_default_registry());
     let wizards = Arc::new(build_default_wizard_registry());
 
     let app_state = AppState {
-        workspace_root,
         command_service: Mutex::new(command_service),
         editor_session: Mutex::new(EditorSession::default()),
         database: database.clone(),

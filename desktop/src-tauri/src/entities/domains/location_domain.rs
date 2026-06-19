@@ -1,23 +1,22 @@
 use async_trait::async_trait;
 
-use crate::app_state::{AppState, LocationDraftSession};
-use crate::entities::common::{
-    entity_message_response,
-    entity_response_with_event,
-    merge_seed_and_reroll_prompt,
-    no_active_draft_message,
-    normalize_unknown_list,
-    normalize_unknown_text,
-    parse_list_csv,
-};
-use crate::entities::domain::{EntityDomain, EntityDomainResult};
-use crate::entities::schema::{canonical_field_name, format_valid_field_list, FieldAccess, LOCATION_SCHEMA};
+use crate::app_state::{AppState, DraftEnvelope, LocationDraftSession};
 use crate::entities::EntityKind;
-use crate::services::entity_persistence::{EntityPersistenceService, SaveLocationDraftInput};
-use crate::services::entity_reroll::{EntityRerollService, LocationRerollContext, RerollLocationFieldInput};
+use crate::entities::common::{
+    entity_message_response, entity_no_active_draft, entity_response_with_event,
+    merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
+};
+use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
+use crate::entities::schema::{
+    FieldAccess, LOCATION_SCHEMA, canonical_field_name, format_valid_field_list,
+};
+use crate::services::entity_reroll::{
+    EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
+};
 use crate::utils::path_for_display;
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
+use dnd_core::serialization::exports_from_db_text;
 
 pub struct LocationDomain;
 
@@ -51,13 +50,47 @@ impl EntityDomain for LocationDomain {
         .join("\n")
     }
 
+    async fn resolve(
+        &self,
+        name_or_slug: &str,
+        state: &AppState,
+    ) -> Result<Option<EntityDetail>, String> {
+        let database = state.database();
+        let Some(row) = state
+            .location_repo()
+            .find_by_name_or_slug(database.as_ref(), name_or_slug)
+            .await?
+        else {
+            return Ok(None);
+        };
+        let draft = LocationDraftSession {
+            id: row.id,
+            seed_prompt: None,
+            name: row.name,
+            slug: row.slug,
+            vault_path: path_for_display(&row.vault_path),
+            kind_type: row.kind_type,
+            kind_custom: row.kind_custom,
+            visual_description: row.visual_description,
+            history_background: row.history_background,
+            exports: exports_from_db_text(&row.exports),
+            tone: row.tone,
+            authority: row.authority,
+            danger_level: row.danger_level,
+            current_tension: row.current_tension,
+        };
+        Ok(Some(EntityDetail {
+            draft: DraftEnvelope::Location(draft),
+        }))
+    }
+
     async fn show_draft(&self, state: &AppState) -> EntityDomainResult {
         let draft = {
             let editor = state.editor_session.lock().await;
             editor.get_location().cloned()
         };
         let Some(draft) = draft else {
-            return entity_message_response(no_active_draft_message(EntityKind::Location));
+            return entity_no_active_draft(EntityKind::Location);
         };
 
         entity_response_with_event(
@@ -74,15 +107,12 @@ impl EntityDomain for LocationDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_location_mut()
-                .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            let draft = editor.get_location_mut().ok_or_else(|| {
+                "no active location draft. run create location or load <name>.".to_string()
+            })?;
             draft.name = name.to_string();
             draft.slug = slugify(name);
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Location);
-            editor.clear_kind(EntityKind::Npc);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -97,7 +127,8 @@ impl EntityDomain for LocationDomain {
             return entity_message_response("location set value cannot be empty.");
         }
 
-        let Some(canonical) = canonical_field_name(EntityKind::Location, field, FieldAccess::Set) else {
+        let Some(canonical) = canonical_field_name(EntityKind::Location, field, FieldAccess::Set)
+        else {
             let valid_fields = format_valid_field_list(EntityKind::Location, FieldAccess::Set);
             return entity_message_response(format!(
                 "unknown location field: {}. valid fields: {}",
@@ -107,9 +138,9 @@ impl EntityDomain for LocationDomain {
 
         let updated = {
             let mut editor = state.editor_session.lock().await;
-            let draft = editor
-                .get_location_mut()
-                .ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            let draft = editor.get_location_mut().ok_or_else(|| {
+                "no active location draft. run create location or load <name>.".to_string()
+            })?;
 
             match canonical {
                 "name" => {
@@ -149,10 +180,7 @@ impl EntityDomain for LocationDomain {
                 draft.kind_custom = None;
             }
 
-            let snapshot = draft.clone();
-            editor.activate(EntityKind::Location);
-            editor.clear_kind(EntityKind::Npc);
-            snapshot
+            draft.clone()
         };
 
         entity_response_with_event(
@@ -173,15 +201,15 @@ impl EntityDomain for LocationDomain {
 
         let mut draft = {
             let editor = state.editor_session.lock().await;
-            editor
-                .get_location()
-                .cloned()
-        }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
+            editor.get_location().cloned()
+        }
+        .ok_or_else(|| {
+            "no active location draft. run create location or load <name>.".to_string()
+        })?;
 
         let prompt = merge_seed_and_reroll_prompt(&draft.seed_prompt, prompt);
 
         let reroll_service = EntityRerollService;
-        let workspace_root = state.workspace_root.clone();
         let database = state.database();
         let generation_repo = state.generation_repo();
         let rerolled = reroll_service
@@ -202,7 +230,6 @@ impl EntityDomain for LocationDomain {
                         current_tension: draft.current_tension.clone(),
                     },
                 },
-                &workspace_root,
                 database.as_ref(),
                 generation_repo.as_ref(),
             )
@@ -271,7 +298,6 @@ impl EntityDomain for LocationDomain {
         {
             let mut editor = state.editor_session.lock().await;
             editor.set_location(draft.clone());
-            editor.clear_kind(EntityKind::Npc);
         }
 
         entity_response_with_event(
@@ -280,59 +306,13 @@ impl EntityDomain for LocationDomain {
         )
     }
 
-    async fn save(&self, state: &AppState) -> EntityDomainResult {
-        let draft = {
-            let editor = state.editor_session.lock().await;
-            editor
-                .get_location()
-                .cloned()
-        }.ok_or_else(|| "no active location draft. run create location or load <name>.".to_string())?;
-
-        let persistence = EntityPersistenceService;
-        let result = persistence
-            .save_location_draft(
-                SaveLocationDraftInput {
-                    id: draft.id.clone(),
-                    name: draft.name.clone(),
-                    vault_path: draft.vault_path.clone(),
-                    kind_type: draft.kind_type.clone(),
-                    kind_custom: draft.kind_custom.clone(),
-                    visual_description: draft.visual_description.clone(),
-                    history_background: draft.history_background.clone(),
-                    exports: draft.exports.clone(),
-                    tone: draft.tone.clone(),
-                    authority: draft.authority.clone(),
-                    danger_level: draft.danger_level.clone(),
-                    current_tension: draft.current_tension.clone(),
-                },
-                state,
-            )
-            .await?;
-
-        {
-            let mut editor = state.editor_session.lock().await;
-            editor.clear_all();
-        }
-
-        let output = [
-            "## Location saved".to_string(),
-            format!("id: {}", result.id),
-            format!("slug: {}", result.slug),
-            format!("vault: {}", path_for_display(&result.vault_path)),
-            format!("updated: {}", result.updated_at),
-        ]
-        .join("\n");
-
-        entity_response_with_event(output, CommandClientEvent::ClearDrafts)
-    }
-
     async fn cancel(&self, state: &AppState) -> EntityDomainResult {
         let removed = {
             let mut editor = state.editor_session.lock().await;
             editor.take_location()
         };
         if removed.is_none() {
-            return entity_message_response(no_active_draft_message(EntityKind::Location));
+            return entity_no_active_draft(EntityKind::Location);
         }
 
         entity_response_with_event("location draft discarded.", CommandClientEvent::ClearDrafts)
@@ -413,7 +393,7 @@ pub fn location_summary_text(draft: &LocationDraftSession) -> String {
 }
 
 pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::location_entity_card;
+    use runebound_models::drafts::{CardFooter, location_entity_card};
 
     let normalized_draft = LocationDraftSession {
         id: draft.id.clone(),
@@ -431,7 +411,7 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         current_tension: normalize_unknown_text(&draft.current_tension),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = location_entity_card(&normalized_draft);
+    let entity_card_doc = location_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadLocationDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

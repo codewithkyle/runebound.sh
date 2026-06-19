@@ -3,25 +3,161 @@ use std::path::PathBuf;
 use serde::{Deserialize, Serialize};
 
 use crate::app_state::AppState;
+use crate::entities::{ALL_ENTITY_KINDS, EntityDetail, EntityKind};
 use crate::repositories::db;
+use crate::services::entity_persistence::unique_readable_vault_path;
 use crate::services::publish::render_location_markdown;
 use crate::services::vault_sync::{
     dungeon_row_from_frontmatter, event_row_from_frontmatter, faction_row_from_frontmatter,
     god_row_from_frontmatter, item_row_from_frontmatter, location_row_from_frontmatter,
-    move_vault_file, npc_row_from_frontmatter, unique_markdown_path_for_name, unique_trash_path,
+    npc_row_from_frontmatter, unique_markdown_path_for_name,
 };
 use crate::utils::normalize_relative_path_for_storage;
 use dnd_core::config::{load_effective, validate_for_runtime};
 use dnd_core::entity_store::EntityStore;
 use dnd_core::npc::{
-    LocationFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
-    unique_slug_for_dir,
-};
-use dnd_core::serialization::{
-    carrying_from_db_text, exports_from_db_text, faction_list_from_db_text,
+    DungeonFrontmatter, EventFrontmatter, FactionFrontmatter, GodFrontmatter, ItemFrontmatter,
+    LocationFrontmatter, NpcFrontmatter, UNKNOWN_LOCATION, make_entity_id, now_timestamp, slugify,
+    unique_slug_for_dir_with_ext,
 };
 use dnd_core::vault::Vault;
-use runebound_models::DungeonBeat;
+
+/// Generate one entity's `soft_delete_<kind>` + `restore_<kind>` free functions
+/// (P5.2d). Both wrap the shared `record_soft_delete` / `restore_collision` +
+/// `commit_restore` helpers around the per-kind repo + TOML store.
+///
+/// Delete and undo operate ENTIRELY on local state — the TOML draft (the entity
+/// store), the DB row, and the document index. They never read, move, or remove
+/// anything in the user's Obsidian vault: deleting a saved-but-unpublished draft
+/// must not depend on a vault `.md` that publish hasn't written yet, and we never
+/// destroy a vault file the user owns. The serialized TOML frontmatter IS the
+/// recovery payload (it preserves `published_at`, which the DB row drops), so
+/// undo recreates the draft and re-derives the DB row from it. `soft_delete`
+/// writes the recovery row before any destructive step (P1.3).
+macro_rules! impl_entity_soft_delete {
+    (
+        kind: $kind:expr,
+        dir: $dir:literal,
+        repo: $repo:ident,
+        frontmatter: $Frontmatter:ty,
+        store_load: $store_load:ident,
+        store_save: $store_save:ident,
+        store_delete: $store_delete:ident,
+        row_from_frontmatter: $row_from_frontmatter:ident,
+        soft_delete_fn: $sd:ident,
+        restore_fn: $rs:ident $(,)?
+    ) => {
+        async fn $sd(
+            target: &str,
+            state: &AppState,
+            store: &EntityStore,
+            now: &str,
+        ) -> Result<Option<SoftDeleteEntityResult>, String> {
+            let database = state.database();
+            let Some(row) = state
+                .$repo()
+                .find_by_name_or_slug(database.as_ref(), target)
+                .await?
+            else {
+                return Ok(None);
+            };
+            // The local TOML draft is the recovery payload — never the vault file.
+            let frontmatter = store
+                .$store_load(&row.slug)
+                .map_err(|err| err.to_string())?
+                .ok_or_else(|| {
+                    format!("cannot delete \"{}\": its draft file is missing", row.name)
+                })?;
+            let payload_json =
+                serde_json::to_string(&frontmatter).map_err(|err| err.to_string())?;
+            record_soft_delete(
+                state,
+                $kind,
+                &row.id,
+                &row.slug,
+                &row.name,
+                &row.vault_path,
+                payload_json,
+                now,
+            )
+            .await?;
+            // Destructive steps run only after the recovery row is committed (P1.3).
+            // We remove the local TOML draft + DB/index rows; the vault is untouched.
+            // The canonical TOML (source of truth) goes first; a partial DB failure
+            // after it self-heals on the next `sync` (P6.1).
+            store
+                .$store_delete(&row.slug)
+                .map_err(|err| err.to_string())?;
+            // Drop the row and its index entry as one transaction so the index can't
+            // be left pointing at a deleted entity (P6.1). The recovery row is
+            // already committed above, so undo still works if this fails.
+            let mut tx = database.begin().await.map_err(|err| err.to_string())?;
+            state.$repo().delete_by_id_tx(&mut tx, &row.id).await?;
+            state
+                .document_repo()
+                .delete_by_vault_path_tx(&mut tx, &row.vault_path)
+                .await?;
+            tx.commit().await.map_err(|err| err.to_string())?;
+            Ok(Some(SoftDeleteEntityResult {
+                entity_type: $kind,
+                id: row.id,
+                name: row.name,
+                slug: row.slug,
+            }))
+        }
+
+        async fn $rs(
+            soft_delete: &db::SoftDeleteRow,
+            state: &AppState,
+            store: &EntityStore,
+            now: &str,
+        ) -> Result<UndoSoftDeleteResult, String> {
+            let database = state.database();
+            let mut frontmatter: $Frontmatter =
+                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
+            // Re-mint slug/vault path only if a new entity took them while this one
+            // was deleted. Collisions are checked against the local store + document
+            // index — never the vault.
+            let (restored_slug, restored_vault_path) = restore_collision(
+                state,
+                store,
+                $dir,
+                &frontmatter.slug,
+                &frontmatter.name,
+                &frontmatter.vault_path,
+            )
+            .await?;
+            frontmatter.slug = restored_slug.clone();
+            frontmatter.vault_path = restored_vault_path.clone();
+            frontmatter.updated_at = now.to_string();
+            // Recreate the TOML draft, then re-derive the DB row + document index.
+            store
+                .$store_save(&frontmatter)
+                .map_err(|err| err.to_string())?;
+            let row = $row_from_frontmatter(&frontmatter)?;
+            state.$repo().upsert(database.as_ref(), &row).await?;
+            commit_restore(
+                state,
+                $kind,
+                &row.slug,
+                &row.name,
+                &row.vault_path,
+                &row.created_at,
+                &row.updated_at,
+                soft_delete.id,
+                now,
+            )
+            .await?;
+            Ok(UndoSoftDeleteResult {
+                entity_type: $kind,
+                id: row.id,
+                name: row.name,
+                slug: restored_slug,
+                vault_path: restored_vault_path,
+            })
+        }
+    };
+}
 
 pub struct EntityAdminService;
 
@@ -31,7 +167,7 @@ impl EntityAdminService {
         input: EnsureLocationInput,
         state: &AppState,
     ) -> Result<EnsureLocationResult, String> {
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
+        let loaded = load_effective().map_err(|err| err.to_string())?;
         validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
         let vault_path = loaded
             .effective
@@ -60,9 +196,7 @@ impl EntityAdminService {
         let location_repo = state.location_repo();
         let document_repo = state.document_repo();
         let slug = slugify(raw_name);
-        let existing = location_repo
-            .find_by_slug(database.as_ref(), &slug)
-            .await?;
+        let existing = location_repo.find_by_slug(database.as_ref(), &slug).await?;
 
         let mut created_file = false;
         let mut created_record = false;
@@ -166,9 +300,7 @@ impl EntityAdminService {
             updated_at: now.clone(),
         };
 
-        location_repo
-            .upsert(database.as_ref(), &row)
-            .await?;
+        location_repo.upsert(database.as_ref(), &row).await?;
         document_repo
             .upsert_index(
                 database.as_ref(),
@@ -194,535 +326,43 @@ impl EntityAdminService {
         &self,
         input: String,
         state: &AppState,
-    ) -> Result<Option<EntityDetails>, String> {
+    ) -> Result<Option<EntityDetail>, String> {
         let trimmed = input.trim();
         if trimmed.is_empty() {
             return Ok(None);
         }
 
-        let database = state.database();
-        let npc_repo = state.npc_repo();
-        let location_repo = state.location_repo();
-        let faction_repo = state.faction_repo();
-        let item_repo = state.item_repo();
-        let event_repo = state.event_repo();
-        let god_repo = state.god_repo();
-        let dungeon_repo = state.dungeon_repo();
-
-        if let Some(npc) = npc_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: npc.id,
-                entity_type: EntityType::Npc,
-                name: npc.name,
-                slug: npc.slug,
-                race: Some(npc.race),
-                occupation: Some(npc.occupation),
-                sex: Some(npc.sex),
-                age: Some(npc.age),
-                height: Some(npc.height),
-                weight_lbs: Some(npc.weight_lbs),
-                background: Some(npc.background),
-                want_need: Some(npc.want_need),
-                secret_obstacle: Some(npc.secret_obstacle),
-                carrying: Some(carrying_from_db_text(&npc.carrying)),
-                location: Some(npc.location),
-                vault_path: normalize_relative_path_for_storage(&npc.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(npc.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
+        // Drive resolution through the domain registry: ask every kind, then
+        // disambiguate. Collecting all matches (rather than returning the first)
+        // is what lets a cross-kind name collision surface as an error instead of
+        // silently shadowing the kinds later in the walk order (P5.7).
+        let registry = state.domains();
+        let mut matches: Vec<EntityDetail> = Vec::new();
+        for kind in ALL_ENTITY_KINDS {
+            if let Some(domain) = registry.domain(kind)
+                && let Some(detail) = domain.resolve(trimmed, state).await?
+            {
+                matches.push(detail);
+            }
         }
 
-        if let Some(location) = location_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: location.id,
-                entity_type: EntityType::Location,
-                name: location.name,
-                slug: location.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&location.vault_path),
-                kind_type: Some(location.kind_type),
-                kind_custom: location.kind_custom,
-                visual_description: Some(location.visual_description),
-                history_background: Some(location.history_background),
-                exports: Some(exports_from_db_text(&location.exports)),
-                tone: Some(location.tone),
-                authority: Some(location.authority),
-                danger_level: Some(location.danger_level),
-                current_tension: Some(location.current_tension),
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(location.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
+        match matches.len() {
+            0 => Ok(None),
+            1 => Ok(matches.pop()),
+            _ => {
+                let name = matches[0].name().to_string();
+                let kinds = matches
+                    .iter()
+                    .map(|detail| detail.kind().display_name())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                Err(format!(
+                    "\"{name}\" matches multiple saved entities ({kinds}). Names must be \
+                     unique to load, show, or delete by name — rename one so the name no \
+                     longer collides."
+                ))
+            }
         }
-
-        if let Some(faction) = faction_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: faction.id,
-                entity_type: EntityType::Faction,
-                name: faction.name,
-                slug: faction.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&faction.vault_path),
-                kind_type: Some(faction.kind_type),
-                kind_custom: faction.kind_custom,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: Some(faction.current_tension),
-                public_description: Some(faction.public_description),
-                true_agenda: Some(faction.true_agenda),
-                methods: Some(faction.methods),
-                leadership: Some(faction.leadership),
-                headquarters: Some(faction.headquarters),
-                sphere_of_influence: Some(faction.sphere_of_influence),
-                resources_assets: Some(faction.resources_assets),
-                allies: Some(faction_list_from_db_text(&faction.allies)),
-                rivals_enemies: Some(faction_list_from_db_text(&faction.rivals_enemies)),
-                reputation: Some(faction.reputation),
-                goals_short_term: Some(faction_list_from_db_text(&faction.goals_short_term)),
-                goals_long_term: Some(faction_list_from_db_text(&faction.goals_long_term)),
-                symbol_description: Some(faction.symbol_description),
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(faction.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(item) = item_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: item.id,
-                entity_type: EntityType::Item,
-                name: item.name,
-                slug: item.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: Some(item.location.clone()),
-                vault_path: normalize_relative_path_for_storage(&item.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: Some(item.category),
-                rarity: Some(item.rarity),
-                attunement: Some(item.attunement),
-                materials: Some(faction_list_from_db_text(&item.materials)),
-                appearance: Some(item.appearance),
-                abilities: Some(item.abilities),
-                drawbacks: Some(item.drawbacks),
-                history: Some(item.history),
-                value: Some(item.value),
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(item.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(event) = event_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: event.id,
-                entity_type: EntityType::Event,
-                name: event.name,
-                slug: event.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&event.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: Some(event.body),
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(event.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(god) = god_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            return Ok(Some(EntityDetails {
-                id: god.id,
-                entity_type: EntityType::God,
-                name: god.name,
-                slug: god.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: None,
-                vault_path: normalize_relative_path_for_storage(&god.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: None,
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: Some(faction_list_from_db_text(&god.allies)),
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: Some(god.appearance),
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: Some(god.epithet),
-                rank: Some(god.rank),
-                rank_custom: god.rank_custom,
-                alignment: Some(god.alignment),
-                domains: Some(faction_list_from_db_text(&god.domains)),
-                symbol: Some(god.symbol),
-                dogma: Some(god.dogma),
-                realm: Some(god.realm),
-                worshippers: Some(god.worshippers),
-                clergy: Some(god.clergy),
-                rivals: Some(faction_list_from_db_text(&god.rivals)),
-                created_at: Some(god.created_at),
-                premise: None,
-                topology: None,
-                twist: None,
-                beats: None,
-                story: None,
-            }));
-        }
-
-        if let Some(dungeon) = dungeon_repo
-            .find_by_name_or_slug(database.as_ref(), trimmed)
-            .await?
-        {
-            let beats: Vec<DungeonBeat> =
-                serde_json::from_str(&dungeon.beats_json).unwrap_or_default();
-            return Ok(Some(EntityDetails {
-                id: dungeon.id,
-                entity_type: EntityType::Dungeon,
-                name: dungeon.name,
-                slug: dungeon.slug,
-                race: None,
-                occupation: None,
-                sex: None,
-                age: None,
-                height: None,
-                weight_lbs: None,
-                background: None,
-                want_need: None,
-                secret_obstacle: None,
-                carrying: None,
-                location: Some(dungeon.location.clone()),
-                vault_path: normalize_relative_path_for_storage(&dungeon.vault_path),
-                kind_type: None,
-                kind_custom: None,
-                visual_description: None,
-                history_background: None,
-                exports: None,
-                tone: Some(dungeon.tone),
-                authority: None,
-                danger_level: None,
-                current_tension: None,
-                public_description: None,
-                true_agenda: None,
-                methods: None,
-                leadership: None,
-                headquarters: None,
-                sphere_of_influence: None,
-                resources_assets: None,
-                allies: None,
-                rivals_enemies: None,
-                reputation: None,
-                goals_short_term: None,
-                goals_long_term: None,
-                symbol_description: None,
-                category: None,
-                rarity: None,
-                attunement: None,
-                materials: None,
-                appearance: None,
-                abilities: None,
-                drawbacks: None,
-                history: None,
-                value: None,
-                body: None,
-                epithet: None,
-                rank: None,
-                rank_custom: None,
-                alignment: None,
-                domains: None,
-                symbol: None,
-                dogma: None,
-                realm: None,
-                worshippers: None,
-                clergy: None,
-                rivals: None,
-                created_at: Some(dungeon.created_at),
-                premise: Some(dungeon.premise),
-                topology: Some(dungeon.topology),
-                twist: Some(dungeon.twist),
-                beats: Some(beats),
-                story: Some(dungeon.story),
-            }));
-        }
-
-        Ok(None)
     }
 
     pub async fn soft_delete_entity(
@@ -732,458 +372,35 @@ impl EntityAdminService {
     ) -> Result<SoftDeleteEntityResult, String> {
         let target = input.target.trim();
         if target.is_empty() {
-            return Err("usage: delete <npc-or-location-name>".to_string());
+            return Err("usage: delete <entity-name>".to_string());
         }
 
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
-        let database = state.database();
-        let npc_repo = state.npc_repo();
-        let location_repo = state.location_repo();
-        let faction_repo = state.faction_repo();
-        let item_repo = state.item_repo();
-        let event_repo = state.event_repo();
-        let god_repo = state.god_repo();
-        let dungeon_repo = state.dungeon_repo();
-        let document_repo = state.document_repo();
-        let soft_delete_repo = state.soft_delete_repo();
+        // Delete works purely on local state, so it needs no vault config \u2014 only the
+        // entity store (TOML drafts) and the database.
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let now = now_timestamp();
 
-        if let Some(npc) = npc_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&npc.vault_path);
-            let trash_path = unique_trash_path(&vault, "npcs", &npc.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            npc_repo
-                .delete_by_id(database.as_ref(), &npc.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &npc.vault_path)
-                .await?;
-
-            let payload = NpcDeletePayload {
-                id: npc.id.clone(),
-                slug: npc.slug.clone(),
-                name: npc.name.clone(),
-                race: npc.race,
-                occupation: npc.occupation,
-                sex: npc.sex,
-                age: npc.age,
-                height: npc.height,
-                weight_lbs: npc.weight_lbs,
-                background: npc.background,
-                want_need: npc.want_need,
-                secret_obstacle: npc.secret_obstacle,
-                carrying: npc.carrying,
-                location: npc.location,
-                vault_path: normalized_vault_path.clone(),
-                created_at: npc.created_at,
-                updated_at: npc.updated_at,
+        // Walk kinds in registry order, soft-deleting the first name/slug match
+        // (first-match wins \u2014 a bare name colliding across kinds resolves to the
+        // earliest kind). The per-kind snapshot + draft/DB/index removal is generated
+        // by `impl_entity_soft_delete!`; the vault is never touched.
+        for kind in ALL_ENTITY_KINDS {
+            let found = match kind {
+                EntityKind::Npc => soft_delete_npc(target, state, &store, &now).await?,
+                EntityKind::Location => soft_delete_location(target, state, &store, &now).await?,
+                EntityKind::Faction => soft_delete_faction(target, state, &store, &now).await?,
+                EntityKind::Item => soft_delete_item(target, state, &store, &now).await?,
+                EntityKind::Event => soft_delete_event(target, state, &store, &now).await?,
+                EntityKind::God => soft_delete_god(target, state, &store, &now).await?,
+                EntityKind::Dungeon => soft_delete_dungeon(target, state, &store, &now).await?,
             };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "npc".to_string(),
-                entity_id: npc.id.clone(),
-                name: npc.name.clone(),
-                slug: npc.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Npc,
-                id: npc.id,
-                name: npc.name,
-                slug: npc.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(location) = location_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&location.vault_path);
-            let trash_path = unique_trash_path(&vault, "locations", &location.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            location_repo
-                .delete_by_id(database.as_ref(), &location.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &location.vault_path)
-                .await?;
-
-            let payload = LocationDeletePayload {
-                id: location.id.clone(),
-                slug: location.slug.clone(),
-                name: location.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                kind_type: location.kind_type,
-                kind_custom: location.kind_custom,
-                visual_description: location.visual_description,
-                history_background: location.history_background,
-                exports: location.exports,
-                tone: location.tone,
-                authority: location.authority,
-                danger_level: location.danger_level,
-                current_tension: location.current_tension,
-                created_at: location.created_at,
-                updated_at: location.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "location".to_string(),
-                entity_id: location.id.clone(),
-                name: location.name.clone(),
-                slug: location.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Location,
-                id: location.id,
-                name: location.name,
-                slug: location.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(faction) = faction_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&faction.vault_path);
-            let trash_path = unique_trash_path(&vault, "factions", &faction.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            faction_repo
-                .delete_by_id(database.as_ref(), &faction.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &faction.vault_path)
-                .await?;
-
-            let payload = FactionDeletePayload {
-                id: faction.id.clone(),
-                slug: faction.slug.clone(),
-                name: faction.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                kind_type: faction.kind_type,
-                kind_custom: faction.kind_custom,
-                public_description: faction.public_description,
-                true_agenda: faction.true_agenda,
-                methods: faction.methods,
-                leadership: faction.leadership,
-                headquarters: faction.headquarters,
-                sphere_of_influence: faction.sphere_of_influence,
-                resources_assets: faction.resources_assets,
-                allies: faction.allies,
-                rivals_enemies: faction.rivals_enemies,
-                reputation: faction.reputation,
-                current_tension: faction.current_tension,
-                goals_short_term: faction.goals_short_term,
-                goals_long_term: faction.goals_long_term,
-                symbol_description: faction.symbol_description,
-                created_at: faction.created_at,
-                updated_at: faction.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "faction".to_string(),
-                entity_id: faction.id.clone(),
-                name: faction.name.clone(),
-                slug: faction.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Faction,
-                id: faction.id,
-                name: faction.name,
-                slug: faction.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(item) = item_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&item.vault_path);
-            let trash_path = unique_trash_path(&vault, "items", &item.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            item_repo
-                .delete_by_id(database.as_ref(), &item.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &item.vault_path)
-                .await?;
-
-            let payload = ItemDeletePayload {
-                id: item.id.clone(),
-                slug: item.slug.clone(),
-                name: item.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                category: item.category,
-                rarity: item.rarity,
-                attunement: item.attunement,
-                materials: item.materials,
-                appearance: item.appearance,
-                abilities: item.abilities,
-                drawbacks: item.drawbacks,
-                history: item.history,
-                value: item.value,
-                location: item.location,
-                created_at: item.created_at,
-                updated_at: item.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "item".to_string(),
-                entity_id: item.id.clone(),
-                name: item.name.clone(),
-                slug: item.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Item,
-                id: item.id,
-                name: item.name,
-                slug: item.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(event) = event_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&event.vault_path);
-            let trash_path = unique_trash_path(&vault, "events", &event.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            event_repo
-                .delete_by_id(database.as_ref(), &event.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &event.vault_path)
-                .await?;
-
-            let payload = EventDeletePayload {
-                id: event.id.clone(),
-                slug: event.slug.clone(),
-                name: event.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                body: event.body,
-                created_at: event.created_at,
-                updated_at: event.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "event".to_string(),
-                entity_id: event.id.clone(),
-                name: event.name.clone(),
-                slug: event.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Event,
-                id: event.id,
-                name: event.name,
-                slug: event.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(god) = god_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&god.vault_path);
-            let trash_path = unique_trash_path(&vault, "gods", &god.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            god_repo
-                .delete_by_id(database.as_ref(), &god.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &god.vault_path)
-                .await?;
-
-            let payload = GodDeletePayload {
-                id: god.id.clone(),
-                slug: god.slug.clone(),
-                name: god.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                epithet: god.epithet,
-                rank: god.rank,
-                rank_custom: god.rank_custom,
-                alignment: god.alignment,
-                domains: god.domains,
-                symbol: god.symbol,
-                appearance: god.appearance,
-                dogma: god.dogma,
-                realm: god.realm,
-                worshippers: god.worshippers,
-                clergy: god.clergy,
-                allies: god.allies,
-                rivals: god.rivals,
-                created_at: god.created_at,
-                updated_at: god.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "god".to_string(),
-                entity_id: god.id.clone(),
-                name: god.name.clone(),
-                slug: god.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::God,
-                id: god.id,
-                name: god.name,
-                slug: god.slug,
-                trash_vault_path: trash_path,
-            });
-        }
-
-        if let Some(dungeon) = dungeon_repo
-            .find_by_name_or_slug(database.as_ref(), target)
-            .await?
-        {
-            let normalized_vault_path = normalize_relative_path_for_storage(&dungeon.vault_path);
-            let trash_path = unique_trash_path(&vault, "dungeons", &dungeon.slug, &now)?;
-            move_vault_file(&vault, &normalized_vault_path, &trash_path)?;
-
-            dungeon_repo
-                .delete_by_id(database.as_ref(), &dungeon.id)
-                .await?;
-            document_repo
-                .delete_by_vault_path(database.as_ref(), &dungeon.vault_path)
-                .await?;
-
-            let payload = DungeonDeletePayload {
-                id: dungeon.id.clone(),
-                slug: dungeon.slug.clone(),
-                name: dungeon.name.clone(),
-                vault_path: normalized_vault_path.clone(),
-                location: dungeon.location,
-                story: dungeon.story,
-                premise: dungeon.premise,
-                topology: dungeon.topology,
-                tone: dungeon.tone,
-                twist: dungeon.twist,
-                beats_json: dungeon.beats_json,
-                created_at: dungeon.created_at,
-                updated_at: dungeon.updated_at,
-            };
-
-            let payload_json = serde_json::to_string(&payload).map_err(|err| err.to_string())?;
-            let soft_delete_row = db::SoftDeleteRow {
-                id: 0,
-                entity_type: "dungeon".to_string(),
-                entity_id: dungeon.id.clone(),
-                name: dungeon.name.clone(),
-                slug: dungeon.slug.clone(),
-                original_vault_path: normalized_vault_path,
-                trash_vault_path: trash_path.clone(),
-                payload_json,
-                created_at: now.clone(),
-                undone_at: None,
-                operation: "delete".to_string(),
-            };
-            soft_delete_repo
-                .insert(database.as_ref(), &soft_delete_row)
-                .await?;
-
-            return Ok(SoftDeleteEntityResult {
-                entity_type: EntityType::Dungeon,
-                id: dungeon.id,
-                name: dungeon.name,
-                slug: dungeon.slug,
-                trash_vault_path: trash_path,
-            });
+            if let Some(result) = found {
+                return Ok(result);
+            }
         }
 
         Err(format!(
-            "no npc, location, faction, item, event, god, or dungeon found for: {target}"
+            "nothing to delete: no saved draft found for \"{target}\"."
         ))
     }
 
@@ -1191,32 +408,10 @@ impl EntityAdminService {
         &self,
         state: &AppState,
     ) -> Result<UndoSoftDeleteResult, String> {
-        let loaded = load_effective(&state.workspace_root).map_err(|err| err.to_string())?;
-        validate_for_runtime(&loaded.effective).map_err(|err| err.to_string())?;
-        let vault_path = loaded
-            .effective
-            .vault
-            .path
-            .clone()
-            .ok_or_else(|| "vault.path is not configured".to_string())?;
-        let vault = Vault::new(vault_path);
-        state.vault_repo().ensure_structure(&vault)?;
-
         let database = state.database();
-        let npc_repo = state.npc_repo();
-        let location_repo = state.location_repo();
-        let faction_repo = state.faction_repo();
-        let item_repo = state.item_repo();
-        let event_repo = state.event_repo();
-        let god_repo = state.god_repo();
-        let dungeon_repo = state.dungeon_repo();
-        let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
 
-        let Some(soft_delete) = soft_delete_repo
-            .latest_pending(database.as_ref())
-            .await?
-        else {
+        let Some(soft_delete) = soft_delete_repo.latest_pending(database.as_ref()).await? else {
             return Err("nothing to undo".to_string());
         };
 
@@ -1224,457 +419,20 @@ impl EntityAdminService {
             return self.undo_publish(state, &soft_delete).await;
         }
 
+        // Undo of a delete is local-only too: recreate the TOML draft + DB/index
+        // rows from the recovery payload. No vault config or file moves involved.
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let now = now_timestamp();
-
-        if soft_delete.entity_type == "npc" {
-            let payload: NpcDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug;
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "npcs", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "npcs", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let npc_row = db::NpcRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                race: payload.race,
-                occupation: payload.occupation,
-                sex: payload.sex,
-                age: payload.age,
-                height: payload.height,
-                weight_lbs: payload.weight_lbs,
-                background: payload.background,
-                want_need: payload.want_need,
-                secret_obstacle: payload.secret_obstacle,
-                carrying: payload.carrying,
-                location: payload.location,
-                vault_path: restored_vault_path.clone(),
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            npc_repo
-                .upsert(database.as_ref(), &npc_row)
-                .await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "npc",
-                    &npc_row.slug,
-                    Some(&npc_row.name),
-                    &npc_row.vault_path,
-                    &npc_row.created_at,
-                    &npc_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Npc,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
+        match soft_delete.entity_type.as_str() {
+            "npc" => restore_npc(&soft_delete, state, &store, &now).await,
+            "location" => restore_location(&soft_delete, state, &store, &now).await,
+            "faction" => restore_faction(&soft_delete, state, &store, &now).await,
+            "item" => restore_item(&soft_delete, state, &store, &now).await,
+            "event" => restore_event(&soft_delete, state, &store, &now).await,
+            "god" => restore_god(&soft_delete, state, &store, &now).await,
+            "dungeon" => restore_dungeon(&soft_delete, state, &store, &now).await,
+            other => Err(format!("unsupported soft delete entity type: {other}")),
         }
-
-        if soft_delete.entity_type == "location" {
-            let payload: LocationDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug;
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "locations", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "locations", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let location_row = db::LocationRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                kind_type: payload.kind_type,
-                kind_custom: payload.kind_custom,
-                visual_description: payload.visual_description,
-                history_background: payload.history_background,
-                exports: payload.exports,
-                tone: payload.tone,
-                authority: payload.authority,
-                danger_level: payload.danger_level,
-                current_tension: payload.current_tension,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            location_repo
-                .upsert(database.as_ref(), &location_row)
-                .await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "location",
-                    &location_row.slug,
-                    Some(&location_row.name),
-                    &location_row.vault_path,
-                    &location_row.created_at,
-                    &location_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Location,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "faction" {
-            let payload: FactionDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug;
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "factions", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "factions", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let faction_row = db::FactionRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                kind_type: payload.kind_type,
-                kind_custom: payload.kind_custom,
-                public_description: payload.public_description,
-                true_agenda: payload.true_agenda,
-                methods: payload.methods,
-                leadership: payload.leadership,
-                headquarters: payload.headquarters,
-                sphere_of_influence: payload.sphere_of_influence,
-                resources_assets: payload.resources_assets,
-                allies: payload.allies,
-                rivals_enemies: payload.rivals_enemies,
-                reputation: payload.reputation,
-                current_tension: payload.current_tension,
-                goals_short_term: payload.goals_short_term,
-                goals_long_term: payload.goals_long_term,
-                symbol_description: payload.symbol_description,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            faction_repo
-                .upsert(database.as_ref(), &faction_row)
-                .await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "faction",
-                    &faction_row.slug,
-                    Some(&faction_row.name),
-                    &faction_row.vault_path,
-                    &faction_row.created_at,
-                    &faction_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Faction,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "item" {
-            let payload: ItemDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "items", &restored_slug);
-                restored_vault_path = unique_markdown_path_for_name(&vault, "items", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let item_row = db::ItemRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                category: payload.category,
-                rarity: payload.rarity,
-                attunement: payload.attunement,
-                materials: payload.materials,
-                appearance: payload.appearance,
-                abilities: payload.abilities,
-                drawbacks: payload.drawbacks,
-                history: payload.history,
-                value: payload.value,
-                location: payload.location,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            item_repo
-                .upsert(database.as_ref(), &item_row)
-                .await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "item",
-                    &item_row.slug,
-                    Some(&item_row.name),
-                    &item_row.vault_path,
-                    &item_row.created_at,
-                    &item_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Item,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "event" {
-            let payload: EventDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "events", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "events", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let event_row = db::EventRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                body: payload.body,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            event_repo.upsert(database.as_ref(), &event_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "event",
-                    &event_row.slug,
-                    Some(&event_row.name),
-                    &event_row.vault_path,
-                    &event_row.created_at,
-                    &event_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Event,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "god" {
-            let payload: GodDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "gods", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "gods", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let god_row = db::GodRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                epithet: payload.epithet,
-                rank: payload.rank,
-                rank_custom: payload.rank_custom,
-                alignment: payload.alignment,
-                domains: payload.domains,
-                symbol: payload.symbol,
-                appearance: payload.appearance,
-                dogma: payload.dogma,
-                realm: payload.realm,
-                worshippers: payload.worshippers,
-                clergy: payload.clergy,
-                allies: payload.allies,
-                rivals: payload.rivals,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            god_repo.upsert(database.as_ref(), &god_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "god",
-                    &god_row.slug,
-                    Some(&god_row.name),
-                    &god_row.vault_path,
-                    &god_row.created_at,
-                    &god_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::God,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        if soft_delete.entity_type == "dungeon" {
-            let payload: DungeonDeletePayload =
-                serde_json::from_str(&soft_delete.payload_json).map_err(|err| err.to_string())?;
-
-            let mut restored_slug = payload.slug.clone();
-            let mut restored_vault_path = normalize_relative_path_for_storage(&payload.vault_path);
-            let trash_vault_path = normalize_relative_path_for_storage(&soft_delete.trash_vault_path);
-            let preferred_full = vault
-                .resolve_relative(&PathBuf::from(&restored_vault_path))
-                .map_err(|err| err.to_string())?;
-            if preferred_full.exists() {
-                restored_slug = unique_slug_for_dir(vault.root(), "dungeons", &restored_slug);
-                restored_vault_path =
-                    unique_markdown_path_for_name(&vault, "dungeons", &payload.name, None)?;
-            }
-
-            move_vault_file(&vault, &trash_vault_path, &restored_vault_path)?;
-
-            let dungeon_row = db::DungeonRow {
-                id: payload.id.clone(),
-                slug: restored_slug.clone(),
-                name: payload.name.clone(),
-                vault_path: restored_vault_path.clone(),
-                location: payload.location,
-                story: payload.story,
-                premise: payload.premise,
-                topology: payload.topology,
-                tone: payload.tone,
-                twist: payload.twist,
-                beats_json: payload.beats_json,
-                created_at: payload.created_at,
-                updated_at: now.clone(),
-            };
-
-            dungeon_repo.upsert(database.as_ref(), &dungeon_row).await?;
-            document_repo
-                .upsert_index(
-                    database.as_ref(),
-                    "dungeon",
-                    &dungeon_row.slug,
-                    Some(&dungeon_row.name),
-                    &dungeon_row.vault_path,
-                    &dungeon_row.created_at,
-                    &dungeon_row.updated_at,
-                )
-                .await?;
-
-            soft_delete_repo
-                .mark_undone(database.as_ref(), soft_delete.id, &now)
-                .await?;
-
-            return Ok(UndoSoftDeleteResult {
-                entity_type: EntityType::Dungeon,
-                id: payload.id,
-                name: payload.name,
-                slug: restored_slug,
-                vault_path: restored_vault_path,
-            });
-        }
-
-        Err(format!(
-            "unsupported soft delete entity type: {}",
-            soft_delete.entity_type
-        ))
     }
 
     /// Retires a just-published entity from the app: records a reversible `publish`
@@ -1684,7 +442,7 @@ impl EntityAdminService {
     pub async fn soft_delete_for_publish(
         &self,
         state: &AppState,
-        entity_type: EntityType,
+        entity_type: EntityKind,
         slug: &str,
     ) -> Result<(), String> {
         let database = state.database();
@@ -1695,37 +453,37 @@ impl EntityAdminService {
         // Look up the live row (without deleting yet) so the recovery record is
         // written before anything is destroyed.
         let Some((id, name, vault_path)) = (match entity_type {
-            EntityType::Npc => state
+            EntityKind::Npc => state
                 .npc_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Location => state
+            EntityKind::Location => state
                 .location_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Faction => state
+            EntityKind::Faction => state
                 .faction_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Item => state
+            EntityKind::Item => state
                 .item_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Event => state
+            EntityKind::Event => state
                 .event_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::God => state
+            EntityKind::God => state
                 .god_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
                 .map(|row| (row.id, row.name, row.vault_path)),
-            EntityType::Dungeon => state
+            EntityKind::Dungeon => state
                 .dungeon_repo()
                 .find_by_name_or_slug(database.as_ref(), slug)
                 .await?
@@ -1761,18 +519,22 @@ impl EntityAdminService {
             .insert(database.as_ref(), &soft_delete_row)
             .await?;
 
+        // Drop the row and its index entry as one transaction (P6.1); the recovery
+        // row is already committed above.
+        let mut tx = database.begin().await.map_err(|err| err.to_string())?;
         match entity_type {
-            EntityType::Npc => state.npc_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Location => state.location_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Faction => state.faction_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Item => state.item_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Event => state.event_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::God => state.god_repo().delete_by_id(database.as_ref(), &id).await?,
-            EntityType::Dungeon => state.dungeon_repo().delete_by_id(database.as_ref(), &id).await?,
+            EntityKind::Npc => state.npc_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Location => state.location_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Faction => state.faction_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Item => state.item_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Event => state.event_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::God => state.god_repo().delete_by_id_tx(&mut tx, &id).await?,
+            EntityKind::Dungeon => state.dungeon_repo().delete_by_id_tx(&mut tx, &id).await?,
         }
         document_repo
-            .delete_by_vault_path(database.as_ref(), &normalized)
+            .delete_by_vault_path_tx(&mut tx, &normalized)
             .await?;
+        tx.commit().await.map_err(|err| err.to_string())?;
 
         Ok(())
     }
@@ -1787,99 +549,442 @@ impl EntityAdminService {
         let database = state.database();
         let document_repo = state.document_repo();
         let soft_delete_repo = state.soft_delete_repo();
-        let store = EntityStore::new(&state.workspace_root).map_err(|err| err.to_string())?;
+        let store = EntityStore::new().map_err(|err| err.to_string())?;
         let now = now_timestamp();
         let slug = soft_delete.slug.as_str();
-        let missing = || format!("cannot undo publish: canonical {} record is missing", soft_delete.entity_type);
+        let missing = || {
+            format!(
+                "cannot undo publish: canonical {} record is missing",
+                soft_delete.entity_type
+            )
+        };
 
         match soft_delete.entity_type.as_str() {
             "npc" => {
-                let mut frontmatter = store.load_npc(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_npc(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_npc(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_npc(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = npc_row_from_frontmatter(&frontmatter)?;
                 state.npc_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "npc", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "npc",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Npc, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::Npc,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "location" => {
-                let mut frontmatter = store.load_location(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_location(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_location(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_location(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = location_row_from_frontmatter(&frontmatter)?;
-                state.location_repo().upsert(database.as_ref(), &row).await?;
-                document_repo
-                    .upsert_index(database.as_ref(), "location", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                state
+                    .location_repo()
+                    .upsert(database.as_ref(), &row)
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Location, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                document_repo
+                    .upsert_index(
+                        database.as_ref(),
+                        "location",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
+                    .await?;
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::Location,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "faction" => {
-                let mut frontmatter = store.load_faction(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_faction(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_faction(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_faction(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = faction_row_from_frontmatter(&frontmatter)?;
                 state.faction_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "faction", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "faction",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Faction, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::Faction,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "item" => {
-                let mut frontmatter = store.load_item(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_item(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_item(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_item(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = item_row_from_frontmatter(&frontmatter)?;
                 state.item_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "item", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "item",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Item, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::Item,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "event" => {
-                let mut frontmatter = store.load_event(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_event(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_event(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_event(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = event_row_from_frontmatter(&frontmatter)?;
                 state.event_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "event", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "event",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Event, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::Event,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "god" => {
-                let mut frontmatter = store.load_god(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_god(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_god(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_god(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = god_row_from_frontmatter(&frontmatter)?;
                 state.god_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "god", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "god",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::God, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::God,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
             "dungeon" => {
-                let mut frontmatter = store.load_dungeon(slug).map_err(|err| err.to_string())?.ok_or_else(missing)?;
+                let mut frontmatter = store
+                    .load_dungeon(slug)
+                    .map_err(|err| err.to_string())?
+                    .ok_or_else(missing)?;
                 frontmatter.published_at = None;
-                store.save_dungeon(&frontmatter).map_err(|err| err.to_string())?;
+                store
+                    .save_dungeon(&frontmatter)
+                    .map_err(|err| err.to_string())?;
                 let row = dungeon_row_from_frontmatter(&frontmatter)?;
                 state.dungeon_repo().upsert(database.as_ref(), &row).await?;
                 document_repo
-                    .upsert_index(database.as_ref(), "dungeon", &row.slug, Some(&row.name), &row.vault_path, &row.created_at, &row.updated_at)
+                    .upsert_index(
+                        database.as_ref(),
+                        "dungeon",
+                        &row.slug,
+                        Some(&row.name),
+                        &row.vault_path,
+                        &row.created_at,
+                        &row.updated_at,
+                    )
                     .await?;
-                soft_delete_repo.mark_undone(database.as_ref(), soft_delete.id, &now).await?;
-                Ok(UndoSoftDeleteResult { entity_type: EntityType::Dungeon, id: frontmatter.id, name: frontmatter.name, slug: frontmatter.slug, vault_path: frontmatter.vault_path })
+                soft_delete_repo
+                    .mark_undone(database.as_ref(), soft_delete.id, &now)
+                    .await?;
+                Ok(UndoSoftDeleteResult {
+                    entity_type: EntityKind::Dungeon,
+                    id: frontmatter.id,
+                    name: frontmatter.name,
+                    slug: frontmatter.slug,
+                    vault_path: frontmatter.vault_path,
+                })
             }
-            other => Err(format!("cannot undo publish for unknown entity type: {other}")),
+            other => Err(format!(
+                "cannot undo publish for unknown entity type: {other}"
+            )),
         }
     }
+}
+
+impl_entity_soft_delete! {
+    kind: EntityKind::Npc,
+    dir: "npcs",
+    repo: npc_repo,
+    frontmatter: NpcFrontmatter,
+    store_load: load_npc,
+    store_save: save_npc,
+    store_delete: delete_npc,
+    row_from_frontmatter: npc_row_from_frontmatter,
+    soft_delete_fn: soft_delete_npc,
+    restore_fn: restore_npc,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Location,
+    dir: "locations",
+    repo: location_repo,
+    frontmatter: LocationFrontmatter,
+    store_load: load_location,
+    store_save: save_location,
+    store_delete: delete_location,
+    row_from_frontmatter: location_row_from_frontmatter,
+    soft_delete_fn: soft_delete_location,
+    restore_fn: restore_location,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Faction,
+    dir: "factions",
+    repo: faction_repo,
+    frontmatter: FactionFrontmatter,
+    store_load: load_faction,
+    store_save: save_faction,
+    store_delete: delete_faction,
+    row_from_frontmatter: faction_row_from_frontmatter,
+    soft_delete_fn: soft_delete_faction,
+    restore_fn: restore_faction,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Item,
+    dir: "items",
+    repo: item_repo,
+    frontmatter: ItemFrontmatter,
+    store_load: load_item,
+    store_save: save_item,
+    store_delete: delete_item,
+    row_from_frontmatter: item_row_from_frontmatter,
+    soft_delete_fn: soft_delete_item,
+    restore_fn: restore_item,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Event,
+    dir: "events",
+    repo: event_repo,
+    frontmatter: EventFrontmatter,
+    store_load: load_event,
+    store_save: save_event,
+    store_delete: delete_event,
+    row_from_frontmatter: event_row_from_frontmatter,
+    soft_delete_fn: soft_delete_event,
+    restore_fn: restore_event,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::God,
+    dir: "gods",
+    repo: god_repo,
+    frontmatter: GodFrontmatter,
+    store_load: load_god,
+    store_save: save_god,
+    store_delete: delete_god,
+    row_from_frontmatter: god_row_from_frontmatter,
+    soft_delete_fn: soft_delete_god,
+    restore_fn: restore_god,
+}
+impl_entity_soft_delete! {
+    kind: EntityKind::Dungeon,
+    dir: "dungeons",
+    repo: dungeon_repo,
+    frontmatter: DungeonFrontmatter,
+    store_load: load_dungeon,
+    store_save: save_dungeon,
+    store_delete: delete_dungeon,
+    row_from_frontmatter: dungeon_row_from_frontmatter,
+    soft_delete_fn: soft_delete_dungeon,
+    restore_fn: restore_dungeon,
+}
+
+/// Record an entity's recovery row (the serialized TOML draft) before any
+/// destructive step. The vault is never touched — the recovery payload is the
+/// draft itself, so there is no trash file to move. The caller removes the draft
+/// + DB row only after this returns (P1.3 safe order).
+#[allow(clippy::too_many_arguments)]
+async fn record_soft_delete(
+    state: &AppState,
+    kind: EntityKind,
+    id: &str,
+    slug: &str,
+    name: &str,
+    raw_vault_path: &str,
+    payload_json: String,
+    now: &str,
+) -> Result<(), String> {
+    let database = state.database();
+    let soft_delete_row = db::SoftDeleteRow {
+        id: 0,
+        entity_type: kind.as_str().to_string(),
+        entity_id: id.to_string(),
+        name: name.to_string(),
+        slug: slug.to_string(),
+        original_vault_path: normalize_relative_path_for_storage(raw_vault_path),
+        // No vault file is moved on delete, so there is no trash path.
+        trash_vault_path: String::new(),
+        payload_json,
+        created_at: now.to_string(),
+        undone_at: None,
+        operation: "delete".to_string(),
+    };
+    state
+        .soft_delete_repo()
+        .insert(database.as_ref(), &soft_delete_row)
+        .await?;
+    Ok(())
+}
+
+/// Resolve the slug + vault path to restore to without touching the vault: keep
+/// the originals unless a new entity claimed the slug's TOML draft or the
+/// document-index path while this one was deleted, in which case mint fresh
+/// unique ones.
+async fn restore_collision(
+    state: &AppState,
+    store: &EntityStore,
+    dir: &str,
+    slug: &str,
+    name: &str,
+    vault_path: &str,
+) -> Result<(String, String), String> {
+    let database = state.database();
+    let document_repo = state.document_repo();
+    let restored_vault_path = normalize_relative_path_for_storage(vault_path);
+    let toml_taken = store.root().join(dir).join(format!("{slug}.toml")).exists();
+    let path_taken = document_repo
+        .find_by_vault_path(database.as_ref(), &restored_vault_path)
+        .await?
+        .is_some();
+    if toml_taken || path_taken {
+        let fresh_slug = unique_slug_for_dir_with_ext(store.root(), dir, slug, "toml");
+        let fresh_path =
+            unique_readable_vault_path(document_repo.as_ref(), database.as_ref(), dir, name, None)
+                .await?;
+        Ok((fresh_slug, fresh_path))
+    } else {
+        Ok((slug.to_string(), restored_vault_path))
+    }
+}
+
+/// Re-index a restored entity and mark its recovery row undone.
+#[allow(clippy::too_many_arguments)]
+async fn commit_restore(
+    state: &AppState,
+    kind: EntityKind,
+    slug: &str,
+    name: &str,
+    vault_path: &str,
+    created_at: &str,
+    updated_at: &str,
+    soft_delete_id: i64,
+    now: &str,
+) -> Result<(), String> {
+    let database = state.database();
+    state
+        .document_repo()
+        .upsert_index(
+            database.as_ref(),
+            kind.as_str(),
+            slug,
+            Some(name),
+            vault_path,
+            created_at,
+            updated_at,
+        )
+        .await?;
+    state
+        .soft_delete_repo()
+        .mark_undone(database.as_ref(), soft_delete_id, now)
+        .await?;
+    Ok(())
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1889,16 +994,15 @@ pub struct SoftDeleteEntityInput {
 
 #[derive(Debug, Clone, Serialize)]
 pub struct SoftDeleteEntityResult {
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub id: String,
     pub name: String,
     pub slug: String,
-    pub trash_vault_path: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
 pub struct UndoSoftDeleteResult {
-    pub entity_type: EntityType,
+    pub entity_type: EntityKind,
     pub id: String,
     pub name: String,
     pub slug: String,
@@ -1919,104 +1023,6 @@ pub struct EnsureLocationResult {
     pub created_record: bool,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum EntityType {
-    Npc,
-    Location,
-    Faction,
-    Item,
-    Event,
-    God,
-    Dungeon,
-}
-
-impl EntityType {
-    pub fn as_str(&self) -> &'static str {
-        match self {
-            EntityType::Npc => "npc",
-            EntityType::Location => "location",
-            EntityType::Faction => "faction",
-            EntityType::Item => "item",
-            EntityType::Event => "event",
-            EntityType::God => "god",
-            EntityType::Dungeon => "dungeon",
-        }
-    }
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct EntityDetails {
-    pub id: String,
-    pub entity_type: EntityType,
-    pub name: String,
-    pub slug: String,
-    pub race: Option<String>,
-    pub occupation: Option<String>,
-    pub sex: Option<String>,
-    pub age: Option<String>,
-    pub height: Option<String>,
-    pub weight_lbs: Option<String>,
-    pub background: Option<String>,
-    pub want_need: Option<String>,
-    pub secret_obstacle: Option<String>,
-    pub carrying: Option<Vec<String>>,
-    pub location: Option<String>,
-    pub vault_path: String,
-    pub kind_type: Option<String>,
-    pub kind_custom: Option<String>,
-    pub visual_description: Option<String>,
-    pub history_background: Option<String>,
-    pub exports: Option<Vec<String>>,
-    pub tone: Option<String>,
-    pub authority: Option<String>,
-    pub danger_level: Option<String>,
-    pub current_tension: Option<String>,
-    pub public_description: Option<String>,
-    pub true_agenda: Option<String>,
-    pub methods: Option<String>,
-    pub leadership: Option<String>,
-    pub headquarters: Option<String>,
-    pub sphere_of_influence: Option<String>,
-    pub resources_assets: Option<String>,
-    pub allies: Option<Vec<String>>,
-    pub rivals_enemies: Option<Vec<String>>,
-    pub reputation: Option<String>,
-    pub goals_short_term: Option<Vec<String>>,
-    pub goals_long_term: Option<Vec<String>>,
-    pub symbol_description: Option<String>,
-    pub category: Option<String>,
-    pub rarity: Option<String>,
-    pub attunement: Option<String>,
-    pub materials: Option<Vec<String>>,
-    pub appearance: Option<String>,
-    pub abilities: Option<String>,
-    pub drawbacks: Option<String>,
-    pub history: Option<String>,
-    pub value: Option<String>,
-    /// The narrative body of an event; `None` for the structured entity kinds.
-    pub body: Option<String>,
-    // God-specific fields (`appearance` and `allies` above are reused for gods).
-    pub epithet: Option<String>,
-    pub rank: Option<String>,
-    pub rank_custom: Option<String>,
-    pub alignment: Option<String>,
-    pub domains: Option<Vec<String>>,
-    pub symbol: Option<String>,
-    pub dogma: Option<String>,
-    pub realm: Option<String>,
-    pub worshippers: Option<String>,
-    pub clergy: Option<String>,
-    pub rivals: Option<Vec<String>>,
-    pub created_at: Option<String>,
-    // Dungeon-specific fields.
-    pub premise: Option<String>,
-    pub topology: Option<String>,
-    pub twist: Option<String>,
-    pub beats: Option<Vec<DungeonBeat>>,
-    pub story: Option<String>,
-}
-
 /// Recovery record for a `publish` soft-delete. The full entity data is restored
 /// from the canonical store on undo, so this only needs identifying fields.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -2025,143 +1031,4 @@ struct PublishPayload {
     slug: String,
     name: String,
     vault_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct NpcDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    race: String,
-    occupation: String,
-    sex: String,
-    age: String,
-    height: String,
-    weight_lbs: String,
-    background: String,
-    want_need: String,
-    secret_obstacle: String,
-    carrying: String,
-    location: String,
-    vault_path: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct LocationDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    kind_type: String,
-    kind_custom: Option<String>,
-    visual_description: String,
-    history_background: String,
-    exports: String,
-    tone: String,
-    authority: String,
-    danger_level: String,
-    current_tension: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct FactionDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    kind_type: String,
-    kind_custom: Option<String>,
-    public_description: String,
-    true_agenda: String,
-    methods: String,
-    leadership: String,
-    headquarters: String,
-    sphere_of_influence: String,
-    resources_assets: String,
-    allies: String,
-    rivals_enemies: String,
-    reputation: String,
-    current_tension: String,
-    goals_short_term: String,
-    goals_long_term: String,
-    symbol_description: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct ItemDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    category: String,
-    rarity: String,
-    attunement: String,
-    materials: String,
-    appearance: String,
-    abilities: String,
-    drawbacks: String,
-    history: String,
-    value: String,
-    location: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct EventDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    body: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct GodDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    epithet: String,
-    rank: String,
-    rank_custom: Option<String>,
-    alignment: String,
-    domains: String,
-    symbol: String,
-    appearance: String,
-    dogma: String,
-    realm: String,
-    worshippers: String,
-    clergy: String,
-    allies: String,
-    rivals: String,
-    created_at: String,
-    updated_at: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DungeonDeletePayload {
-    id: String,
-    slug: String,
-    name: String,
-    vault_path: String,
-    #[serde(default)]
-    location: String,
-    #[serde(default)]
-    story: String,
-    premise: String,
-    topology: String,
-    tone: String,
-    twist: String,
-    beats_json: String,
-    created_at: String,
-    updated_at: String,
 }

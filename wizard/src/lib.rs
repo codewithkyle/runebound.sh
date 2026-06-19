@@ -25,6 +25,4 @@ pub type CommandResult = Result<Option<CommandResponse>, String>;
 pub use registry::WizardRegistry;
 pub use runtime::{WizardHost, active_step_suggestions, start_wizard, try_execute_active_wizard};
 pub use session::{WizardData, WizardSession};
-pub use wizard::{
-    NativeAction, NativeOutcome, Wizard, WizardChoice, WizardStep, WizardTransition,
-};
+pub use wizard::{NativeAction, NativeOutcome, Wizard, WizardChoice, WizardStep, WizardTransition};
