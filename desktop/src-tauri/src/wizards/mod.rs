@@ -21,6 +21,7 @@ use crate::app_state::AppState;
 use crate::commands::setup_commands::{FolderPick, pick_vault_folder};
 
 pub mod dungeon;
+pub mod entity_link;
 pub mod location;
 
 use dungeon::DungeonWizard;
