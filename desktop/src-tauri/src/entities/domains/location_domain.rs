@@ -81,6 +81,7 @@ impl EntityDomain for LocationDomain {
             authority: row.authority,
             danger_level: row.danger_level,
             current_tension: row.current_tension,
+            location: row.location,
         };
         Ok(Some(EntityDetail {
             draft: DraftEnvelope::Location(draft),
@@ -324,7 +325,7 @@ impl EntityDomain for LocationDomain {
 
 pub fn location_summary_text(draft: &LocationDraftSession) -> String {
     format!(
-        "## Location Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
+        "## Location Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\nlocation: {}\ndanger: {}\ntension: {}\npath: {}",
         draft.name,
         draft.slug,
         draft.kind_type,
@@ -334,6 +335,11 @@ pub fn location_summary_text(draft: &LocationDraftSession) -> String {
         draft.exports.join(", "),
         draft.tone,
         draft.authority,
+        if draft.location.trim().is_empty() {
+            "(none)"
+        } else {
+            draft.location.trim()
+        },
         draft.danger_level,
         draft.current_tension,
         draft.vault_path,
@@ -369,6 +375,9 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         },
         danger_level: normalize_unknown_text(&draft.danger_level),
         current_tension: normalize_unknown_text(&draft.current_tension),
+        // Preserve a deliberately-empty anchor (most non-guildhall locations) so the
+        // card omits the row; the value is an entity reference, not prose.
+        location: draft.location.clone(),
         seed_prompt: draft.seed_prompt.clone(),
     };
     let entity_card_doc = location_entity_card(&normalized_draft, CardFooter::Show);

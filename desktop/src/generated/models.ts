@@ -4,7 +4,12 @@
 
 export type NpcDraft = { id: string, seed_prompt: string | null, name: string, slug: string, race: string, occupation: string, sex: string, age: string, height: string, weight_lbs: string, background: string, want_need: string, secret_obstacle: string, carrying: Array<string>, location: string, };
 
-export type LocationDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, visual_description: string, history_background: string, exports: Array<string>, tone: string, authority: string, danger_level: string, current_tension: string, };
+export type LocationDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, visual_description: string, history_background: string, exports: Array<string>, tone: string, authority: string, danger_level: string, current_tension: string, 
+/**
+ * The location this one stands within (a guildhall's containing place). Empty
+ * when there is no anchor; published as a `[[wikilink]]`.
+ */
+location: string, };
 
 export type FactionDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, public_description: string, true_agenda: string, methods: string, leadership: string, headquarters: string, sphere_of_influence: string, resources_assets: Array<string>, allies: Array<string>, rivals_enemies: Array<string>, reputation: string, current_tension: string, goals_short_term: Array<string>, goals_long_term: Array<string>, symbol_description: string, };
 

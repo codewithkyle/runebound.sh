@@ -1521,6 +1521,8 @@ fn build_location_draft(d: &LocationWizardData, id: String) -> Option<LocationDr
         authority: seed.authority,
         danger_level: seed.danger_level,
         current_tension: seed.current_tension,
+        // The guildhall anchor (Q-G3); empty for every other branch.
+        location: d.location_anchor.clone().unwrap_or_default(),
     })
 }
 

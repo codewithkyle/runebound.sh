@@ -159,6 +159,9 @@ impl_entity_persistence! {
         let authority = normalize_unknown_text(&draft.authority);
         let danger_level = normalize_location_danger_level(&draft.danger_level)?;
         let current_tension = normalize_unknown_text(&draft.current_tension);
+        // The containing-location anchor is an entity reference, not prose — keep it
+        // empty when unset (the markdown/card omit it) rather than coercing "Unknown".
+        let location = draft.location.trim().to_string();
         validate_location_details(&LocationSeed {
             name: name.to_string(),
             kind_type: kind_type.clone(),
@@ -183,6 +186,7 @@ impl_entity_persistence! {
         authority: authority.clone(),
         danger_level: danger_level.clone(),
         current_tension: current_tension.clone(),
+        location: location.clone(),
     },
     row_fields: {
         kind_type,
@@ -194,6 +198,7 @@ impl_entity_persistence! {
         authority,
         danger_level,
         current_tension,
+        location,
     },
 }
 

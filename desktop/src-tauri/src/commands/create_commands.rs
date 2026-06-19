@@ -184,6 +184,8 @@ async fn create_location(trimmed: &str, state: tauri::State<'_, AppState>) -> Co
         authority: seed.authority,
         danger_level: seed.danger_level,
         current_tension: seed.current_tension,
+        // The one-shot lane has no containing-location anchor (a wizard guildhall does).
+        location: String::new(),
     };
 
     {

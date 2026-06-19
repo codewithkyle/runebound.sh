@@ -76,6 +76,10 @@ pub struct LocationDraft {
     pub authority: String,
     pub danger_level: String,
     pub current_tension: String,
+    /// The location this one stands within (a guildhall's containing place). Empty
+    /// when there is no anchor; published as a `[[wikilink]]`.
+    #[serde(default)]
+    pub location: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -255,6 +259,10 @@ pub struct LocationFrontmatter {
     pub authority: String,
     pub danger_level: String,
     pub current_tension: String,
+    /// The location this one stands within (a guildhall's containing place). Empty
+    /// when there is no anchor; published as a `[[wikilink]]`.
+    #[serde(default)]
+    pub location: String,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
@@ -483,6 +491,14 @@ pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> Output
         rows.push(entity_row(
             "Authority:",
             normalize_unknown_text(&draft.authority),
+        ));
+    }
+    // The containing location (a guildhall's anchor) is optional, so the row is
+    // omitted when empty rather than rendered as "Unknown".
+    if !draft.location.trim().is_empty() {
+        rows.push(entity_row(
+            "Location:",
+            normalize_unknown_text(&draft.location),
         ));
     }
     rows.extend([
@@ -779,6 +795,7 @@ mod tests {
             authority: "Unknown".to_string(),
             danger_level: "deadly".to_string(),
             current_tension: "Something stirs.".to_string(),
+            location: String::new(),
         }
     }
 

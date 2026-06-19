@@ -586,6 +586,7 @@ mod tests {
             authority: String::new(),
             danger_level: String::new(),
             current_tension: String::new(),
+            location: String::new(),
         }
     }
 

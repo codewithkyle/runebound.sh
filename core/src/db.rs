@@ -51,6 +51,9 @@ pub struct LocationRow {
     pub authority: String,
     pub danger_level: String,
     pub current_tension: String,
+    /// The location this one stands within (a guildhall's containing place). Empty
+    /// when there is no anchor.
+    pub location: String,
     pub created_at: String,
     pub updated_at: String,
 }
@@ -241,6 +244,7 @@ impl_entity_table! {
         lenient authority = "Unknown".to_string(),
         lenient danger_level = "Unknown".to_string(),
         lenient current_tension = "Unknown".to_string(),
+        lenient location = String::new(),
     ],
 }
 
@@ -746,6 +750,7 @@ mod tests {
             authority: "Merchants' Compact".to_string(),
             danger_level: "risky".to_string(),
             current_tension: "Guild war brews.".to_string(),
+            location: "Saltmarsh".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
         }
