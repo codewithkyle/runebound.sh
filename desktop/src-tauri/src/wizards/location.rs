@@ -381,9 +381,7 @@ impl WizardStep<AppState> for ResourcesStep {
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         doc()
             .with_block(heading(2, "Create Location — Settlement — Resources"))
-            .with_block(paragraph_text(
-                "What natural resources are here? (e.g. \"river fish and reed\", \"silver ore\", \"grain and cattle\")",
-            ))
+            .with_block(paragraph_text("What natural resources are here?"))
     }
 
     async fn accept(
@@ -1109,8 +1107,6 @@ impl WizardStep<AppState> for FactionLinkStep {
     fn prompt(&self, data: &WizardData) -> OutputDoc {
         let d = location_data(data);
         let mut document = doc().with_block(heading(2, "Create Location — Link a Faction"));
-        let count = d.factions.len();
-        let noun = if count == 1 { "faction" } else { "factions" };
 
         if faction_link_is_guildhall(d) {
             // Mandatory: a guildhall must belong to a faction. An unknown name is
@@ -1130,9 +1126,7 @@ impl WizardStep<AppState> for FactionLinkStep {
             // A long campaign can have hundreds of factions, so search rather than
             // enumerate: typeahead (`suggest`) lists matches as the GM types.
             document = document.with_block(paragraph_with_inlines(vec![
-                text_node(format!(
-                    "Start typing to search your {count} {noun} by name — matches autocomplete as you go. Pick one, or "
-                )),
+                text_node("Search your factions by name, or "),
                 command_ref("skip", "skip"),
                 text_node(" to choose an archetype instead."),
             ]));
@@ -1248,7 +1242,7 @@ impl LocationWizard {
                 Arc::new(GenerateStep {
                     id: "geography_settlement",
                     title: "Create Location — Settlement — Geography",
-                    body: "Geography / trade route? (e.g. \"on a river\", \"landlocked, four days from the coast\")",
+                    body: "Geography / trade route?",
                     field: SeedField::Geography,
                 }),
                 // Site
