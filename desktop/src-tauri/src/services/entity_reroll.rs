@@ -279,6 +279,217 @@ fn reroll_user_message(
     }
 }
 
+/// The rerolled value for one field: either a scalar replacement or a whole list.
+/// Replaces the seven near-identical `Reroll*FieldResult { value, <list> }` shapes
+/// with one the domains match once.
+#[derive(Debug, Clone)]
+pub enum RerollValue {
+    Scalar(String),
+    List(Vec<String>),
+}
+
+/// NPC-occupation-only dedup context: the anchor of the current occupation plus the
+/// recent occupation anchors to avoid (fetched from prior generations). `None` for
+/// every other (kind, field), where the anchor machinery stays inert.
+struct OccupationDedup {
+    current_anchor: String,
+    recent_anchors: HashSet<String>,
+}
+
+/// Outcome of normalizing one scalar reroll value. `Retry` (a coercible enum miss)
+/// re-prompts; `Fail` (a closed-enum violation) aborts — preserving the prior
+/// per-field split: `sex`/`category`/`rarity` fail, `kind_type`/`danger_level`/
+/// `rank`/`alignment` retry, everything else is infallible free text.
+enum ScalarNorm {
+    Value(String),
+    Retry,
+    Fail(String),
+}
+
+/// Normalize a scalar reroll value for `(kind, field)`, centralizing the per-field
+/// normalizer + fail-vs-retry choice the five methods used to inline.
+fn normalize_reroll_scalar(kind: EntityKind, field: &str, raw: &str) -> ScalarNorm {
+    let coerce_or_retry = |result: Result<String, String>| match result {
+        Ok(value) => ScalarNorm::Value(value),
+        Err(_) => ScalarNorm::Retry,
+    };
+    let coerce_or_fail = |result: Result<String, String>| match result {
+        Ok(value) => ScalarNorm::Value(value),
+        Err(err) => ScalarNorm::Fail(err),
+    };
+    match (kind, field) {
+        (EntityKind::Npc, "sex") => coerce_or_fail(normalize_sex(raw)),
+        (EntityKind::Location, "kind_type") => coerce_or_retry(normalize_location_kind_type(raw)),
+        (EntityKind::Location, "danger_level") => {
+            coerce_or_retry(normalize_location_danger_level(raw))
+        }
+        (EntityKind::Faction, "kind_type") => coerce_or_retry(normalize_faction_kind_type(raw)),
+        (EntityKind::God, "rank") => coerce_or_retry(normalize_god_rank(raw)),
+        (EntityKind::God, "alignment") => coerce_or_retry(normalize_god_alignment(raw)),
+        (EntityKind::Item, "category") => coerce_or_fail(normalize_item_category(raw)),
+        (EntityKind::Item, "rarity") => coerce_or_fail(normalize_item_rarity(raw)),
+        _ => ScalarNorm::Value(normalize_unknown_text(raw)),
+    }
+}
+
+/// Normalize a list reroll value. `None` signals a retry — only `location exports`
+/// rejects (empty or > 3 after `normalize_exports`); every other list uses
+/// `normalize_unknown_list` and always accepts (the schema enforces `minItems`).
+fn normalize_reroll_list(kind: EntityKind, field: &str, raw: Vec<String>) -> Option<Vec<String>> {
+    if kind == EntityKind::Location && field == "exports" {
+        let next = normalize_exports(raw);
+        if next.is_empty() || next.len() > 3 {
+            return None;
+        }
+        return Some(next);
+    }
+    Some(normalize_unknown_list(raw))
+}
+
+/// Whether a freshly normalized scalar equals the current value (so the attempt is a
+/// no-op and should retry). `item category`/`rarity` compare exactly (canonical enum
+/// values); everything else is case-insensitive on the trimmed current value.
+fn dedup_scalar_matches(kind: EntityKind, field: &str, normalized: &str, current: &str) -> bool {
+    if kind == EntityKind::Item && (field == "category" || field == "rarity") {
+        normalized == current
+    } else {
+        normalized.eq_ignore_ascii_case(current.trim())
+    }
+}
+
+/// Whether a freshly normalized list equals the current list (retry if so). The
+/// current list is re-normalized with the field's own normalizer before comparing —
+/// except `item materials`, which compares against the stored list verbatim
+/// (preserving the prior per-field behavior).
+fn dedup_list_matches(kind: EntityKind, field: &str, next: &[String], current: &[String]) -> bool {
+    let baseline = match (kind, field) {
+        (EntityKind::Item, "materials") => current.to_vec(),
+        (EntityKind::Location, "exports") => normalize_exports(current.to_vec()),
+        _ => normalize_unknown_list(current.to_vec()),
+    };
+    next == baseline.as_slice()
+}
+
+/// Serialize a typed reroll context into a field map so the generic accept loop can
+/// read any field's current value by name (for dedup) without a per-kind match.
+fn context_snapshot<T: serde::Serialize>(
+    context: &T,
+) -> Result<serde_json::Map<String, serde_json::Value>, String> {
+    match serde_json::to_value(context).map_err(|err| err.to_string())? {
+        serde_json::Value::Object(map) => Ok(map),
+        _ => Err("reroll context did not serialize to an object".to_string()),
+    }
+}
+
+/// The current scalar value of `field` from a context snapshot (absent / null → "").
+fn snapshot_scalar(snapshot: &serde_json::Map<String, serde_json::Value>, field: &str) -> String {
+    snapshot
+        .get(field)
+        .and_then(|value| value.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+/// The current list value of `field` from a context snapshot (absent → empty).
+fn snapshot_list(
+    snapshot: &serde_json::Map<String, serde_json::Value>,
+    field: &str,
+) -> Vec<String> {
+    snapshot
+        .get(field)
+        .and_then(|value| value.as_array())
+        .map(|array| {
+            array
+                .iter()
+                .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+/// The generic reroll accept loop shared by every entity field. Replaces the five
+/// near-identical per-kind closures: extracts the value (list under `list_key`, or
+/// the scalar `value`), normalizes it via [`normalize_reroll_scalar`] /
+/// [`normalize_reroll_list`], retries on a no-op (per [`dedup_scalar_matches`] /
+/// [`dedup_list_matches`]), and applies the NPC occupation-anchor dedup when
+/// `occupation` is set. The per-attempt "current" value is read from `snapshot`.
+#[allow(clippy::too_many_arguments)]
+async fn run_field_reroll(
+    client: &dyn ChatClient,
+    model: &str,
+    sampling: &Sampling,
+    kind: EntityKind,
+    field: &str,
+    is_list: bool,
+    list_key: &str,
+    snapshot: &serde_json::Map<String, serde_json::Value>,
+    system: &str,
+    user: &str,
+    schema: &serde_json::Value,
+    occupation: Option<OccupationDedup>,
+) -> Result<RerollValue, String> {
+    let mut seen_attempt_occupation_anchors: HashSet<String> = HashSet::new();
+    run_reroll_attempts(
+        client,
+        model,
+        sampling,
+        None,
+        system,
+        user,
+        schema,
+        || format!("failed to reroll {} field: {}", kind.command_root(), field),
+        |parsed, attempt| {
+            if is_list {
+                let Some(items) = parsed.get(list_key).and_then(|value| value.as_array()) else {
+                    return RerollStep::Retry;
+                };
+                let raw: Vec<String> = items
+                    .iter()
+                    .filter_map(|item| item.as_str().map(|value| value.to_string()))
+                    .collect();
+                let Some(next) = normalize_reroll_list(kind, field, raw) else {
+                    return RerollStep::Retry;
+                };
+                if attempt < 3
+                    && dedup_list_matches(kind, field, &next, &snapshot_list(snapshot, field))
+                {
+                    return RerollStep::Retry;
+                }
+                return RerollStep::Accept(RerollValue::List(next));
+            }
+
+            let Some(raw_value) = parsed.get("value").and_then(|value| value.as_str()) else {
+                return RerollStep::Retry;
+            };
+            let normalized = match normalize_reroll_scalar(kind, field, raw_value) {
+                ScalarNorm::Value(value) => value,
+                ScalarNorm::Retry => return RerollStep::Retry,
+                ScalarNorm::Fail(err) => return RerollStep::Fail(err),
+            };
+            if attempt < 3
+                && dedup_scalar_matches(kind, field, &normalized, &snapshot_scalar(snapshot, field))
+            {
+                return RerollStep::Retry;
+            }
+            if let Some(occupation) = &occupation {
+                let anchor = occupation_anchor(&normalized);
+                if anchor != "unknown"
+                    && (anchor == occupation.current_anchor
+                        || occupation.recent_anchors.contains(&anchor)
+                        || seen_attempt_occupation_anchors.contains(&anchor))
+                {
+                    return RerollStep::Retry;
+                }
+                if anchor != "unknown" {
+                    seen_attempt_occupation_anchors.insert(anchor);
+                }
+            }
+            RerollStep::Accept(RerollValue::Scalar(normalized))
+        },
+    )
+    .await
+}
+
 pub struct EntityRerollService;
 
 impl EntityRerollService {
@@ -345,91 +556,44 @@ impl EntityRerollService {
         );
 
         let client = OllamaChatClient::from_config(&config)?;
-        let mut seen_attempt_occupation_anchors = HashSet::new();
+        let snapshot = context_snapshot(&input.npc)?;
+        let occupation = if field == "occupation" {
+            Some(OccupationDedup {
+                current_anchor: current_occupation_anchor,
+                recent_anchors: recent_occupation_anchors,
+            })
+        } else {
+            None
+        };
 
-        run_reroll_attempts(
+        let value = run_field_reroll(
             &client,
             &model,
             &NPC_SAMPLING,
-            None,
+            EntityKind::Npc,
+            field,
+            spec.value_kind == ValueKind::List,
+            "carrying",
+            &snapshot,
             &system,
             &user,
             &schema,
-            || format!("failed to reroll npc field: {}", field),
-            |parsed, attempt| {
-                if field == "carrying" {
-                    let Some(items) = parsed.get("carrying").and_then(|item| item.as_array())
-                    else {
-                        return RerollStep::Retry;
-                    };
-                    let next = normalize_unknown_list(
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(|value| value.to_string()))
-                            .collect(),
-                    );
-                    if attempt < 3 && next == normalize_unknown_list(input.npc.carrying.clone()) {
-                        return RerollStep::Retry;
-                    }
-                    return RerollStep::Accept(RerollNpcFieldResult {
-                        field: field.to_string(),
-                        value: None,
-                        carrying: Some(next),
-                    });
-                }
-
-                let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
-                    return RerollStep::Retry;
-                };
-                let normalized = if field == "sex" {
-                    match normalize_sex(raw_value) {
-                        Ok(value) => value,
-                        Err(err) => return RerollStep::Fail(err),
-                    }
-                } else {
-                    normalize_unknown_text(raw_value)
-                };
-
-                let current = match field {
-                    "name" => input.npc.name.clone(),
-                    "race" => input.npc.race.clone(),
-                    "occupation" => input.npc.occupation.clone(),
-                    "sex" => input.npc.sex.clone(),
-                    "age" => input.npc.age.clone(),
-                    "height" => input.npc.height.clone(),
-                    "weight_lbs" => input.npc.weight_lbs.clone(),
-                    "background" => input.npc.background.clone(),
-                    "want_need" => input.npc.want_need.clone(),
-                    "secret_obstacle" => input.npc.secret_obstacle.clone(),
-                    _ => String::new(),
-                };
-
-                if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
-                    return RerollStep::Retry;
-                }
-
-                if field == "occupation" {
-                    let anchor = occupation_anchor(&normalized);
-                    if anchor != "unknown"
-                        && (anchor == current_occupation_anchor
-                            || recent_occupation_anchors.contains(&anchor)
-                            || seen_attempt_occupation_anchors.contains(&anchor))
-                    {
-                        return RerollStep::Retry;
-                    }
-                    if anchor != "unknown" {
-                        seen_attempt_occupation_anchors.insert(anchor);
-                    }
-                }
-
-                RerollStep::Accept(RerollNpcFieldResult {
-                    field: field.to_string(),
-                    value: Some(normalized),
-                    carrying: None,
-                })
-            },
+            occupation,
         )
-        .await
+        .await?;
+
+        Ok(match value {
+            RerollValue::List(carrying) => RerollNpcFieldResult {
+                field: field.to_string(),
+                value: None,
+                carrying: Some(carrying),
+            },
+            RerollValue::Scalar(scalar) => RerollNpcFieldResult {
+                field: field.to_string(),
+                value: Some(scalar),
+                carrying: None,
+            },
+        })
     }
 
     pub async fn reroll_location_field(
@@ -470,81 +634,36 @@ impl EntityRerollService {
         );
 
         let client = OllamaChatClient::from_config(&config)?;
+        let snapshot = context_snapshot(&input.location)?;
 
-        run_reroll_attempts(
+        let value = run_field_reroll(
             &client,
             &model,
             &LOCATION_SAMPLING,
-            None,
+            EntityKind::Location,
+            field,
+            spec.value_kind == ValueKind::List,
+            "exports",
+            &snapshot,
             &system,
             &user,
             &schema,
-            || format!("failed to reroll location field: {}", field),
-            |parsed, attempt| {
-                if field == "exports" {
-                    let Some(items) = parsed.get("exports").and_then(|item| item.as_array()) else {
-                        return RerollStep::Retry;
-                    };
-                    let next = normalize_exports(
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(|value| value.to_string()))
-                            .collect(),
-                    );
-                    if next.is_empty() || next.len() > 3 {
-                        return RerollStep::Retry;
-                    }
-                    if attempt < 3 && next == normalize_exports(input.location.exports.clone()) {
-                        return RerollStep::Retry;
-                    }
-                    return RerollStep::Accept(RerollLocationFieldResult {
-                        field: field.to_string(),
-                        value: None,
-                        exports: Some(next),
-                    });
-                }
-
-                let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
-                    return RerollStep::Retry;
-                };
-
-                let normalized = match field {
-                    "kind_type" => match normalize_location_kind_type(raw_value) {
-                        Ok(value) => value,
-                        Err(_) => return RerollStep::Retry,
-                    },
-                    "danger_level" => match normalize_location_danger_level(raw_value) {
-                        Ok(value) => value,
-                        Err(_) => return RerollStep::Retry,
-                    },
-                    _ => normalize_unknown_text(raw_value),
-                };
-
-                let current = match field {
-                    "name" => input.location.name.clone(),
-                    "kind_type" => input.location.kind_type.clone(),
-                    "kind_custom" => input.location.kind_custom.clone().unwrap_or_default(),
-                    "visual_description" => input.location.visual_description.clone(),
-                    "history_background" => input.location.history_background.clone(),
-                    "tone" => input.location.tone.clone(),
-                    "authority" => input.location.authority.clone(),
-                    "danger_level" => input.location.danger_level.clone(),
-                    "current_tension" => input.location.current_tension.clone(),
-                    _ => String::new(),
-                };
-
-                if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
-                    return RerollStep::Retry;
-                }
-
-                RerollStep::Accept(RerollLocationFieldResult {
-                    field: field.to_string(),
-                    value: Some(normalized),
-                    exports: None,
-                })
-            },
+            None,
         )
-        .await
+        .await?;
+
+        Ok(match value {
+            RerollValue::List(exports) => RerollLocationFieldResult {
+                field: field.to_string(),
+                value: None,
+                exports: Some(exports),
+            },
+            RerollValue::Scalar(scalar) => RerollLocationFieldResult {
+                field: field.to_string(),
+                value: Some(scalar),
+                exports: None,
+            },
+        })
     }
 
     pub async fn reroll_faction_field(
@@ -568,7 +687,6 @@ impl EntityRerollService {
         let context_summary = faction_context_summary(&input.faction);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
-        let is_list = spec.value_kind == ValueKind::List;
         let schema = reroll_field_schema(spec, "list", Some(5));
         let system = reroll_system_prompt(
             EntityKind::Faction,
@@ -586,85 +704,36 @@ impl EntityRerollService {
         );
 
         let client = OllamaChatClient::from_config(&config)?;
+        let snapshot = context_snapshot(&input.faction)?;
 
-        run_reroll_attempts(
+        let value = run_field_reroll(
             &client,
             &model,
             &FACTION_SAMPLING,
-            None,
+            EntityKind::Faction,
+            field,
+            spec.value_kind == ValueKind::List,
+            "list",
+            &snapshot,
             &system,
             &user,
             &schema,
-            || format!("failed to reroll faction field: {}", field),
-            |parsed, attempt| {
-                if is_list {
-                    let Some(items) = parsed.get("list").and_then(|item| item.as_array()) else {
-                        return RerollStep::Retry;
-                    };
-                    let next = normalize_unknown_list(
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(|value| value.to_string()))
-                            .collect(),
-                    );
-                    let current = match field {
-                        "resources_assets" => input.faction.resources_assets.clone(),
-                        "allies" => input.faction.allies.clone(),
-                        "rivals_enemies" => input.faction.rivals_enemies.clone(),
-                        "goals_short_term" => input.faction.goals_short_term.clone(),
-                        "goals_long_term" => input.faction.goals_long_term.clone(),
-                        _ => Vec::new(),
-                    };
-                    if attempt < 3 && next == normalize_unknown_list(current) {
-                        return RerollStep::Retry;
-                    }
-                    return RerollStep::Accept(RerollFactionFieldResult {
-                        field: field.to_string(),
-                        value: None,
-                        list_value: Some(next),
-                    });
-                }
-
-                let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
-                    return RerollStep::Retry;
-                };
-                let normalized = if field == "kind_type" {
-                    match normalize_faction_kind_type(raw_value) {
-                        Ok(value) => value,
-                        Err(_) => return RerollStep::Retry,
-                    }
-                } else {
-                    normalize_unknown_text(raw_value)
-                };
-
-                let current = match field {
-                    "name" => input.faction.name.clone(),
-                    "kind_type" => input.faction.kind_type.clone(),
-                    "kind_custom" => input.faction.kind_custom.clone().unwrap_or_default(),
-                    "public_description" => input.faction.public_description.clone(),
-                    "true_agenda" => input.faction.true_agenda.clone(),
-                    "methods" => input.faction.methods.clone(),
-                    "leadership" => input.faction.leadership.clone(),
-                    "headquarters" => input.faction.headquarters.clone(),
-                    "sphere_of_influence" => input.faction.sphere_of_influence.clone(),
-                    "reputation" => input.faction.reputation.clone(),
-                    "current_tension" => input.faction.current_tension.clone(),
-                    "symbol_description" => input.faction.symbol_description.clone(),
-                    _ => String::new(),
-                };
-
-                if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
-                    return RerollStep::Retry;
-                }
-
-                RerollStep::Accept(RerollFactionFieldResult {
-                    field: field.to_string(),
-                    value: Some(normalized),
-                    list_value: None,
-                })
-            },
+            None,
         )
-        .await
+        .await?;
+
+        Ok(match value {
+            RerollValue::List(list_value) => RerollFactionFieldResult {
+                field: field.to_string(),
+                value: None,
+                list_value: Some(list_value),
+            },
+            RerollValue::Scalar(scalar) => RerollFactionFieldResult {
+                field: field.to_string(),
+                value: Some(scalar),
+                list_value: None,
+            },
+        })
     }
 
     pub async fn reroll_god_field(
@@ -688,7 +757,6 @@ impl EntityRerollService {
         let context_summary = god_context_summary(&input.god);
         let reference_suffix = resolve_reference_suffix(&config, extra_prompt).await;
 
-        let is_list = spec.value_kind == ValueKind::List;
         let schema = reroll_field_schema(spec, "list", Some(5));
         let system = reroll_system_prompt(
             EntityKind::God,
@@ -706,85 +774,36 @@ impl EntityRerollService {
         );
 
         let client = OllamaChatClient::from_config(&config)?;
+        let snapshot = context_snapshot(&input.god)?;
 
-        run_reroll_attempts(
+        let value = run_field_reroll(
             &client,
             &model,
             &GOD_SAMPLING,
-            None,
+            EntityKind::God,
+            field,
+            spec.value_kind == ValueKind::List,
+            "list",
+            &snapshot,
             &system,
             &user,
             &schema,
-            || format!("failed to reroll god field: {}", field),
-            |parsed, attempt| {
-                if is_list {
-                    let Some(items) = parsed.get("list").and_then(|item| item.as_array()) else {
-                        return RerollStep::Retry;
-                    };
-                    let next = normalize_unknown_list(
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(|value| value.to_string()))
-                            .collect(),
-                    );
-                    let current = match field {
-                        "domains" => input.god.domains.clone(),
-                        "allies" => input.god.allies.clone(),
-                        "rivals" => input.god.rivals.clone(),
-                        _ => Vec::new(),
-                    };
-                    if attempt < 3 && next == normalize_unknown_list(current) {
-                        return RerollStep::Retry;
-                    }
-                    return RerollStep::Accept(RerollGodFieldResult {
-                        field: field.to_string(),
-                        value: None,
-                        list_value: Some(next),
-                    });
-                }
-
-                let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
-                    return RerollStep::Retry;
-                };
-                let normalized = match field {
-                    "rank" => match normalize_god_rank(raw_value) {
-                        Ok(value) => value,
-                        Err(_) => return RerollStep::Retry,
-                    },
-                    "alignment" => match normalize_god_alignment(raw_value) {
-                        Ok(value) => value,
-                        Err(_) => return RerollStep::Retry,
-                    },
-                    _ => normalize_unknown_text(raw_value),
-                };
-
-                let current = match field {
-                    "name" => input.god.name.clone(),
-                    "epithet" => input.god.epithet.clone(),
-                    "rank" => input.god.rank.clone(),
-                    "rank_custom" => input.god.rank_custom.clone().unwrap_or_default(),
-                    "alignment" => input.god.alignment.clone(),
-                    "symbol" => input.god.symbol.clone(),
-                    "appearance" => input.god.appearance.clone(),
-                    "dogma" => input.god.dogma.clone(),
-                    "realm" => input.god.realm.clone(),
-                    "worshippers" => input.god.worshippers.clone(),
-                    "clergy" => input.god.clergy.clone(),
-                    _ => String::new(),
-                };
-
-                if attempt < 3 && normalized.eq_ignore_ascii_case(current.trim()) {
-                    return RerollStep::Retry;
-                }
-
-                RerollStep::Accept(RerollGodFieldResult {
-                    field: field.to_string(),
-                    value: Some(normalized),
-                    list_value: None,
-                })
-            },
+            None,
         )
-        .await
+        .await?;
+
+        Ok(match value {
+            RerollValue::List(list_value) => RerollGodFieldResult {
+                field: field.to_string(),
+                value: None,
+                list_value: Some(list_value),
+            },
+            RerollValue::Scalar(scalar) => RerollGodFieldResult {
+                field: field.to_string(),
+                value: Some(scalar),
+                list_value: None,
+            },
+        })
     }
 
     /// Regenerate a single beat against the frozen rest of the dungeon. The other
@@ -1065,84 +1084,36 @@ impl EntityRerollService {
         );
 
         let client = OllamaChatClient::from_config(&config)?;
+        let snapshot = context_snapshot(&input.item)?;
 
-        run_reroll_attempts(
+        let value = run_field_reroll(
             &client,
             &model,
             &ITEM_SAMPLING,
-            None,
+            EntityKind::Item,
+            field,
+            spec.value_kind == ValueKind::List,
+            "materials",
+            &snapshot,
             &system,
             &user,
             &schema,
-            || format!("failed to reroll item field: {}", field),
-            |parsed, attempt| {
-                if field == "materials" {
-                    let Some(items) = parsed.get("materials").and_then(|item| item.as_array())
-                    else {
-                        return RerollStep::Retry;
-                    };
-                    let next = normalize_unknown_list(
-                        items
-                            .iter()
-                            .filter_map(|item| item.as_str().map(|value| value.to_string()))
-                            .collect(),
-                    );
-                    if attempt < 3 && next == input.item.materials {
-                        return RerollStep::Retry;
-                    }
-                    return RerollStep::Accept(RerollItemFieldResult {
-                        field: field.to_string(),
-                        value: None,
-                        materials: Some(next),
-                    });
-                }
-
-                let Some(raw_value) = parsed.get("value").and_then(|item| item.as_str()) else {
-                    return RerollStep::Retry;
-                };
-                let normalized = match field {
-                    "category" => match normalize_item_category(raw_value) {
-                        Ok(value) => value,
-                        Err(err) => return RerollStep::Fail(err),
-                    },
-                    "rarity" => match normalize_item_rarity(raw_value) {
-                        Ok(value) => value,
-                        Err(err) => return RerollStep::Fail(err),
-                    },
-                    _ => normalize_unknown_text(raw_value),
-                };
-
-                if attempt < 3 {
-                    let matches_current = match field {
-                        "name" => normalized.eq_ignore_ascii_case(input.item.name.trim()),
-                        "category" => normalized == input.item.category,
-                        "rarity" => normalized == input.item.rarity,
-                        "attunement" => {
-                            normalized.eq_ignore_ascii_case(input.item.attunement.trim())
-                        }
-                        "appearance" => {
-                            normalized.eq_ignore_ascii_case(input.item.appearance.trim())
-                        }
-                        "abilities" => normalized.eq_ignore_ascii_case(input.item.abilities.trim()),
-                        "drawbacks" => normalized.eq_ignore_ascii_case(input.item.drawbacks.trim()),
-                        "history" => normalized.eq_ignore_ascii_case(input.item.history.trim()),
-                        "value" => normalized.eq_ignore_ascii_case(input.item.value.trim()),
-                        "location" => normalized.eq_ignore_ascii_case(input.item.location.trim()),
-                        _ => false,
-                    };
-                    if matches_current {
-                        return RerollStep::Retry;
-                    }
-                }
-
-                RerollStep::Accept(RerollItemFieldResult {
-                    field: field.to_string(),
-                    value: Some(normalized),
-                    materials: None,
-                })
-            },
+            None,
         )
-        .await
+        .await?;
+
+        Ok(match value {
+            RerollValue::List(materials) => RerollItemFieldResult {
+                field: field.to_string(),
+                value: None,
+                materials: Some(materials),
+            },
+            RerollValue::Scalar(scalar) => RerollItemFieldResult {
+                field: field.to_string(),
+                value: Some(scalar),
+                materials: None,
+            },
+        })
     }
 }
 
@@ -1752,5 +1723,232 @@ mod tests {
         .await;
         assert_eq!(out.unwrap_err(), "not produced");
         assert_eq!(client.captured().len(), 4);
+    }
+
+    // --- accept-side: the per-field normalize + dedup nuances the generic accept
+    // must preserve byte-for-byte across the five kinds.
+
+    #[test]
+    fn scalar_norm_closed_enums_fail_but_coercible_enums_retry() {
+        // Closed enums (no custom/other) surface a hard error to the user.
+        assert!(matches!(
+            normalize_reroll_scalar(EntityKind::Npc, "sex", "zorp"),
+            ScalarNorm::Fail(_)
+        ));
+        assert!(matches!(
+            normalize_reroll_scalar(EntityKind::Item, "category", "zorp"),
+            ScalarNorm::Fail(_)
+        ));
+        assert!(matches!(
+            normalize_reroll_scalar(EntityKind::Item, "rarity", "zorp"),
+            ScalarNorm::Fail(_)
+        ));
+        // Coercible enums just retry the attempt.
+        for (kind, field) in [
+            (EntityKind::Location, "kind_type"),
+            (EntityKind::Location, "danger_level"),
+            (EntityKind::Faction, "kind_type"),
+            (EntityKind::God, "rank"),
+            (EntityKind::God, "alignment"),
+        ] {
+            assert!(
+                matches!(
+                    normalize_reroll_scalar(kind, field, "zorp"),
+                    ScalarNorm::Retry
+                ),
+                "{kind:?} {field} should retry on a bad enum"
+            );
+        }
+    }
+
+    #[test]
+    fn scalar_norm_free_text_is_infallible() {
+        assert!(matches!(
+            normalize_reroll_scalar(EntityKind::Npc, "background", "A tense backstory."),
+            ScalarNorm::Value(_)
+        ));
+        assert!(matches!(
+            normalize_reroll_scalar(EntityKind::Npc, "sex", "Male"),
+            ScalarNorm::Value(value) if value == "male"
+        ));
+    }
+
+    #[test]
+    fn list_norm_rejects_only_oversized_location_exports() {
+        assert!(
+            normalize_reroll_list(
+                EntityKind::Location,
+                "exports",
+                vec!["a".into(), "b".into(), "c".into(), "d".into()]
+            )
+            .is_none()
+        );
+        assert!(
+            normalize_reroll_list(
+                EntityKind::Location,
+                "exports",
+                vec!["a".into(), "b".into()]
+            )
+            .is_some()
+        );
+        // Other lists accept any count (the schema enforces minItems).
+        assert!(
+            normalize_reroll_list(
+                EntityKind::Faction,
+                "allies",
+                vec![
+                    "a".into(),
+                    "b".into(),
+                    "c".into(),
+                    "d".into(),
+                    "e".into(),
+                    "f".into()
+                ]
+            )
+            .is_some()
+        );
+    }
+
+    #[test]
+    fn dedup_scalar_item_enums_exact_others_case_insensitive() {
+        assert!(dedup_scalar_matches(
+            EntityKind::Item,
+            "category",
+            "weapon",
+            "weapon"
+        ));
+        assert!(!dedup_scalar_matches(
+            EntityKind::Item,
+            "category",
+            "Weapon",
+            "weapon"
+        ));
+        assert!(dedup_scalar_matches(
+            EntityKind::Npc,
+            "name",
+            "Bob",
+            "  bob "
+        ));
+        assert!(!dedup_scalar_matches(
+            EntityKind::Npc,
+            "name",
+            "Alice",
+            "bob"
+        ));
+    }
+
+    #[test]
+    fn dedup_list_equality_holds_for_materials_and_other_lists() {
+        assert!(dedup_list_matches(
+            EntityKind::Item,
+            "materials",
+            &["steel".to_string()],
+            &["steel".to_string()]
+        ));
+        assert!(dedup_list_matches(
+            EntityKind::Faction,
+            "allies",
+            &["x".to_string()],
+            &["x".to_string()]
+        ));
+        assert!(!dedup_list_matches(
+            EntityKind::Item,
+            "materials",
+            &["steel".to_string()],
+            &["iron".to_string()]
+        ));
+    }
+
+    #[test]
+    fn snapshot_reads_scalar_and_list_with_sane_fallbacks() {
+        let snapshot = serde_json::json!({
+            "name": "Bob",
+            "carrying": ["sword", "shield"],
+            "kind_custom": null
+        });
+        let map = snapshot.as_object().unwrap();
+        assert_eq!(snapshot_scalar(map, "name"), "Bob");
+        assert_eq!(snapshot_scalar(map, "kind_custom"), ""); // null -> ""
+        assert_eq!(snapshot_scalar(map, "absent"), "");
+        assert_eq!(
+            snapshot_list(map, "carrying"),
+            vec!["sword".to_string(), "shield".to_string()]
+        );
+        assert!(snapshot_list(map, "absent").is_empty());
+    }
+
+    #[tokio::test]
+    async fn run_field_reroll_retries_when_value_equals_current() {
+        // attempt 0 returns the current value (a no-op -> retry); attempt 1 differs.
+        let client =
+            MockChatClient::with_contents(&["{\"value\":\"Bob\"}", "{\"value\":\"Alice\"}"]);
+        let snapshot = serde_json::json!({ "name": "Bob" });
+        let value = run_field_reroll(
+            &client,
+            "m",
+            &NPC_SAMPLING,
+            EntityKind::Npc,
+            "name",
+            false,
+            "carrying",
+            snapshot.as_object().unwrap(),
+            "sys",
+            "usr",
+            &serde_json::json!({}),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(value, RerollValue::Scalar(name) if name == "Alice"));
+        assert_eq!(client.captured().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn run_field_reroll_closed_enum_failure_aborts() {
+        let client = MockChatClient::with_contents(&["{\"value\":\"notasex\"}"]);
+        let snapshot = serde_json::json!({ "sex": "male" });
+        let err = run_field_reroll(
+            &client,
+            "m",
+            &NPC_SAMPLING,
+            EntityKind::Npc,
+            "sex",
+            false,
+            "carrying",
+            snapshot.as_object().unwrap(),
+            "sys",
+            "usr",
+            &serde_json::json!({}),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("sex must be one of"), "got: {err}");
+        assert_eq!(client.captured().len(), 1); // failed immediately, no retries
+    }
+
+    #[tokio::test]
+    async fn run_field_reroll_returns_list_under_the_key() {
+        let client = MockChatClient::with_contents(&["{\"carrying\":[\"rope\",\"torch\"]}"]);
+        let snapshot = serde_json::json!({ "carrying": ["sword"] });
+        let value = run_field_reroll(
+            &client,
+            "m",
+            &NPC_SAMPLING,
+            EntityKind::Npc,
+            "carrying",
+            true,
+            "carrying",
+            snapshot.as_object().unwrap(),
+            "sys",
+            "usr",
+            &serde_json::json!({}),
+            None,
+        )
+        .await
+        .unwrap();
+        assert!(
+            matches!(value, RerollValue::List(items) if items == vec!["rope".to_string(), "torch".to_string()])
+        );
     }
 }
