@@ -198,7 +198,7 @@ async fn reroll_current_dungeon(
     draft.location = normalize_unknown_text(&seed.location);
     draft.story = story.story.clone();
     draft.premise = normalize_unknown_text(&seed.premise);
-    let mut beats = seed.into_beats();
+    let mut beats = seed.to_beats();
     // Re-stamp the overlay + faction tint so they persist on the regenerated beats.
     apply_plan_meta_to_beats(&mut beats, &plan);
     draft.beats = beats;

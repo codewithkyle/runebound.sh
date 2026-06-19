@@ -4,8 +4,8 @@ use crate::entities::schema::{
 };
 use crate::repositories::{Database, GenerationRepository};
 use crate::services::ai_generation::{
-    anchor_mechanic, build_reference_context, describe_recent_npc_occupation_anchors,
-    occupation_anchor, parse_recent_npc_seeds, recent_occupation_anchor_set,
+    NpcSeed, anchor_mechanic, build_reference_context, describe_recent_npc_occupation_anchors,
+    occupation_anchor, parse_recent_seeds, recent_occupation_anchor_set,
 };
 use crate::services::ollama_chat::{
     ChatClient, OllamaChatClient, attempt_seed, detail_directive, load_generation_config,
@@ -524,7 +524,7 @@ impl EntityRerollService {
             let recent_payloads = generation_repo
                 .recent_prompts(database, "npc_seed", 20)
                 .await?;
-            let recent_seeds = parse_recent_npc_seeds(recent_payloads);
+            let recent_seeds = parse_recent_seeds::<NpcSeed>(recent_payloads);
             (
                 recent_occupation_anchor_set(&recent_seeds),
                 describe_recent_npc_occupation_anchors(&recent_seeds),

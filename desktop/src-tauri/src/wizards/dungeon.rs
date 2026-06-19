@@ -564,7 +564,7 @@ impl Wizard<AppState> for DungeonWizard {
 
         // Stamp the rolled overlay + faction tint onto the beats so they persist and
         // a later whole-dungeon reroll can honor them.
-        let mut beats = seed.into_beats();
+        let mut beats = seed.to_beats();
         apply_plan_meta_to_beats(&mut beats, &plan);
 
         let draft = DungeonDraftSession {

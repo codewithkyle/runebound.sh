@@ -5,7 +5,7 @@ use crate::dungeon_plan::{DungeonContentPlan, PlannedOverlay};
 
 /// Stamp a content plan's overlay + faction tint onto freshly-built beats so they
 /// persist with the dungeon. The overlay marks the single beat it layers onto; the
-/// dungeon-wide faction tint is mirrored on every beat. Call after `into_beats`.
+/// dungeon-wide faction tint is mirrored on every beat. Call after `to_beats`.
 pub fn apply_plan_meta_to_beats(beats: &mut [DungeonBeat], plan: &DungeonContentPlan) {
     for beat in beats.iter_mut() {
         beat.overlay = None;
