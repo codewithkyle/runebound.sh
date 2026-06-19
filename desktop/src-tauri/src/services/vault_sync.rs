@@ -600,6 +600,7 @@ pub(crate) fn location_row_from_frontmatter(
         authority: frontmatter.authority.clone(),
         danger_level: frontmatter.danger_level.clone(),
         current_tension: frontmatter.current_tension.clone(),
+        location: frontmatter.location.clone(),
         created_at: frontmatter.created_at.clone(),
         updated_at: frontmatter.updated_at.clone(),
     })
@@ -786,6 +787,7 @@ mod tests {
             authority: "Circle".to_string(),
             danger_level: "low".to_string(),
             current_tension: "None".to_string(),
+            location: "Silkenhollow Vale".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T12:00:00Z".to_string(),
             published_at: None,
@@ -794,5 +796,6 @@ mod tests {
         let row = location_row_from_frontmatter(&frontmatter).expect("row");
         assert!(row.exports.contains("Incense"));
         assert_eq!(row.kind_custom.as_deref(), Some("Sanctum"));
+        assert_eq!(row.location, "Silkenhollow Vale");
     }
 }

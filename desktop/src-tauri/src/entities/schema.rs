@@ -182,11 +182,11 @@ const LOCATION_FIELDS: [EntityFieldSpec; 10] = [
         canonical: "kind_type",
         display_name: "kind",
         aliases: &["kind", "kind_type"],
-        description: "Location type (hamlet, town, city, dungeon, ...).",
+        description: "Location type (hamlet, town, city, hideout, ...).",
         value_kind: ValueKind::Enum,
         settable: true,
         rerollable: true,
-        reroll_instruction: "Generate one kind_type enum value from: hamlet, town, city, dungeon, hideout, ruin, guildhall, landmark, wilderness, other.",
+        reroll_instruction: "Generate one kind_type enum value from: hamlet, town, city, hideout, ruin, guildhall, landmark, wilderness, other.",
     },
     EntityFieldSpec {
         canonical: "kind_custom",

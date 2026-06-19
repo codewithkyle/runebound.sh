@@ -45,7 +45,17 @@ pub fn render_location_markdown_with_links(
     let mut out = String::new();
     write_attr_line(&mut out, "Kind", &kind_display(frontmatter));
     write_attr_line(&mut out, "Tone", &frontmatter.tone);
-    write_attr_line(&mut out, "Authority", &frontmatter.authority);
+    // A guildhall's authority is its faction — an entity reference, so render it as a
+    // `[[wikilink]]`. Other kinds carry free-text authority (a lone occupant, a
+    // council), which would make a nonsense link target, so they stay plain.
+    if frontmatter.kind_type == "guildhall" {
+        write_attr_line_linked(&mut out, "Authority", &frontmatter.authority);
+    } else {
+        write_attr_line(&mut out, "Authority", &frontmatter.authority);
+    }
+    // The containing location (a guildhall's anchor) is an entity reference, so it is
+    // linked; it is empty for other kinds, so the linked writer omits the line.
+    write_attr_line_linked(&mut out, "Location", &frontmatter.location);
     write_attr_line(&mut out, "Danger", &frontmatter.danger_level);
     writeln!(&mut out).ok();
 
@@ -649,6 +659,56 @@ mod tests {
         assert!(markdown.contains("**Race:** Elf"));
         assert!(markdown.contains("## Background"));
         assert!(markdown.contains("- Silver quill"));
+    }
+
+    fn location_frontmatter(
+        kind_type: &str,
+        authority: &str,
+        location: &str,
+    ) -> LocationFrontmatter {
+        LocationFrontmatter {
+            doc_type: "location".to_string(),
+            id: "loc_1".to_string(),
+            slug: "the-hall".to_string(),
+            name: "The Hall".to_string(),
+            vault_path: "locations/The Hall.md".to_string(),
+            kind_type: kind_type.to_string(),
+            kind_custom: None,
+            visual_description: "Marble columns.".to_string(),
+            history_background: "Founded long ago.".to_string(),
+            exports: Vec::new(),
+            tone: "stern".to_string(),
+            authority: authority.to_string(),
+            danger_level: "safe".to_string(),
+            current_tension: "An audit looms.".to_string(),
+            location: location.to_string(),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T12:00:00Z".to_string(),
+            published_at: None,
+        }
+    }
+
+    #[test]
+    fn guildhall_links_authority_and_location() {
+        // A guildhall's authority is its faction and its anchor is a location, so both
+        // publish as `[[wikilinks]]`.
+        let markdown = render_location_markdown(&location_frontmatter(
+            "guildhall",
+            "Crimson Lanterns",
+            "Silverhall",
+        ));
+        assert!(markdown.contains("**Authority:** [[Crimson Lanterns]]"));
+        assert!(markdown.contains("**Location:** [[Silverhall]]"));
+    }
+
+    #[test]
+    fn non_guildhall_authority_plain_and_empty_location_omitted() {
+        // A site's authority is free prose (not an entity), so it stays unlinked; an
+        // empty anchor drops the Location line entirely.
+        let markdown = render_location_markdown(&location_frontmatter("ruin", "a marsh hag", ""));
+        assert!(markdown.contains("**Authority:** a marsh hag"));
+        assert!(!markdown.contains("[[a marsh hag]]"));
+        assert!(!markdown.contains("**Location:**"));
     }
 
     #[test]

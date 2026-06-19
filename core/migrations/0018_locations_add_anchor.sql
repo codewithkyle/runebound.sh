@@ -1,0 +1,1 @@
+ALTER TABLE locations ADD COLUMN location TEXT NOT NULL DEFAULT '';

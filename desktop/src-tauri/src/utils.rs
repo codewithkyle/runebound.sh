@@ -112,7 +112,11 @@ pub fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, S
     Ok(seed)
 }
 
-pub fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
+/// Validate the prose/scalar fields every location shares (name + the sentence/word
+/// leashes), independent of the kind-specific `exports`. The wizard's Site/Hideout
+/// path reuses this directly (exports are suppressed there); the settlement/one-shot
+/// path layers the `exports` check on top in [`validate_location_details`].
+pub fn validate_location_prose(seed: &LocationSeed) -> Result<(), String> {
     if seed.name.trim().is_empty() {
         return Err("location name cannot be empty".to_string());
     }
@@ -125,6 +129,15 @@ pub fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
     if seed.current_tension != "Unknown" {
         validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?;
     }
+    let tone_words = word_count(&seed.tone);
+    if seed.tone != "Unknown" && !(2..=5).contains(&tone_words) {
+        return Err(format!("tone must be 2-5 words; got {tone_words}"));
+    }
+    Ok(())
+}
+
+pub fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
+    validate_location_prose(seed)?;
     if seed.exports.is_empty() || seed.exports.len() > 3 {
         return Err("exports must have 1-3 items".to_string());
     }
@@ -133,10 +146,6 @@ pub fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
         if empty_item {
             return Err("exports cannot contain empty items".to_string());
         }
-    }
-    let tone_words = word_count(&seed.tone);
-    if seed.tone != "Unknown" && !(2..=5).contains(&tone_words) {
-        return Err(format!("tone must be 2-5 words; got {tone_words}"));
     }
     Ok(())
 }

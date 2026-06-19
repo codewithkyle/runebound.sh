@@ -21,8 +21,10 @@ use crate::app_state::AppState;
 use crate::commands::setup_commands::{FolderPick, pick_vault_folder};
 
 pub mod dungeon;
+pub mod location;
 
 use dungeon::DungeonWizard;
+use location::LocationWizard;
 
 // Re-export the engine surface used across the desktop crate so existing call
 // sites (`crate::wizards::…`) keep working after the crate promotion.
@@ -37,6 +39,7 @@ pub use wizard::{
 pub fn build_default_wizard_registry() -> WizardRegistry<AppState> {
     let mut registry = WizardRegistry::new();
     registry.register(Arc::new(DungeonWizard::new()));
+    registry.register(Arc::new(LocationWizard::new()));
     register_onboarding_wizards(&mut registry);
     registry
 }

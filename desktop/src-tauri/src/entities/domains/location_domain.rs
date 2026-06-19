@@ -13,7 +13,10 @@ use crate::entities::schema::{
 use crate::services::entity_reroll::{
     EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
-use crate::utils::path_for_display;
+use crate::utils::{
+    normalize_exports, normalize_location_danger_level, normalize_location_kind_type,
+    path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::exports_from_db_text;
@@ -78,6 +81,10 @@ impl EntityDomain for LocationDomain {
             authority: row.authority,
             danger_level: row.danger_level,
             current_tension: row.current_tension,
+            location: row.location,
+            // Loaded from an existing row; re-save preserves its on-disk folder
+            // regardless, so this transient flag stays false.
+            wizard_subfoldered: false,
         };
         Ok(Some(EntityDetail {
             draft: DraftEnvelope::Location(draft),
@@ -319,64 +326,9 @@ impl EntityDomain for LocationDomain {
     }
 }
 
-pub fn normalize_location_kind_type(value: &str) -> Result<String, String> {
-    const LOCATION_KIND_TYPES: [&str; 10] = [
-        "hamlet",
-        "town",
-        "city",
-        "dungeon",
-        "hideout",
-        "ruin",
-        "guildhall",
-        "landmark",
-        "wilderness",
-        "other",
-    ];
-    let normalized = value.trim().to_ascii_lowercase();
-    if LOCATION_KIND_TYPES.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "kind_type must be one of: {}",
-            LOCATION_KIND_TYPES.join(", ")
-        ))
-    }
-}
-
-pub fn normalize_location_danger_level(value: &str) -> Result<String, String> {
-    const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
-    let trimmed = value.trim();
-    let normalized = if trimmed.eq_ignore_ascii_case("unknown") {
-        "Unknown".to_string()
-    } else {
-        trimmed.to_ascii_lowercase()
-    };
-    if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "danger_level must be one of: {}",
-            LOCATION_DANGER_LEVELS.join(", ")
-        ))
-    }
-}
-
-pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    if cleaned.is_empty() {
-        vec!["Unknown".to_string()]
-    } else {
-        cleaned
-    }
-}
-
 pub fn location_summary_text(draft: &LocationDraftSession) -> String {
     format!(
-        "## Location Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
+        "## Location Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\nlocation: {}\ndanger: {}\ntension: {}\npath: {}",
         draft.name,
         draft.slug,
         draft.kind_type,
@@ -386,6 +338,11 @@ pub fn location_summary_text(draft: &LocationDraftSession) -> String {
         draft.exports.join(", "),
         draft.tone,
         draft.authority,
+        if draft.location.trim().is_empty() {
+            "(none)"
+        } else {
+            draft.location.trim()
+        },
         draft.danger_level,
         draft.current_tension,
         draft.vault_path,
@@ -404,12 +361,30 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         kind_custom: draft.kind_custom.clone(),
         visual_description: normalize_unknown_text(&draft.visual_description),
         history_background: normalize_unknown_text(&draft.history_background),
-        exports: normalize_unknown_list(draft.exports.clone()),
+        // Preserve a deliberately-empty exports list (Site/Hideout suppression) so
+        // the card omits the row; only normalize when there is content to clean.
+        exports: if draft.exports.is_empty() {
+            Vec::new()
+        } else {
+            normalize_unknown_list(draft.exports.clone())
+        },
         tone: normalize_unknown_text(&draft.tone),
-        authority: normalize_unknown_text(&draft.authority),
+        // Preserve a deliberately-empty authority (one-shot suppression) so the card
+        // omits the row; only normalize when there is content to clean.
+        authority: if draft.authority.trim().is_empty() {
+            String::new()
+        } else {
+            normalize_unknown_text(&draft.authority)
+        },
         danger_level: normalize_unknown_text(&draft.danger_level),
         current_tension: normalize_unknown_text(&draft.current_tension),
+        // Preserve a deliberately-empty anchor (most non-guildhall locations) so the
+        // card omits the row; the value is an entity reference, not prose.
+        location: draft.location.clone(),
         seed_prompt: draft.seed_prompt.clone(),
+        // Carry the transient subfolder flag forward (serde-skipped on the wire; this
+        // copy is for the event payload only, not the editor draft that `save` reads).
+        wizard_subfoldered: draft.wizard_subfoldered,
     };
     let entity_card_doc = location_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadLocationDraftWithCard {

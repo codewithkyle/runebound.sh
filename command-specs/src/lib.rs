@@ -351,7 +351,8 @@ pub fn command_manifest() -> CommandManifest {
                     },
                     SubcommandSpec {
                         name: "location".to_string(),
-                        summary: "Start guided location creation".to_string(),
+                        summary: "Start the guided location flow (or `create location <prompt>` for one-shot)"
+                            .to_string(),
                         options: Vec::new(),
                         examples: vec!["create location".to_string()],
                     },

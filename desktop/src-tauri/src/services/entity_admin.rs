@@ -241,6 +241,7 @@ impl EntityAdminService {
                 authority: "Unknown".to_string(),
                 danger_level: "Unknown".to_string(),
                 current_tension: "Unknown".to_string(),
+                location: String::new(),
                 created_at: created_at.clone(),
                 updated_at: now.clone(),
                 published_at: None,
@@ -296,6 +297,10 @@ impl EntityAdminService {
                 .as_ref()
                 .map(|row| row.current_tension.clone())
                 .unwrap_or_else(|| "Unknown".to_string()),
+            location: existing
+                .as_ref()
+                .map(|row| row.location.clone())
+                .unwrap_or_default(),
             created_at,
             updated_at: now.clone(),
         };
