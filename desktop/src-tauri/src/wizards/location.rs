@@ -218,9 +218,7 @@ impl WizardStep<AppState> for KindStep {
         if location_data(data).awaiting_custom_kind {
             return doc()
                 .with_block(heading(2, "Create Location — Custom Kind"))
-                .with_block(paragraph_text(
-                    "Type a name for this custom kind (e.g. \"floating market\", \"planar rift\").",
-                ));
+                .with_block(paragraph_text("Type a name for this custom kind."));
         }
         wizard_menu(
             "Create Location — Kind",
@@ -1252,7 +1250,7 @@ impl LocationWizard {
                 Arc::new(GenerateStep {
                     id: "geography_site",
                     title: "Create Location — Site — Map Anchor",
-                    body: "Geography / map anchor? (e.g. \"half a day from Greenhollow, deep in the marsh\")",
+                    body: "Geography / map anchor?",
                     field: SeedField::Geography,
                 }),
                 // Hideout
@@ -1263,7 +1261,7 @@ impl LocationWizard {
                 Arc::new(GenerateStep {
                     id: "geography_hideout",
                     title: "Create Location — Hideout — Map Anchor",
-                    body: "Where does the base hide? (e.g. \"the city's sewers\", \"a high mountain pass\")",
+                    body: "Where does the base hide?",
                     field: SeedField::Geography,
                 }),
                 // Guildhall (faction link runs first, from KindStep; anchor generates)
