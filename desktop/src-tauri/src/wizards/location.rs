@@ -10,11 +10,13 @@
 //! generated prose and the derived/locked fields, and flattened into `seed_prompt`
 //! as reroll bias. Nothing new is persisted (no draft/row/migration changes).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use dnd_core::config::load_effective;
 use dnd_core::npc::slugify;
-use runebound_models::drafts::{CardFooter, location_entity_card};
+use dnd_core::vault::Vault;
 use runebound_models::output::{
     OutputDoc, command_ref, doc, heading, paragraph_text, paragraph_with_inlines, text_node,
 };
@@ -29,9 +31,10 @@ use crate::services::ai_generation::{
     AiGenerationService, LocationSeed, LocationWizardInputs, SeedGeneration,
     build_wizard_user_prompt,
 };
+use crate::services::vault_ref::{VaultReferenceEntry, load_vault_reference_entries};
 use crate::utils::prepend_notice;
 
-use wizard::prompt::{action_row, wizard_menu};
+use wizard::prompt::wizard_menu;
 use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 
 // ---------------------------------------------------------------------------
@@ -39,8 +42,8 @@ use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 // ---------------------------------------------------------------------------
 
 /// The per-flow answers; the cursor/history live in the engine's `WizardSession`.
-/// `seed`/`notice` carry the generated result and a one-shot capacity notice to the
-/// review screen.
+/// `seed`/`notice` carry the generated result and a one-shot capacity notice into
+/// the `finalize` hand-off that opens the location editor.
 #[derive(Debug, Clone, Default)]
 struct LocationWizardData {
     // Step 1
@@ -79,7 +82,7 @@ struct LocationWizardData {
     faction_ref: Option<String>,
     faction_link_return: Option<&'static str>,
 
-    // Generated seed held for the review screen, plus a one-shot notice.
+    // Generated seed handed to `finalize`/the editor, plus a one-shot notice.
     seed: Option<LocationSeed>,
     notice: Option<String>,
 }
@@ -305,11 +308,11 @@ impl WizardStep<AppState> for ControlStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        let mut choices = numbered_choices(&CONTROL_LABELS);
-        choices.push(
-            WizardChoice::new("link an existing faction", "link")
-                .with_help("Point control at a faction already in your world"),
-        );
+        // Linking is always option 0, above the archetypes.
+        let mut choices = vec![link_faction_choice(
+            "Point control at a faction already in your world",
+        )];
+        choices.extend(numbered_choices(&CONTROL_LABELS));
         choices
     }
 
@@ -320,7 +323,7 @@ impl WizardStep<AppState> for ControlStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if trimmed.eq_ignore_ascii_case("link") {
+        if trimmed == "0" || trimmed.eq_ignore_ascii_case("link") {
             return enter_faction_link(d, state, "control").await;
         }
         let Some(value) = pick_value(trimmed, &CONTROL_VALUES) else {
@@ -597,11 +600,11 @@ impl WizardStep<AppState> for BaseOwnerStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        let mut choices = numbered_choices(&BASE_OWNER_LABELS);
-        choices.push(
-            WizardChoice::new("link an existing faction", "link")
-                .with_help("Point ownership at a faction already in your world"),
-        );
+        // Linking is always option 0, above the archetypes.
+        let mut choices = vec![link_faction_choice(
+            "Point ownership at a faction already in your world",
+        )];
+        choices.extend(numbered_choices(&BASE_OWNER_LABELS));
         choices
     }
 
@@ -612,7 +615,7 @@ impl WizardStep<AppState> for BaseOwnerStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if trimmed.eq_ignore_ascii_case("link") {
+        if trimmed == "0" || trimmed.eq_ignore_ascii_case("link") {
             return enter_faction_link(d, state, "base_owner").await;
         }
         let Some(value) = pick_value(trimmed, &BASE_OWNER_VALUES) else {
@@ -756,7 +759,9 @@ enum SeedField {
 }
 
 /// The terminal step of every branch: record the (optional, skippable) free text,
-/// run generation under the locked answers, then jump to the shared review.
+/// run generation under the locked answers, then complete the wizard — `finalize`
+/// opens the draft straight in the location editor, where save/publish/reroll/cancel
+/// live (mirroring the one-shot `create_location`; no separate review screen).
 struct GenerateStep {
     id: &'static str,
     title: &'static str,
@@ -813,74 +818,7 @@ impl WizardStep<AppState> for GenerateStep {
             }
         }
         generate_location_into(location_data_mut(d), state, None).await?;
-        Ok(WizardTransition::Goto("review"))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Review — shared terminal
-// ---------------------------------------------------------------------------
-
-struct ReviewStep;
-
-#[async_trait]
-impl WizardStep<AppState> for ReviewStep {
-    fn id(&self) -> &'static str {
-        "review"
-    }
-
-    fn awaiting_llm_label(&self) -> Option<&'static str> {
-        Some("generating location")
-    }
-
-    fn summary(&self) -> &'static str {
-        "Review the location. Continue to open it in the editor, or reroll for a new one."
-    }
-
-    fn prompt(&self, data: &WizardData) -> OutputDoc {
-        let d = location_data(data);
-        let Some(draft) = build_location_draft(d, String::new()) else {
-            return doc().with_block(paragraph_text("No location generated yet."));
-        };
-        let mut document = doc();
-        if let Some(notice) = &d.notice {
-            document = document.with_block(paragraph_text(notice.clone()));
-        }
-        document = document.with_block(heading(2, "Create Location — Review"));
-        for block in location_entity_card(&draft, CardFooter::Hide).blocks {
-            document = document.with_block(block);
-        }
-        document.with_block(action_row(&self.choices(data)))
-    }
-
-    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![
-            WizardChoice::new("continue", "continue").with_help("Open this location in the editor"),
-            WizardChoice::new("reroll", "reroll")
-                .with_help("Regenerate the location (optionally `reroll <hint>`)"),
-            WizardChoice::new("cancel", "cancel").with_help("Discard this location and exit"),
-        ]
-    }
-
-    async fn accept(
-        &self,
-        input: &str,
-        d: &mut WizardData,
-        state: &AppState,
-    ) -> Result<WizardTransition, String> {
-        let mut parts = input.splitn(2, char::is_whitespace);
-        let cmd = parts.next().unwrap_or("").to_ascii_lowercase();
-        let rest = parts.next().unwrap_or("").trim();
-
-        match cmd.as_str() {
-            "continue" | "accept" => Ok(WizardTransition::Complete),
-            "reroll" | "redo" => {
-                let hint = (!rest.is_empty()).then_some(rest);
-                generate_location_into(location_data_mut(d), state, hint).await?;
-                Ok(WizardTransition::Stay)
-            }
-            _ => Ok(WizardTransition::Stay),
-        }
+        Ok(WizardTransition::Complete)
     }
 }
 
@@ -1020,8 +958,7 @@ impl LocationWizard {
                     body: "Describe this place in a sentence or two.",
                     field: SeedField::CustomSeed,
                 }),
-                // Shared terminal + faction link
-                Arc::new(ReviewStep),
+                // Shared read-only faction link (reached from control / base_owner)
                 Arc::new(FactionLinkStep),
             ],
         }
@@ -1046,9 +983,9 @@ impl Wizard<AppState> for LocationWizard {
         Ok(WizardData::new(LocationWizardData::default()))
     }
 
-    /// `continue` at review: build the `LocationDraft` from the generated seed +
-    /// locked answers and open it in the location editor — the same hand-off the
-    /// one-shot `create_location` performs. No LLM call here.
+    /// Runs when a branch's generate step completes: build the `LocationDraft` from
+    /// the generated seed + locked answers and open it in the location editor — the
+    /// same hand-off the one-shot `create_location` performs. No LLM call here.
     async fn finalize(&self, state: &AppState, d: &WizardData) -> CommandResult {
         let data = location_data(d);
         let Some(draft) = build_location_draft(data, make_entity_id("loc")) else {
@@ -1111,19 +1048,104 @@ fn pick_danger(input: &str) -> Option<String> {
         .then(|| value.to_string())
 }
 
-/// Load the existing factions (read-only) into the accumulator and jump to the
+/// The leading "0: link an existing faction" entry shared by the control/owner
+/// menus, so linking is always option 0 (above the numbered archetypes).
+fn link_faction_choice(help: &'static str) -> WizardChoice {
+    WizardChoice::new("0: link an existing faction", "0").with_help(help)
+}
+
+/// Load the linkable factions (read-only) into the accumulator and jump to the
 /// faction-link step, remembering which step asked so `skip` can return there.
 async fn enter_faction_link(
     d: &mut WizardData,
     state: &AppState,
     from_step: &'static str,
 ) -> Result<WizardTransition, String> {
-    let database = state.database();
-    let rows = state.faction_repo().list_all(database.as_ref()).await?;
+    let factions = load_linkable_factions(state).await?;
     let data = location_data_mut(d);
-    data.factions = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+    data.factions = factions;
     data.faction_link_return = Some(from_step);
     Ok(WizardTransition::Goto("faction_link"))
+}
+
+/// Every faction the GM can link, read-only: unpublished drafts from the DB plus
+/// published notes recovered from the vault (those were reaped from the DB at
+/// publish time and now live only as `.md` files). Deduped by slug, sorted by name.
+async fn load_linkable_factions(state: &AppState) -> Result<Vec<(String, String)>, String> {
+    let database = state.database();
+    let rows = state.faction_repo().list_all(database.as_ref()).await?;
+    let mut factions: Vec<(String, String)> =
+        rows.into_iter().map(|row| (row.name, row.slug)).collect();
+
+    // Reading the vault is recursive, blocking IO; keep it off the async runtime.
+    let published = tokio::task::spawn_blocking(load_published_faction_names)
+        .await
+        .map_err(|err| err.to_string())??;
+
+    let mut seen: HashSet<String> = factions
+        .iter()
+        .map(|(_, slug)| slug.to_ascii_lowercase())
+        .collect();
+    for (name, slug) in published {
+        if seen.insert(slug.to_ascii_lowercase()) {
+            factions.push((name, slug));
+        }
+    }
+    factions.sort_by(|left, right| {
+        left.0
+            .to_ascii_lowercase()
+            .cmp(&right.0.to_ascii_lowercase())
+    });
+    Ok(factions)
+}
+
+/// Recover published factions from the Obsidian vault's `factions/` folder. Blocking
+/// IO (recursive `read_dir`) — only call inside `spawn_blocking`.
+fn load_published_faction_names() -> Result<Vec<(String, String)>, String> {
+    let loaded = load_effective().map_err(|err| err.to_string())?;
+    let Some(vault_path) = loaded.effective.vault.path else {
+        return Ok(Vec::new());
+    };
+    let vault = Vault::new(vault_path);
+    if vault.ensure_root_exists().is_err() {
+        return Ok(Vec::new());
+    }
+    let entries = load_vault_reference_entries(&vault)?;
+    Ok(faction_entries_from_refs(&entries))
+}
+
+/// Extract `(display name, slug)` for each faction note under the vault's
+/// `factions/` folder. The display name is the file stem; the slug is derived from
+/// it, since published notes carry no DB row. Pure, so it's unit-testable.
+fn faction_entries_from_refs(entries: &[VaultReferenceEntry]) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for entry in entries {
+        if entry.is_dir {
+            continue;
+        }
+        let Some(path) = entry.markdown_path.as_deref() else {
+            continue;
+        };
+        let Some((dir, file)) = path.split_once('/') else {
+            continue;
+        };
+        if !dir.eq_ignore_ascii_case("factions") {
+            continue;
+        }
+        // Publish writes `factions/<Name>.md`; ignore anything nested deeper.
+        if file.contains('/') {
+            continue;
+        }
+        let name = std::path::Path::new(file)
+            .file_stem()
+            .and_then(|value| value.to_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        if let Some(name) = name {
+            out.push((name.to_string(), slugify(name)));
+        }
+    }
+    out
 }
 
 /// Run kind-aware generation into the accumulator: the structured branches go
@@ -1307,5 +1329,56 @@ mod tests {
         let prompt = build_seed_prompt(&d).expect("seed prompt");
         assert!(prompt.contains("town"));
         assert!(prompt.contains("silver ore"));
+    }
+
+    #[test]
+    fn link_faction_is_always_option_zero() {
+        let data = WizardData::new(LocationWizardData::default());
+        for choices in [ControlStep.choices(&data), BaseOwnerStep.choices(&data)] {
+            let first = &choices[0];
+            assert_eq!(first.token, "0", "link must submit token 0");
+            assert!(
+                first
+                    .label
+                    .to_lowercase()
+                    .contains("link an existing faction"),
+                "option 0 should be the faction link, got {:?}",
+                first.label
+            );
+            // The archetypes follow, still numbered from 1.
+            assert_eq!(choices[1].token, "1");
+        }
+    }
+
+    fn ref_file(key: &str) -> VaultReferenceEntry {
+        VaultReferenceEntry {
+            key: key.to_string(),
+            key_lower: key.to_ascii_lowercase(),
+            markdown_path: Some(format!("{key}.md")),
+            is_dir: false,
+        }
+    }
+
+    #[test]
+    fn faction_entries_keep_top_level_faction_notes_only() {
+        let entries = vec![
+            ref_file("factions/Crimson Lanterns"),
+            ref_file("factions/sub/Nested Note"), // nested → ignored
+            ref_file("npcs/Lirael Drake"),        // wrong folder → ignored
+            VaultReferenceEntry {
+                key: "factions/".to_string(),
+                key_lower: "factions/".to_string(),
+                markdown_path: None,
+                is_dir: true, // directory → ignored
+            },
+        ];
+        let out = faction_entries_from_refs(&entries);
+        assert_eq!(
+            out,
+            vec![(
+                "Crimson Lanterns".to_string(),
+                "crimson-lanterns".to_string()
+            )]
+        );
     }
 }
