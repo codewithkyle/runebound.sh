@@ -13,7 +13,10 @@ use crate::entities::schema::{
 use crate::services::entity_reroll::{
     EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
-use crate::utils::path_for_display;
+use crate::utils::{
+    normalize_exports, normalize_location_danger_level, normalize_location_kind_type,
+    path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::exports_from_db_text;
@@ -319,61 +322,6 @@ impl EntityDomain for LocationDomain {
     }
 }
 
-pub fn normalize_location_kind_type(value: &str) -> Result<String, String> {
-    const LOCATION_KIND_TYPES: [&str; 10] = [
-        "hamlet",
-        "town",
-        "city",
-        "dungeon",
-        "hideout",
-        "ruin",
-        "guildhall",
-        "landmark",
-        "wilderness",
-        "other",
-    ];
-    let normalized = value.trim().to_ascii_lowercase();
-    if LOCATION_KIND_TYPES.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "kind_type must be one of: {}",
-            LOCATION_KIND_TYPES.join(", ")
-        ))
-    }
-}
-
-pub fn normalize_location_danger_level(value: &str) -> Result<String, String> {
-    const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
-    let trimmed = value.trim();
-    let normalized = if trimmed.eq_ignore_ascii_case("unknown") {
-        "Unknown".to_string()
-    } else {
-        trimmed.to_ascii_lowercase()
-    };
-    if LOCATION_DANGER_LEVELS.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "danger_level must be one of: {}",
-            LOCATION_DANGER_LEVELS.join(", ")
-        ))
-    }
-}
-
-pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
-    let cleaned: Vec<String> = values
-        .into_iter()
-        .map(|value| value.trim().to_string())
-        .filter(|value| !value.is_empty())
-        .collect();
-    if cleaned.is_empty() {
-        vec!["Unknown".to_string()]
-    } else {
-        cleaned
-    }
-}
-
 pub fn location_summary_text(draft: &LocationDraftSession) -> String {
     format!(
         "## Location Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\nvisual: {}\nhistory: {}\nexports: {}\ntone: {}\nauthority: {}\ndanger: {}\ntension: {}\npath: {}",
@@ -404,7 +352,13 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         kind_custom: draft.kind_custom.clone(),
         visual_description: normalize_unknown_text(&draft.visual_description),
         history_background: normalize_unknown_text(&draft.history_background),
-        exports: normalize_unknown_list(draft.exports.clone()),
+        // Preserve a deliberately-empty exports list (Site/Hideout suppression) so
+        // the card omits the row; only normalize when there is content to clean.
+        exports: if draft.exports.is_empty() {
+            Vec::new()
+        } else {
+            normalize_unknown_list(draft.exports.clone())
+        },
         tone: normalize_unknown_text(&draft.tone),
         authority: normalize_unknown_text(&draft.authority),
         danger_level: normalize_unknown_text(&draft.danger_level),

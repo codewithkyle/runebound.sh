@@ -10,7 +10,6 @@ pub enum LocationKindType {
     Hamlet,
     Town,
     City,
-    Dungeon,
     Hideout,
     Ruin,
     Guildhall,
@@ -25,7 +24,6 @@ impl LocationKindType {
             LocationKindType::Hamlet => "hamlet",
             LocationKindType::Town => "town",
             LocationKindType::City => "city",
-            LocationKindType::Dungeon => "dungeon",
             LocationKindType::Hideout => "hideout",
             LocationKindType::Ruin => "ruin",
             LocationKindType::Guildhall => "guildhall",
@@ -67,11 +65,10 @@ impl FactionKindType {
     }
 }
 
-pub const LOCATION_KIND_TYPES: [&str; 10] = [
+pub const LOCATION_KIND_TYPES: [&str; 9] = [
     "hamlet",
     "town",
     "city",
-    "dungeon",
     "hideout",
     "ruin",
     "guildhall",

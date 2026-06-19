@@ -455,7 +455,7 @@ pub fn npc_entity_card(draft: &NpcDraft, footer: CardFooter) -> OutputDoc {
 }
 
 pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> OutputDoc {
-    let rows = vec![
+    let mut rows = vec![
         entity_row(
             "Kind:",
             location_kind_display(&draft.kind_type, &draft.kind_custom),
@@ -465,16 +465,23 @@ pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> Output
             "History:",
             normalize_unknown_text(&draft.history_background),
         ),
-        entity_row(
+    ];
+    // Exports is kind-conditional: Site/Hideout suppress it (empty `Vec`), so the
+    // row is omitted entirely rather than rendered as "Unknown". Settlements (and
+    // the one-shot path) always carry 1-3 items, so the row shows there.
+    if !draft.exports.is_empty() {
+        rows.push(entity_row(
             "Exports:",
             normalize_unknown_list(draft.exports.clone()).join(", "),
-        ),
+        ));
+    }
+    rows.extend([
         entity_row("Tone:", normalize_unknown_text(&draft.tone)),
         entity_row("Authority:", normalize_unknown_text(&draft.authority)),
         entity_row("Danger:", normalize_unknown_text(&draft.danger_level)),
         entity_row("Tension:", normalize_unknown_text(&draft.current_tension)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
-    ];
+    ]);
     let mut output = doc().with_block(entity_card(&draft.name, rows));
     if footer == CardFooter::Show {
         output.push(paragraph_with_inlines(vec![
@@ -741,4 +748,65 @@ pub fn dungeon_entity_card(draft: &DungeonDraft, footer: CardFooter) -> OutputDo
         ]));
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::output::OutputBlock;
+
+    fn location_draft(exports: Vec<String>) -> LocationDraft {
+        LocationDraft {
+            id: "loc_1".to_string(),
+            seed_prompt: None,
+            name: "Greenhollow".to_string(),
+            slug: "greenhollow".to_string(),
+            vault_path: String::new(),
+            kind_type: "ruin".to_string(),
+            kind_custom: None,
+            visual_description: "A misty fen.".to_string(),
+            history_background: "Old. Older still.".to_string(),
+            exports,
+            tone: "quiet and damp".to_string(),
+            authority: "Unknown".to_string(),
+            danger_level: "deadly".to_string(),
+            current_tension: "Something stirs.".to_string(),
+        }
+    }
+
+    fn card_labels(draft: &LocationDraft) -> Vec<String> {
+        location_entity_card(draft, CardFooter::Hide)
+            .blocks
+            .iter()
+            .flat_map(|block| match block {
+                OutputBlock::EntityCard { rows, .. } => {
+                    rows.iter().map(|row| row.label.clone()).collect::<Vec<_>>()
+                }
+                _ => Vec::new(),
+            })
+            .collect()
+    }
+
+    #[test]
+    fn location_card_omits_exports_row_when_empty() {
+        // Site/Hideout suppress exports (empty Vec): the row is dropped, not shown
+        // as "Unknown".
+        let labels = card_labels(&location_draft(Vec::new()));
+        assert!(
+            !labels.iter().any(|label| label == "Exports:"),
+            "empty exports should omit the row, got {labels:?}"
+        );
+        // The neighboring rows still render.
+        assert!(labels.iter().any(|label| label == "History:"));
+        assert!(labels.iter().any(|label| label == "Tone:"));
+    }
+
+    #[test]
+    fn location_card_keeps_exports_row_when_present() {
+        let labels = card_labels(&location_draft(vec!["reed".to_string()]));
+        assert!(
+            labels.iter().any(|label| label == "Exports:"),
+            "non-empty exports should render the row, got {labels:?}"
+        );
+    }
 }

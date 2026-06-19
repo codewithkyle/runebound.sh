@@ -900,6 +900,10 @@ function wizardSpinnerLabel(wizard: WizardView, lowered: string): string | null 
   if (wizard.step_id === "story_review" && isReroll) {
     return "generating story";
   }
+  // The location wizard's review reroll re-runs generation (a new location).
+  if (wizard.step_id === "review" && isReroll) {
+    return "generating location";
+  }
   if (!wizard.awaiting_llm_label) {
     return null;
   }

@@ -61,7 +61,13 @@ pub async fn handle_create(invocation: DesktopHandlerInvocation<'_>) -> CommandR
         return create_npc(trimmed, invocation.state.clone()).await;
     }
 
-    if lowered == "create location" || lowered.starts_with("create location ") {
+    if lowered == "create location" {
+        // Bare `create location` launches the guided wizard (mirrors `create
+        // dungeon`); the `<prompt>` form below stays the one-shot custom lane.
+        return crate::wizards::start_wizard("location", invocation.state.inner()).await;
+    }
+
+    if lowered.starts_with("create location ") {
         return create_location(trimmed, invocation.state.clone()).await;
     }
 
