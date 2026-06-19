@@ -135,7 +135,10 @@ pub fn render_item_markdown_with_links(
     write_attr_line(&mut out, "Rarity", &frontmatter.rarity);
     write_attr_line(&mut out, "Attunement", &frontmatter.attunement);
     write_attr_line(&mut out, "Value", &frontmatter.value);
-    write_attr_line_linked(&mut out, "Location", &frontmatter.location);
+    // The item Location is free-text describing where the item is (the LLM writes
+    // a phrase like "buried beneath the old mill"), not a reference to a known
+    // location entity — so it's rendered as plain text, not a `[[wikilink]]`.
+    write_attr_line(&mut out, "Location", &frontmatter.location);
     writeln!(&mut out).ok();
 
     write_section(&mut out, "Appearance", &frontmatter.appearance, linker);
@@ -779,7 +782,9 @@ mod tests {
     }
 
     #[test]
-    fn item_location_is_rendered_as_a_wikilink() {
+    fn item_location_is_rendered_as_plain_text() {
+        // The item Location is a free-text description of where the item rests, not
+        // a reference to a known location entity, so it must not be wikilinked.
         let frontmatter = ItemFrontmatter {
             doc_type: "item".to_string(),
             id: "item_1".to_string(),
@@ -795,19 +800,19 @@ mod tests {
             drawbacks: "Hums in the rain.".to_string(),
             history: "Forged in the old wars.".to_string(),
             value: "1000gp".to_string(),
-            location: "Smolderkeep".to_string(),
+            location: "Buried in the vaults beneath Smolderkeep.".to_string(),
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
             published_at: None,
         };
         let markdown = render_item_markdown(&frontmatter);
         assert!(
-            markdown.contains("**Location:** [[Smolderkeep]]"),
-            "expected linked item location, got:\n{markdown}"
+            markdown.contains("**Location:** Buried in the vaults beneath Smolderkeep."),
+            "expected plain-text item location, got:\n{markdown}"
         );
-        // Materials are substances, not entities — not linked.
+        // Neither the location description nor the materials are entity references.
         assert!(markdown.contains("- stormglass"));
-        assert!(!markdown.contains("[[stormglass]]"));
+        assert!(!markdown.contains("[["));
     }
 
     #[test]

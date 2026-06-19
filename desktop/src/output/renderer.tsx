@@ -49,7 +49,21 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
 
   if (block.kind === "image") {
     const src = DOC_IMAGES[block.src] ?? block.src;
-    return <img class="rb-doc-image" src={src} alt={block.alt} />;
+    // The entry is scrolled to the bottom when appended, but an image has zero
+    // height until it loads — so that scroll lands short. Re-scroll the output
+    // container once the image's real height is known (e.g. the topology step).
+    const scrollOutputToBottom = (img: HTMLImageElement) => {
+      const scroller = img.closest(".rb-output-scroll");
+      scroller?.scrollTo({ top: scroller.scrollHeight, behavior: "smooth" });
+    };
+    return (
+      <img
+        class="rb-doc-image"
+        src={src}
+        alt={block.alt}
+        onLoad={(event) => scrollOutputToBottom(event.currentTarget)}
+      />
+    );
   }
 
   if (block.kind === "entity_card") {

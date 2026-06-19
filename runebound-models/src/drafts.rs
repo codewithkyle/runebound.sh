@@ -691,8 +691,8 @@ pub fn dungeon_entity_card(draft: &DungeonDraft, footer: CardFooter) -> OutputDo
         format!("Topology: {}", draft.topology)
     };
     out.push(status(StatusTone::Info, topo));
-    // 3b. the rolled overlay + faction tint, recovered from the beats.
-    let (overlay, factions) = plan_meta_from_beats(&draft.beats);
+    // 3b. the rolled overlay, recovered from the beats.
+    let (overlay, _) = plan_meta_from_beats(&draft.beats);
     if let Some(overlay) = overlay {
         out.push(status(
             StatusTone::Info,
@@ -700,12 +700,6 @@ pub fn dungeon_entity_card(draft: &DungeonDraft, footer: CardFooter) -> OutputDo
                 "Overlay: {} (on the {})",
                 overlay.overlay_type, draft.beats[overlay.beat_index].function
             ),
-        ));
-    }
-    if factions {
-        out.push(status(
-            StatusTone::Info,
-            "Faction tint: a faction presence colors the whole dungeon".to_string(),
         ));
     }
     // 4. five beat cards, each followed by its own reroll Paragraph

@@ -130,7 +130,7 @@ fn vault_menu_choices(d: &OnboardingData) -> Vec<WizardChoice> {
 }
 
 fn vault_menu_doc(d: &OnboardingData) -> OutputDoc {
-    let mut document = doc().with_block(heading(2, "Vault setup"));
+    let mut document = doc().with_block(heading(2, "Step 1: Vault setup"));
     if !d.vault_path.trim().is_empty() {
         document = document.with_block(paragraph_text(format!("current vault: {}", d.vault_path)));
     }

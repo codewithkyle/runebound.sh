@@ -324,8 +324,8 @@ impl WizardStep<AppState> for PlanReviewStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Review the rolled rooms. Re-roll one with `reroll <room>` or pin one with \
-         `set room <room> <type>` (room by number or name), then continue to write the story."
+        "Review the rolled rooms. Use `set room <room> <type>` to change a specific room, \
+         then continue to write the story."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -347,11 +347,9 @@ impl WizardStep<AppState> for PlanReviewStep {
             ))
             .with_block(list(items))
             .with_block(paragraph_with_inlines(vec![
-                text_node("Re-roll one with "),
-                code("reroll <room>"),
-                text_node(" or pin one with "),
+                text_node("Tip: "),
                 code("set room <room> <type>"),
-                text_node(" (by number or name)."),
+                text_node(" to change a specific room"),
             ]))
             .with_block(action_row(&self.choices(data)))
     }
@@ -419,7 +417,7 @@ impl WizardStep<AppState> for StoryReviewStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Review the story. Continue to build the dungeon, or `reroll <hint>` to steer a new one."
+        "Review the story. Continue to build the dungeon, or reroll for a new one."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -437,11 +435,6 @@ impl WizardStep<AppState> for StoryReviewStep {
             .with_block(heading(3, format!("{name} — {location}")))
             .with_block(paragraph_text(story.clone()))
             .with_block(action_row(&self.choices(data)))
-            .with_block(paragraph_with_inlines(vec![
-                text_node("Tip: "),
-                code("reroll <hint>"),
-                text_node(" to steer a new story."),
-            ]))
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
@@ -880,7 +873,7 @@ fn content_label(content_type: &str) -> String {
         .join(" ")
 }
 
-/// One "Function — Type" line per beat, plus any overlay/faction tint.
+/// One "Function — Type" line per beat, plus any overlay.
 fn plan_room_lines(plan: &DungeonContentPlan) -> Vec<String> {
     let mut lines: Vec<String> = plan
         .anchors
@@ -901,9 +894,6 @@ fn plan_room_lines(plan: &DungeonContentPlan) -> Vec<String> {
             content_label(&overlay.overlay_type),
             DUNGEON_FUNCTIONS[overlay.beat_index]
         ));
-    }
-    if plan.factions {
-        lines.push("Faction tint: a faction presence colors the whole dungeon".to_string());
     }
     lines
 }
