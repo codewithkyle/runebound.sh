@@ -75,8 +75,9 @@ struct LocationWizardData {
     // Minimal / custom seed (free text)
     custom_seed: Option<String>,
 
-    // Read-only faction link (Q-A / Q-H1): the loaded options, plus the chosen
-    // faction's canonical name + slug, and which step requested the link.
+    // Read-only faction link (Q-A / Q-H1): the searchable set loaded on entry (the
+    // typeahead filters it in memory), plus the chosen faction's canonical name +
+    // slug, and which step requested the link.
     factions: Vec<(String, String)>,
     faction_name: Option<String>,
     faction_ref: Option<String>,
@@ -198,7 +199,7 @@ impl WizardStep<AppState> for KindStep {
                 ));
         }
         wizard_menu(
-            "Create Location — Step 1 — Kind",
+            "Create Location — Kind",
             "What kind of place is this?",
             &self.choices(data),
         )
@@ -826,6 +827,10 @@ impl WizardStep<AppState> for GenerateStep {
 // Faction link — shared, read-only (Q-A / Q-H1)
 // ---------------------------------------------------------------------------
 
+/// How many faction matches the typeahead lists at once (mirrors the `@reference`
+/// autocomplete cap), so a huge campaign never floods the suggestion box.
+const FACTION_SUGGESTION_LIMIT: usize = 12;
+
 struct FactionLinkStep;
 
 #[async_trait]
@@ -835,7 +840,7 @@ impl WizardStep<AppState> for FactionLinkStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Pick an existing faction to own this place (read-only), or skip to choose an archetype."
+        "Type to search your factions by name (autocomplete helps), or skip to pick an archetype."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -848,25 +853,62 @@ impl WizardStep<AppState> for FactionLinkStep {
                 text_node(" to pick an archetype instead."),
             ]));
         } else {
-            document = document
-                .with_block(paragraph_text("Pick a faction to own this place:"))
-                .with_block(wizard::prompt::choice_lines(&self.choices(data)));
+            // A long campaign can have hundreds of factions, so search rather than
+            // enumerate: typeahead (`suggest`) lists matches as the GM types.
+            let count = d.factions.len();
+            let noun = if count == 1 { "faction" } else { "factions" };
+            document = document.with_block(paragraph_with_inlines(vec![
+                text_node(format!(
+                    "Start typing to search your {count} {noun} by name — matches autocomplete as you go. Pick one, or "
+                )),
+                command_ref("skip", "skip"),
+                text_node(" to choose an archetype instead."),
+            ]));
         }
         document
     }
 
-    fn choices(&self, data: &WizardData) -> Vec<WizardChoice> {
-        let d = location_data(data);
-        let mut choices: Vec<WizardChoice> = d
-            .factions
-            .iter()
-            .map(|(name, slug)| WizardChoice::new(name.clone(), slug.clone()))
-            .collect();
-        choices.push(
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        // The faction set can be huge, so it is offered via `suggest` typeahead
+        // rather than enumerated here; `skip` is the only always-listed action.
+        vec![
             WizardChoice::new("skip", "skip")
                 .with_help("Don't link a faction; pick an archetype instead"),
-        );
-        choices
+        ]
+    }
+
+    /// Typeahead over the factions loaded on entry: case-insensitive substring
+    /// match on the name, prefix matches ranked first, capped. The submitted token
+    /// is the display name (readable in the input); `accept` resolves it.
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        let d = location_data(data);
+        let query = input.trim().to_ascii_lowercase();
+
+        let mut matches: Vec<&(String, String)> = d
+            .factions
+            .iter()
+            .filter(|(name, _)| query.is_empty() || name.to_ascii_lowercase().contains(&query))
+            .collect();
+        matches.sort_by(|(left, _), (right, _)| {
+            let left = left.to_ascii_lowercase();
+            let right = right.to_ascii_lowercase();
+            // Prefix matches outrank mid-word matches; ties break alphabetically.
+            right
+                .starts_with(&query)
+                .cmp(&left.starts_with(&query))
+                .then(left.cmp(&right))
+        });
+
+        let mut out: Vec<WizardChoice> = matches
+            .into_iter()
+            .take(FACTION_SUGGESTION_LIMIT)
+            .map(|(name, _)| WizardChoice::new(name.clone(), name.clone()))
+            .collect();
+        // Keep `skip` reachable from typeahead when it isn't filtered out.
+        if query.is_empty() || "skip".starts_with(&query) {
+            out.push(WizardChoice::new("skip", "skip"));
+        }
+        out
     }
 
     async fn accept(
@@ -883,15 +925,38 @@ impl WizardStep<AppState> for FactionLinkStep {
             return Ok(WizardTransition::Goto(return_step));
         }
 
-        let chosen = data
+        // Exact name/slug wins; otherwise fall back to a unique substring match so a
+        // typed fragment resolves without forcing the whole name. Ambiguous or empty
+        // matches surface a message rather than silently re-rendering.
+        let exact = data
             .factions
             .iter()
             .find(|(name, slug)| {
                 slug.eq_ignore_ascii_case(trimmed) || name.eq_ignore_ascii_case(trimmed)
             })
             .cloned();
-        let Some((name, slug)) = chosen else {
-            return Ok(WizardTransition::Stay);
+        let (name, slug) = match exact {
+            Some(found) => found,
+            None => {
+                let needle = trimmed.to_ascii_lowercase();
+                let mut hits = data
+                    .factions
+                    .iter()
+                    .filter(|(name, _)| name.to_ascii_lowercase().contains(&needle));
+                match (hits.next().cloned(), hits.next()) {
+                    (Some(only), None) => only,
+                    (Some(_), Some(_)) => {
+                        return Err(format!(
+                            "Several factions match \"{trimmed}\" — pick one from the list or keep typing."
+                        ));
+                    }
+                    _ => {
+                        return Err(format!(
+                            "No faction matches \"{trimmed}\". Type to search, or skip."
+                        ));
+                    }
+                }
+            }
         };
 
         let next = if return_step == "base_owner" {
@@ -1380,5 +1445,50 @@ mod tests {
                 "crimson-lanterns".to_string()
             )]
         );
+    }
+
+    fn faction_link_data(factions: &[(&str, &str)]) -> WizardData {
+        WizardData::new(LocationWizardData {
+            factions: factions
+                .iter()
+                .map(|(name, slug)| (name.to_string(), slug.to_string()))
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn faction_typeahead_filters_and_ranks_prefix_first() {
+        let data = faction_link_data(&[
+            ("Crimson Lanterns", "crimson-lanterns"),
+            ("The Crimson Court", "the-crimson-court"),
+            ("Silver Hand", "silver-hand"),
+        ]);
+        let tokens: Vec<String> = FactionLinkStep
+            .suggest("crim", &data)
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        // Both crimson factions match; the prefix match ranks above the mid-word
+        // match, and the unrelated faction is excluded. `skip` is filtered out.
+        assert_eq!(
+            tokens,
+            vec![
+                "Crimson Lanterns".to_string(),
+                "The Crimson Court".to_string(),
+            ]
+        );
+    }
+
+    #[test]
+    fn faction_typeahead_offers_skip_on_empty_query() {
+        let data = faction_link_data(&[("Silver Hand", "silver-hand")]);
+        let tokens: Vec<String> = FactionLinkStep
+            .suggest("", &data)
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        assert!(tokens.contains(&"Silver Hand".to_string()));
+        assert!(tokens.contains(&"skip".to_string()));
     }
 }
