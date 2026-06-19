@@ -360,7 +360,13 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
             normalize_unknown_list(draft.exports.clone())
         },
         tone: normalize_unknown_text(&draft.tone),
-        authority: normalize_unknown_text(&draft.authority),
+        // Preserve a deliberately-empty authority (one-shot suppression) so the card
+        // omits the row; only normalize when there is content to clean.
+        authority: if draft.authority.trim().is_empty() {
+            String::new()
+        } else {
+            normalize_unknown_text(&draft.authority)
+        },
         danger_level: normalize_unknown_text(&draft.danger_level),
         current_tension: normalize_unknown_text(&draft.current_tension),
         seed_prompt: draft.seed_prompt.clone(),

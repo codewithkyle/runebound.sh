@@ -378,18 +378,19 @@ impl AiGenerationService {
             + estimate_tokens(user_prompt);
         let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
 
+        // The one-shot mirrors the ruin/site output shape: prose-first, no exports
+        // or settlement-economy modelling. `kind_type` + `danger_level` stay
+        // model-derived (no GM to lock them, unlike the wizard's Site branch).
         let schema = serde_json::json!({
             "type": "object",
-            "required": ["name", "kind_type", "visual_description", "history_background", "exports", "tone", "authority", "danger_level", "current_tension"],
+            "required": ["name", "kind_type", "visual_description", "history_background", "tone", "danger_level", "current_tension"],
             "properties": {
                 "name": { "type": "string", "minLength": 1 },
                 "kind_type": { "type": "string", "enum": LOCATION_KIND_TYPES },
                 "kind_custom": { "type": ["string", "null"] },
                 "visual_description": { "type": "string", "minLength": 1 },
                 "history_background": { "type": "string", "minLength": 1 },
-                "exports": { "type": "array", "minItems": 1, "maxItems": 3, "items": { "type": "string", "minLength": 1 } },
                 "tone": { "type": "string", "minLength": 1 },
-                "authority": { "type": "string", "minLength": 1 },
                 "danger_level": { "type": "string", "enum": LOCATION_DANGER_LEVELS },
                 "current_tension": { "type": "string", "minLength": 1 }
             },
@@ -413,16 +414,22 @@ impl AiGenerationService {
             database,
             generation_repo,
             |note| format!(
-                "You generate usable D&D location seeds. Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, exports, tone, authority, danger_level, current_tension. exports must have 1-3 short items. tone must be 2-5 words. If kind_type is not other, kind_custom must be null. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {}.{}{}{}",
-                recent_context, note, reference_suffix, detail_directive(verbosity)
+                "You generate one usable D&D location seed for a game master — describe the place by its look, its history, and the tension there now, the way you would a ruin, landmark, or remote site (not a modelled settlement economy). Return only JSON with fields name, kind_type, kind_custom, visual_description, history_background, tone, danger_level, current_tension. Pick the kind_type that best fits. tone must be 2-5 words. If kind_type is not other, kind_custom must be null. Do not invent exports, trade goods, rulers, or governments. danger_level must be one of: {danger}. If referenced vault metadata is provided, treat it as authoritative setting context and reuse established canonical names for any region, settlement, or landmark instead of inventing new ones. Avoid these recent seeds: {recent_context}.{note}{reference_suffix}{detail}",
+                danger = LOCATION_DANGER_LEVELS.join(", "),
+                detail = detail_directive(verbosity),
             ),
             || "failed to generate valid structured location output from ollama".to_string(),
             |seed: LocationSeed| {
-                let seed = match normalize_location_seed(seed) {
+                let mut seed = match normalize_location_seed(seed) {
                     Ok(seed) => seed,
                     Err(_) => return SeedStep::Retry,
                 };
-                if validate_location_details(&seed).is_err() {
+                // Mirror the ruin/site shape: suppress exports and authority (no
+                // economy or rulership modelling) and validate prose only, leaving
+                // kind_type + danger_level as the model's choices (normalized above).
+                seed.exports = Vec::new();
+                seed.authority = String::new();
+                if validate_location_prose(&seed).is_err() {
                     return SeedStep::Retry;
                 }
                 let normalized_name = seed.name.to_ascii_lowercase();
@@ -1516,6 +1523,9 @@ pub struct LocationSeed {
     #[serde(default)]
     pub exports: Vec<String>,
     pub tone: String,
+    // Suppressed by the one-shot lane (its schema omits it, emptied after); the
+    // wizard schemas still require it, so tolerate its absence here.
+    #[serde(default)]
     pub authority: String,
     // GM-locked for Site/Hideout (omitted from their schema, injected after).
     #[serde(default)]

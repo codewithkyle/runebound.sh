@@ -475,9 +475,17 @@ pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> Output
             normalize_unknown_list(draft.exports.clone()).join(", "),
         ));
     }
+    rows.push(entity_row("Tone:", normalize_unknown_text(&draft.tone)));
+    // Authority is also kind-conditional: the one-shot lane suppresses it (empty
+    // `String`), so the row is omitted rather than rendered as "Unknown". The wizard
+    // branches always set it (control / owner / occupant), so the row shows there.
+    if !draft.authority.trim().is_empty() {
+        rows.push(entity_row(
+            "Authority:",
+            normalize_unknown_text(&draft.authority),
+        ));
+    }
     rows.extend([
-        entity_row("Tone:", normalize_unknown_text(&draft.tone)),
-        entity_row("Authority:", normalize_unknown_text(&draft.authority)),
         entity_row("Danger:", normalize_unknown_text(&draft.danger_level)),
         entity_row("Tension:", normalize_unknown_text(&draft.current_tension)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
@@ -807,6 +815,32 @@ mod tests {
         assert!(
             labels.iter().any(|label| label == "Exports:"),
             "non-empty exports should render the row, got {labels:?}"
+        );
+    }
+
+    #[test]
+    fn location_card_omits_authority_row_when_empty() {
+        // The one-shot lane suppresses authority (empty String): the row is dropped,
+        // not shown as "Unknown".
+        let mut draft = location_draft(vec!["reed".to_string()]);
+        draft.authority = String::new();
+        let labels = card_labels(&draft);
+        assert!(
+            !labels.iter().any(|label| label == "Authority:"),
+            "empty authority should omit the row, got {labels:?}"
+        );
+        // Neighboring rows still render.
+        assert!(labels.iter().any(|label| label == "Tone:"));
+        assert!(labels.iter().any(|label| label == "Danger:"));
+    }
+
+    #[test]
+    fn location_card_keeps_authority_row_when_present() {
+        // location_draft seeds a non-empty authority.
+        let labels = card_labels(&location_draft(Vec::new()));
+        assert!(
+            labels.iter().any(|label| label == "Authority:"),
+            "non-empty authority should render the row, got {labels:?}"
         );
     }
 }
