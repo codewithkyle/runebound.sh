@@ -73,7 +73,6 @@ impl_entity_persistence! {
     store_save: save_npc,
     store_load: load_npc,
     store_delete: delete_npc,
-    requested_vault_path: None,
     normalize: {
         let race = draft.race.trim();
         if race.is_empty() {
@@ -136,7 +135,6 @@ impl_entity_persistence! {
     store_save: save_location,
     store_load: load_location,
     store_delete: delete_location,
-    requested_vault_path: Some(draft.vault_path.as_str()),
     normalize: {
         let name = draft.name.trim();
         let kind_type = normalize_location_kind_type(&draft.kind_type)?;
@@ -211,7 +209,6 @@ impl_entity_persistence! {
     store_save: save_faction,
     store_load: load_faction,
     store_delete: delete_faction,
-    requested_vault_path: Some(draft.vault_path.as_str()),
     normalize: {
         let kind_type = normalize_faction_kind_type(&draft.kind_type)?;
         let kind_custom = if kind_type == "other" {
@@ -295,7 +292,6 @@ impl_entity_persistence! {
     store_save: save_god,
     store_load: load_god,
     store_delete: delete_god,
-    requested_vault_path: Some(draft.vault_path.as_str()),
     normalize: {
         let rank = normalize_god_rank(&draft.rank)?;
         let rank_custom = if rank == "other" {
@@ -368,7 +364,6 @@ impl_entity_persistence! {
     store_save: save_dungeon,
     store_load: load_dungeon,
     store_delete: delete_dungeon,
-    requested_vault_path: Some(draft.vault_path.as_str()),
     normalize: {
         let location = normalize_unknown_text(&draft.location);
         let story = draft.story.trim().to_string();
@@ -412,7 +407,6 @@ impl_entity_persistence! {
     store_save: save_item,
     store_load: load_item,
     store_delete: delete_item,
-    requested_vault_path: None,
     normalize: {
         let category = normalize_item_category(&draft.category)?;
         let rarity = normalize_item_rarity(&draft.rarity)?;
@@ -464,7 +458,6 @@ impl_entity_persistence! {
     store_save: save_event,
     store_load: load_event,
     store_delete: delete_event,
-    requested_vault_path: None,
     normalize: {
         // Events are narrative-only: the body is stored verbatim (just trimmed),
         // with none of the field normalization the structured entities apply.
@@ -501,25 +494,20 @@ fn resolve_slug(root: &Path, dir: &str, existing_slug: Option<&str>, name: &str)
 /// Resolve the readable vault (markdown) path for a save, plus the old vault path
 /// whose document-index entry should be retired (if the readable name changed).
 ///
-/// Precedence: an explicit `requested` path wins; otherwise reuse the existing
-/// path when it already matches the readable name, else compute a fresh unique
-/// readable path. The retirement is *returned* rather than performed here so the
-/// caller can fold it into the same transaction as the row/index upsert (P6.1).
+/// The path is always derived from the current `name`: reuse the existing path
+/// when it already matches that readable name, otherwise compute a fresh unique
+/// readable path (and report the old one for retirement). Deriving from `name`
+/// rather than a stored draft path is what makes a rename/reroll re-file the
+/// entity under its new name. The retirement is *returned* rather than performed
+/// here so the caller can fold it into the same transaction as the row/index
+/// upsert (P6.1).
 async fn resolve_vault_path(
     document_repo: &dyn crate::repositories::DocumentRepository,
     database: &db::Database,
     dir: &str,
     name: &str,
     existing: Option<ExistingRef<'_>>,
-    requested: Option<&str>,
 ) -> Result<(String, Option<String>), String> {
-    if let Some(requested) = requested {
-        let normalized = normalize_relative_path_for_storage(requested.trim());
-        if !normalized.is_empty() {
-            return Ok((normalized, None));
-        }
-    }
-
     match existing {
         Some(current) => {
             let readable =

@@ -38,7 +38,6 @@ macro_rules! impl_entity_persistence {
         store_save: $store_save:ident,
         store_load: $store_load:ident,
         store_delete: $store_delete:ident,
-        requested_vault_path: $requested:expr,
         normalize: { $($normalize:tt)* },
         frontmatter_fields: { $( $ff:ident $(: $fv:expr)? ),* $(,)? },
         row_fields: { $( $rf:ident $(: $rv:expr)? ),* $(,)? } $(,)?
@@ -82,7 +81,6 @@ macro_rules! impl_entity_persistence {
                     slug: &row.slug,
                     vault_path: &row.vault_path,
                 }),
-                $requested,
             )
             .await?;
             let published_at = match existing.as_ref() {
