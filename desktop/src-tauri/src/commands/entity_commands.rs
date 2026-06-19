@@ -250,22 +250,23 @@ fn build_preview_response(detail: &EntityDetail) -> String {
     build_entity_card_text(detail)
 }
 
-/// The card for `show`/`preview`/`load` is the canonical entity card built from
-/// the typed draft — the single source shared with the draft-edit path, so the
-/// per-kind field list is no longer re-encoded here. (P5.4)
+/// The read-only card for `show`/`preview` (and `load`'s text echo) — the same
+/// per-kind entity card as the draft-edit path, but built with [`CardFooter::Hide`]
+/// since these surfaces don't open a draft, so a `save`/`reroll` hint would point
+/// at commands that do nothing here. (P5.4)
 fn build_entity_card_doc(detail: &EntityDetail) -> OutputDoc {
     use runebound_models::drafts::{
-        dungeon_entity_card, event_entity_card, faction_entity_card, god_entity_card,
+        CardFooter, dungeon_entity_card, event_entity_card, faction_entity_card, god_entity_card,
         item_entity_card, location_entity_card, npc_entity_card,
     };
     match &detail.draft {
-        DraftEnvelope::Npc(d) => npc_entity_card(d),
-        DraftEnvelope::Location(d) => location_entity_card(d),
-        DraftEnvelope::Faction(d) => faction_entity_card(d),
-        DraftEnvelope::Item(d) => item_entity_card(d),
-        DraftEnvelope::Event(d) => event_entity_card(d),
-        DraftEnvelope::God(d) => god_entity_card(d),
-        DraftEnvelope::Dungeon(d) => dungeon_entity_card(d),
+        DraftEnvelope::Npc(d) => npc_entity_card(d, CardFooter::Hide),
+        DraftEnvelope::Location(d) => location_entity_card(d, CardFooter::Hide),
+        DraftEnvelope::Faction(d) => faction_entity_card(d, CardFooter::Hide),
+        DraftEnvelope::Item(d) => item_entity_card(d, CardFooter::Hide),
+        DraftEnvelope::Event(d) => event_entity_card(d, CardFooter::Hide),
+        DraftEnvelope::God(d) => god_entity_card(d, CardFooter::Hide),
+        DraftEnvelope::Dungeon(d) => dungeon_entity_card(d, CardFooter::Hide),
     }
 }
 

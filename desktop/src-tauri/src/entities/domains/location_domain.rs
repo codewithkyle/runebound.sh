@@ -393,7 +393,7 @@ pub fn location_summary_text(draft: &LocationDraftSession) -> String {
 }
 
 pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::location_entity_card;
+    use runebound_models::drafts::{CardFooter, location_entity_card};
 
     let normalized_draft = LocationDraftSession {
         id: draft.id.clone(),
@@ -411,7 +411,7 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         current_tension: normalize_unknown_text(&draft.current_tension),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = location_entity_card(&normalized_draft);
+    let entity_card_doc = location_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadLocationDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

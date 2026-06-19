@@ -360,7 +360,7 @@ pub fn god_summary_text(draft: &GodDraftSession) -> String {
 }
 
 pub fn god_event_from_draft(draft: &GodDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::god_entity_card;
+    use runebound_models::drafts::{CardFooter, god_entity_card};
 
     let normalized_draft = GodDraftSession {
         id: draft.id.clone(),
@@ -382,7 +382,7 @@ pub fn god_event_from_draft(draft: &GodDraftSession) -> CommandClientEvent {
         rivals: normalize_unknown_list(draft.rivals.clone()),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = god_entity_card(&normalized_draft);
+    let entity_card_doc = god_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadGodDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

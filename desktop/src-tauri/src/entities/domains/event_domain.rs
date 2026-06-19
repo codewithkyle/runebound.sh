@@ -177,9 +177,9 @@ pub fn event_summary_text(draft: &EventDraftSession) -> String {
 }
 
 pub fn event_event_from_draft(draft: &EventDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::event_entity_card;
+    use runebound_models::drafts::{CardFooter, event_entity_card};
 
-    let entity_card = event_entity_card(draft);
+    let entity_card = event_entity_card(draft, CardFooter::Show);
     CommandClientEvent::LoadEventDraftWithCard {
         draft: draft.clone(),
         entity_card,

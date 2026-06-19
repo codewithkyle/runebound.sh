@@ -308,7 +308,7 @@ pub fn npc_summary_text(draft: &NpcDraftSession) -> String {
 }
 
 pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::npc_entity_card;
+    use runebound_models::drafts::{CardFooter, npc_entity_card};
 
     let normalized_draft = NpcDraftSession {
         id: draft.id.clone(),
@@ -331,7 +331,7 @@ pub fn npc_event_from_draft(draft: &NpcDraftSession) -> CommandClientEvent {
         location: normalize_unknown_text(&draft.location),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = npc_entity_card(&normalized_draft);
+    let entity_card_doc = npc_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadNpcDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

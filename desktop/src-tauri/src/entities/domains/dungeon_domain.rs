@@ -402,7 +402,7 @@ pub fn dungeon_summary_text(draft: &DungeonDraftSession) -> String {
 }
 
 pub fn dungeon_event_from_draft(draft: &DungeonDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::dungeon_entity_card;
+    use runebound_models::drafts::{CardFooter, dungeon_entity_card};
 
     let mut normalized_draft = draft.clone();
     normalized_draft.location = normalize_unknown_text(&draft.location);
@@ -419,7 +419,7 @@ pub fn dungeon_event_from_draft(draft: &DungeonDraftSession) -> CommandClientEve
             .map(|loot| loot.trim().to_string())
             .filter(|loot| !loot.is_empty());
     }
-    let entity_card_doc = dungeon_entity_card(&normalized_draft);
+    let entity_card_doc = dungeon_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadDungeonDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,

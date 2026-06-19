@@ -309,7 +309,7 @@ pub fn item_summary_text(draft: &ItemDraftSession) -> String {
 }
 
 pub fn item_event_from_draft(draft: &ItemDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::item_entity_card;
+    use runebound_models::drafts::{CardFooter, item_entity_card};
 
     let normalized = ItemDraftSession {
         id: draft.id.clone(),
@@ -328,7 +328,7 @@ pub fn item_event_from_draft(draft: &ItemDraftSession) -> CommandClientEvent {
         value: normalize_unknown_text(&draft.value),
         location: normalize_unknown_text(&draft.location),
     };
-    let entity_card = item_entity_card(&normalized);
+    let entity_card = item_entity_card(&normalized, CardFooter::Show);
     CommandClientEvent::LoadItemDraftWithCard {
         draft: normalized,
         entity_card,

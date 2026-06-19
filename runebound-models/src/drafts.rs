@@ -389,6 +389,16 @@ use super::output::{
 };
 use super::utils::{normalize_unknown_list, normalize_unknown_text};
 
+/// Whether an entity card appends its `save`/`reroll` action footer (and, for
+/// dungeons, the per-beat reroll hints). The active-draft editor flow shows it —
+/// those commands act on the open draft; the read-only `show`/`preview` flow
+/// hides it, since there is no draft for them to act on.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CardFooter {
+    Show,
+    Hide,
+}
+
 fn title_case_sex(value: &str) -> String {
     match value.to_lowercase().as_str() {
         "male" => "Male".to_string(),
@@ -410,7 +420,7 @@ fn location_kind_display(kind_type: &str, kind_custom: &Option<String>) -> Strin
     format!("Other ({})", custom_norm)
 }
 
-pub fn npc_entity_card(draft: &NpcDraft) -> OutputDoc {
+pub fn npc_entity_card(draft: &NpcDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![
         entity_row("Slug:", normalize_unknown_text(&draft.slug)),
         entity_row("Race:", normalize_unknown_text(&draft.race)),
@@ -431,18 +441,20 @@ pub fn npc_entity_card(draft: &NpcDraft) -> OutputDoc {
         ),
         entity_row("Location:", normalize_unknown_text(&draft.location)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this NPC, or "),
             command_ref("reroll", "reroll"),
             text_node(" to generate again."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn location_entity_card(draft: &LocationDraft) -> OutputDoc {
+pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![
         entity_row(
             "Kind:",
@@ -463,18 +475,20 @@ pub fn location_entity_card(draft: &LocationDraft) -> OutputDoc {
         entity_row("Tension:", normalize_unknown_text(&draft.current_tension)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this location, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
+pub fn faction_entity_card(draft: &FactionDraft, footer: CardFooter) -> OutputDoc {
     let kind_custom_display = draft
         .kind_custom
         .as_deref()
@@ -533,18 +547,20 @@ pub fn faction_entity_card(draft: &FactionDraft) -> OutputDoc {
         entity_row("Symbol:", normalize_unknown_text(&draft.symbol_description)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this faction, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn god_entity_card(draft: &GodDraft) -> OutputDoc {
+pub fn god_entity_card(draft: &GodDraft, footer: CardFooter) -> OutputDoc {
     let rank_custom_display = draft
         .rank_custom
         .as_deref()
@@ -585,18 +601,20 @@ pub fn god_entity_card(draft: &GodDraft) -> OutputDoc {
         ),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this god, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
+pub fn item_entity_card(draft: &ItemDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![
         entity_row("Slug:", normalize_unknown_text(&draft.slug)),
         entity_row("Category:", normalize_unknown_text(&draft.category)),
@@ -614,18 +632,20 @@ pub fn item_entity_card(draft: &ItemDraft) -> OutputDoc {
         entity_row("Location:", normalize_unknown_text(&draft.location)),
         entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
-    doc()
-        .with_block(entity_card(&draft.name, rows))
-        .with_block(paragraph_with_inlines(vec![
+    let mut output = doc().with_block(entity_card(&draft.name, rows));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
             text_node("Use "),
             command_ref("save", "save"),
             text_node(" to persist this item, or "),
             command_ref("reroll", "reroll"),
             text_node(" to regenerate it."),
-        ]))
+        ]));
+    }
+    output
 }
 
-pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
+pub fn event_entity_card(draft: &EventDraft, footer: CardFooter) -> OutputDoc {
     let rows = vec![entity_row("Slug:", normalize_unknown_text(&draft.slug))];
     let mut output = doc().with_block(entity_card(&draft.name, rows));
     // The body is narrative prose, not an attribute. Render each paragraph
@@ -636,17 +656,19 @@ pub fn event_entity_card(draft: &EventDraft) -> OutputDoc {
             output.push(paragraph_text(trimmed.to_string()));
         }
     }
-    output.push(paragraph_with_inlines(vec![
-        text_node("Use "),
-        command_ref("save", "save"),
-        text_node(" to persist this event, or "),
-        command_ref("reroll", "reroll"),
-        text_node(" to regenerate the narrative."),
-    ]));
+    if footer == CardFooter::Show {
+        output.push(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(" to persist this event, or "),
+            command_ref("reroll", "reroll"),
+            text_node(" to regenerate the narrative."),
+        ]));
+    }
     output
 }
 
-pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
+pub fn dungeon_entity_card(draft: &DungeonDraft, footer: CardFooter) -> OutputDoc {
     let mut out = doc();
     // 1. spine / premise top-line (feature-dungeons.md §6)
     out.push(heading(
@@ -704,21 +726,25 @@ pub fn dungeon_entity_card(draft: &DungeonDraft) -> OutputDoc {
             normalize_unknown_text(&beat.design_note),
         ));
         out.push(entity_card(format!("{}. {}", i + 1, beat.function), rows));
-        let key = beat.function.to_lowercase();
-        out.push(paragraph_with_inlines(vec![
-            text_node("Reroll this beat: "),
-            command_ref(format!("reroll {key}"), format!("dungeon reroll {key}")),
-        ]));
+        if footer == CardFooter::Show {
+            let key = beat.function.to_lowercase();
+            out.push(paragraph_with_inlines(vec![
+                text_node("Reroll this beat: "),
+                command_ref(format!("reroll {key}"), format!("dungeon reroll {key}")),
+            ]));
+        }
     }
     // 4. footer actions
-    out.push(paragraph_with_inlines(vec![
-        text_node("Use "),
-        command_ref("save", "save"),
-        text_node(", "),
-        command_ref("reroll", "reroll"),
-        text_node(" for a whole new dungeon, or "),
-        command_ref("cancel", "cancel"),
-        text_node(" to discard."),
-    ]));
+    if footer == CardFooter::Show {
+        out.push(paragraph_with_inlines(vec![
+            text_node("Use "),
+            command_ref("save", "save"),
+            text_node(", "),
+            command_ref("reroll", "reroll"),
+            text_node(" for a whole new dungeon, or "),
+            command_ref("cancel", "cancel"),
+            text_node(" to discard."),
+        ]));
+    }
     out
 }

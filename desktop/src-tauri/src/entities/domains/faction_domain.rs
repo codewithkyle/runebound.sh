@@ -431,7 +431,7 @@ pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
 }
 
 pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEvent {
-    use runebound_models::drafts::faction_entity_card;
+    use runebound_models::drafts::{CardFooter, faction_entity_card};
 
     let normalized_draft = FactionDraftSession {
         id: draft.id.clone(),
@@ -456,7 +456,7 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
         symbol_description: normalize_unknown_text(&draft.symbol_description),
         seed_prompt: draft.seed_prompt.clone(),
     };
-    let entity_card_doc = faction_entity_card(&normalized_draft);
+    let entity_card_doc = faction_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadFactionDraftWithCard {
         draft: normalized_draft,
         entity_card: entity_card_doc,
