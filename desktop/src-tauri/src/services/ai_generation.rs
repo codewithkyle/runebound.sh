@@ -1356,8 +1356,10 @@ pub struct LocationWizardInputs {
     pub base_purpose: Option<String>,
     // GM-locked danger for Site + Hideout (Q-S2 / Q-H3)
     pub danger_lock: Option<String>,
-    // Guildhall (faction-locked public HQ): its public-facing function.
+    // Guildhall (faction-locked public HQ): its public-facing function, and the
+    // existing location it stands within (or a free-typed place name).
     pub public_role: Option<String>,
+    pub location_anchor: Option<String>,
     // Shared optional map anchor (Q-D / Q-S4 / Q-H5)
     pub geography: Option<String>,
     // A linked faction's canonical name (read-only), forces `authority`.
@@ -1444,8 +1446,15 @@ fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: Location
                 Some(role) => format!(" It functions publicly as {role}."),
                 None => String::new(),
             };
+            // The hall stands within an existing place (Q-G3); ground it there.
+            let anchor = match opt_clause(&inputs.location_anchor) {
+                Some(place) => {
+                    format!(" This hall stands within {place}; ground it in that place.")
+                }
+                None => String::new(),
+            };
             format!(
-                "You generate one usable D&D guildhall seed (a {kind}) for a game master — the PUBLIC headquarters of an established organization, NOT a settlement and NOT a hidden base. Return only JSON with fields name, visual_description, history_background, tone, authority, danger_level, current_tension. This hall is the public seat of {faction}; the authority field must name {faction}, and the visual_description, history_background, tone, and current_tension must reflect that organization's identity, methods, and goals.{role}{geo} Do not invent exports or trade goods. danger_level must be one of: {danger} — a public hall's danger is usually low unless the organization courts it.{leash}",
+                "You generate one usable D&D guildhall seed (a {kind}) for a game master — the PUBLIC headquarters of an established organization, NOT a settlement and NOT a hidden base. Return only JSON with fields name, visual_description, history_background, tone, authority, danger_level, current_tension. This hall is the public seat of {faction}; the authority field must name {faction}, and the visual_description, history_background, tone, and current_tension must reflect that organization's identity, methods, and goals.{role}{anchor} Do not invent exports or trade goods. danger_level must be one of: {danger} — a public hall's danger is usually low unless the organization courts it.{leash}",
                 danger = LOCATION_DANGER_LEVELS.join(", "),
                 leash = LOCATION_PROSE_LEASH,
             )
@@ -1553,6 +1562,11 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
             }
             if let Some(role) = opt_clause(&inputs.public_role) {
                 parts.push(format!("Public role: {role}."));
+            }
+            // `@locations/<name>` pulls the containing place's metadata in the same
+            // way — rich for a published location, name-only otherwise.
+            if let Some(anchor) = opt_clause(&inputs.location_anchor) {
+                parts.push(format!("It stands within @locations/{anchor}."));
             }
         }
     }

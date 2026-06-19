@@ -67,8 +67,10 @@ struct LocationWizardData {
     base_protection: Option<String>,
     base_purpose: Option<String>,
 
-    // Guildhall (faction-locked public HQ): its public-facing function.
+    // Guildhall (faction-locked public HQ): its public-facing function, and the
+    // existing location it stands within (or a free-typed place name).
     public_role: Option<String>,
+    location_anchor: Option<String>,
 
     // GM-locked danger for Site + Hideout (Q-S2 / Q-H3)
     danger_lock: Option<String>,
@@ -86,6 +88,10 @@ struct LocationWizardData {
     faction_name: Option<String>,
     faction_ref: Option<String>,
     faction_link_return: Option<&'static str>,
+
+    // Guildhall location anchor (Q-G3): the searchable set of existing locations
+    // loaded on entry to the anchor step; the chosen name lands in `location_anchor`.
+    locations: Vec<(String, String)>,
 
     // Generated seed handed to `finalize`/the editor, plus a one-shot notice.
     seed: Option<LocationSeed>,
@@ -122,6 +128,7 @@ impl LocationWizardData {
             base_protection: self.base_protection.clone(),
             base_purpose: self.base_purpose.clone(),
             public_role: self.public_role.clone(),
+            location_anchor: self.location_anchor.clone(),
             danger_lock: self.danger_lock.clone(),
             geography: self.geography.clone(),
             faction_name: self.faction_name.clone(),
@@ -808,7 +815,7 @@ impl WizardStep<AppState> for GuildhallRoleStep {
         &self,
         input: &str,
         d: &mut WizardData,
-        _state: &AppState,
+        state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
         let value = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
@@ -819,7 +826,76 @@ impl WizardStep<AppState> for GuildhallRoleStep {
             Some(trimmed.to_string())
         };
         location_data_mut(d).public_role = value;
-        Ok(WizardTransition::Next)
+        // Load the existing locations for the (mandatory) anchor picker, then enter it.
+        enter_location_anchor(d, state).await
+    }
+}
+
+/// The guildhall's terminal step: pick the existing location the hall stands within
+/// (typeahead), or name a new place. Required — a hall stands *somewhere* — but a
+/// free-typed name is accepted so the GM is never blocked. Generates on a valid
+/// answer, then completes (hands off to the editor like every other branch).
+struct GuildhallAnchorStep;
+
+#[async_trait]
+impl WizardStep<AppState> for GuildhallAnchorStep {
+    fn id(&self) -> &'static str {
+        "guildhall_anchor"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Pick the location this hall stands in (type to search), or name a new place."
+    }
+
+    fn awaiting_llm_label(&self) -> Option<&'static str> {
+        Some("generating location")
+    }
+
+    fn prompt(&self, data: &WizardData) -> OutputDoc {
+        let d = location_data(data);
+        let body = if d.locations.is_empty() {
+            "Where does this hall stand? No locations exist yet — type the name of the place that contains it."
+        } else {
+            "Where does this hall stand? Start typing to select one of your locations, or name a new place."
+        };
+        doc()
+            .with_block(heading(2, "Create Location — Guildhall — Where It Stands"))
+            .with_block(paragraph_text(body))
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        // Mandatory and typeahead-driven, so no enumerated choices (and no `skip`).
+        Vec::new()
+    }
+
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        entity_suggestions(&location_data(data).locations, input)
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            // Required: re-prompt rather than generating an unanchored hall.
+            return Ok(WizardTransition::Stay);
+        }
+        let anchor = match match_entity(&location_data(d).locations, trimmed) {
+            EntityMatch::Found(name, _) => name,
+            EntityMatch::Ambiguous => {
+                return Err(format!(
+                    "Several locations match \"{trimmed}\" — pick one from the list or keep typing."
+                ));
+            }
+            // No match: accept the typed text as a new place name.
+            EntityMatch::None => trimmed.to_string(),
+        };
+        location_data_mut(d).location_anchor = Some(anchor);
+        generate_location_into(location_data_mut(d), state, None).await?;
+        Ok(WizardTransition::Complete)
     }
 }
 
@@ -902,15 +978,74 @@ impl WizardStep<AppState> for GenerateStep {
 // Faction link — shared, read-only (Q-A / Q-H1)
 // ---------------------------------------------------------------------------
 
-/// How many faction matches the typeahead lists at once (mirrors the `@reference`
-/// autocomplete cap), so a huge campaign never floods the suggestion box.
-const FACTION_SUGGESTION_LIMIT: usize = 12;
+/// How many matches the entity typeaheads (the faction and location pickers) list at
+/// once, mirroring the `@reference` autocomplete cap so a huge campaign never floods
+/// the suggestion box.
+const ENTITY_SUGGESTION_LIMIT: usize = 12;
 
 /// Whether the faction link is in its mandatory guildhall mode. A guildhall is a
 /// faction's public HQ, so the link is required (no `skip`) and a name that matches
 /// nothing is accepted as a brand-new faction reference rather than rejected.
 fn faction_link_is_guildhall(data: &LocationWizardData) -> bool {
     data.faction_link_return == Some("guildhall")
+}
+
+/// The outcome of resolving typed input against a `(name, slug)` entry set.
+enum EntityMatch {
+    /// A real entry: its display name plus the slug it carried.
+    Found(String, String),
+    /// Nothing matched — the caller decides whether to accept it as free text.
+    None,
+    /// A substring matched more than one entry; the caller asks the GM to narrow it.
+    Ambiguous,
+}
+
+/// Case-insensitive typeahead over `(name, slug)` entries: substring match on the
+/// name, prefix matches ranked first, capped. The submitted token is the display
+/// name (readable in the input). Shared by the faction and location pickers.
+fn entity_suggestions(entities: &[(String, String)], input: &str) -> Vec<WizardChoice> {
+    let query = input.trim().to_ascii_lowercase();
+    let mut matches: Vec<&(String, String)> = entities
+        .iter()
+        .filter(|(name, _)| query.is_empty() || name.to_ascii_lowercase().contains(&query))
+        .collect();
+    matches.sort_by(|(left, _), (right, _)| {
+        let left = left.to_ascii_lowercase();
+        let right = right.to_ascii_lowercase();
+        // Prefix matches outrank mid-word matches; ties break alphabetically.
+        right
+            .starts_with(&query)
+            .cmp(&left.starts_with(&query))
+            .then(left.cmp(&right))
+    });
+    matches
+        .into_iter()
+        .take(ENTITY_SUGGESTION_LIMIT)
+        .map(|(name, _)| WizardChoice::new(name.clone(), name.clone()))
+        .collect()
+}
+
+/// Resolve typed input against `(name, slug)` entries: an exact name/slug match wins,
+/// else a unique case-insensitive substring match. Shared by both pickers.
+fn match_entity(entities: &[(String, String)], trimmed: &str) -> EntityMatch {
+    if let Some((name, slug)) = entities
+        .iter()
+        .find(|(name, slug)| {
+            slug.eq_ignore_ascii_case(trimmed) || name.eq_ignore_ascii_case(trimmed)
+        })
+        .cloned()
+    {
+        return EntityMatch::Found(name, slug);
+    }
+    let needle = trimmed.to_ascii_lowercase();
+    let mut hits = entities
+        .iter()
+        .filter(|(name, _)| name.to_ascii_lowercase().contains(&needle));
+    match (hits.next().cloned(), hits.next()) {
+        (Some((name, slug)), None) => EntityMatch::Found(name, slug),
+        (Some(_), Some(_)) => EntityMatch::Ambiguous,
+        _ => EntityMatch::None,
+    }
 }
 
 struct FactionLinkStep;
@@ -933,15 +1068,10 @@ impl WizardStep<AppState> for FactionLinkStep {
 
         if faction_link_is_guildhall(d) {
             // Mandatory: a guildhall must belong to a faction. An unknown name is
-            // accepted as a new faction reference, so there is no `skip`.
-            let body = if d.factions.is_empty() {
-                "A guildhall is the public seat of a faction. No factions exist yet — type the name of the organization that runs this hall.".to_string()
-            } else {
-                format!(
-                    "A guildhall is the public seat of a faction. Start typing to search your {count} {noun} by name — matches autocomplete as you go. Pick one, or type a new name to use a faction that isn't in your world yet."
-                )
-            };
-            return document.with_block(paragraph_text(body));
+            // accepted as a new ad hoc faction, so there is no `skip`.
+            return document.with_block(paragraph_text(
+                "A guildhall is the public face of a faction. Start typing to select a faction, or create a new ad hoc faction.",
+            ));
         }
 
         if d.factions.is_empty() {
@@ -977,35 +1107,12 @@ impl WizardStep<AppState> for FactionLinkStep {
         ]
     }
 
-    /// Typeahead over the factions loaded on entry: case-insensitive substring
-    /// match on the name, prefix matches ranked first, capped. The submitted token
-    /// is the display name (readable in the input); `accept` resolves it.
+    /// Typeahead over the factions loaded on entry; `accept` resolves the submitted
+    /// display name. `skip` stays reachable except in mandatory guildhall mode.
     fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
         let d = location_data(data);
+        let mut out = entity_suggestions(&d.factions, input);
         let query = input.trim().to_ascii_lowercase();
-
-        let mut matches: Vec<&(String, String)> = d
-            .factions
-            .iter()
-            .filter(|(name, _)| query.is_empty() || name.to_ascii_lowercase().contains(&query))
-            .collect();
-        matches.sort_by(|(left, _), (right, _)| {
-            let left = left.to_ascii_lowercase();
-            let right = right.to_ascii_lowercase();
-            // Prefix matches outrank mid-word matches; ties break alphabetically.
-            right
-                .starts_with(&query)
-                .cmp(&left.starts_with(&query))
-                .then(left.cmp(&right))
-        });
-
-        let mut out: Vec<WizardChoice> = matches
-            .into_iter()
-            .take(FACTION_SUGGESTION_LIMIT)
-            .map(|(name, _)| WizardChoice::new(name.clone(), name.clone()))
-            .collect();
-        // Keep `skip` reachable from typeahead when it isn't filtered out — but never
-        // in guildhall mode, where the link is mandatory.
         if !faction_link_is_guildhall(d) && (query.is_empty() || "skip".starts_with(&query)) {
             out.push(WizardChoice::new("skip", "skip"));
         }
@@ -1035,40 +1142,24 @@ impl WizardStep<AppState> for FactionLinkStep {
             return Ok(WizardTransition::Goto(return_step));
         }
 
-        // Exact name/slug wins; otherwise fall back to a unique substring match so a
-        // typed fragment resolves without forcing the whole name. A linked faction
-        // carries its slug; an unmatched name has no slug.
-        let exact = data
-            .factions
-            .iter()
-            .find(|(name, slug)| {
-                slug.eq_ignore_ascii_case(trimmed) || name.eq_ignore_ascii_case(trimmed)
-            })
-            .cloned();
-        let (name, faction_ref): (String, Option<String>) = match exact {
-            Some((name, slug)) => (name, Some(slug)),
-            None => {
-                let needle = trimmed.to_ascii_lowercase();
-                let mut hits = data
-                    .factions
-                    .iter()
-                    .filter(|(name, _)| name.to_ascii_lowercase().contains(&needle));
-                match (hits.next().cloned(), hits.next()) {
-                    (Some((name, slug)), None) => (name, Some(slug)),
-                    (Some(_), Some(_)) => {
-                        return Err(format!(
-                            "Several factions match \"{trimmed}\" — pick one from the list or keep typing."
-                        ));
-                    }
-                    // No match: a guildhall accepts the typed text as a new faction
-                    // reference (name-only); the optional link rejects it.
-                    _ if guildhall => (trimmed.to_string(), None),
-                    _ => {
-                        return Err(format!(
-                            "No faction matches \"{trimmed}\". Type to search, or skip."
-                        ));
-                    }
-                }
+        // A linked faction carries its slug; an unmatched name has none. A guildhall
+        // accepts an unmatched name as a new ad hoc faction; the optional link rejects
+        // it so the GM picks a real one or skips.
+        let (name, faction_ref): (String, Option<String>) = match match_entity(
+            &data.factions,
+            trimmed,
+        ) {
+            EntityMatch::Found(name, slug) => (name, Some(slug)),
+            EntityMatch::Ambiguous => {
+                return Err(format!(
+                    "Several factions match \"{trimmed}\" — pick one from the list or keep typing."
+                ));
+            }
+            EntityMatch::None if guildhall => (trimmed.to_string(), None),
+            EntityMatch::None => {
+                return Err(format!(
+                    "No faction matches \"{trimmed}\". Type to search, or skip."
+                ));
             }
         };
 
@@ -1135,14 +1226,9 @@ impl LocationWizard {
                     body: "Where does the base hide? (e.g. \"the city's sewers\", \"a high mountain pass\")",
                     field: SeedField::Geography,
                 }),
-                // Guildhall (faction link runs first, from KindStep)
+                // Guildhall (faction link runs first, from KindStep; anchor generates)
                 Arc::new(GuildhallRoleStep),
-                Arc::new(GenerateStep {
-                    id: "geography_guildhall",
-                    title: "Create Location — Guildhall — Map Anchor",
-                    body: "Where does the hall stand? (e.g. \"on the merchant quarter's main square\", \"the old temple district\")",
-                    field: SeedField::Geography,
-                }),
+                Arc::new(GuildhallAnchorStep),
                 // Minimal / custom
                 Arc::new(GenerateStep {
                     id: "custom_seed",
@@ -1260,40 +1346,73 @@ async fn enter_faction_link(
     Ok(WizardTransition::Goto("faction_link"))
 }
 
+/// Load the existing locations (read-only) into the accumulator and jump to the
+/// guildhall anchor step. Mirrors [`enter_faction_link`] for the location picker.
+async fn enter_location_anchor(
+    d: &mut WizardData,
+    state: &AppState,
+) -> Result<WizardTransition, String> {
+    let locations = load_linkable_locations(state).await?;
+    location_data_mut(d).locations = locations;
+    Ok(WizardTransition::Goto("guildhall_anchor"))
+}
+
 /// Every faction the GM can link, read-only: unpublished drafts from the DB plus
 /// published notes recovered from the vault (those were reaped from the DB at
 /// publish time and now live only as `.md` files). Deduped by slug, sorted by name.
 async fn load_linkable_factions(state: &AppState) -> Result<Vec<(String, String)>, String> {
     let database = state.database();
     let rows = state.faction_repo().list_all(database.as_ref()).await?;
-    let mut factions: Vec<(String, String)> =
-        rows.into_iter().map(|row| (row.name, row.slug)).collect();
+    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
 
     // Reading the vault is recursive, blocking IO; keep it off the async runtime.
-    let published = tokio::task::spawn_blocking(load_published_faction_names)
+    let published = tokio::task::spawn_blocking(|| load_published_entity_names("factions"))
         .await
         .map_err(|err| err.to_string())??;
+    Ok(merge_linkable(drafts, published))
+}
 
-    let mut seen: HashSet<String> = factions
+/// Every location the GM can anchor a guildhall to, read-only: unpublished drafts
+/// from the DB plus published notes recovered from the vault. Same shape as
+/// [`load_linkable_factions`].
+async fn load_linkable_locations(state: &AppState) -> Result<Vec<(String, String)>, String> {
+    let database = state.database();
+    let rows = state.location_repo().list_all(database.as_ref()).await?;
+    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+
+    let published = tokio::task::spawn_blocking(|| load_published_entity_names("locations"))
+        .await
+        .map_err(|err| err.to_string())??;
+    Ok(merge_linkable(drafts, published))
+}
+
+/// Merge DB drafts with published-note entries, deduping by slug (drafts win) and
+/// sorting by display name. Shared by the faction and location loaders.
+fn merge_linkable(
+    mut drafts: Vec<(String, String)>,
+    published: Vec<(String, String)>,
+) -> Vec<(String, String)> {
+    let mut seen: HashSet<String> = drafts
         .iter()
         .map(|(_, slug)| slug.to_ascii_lowercase())
         .collect();
     for (name, slug) in published {
         if seen.insert(slug.to_ascii_lowercase()) {
-            factions.push((name, slug));
+            drafts.push((name, slug));
         }
     }
-    factions.sort_by(|left, right| {
+    drafts.sort_by(|left, right| {
         left.0
             .to_ascii_lowercase()
             .cmp(&right.0.to_ascii_lowercase())
     });
-    Ok(factions)
+    drafts
 }
 
-/// Recover published factions from the Obsidian vault's `factions/` folder. Blocking
-/// IO (recursive `read_dir`) — only call inside `spawn_blocking`.
-fn load_published_faction_names() -> Result<Vec<(String, String)>, String> {
+/// Recover published notes from one of the Obsidian vault's entity folders (e.g.
+/// `factions/`, `locations/`). Blocking IO (recursive `read_dir`) — only call inside
+/// `spawn_blocking`.
+fn load_published_entity_names(folder: &str) -> Result<Vec<(String, String)>, String> {
     let loaded = load_effective().map_err(|err| err.to_string())?;
     let Some(vault_path) = loaded.effective.vault.path else {
         return Ok(Vec::new());
@@ -1303,13 +1422,13 @@ fn load_published_faction_names() -> Result<Vec<(String, String)>, String> {
         return Ok(Vec::new());
     }
     let entries = load_vault_reference_entries(&vault)?;
-    Ok(faction_entries_from_refs(&entries))
+    Ok(entries_from_refs(&entries, folder))
 }
 
-/// Extract `(display name, slug)` for each faction note under the vault's
-/// `factions/` folder. The display name is the file stem; the slug is derived from
-/// it, since published notes carry no DB row. Pure, so it's unit-testable.
-fn faction_entries_from_refs(entries: &[VaultReferenceEntry]) -> Vec<(String, String)> {
+/// Extract `(display name, slug)` for each note directly under the vault's `<folder>/`
+/// directory. The display name is the file stem; the slug is derived from it, since
+/// published notes carry no DB row. Pure, so it's unit-testable.
+fn entries_from_refs(entries: &[VaultReferenceEntry], folder: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     for entry in entries {
         if entry.is_dir {
@@ -1321,10 +1440,10 @@ fn faction_entries_from_refs(entries: &[VaultReferenceEntry]) -> Vec<(String, St
         let Some((dir, file)) = path.split_once('/') else {
             continue;
         };
-        if !dir.eq_ignore_ascii_case("factions") {
+        if !dir.eq_ignore_ascii_case(folder) {
             continue;
         }
-        // Publish writes `factions/<Name>.md`; ignore anything nested deeper.
+        // Publish writes `<folder>/<Name>.md`; ignore anything nested deeper.
         if file.contains('/') {
             continue;
         }
@@ -1557,9 +1676,10 @@ mod tests {
     }
 
     #[test]
-    fn faction_entries_keep_top_level_faction_notes_only() {
+    fn entries_from_refs_keep_top_level_notes_in_folder_only() {
         let entries = vec![
             ref_file("factions/Crimson Lanterns"),
+            ref_file("locations/Silverhall"),
             ref_file("factions/sub/Nested Note"), // nested → ignored
             ref_file("npcs/Lirael Drake"),        // wrong folder → ignored
             VaultReferenceEntry {
@@ -1569,14 +1689,52 @@ mod tests {
                 is_dir: true, // directory → ignored
             },
         ];
-        let out = faction_entries_from_refs(&entries);
+        // The folder argument selects which entity directory is harvested.
         assert_eq!(
-            out,
+            entries_from_refs(&entries, "factions"),
             vec![(
                 "Crimson Lanterns".to_string(),
                 "crimson-lanterns".to_string()
             )]
         );
+        assert_eq!(
+            entries_from_refs(&entries, "locations"),
+            vec![("Silverhall".to_string(), "silverhall".to_string())]
+        );
+    }
+
+    #[test]
+    fn match_entity_resolves_exact_unique_ambiguous_and_none() {
+        let entities = vec![
+            (
+                "Crimson Lanterns".to_string(),
+                "crimson-lanterns".to_string(),
+            ),
+            ("Crimson Court".to_string(), "crimson-court".to_string()),
+            ("Silver Hand".to_string(), "silver-hand".to_string()),
+        ];
+        // Exact name and exact slug both resolve.
+        assert!(matches!(
+            match_entity(&entities, "Silver Hand"),
+            EntityMatch::Found(name, _) if name == "Silver Hand"
+        ));
+        assert!(matches!(
+            match_entity(&entities, "silver-hand"),
+            EntityMatch::Found(name, _) if name == "Silver Hand"
+        ));
+        // A unique substring resolves; an ambiguous one does not.
+        assert!(matches!(
+            match_entity(&entities, "silver"),
+            EntityMatch::Found(name, _) if name == "Silver Hand"
+        ));
+        assert!(matches!(
+            match_entity(&entities, "crimson"),
+            EntityMatch::Ambiguous
+        ));
+        assert!(matches!(
+            match_entity(&entities, "nowhere"),
+            EntityMatch::None
+        ));
     }
 
     fn faction_link_data(factions: &[(&str, &str)]) -> WizardData {
@@ -1675,19 +1833,43 @@ mod tests {
     }
 
     #[test]
-    fn seed_prompt_for_guildhall_carries_faction_reference_and_role() {
-        // The `@factions/<name>` token is what lets generation pull the faction's
-        // authoritative metadata in for a published faction.
+    fn guildhall_anchor_typeahead_lists_locations_without_skip() {
+        // The anchor picker is mandatory: it surfaces existing locations and never a
+        // `skip`, and exposes no enumerated choices (typeahead-driven).
+        let data = WizardData::new(LocationWizardData {
+            locations: vec![
+                ("Silverhall".to_string(), "silverhall".to_string()),
+                ("Greenhollow".to_string(), "greenhollow".to_string()),
+            ],
+            ..Default::default()
+        });
+        assert!(GuildhallAnchorStep.choices(&data).is_empty());
+        let tokens: Vec<String> = GuildhallAnchorStep
+            .suggest("", &data)
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        assert!(tokens.contains(&"Silverhall".to_string()));
+        assert!(tokens.contains(&"Greenhollow".to_string()));
+        assert!(!tokens.contains(&"skip".to_string()));
+    }
+
+    #[test]
+    fn seed_prompt_for_guildhall_carries_faction_role_and_location_anchor() {
+        // The `@factions/<name>` and `@locations/<name>` tokens are what let
+        // generation pull each entity's authoritative metadata in for a published note.
         let d = LocationWizardData {
             kind_type: "guildhall".to_string(),
             faction_name: Some("Crimson Lanterns".to_string()),
             public_role: Some("a counting house or bank".to_string()),
+            location_anchor: Some("Silverhall".to_string()),
             ..Default::default()
         };
         let prompt = build_seed_prompt(&d).expect("seed prompt");
         assert!(prompt.contains("guildhall"));
         assert!(prompt.contains("@factions/Crimson Lanterns"));
         assert!(prompt.contains("counting house"));
+        assert!(prompt.contains("@locations/Silverhall"));
     }
 
     #[test]
