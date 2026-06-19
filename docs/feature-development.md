@@ -137,7 +137,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 
 ## 7. Playbook F: Add a New Wizard
 
-A *wizard* is a guided multi-step flow (ask a sequence of questions, then build an artifact) — `create dungeon` is the reference. The host-agnostic engine is the standalone `wizard` crate (dispatch, the nav verbs, clickable prompts, autocomplete, and the spinner signal); `desktop/src-tauri/src/wizards/` only *binds* that engine to `AppState`. A new wizard is additive data + one trait impl. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
+A *wizard* is a guided multi-step flow (ask a sequence of questions, then build an artifact) — `create dungeon` is the reference for a linear flow, `create location` (`wizards/location.rs`) for a branching one (step 1 routes the rest via `WizardTransition::Goto`). The host-agnostic engine is the standalone `wizard` crate (dispatch, the nav verbs, clickable prompts, autocomplete, and the spinner signal); `desktop/src-tauri/src/wizards/` only *binds* that engine to `AppState`. A new wizard is additive data + one trait impl. See `docs/architecture.md` §4 (Wizard Framework) and §8D.
 
 ### Steps + wizard
 
@@ -238,4 +238,4 @@ Then manually test the affected command flows in desktop UI:
 
 ---
 
-*Last updated: 2026-06-17*
+*Last updated: 2026-06-19*

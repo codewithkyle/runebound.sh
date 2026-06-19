@@ -81,20 +81,13 @@ desktop/src-tauri/src/
 |- main.rs                  # Tauri command wiring and app startup
 |- boot.rs                  # ordered startup tasks (spinner per task) before MOTD
 |- router.rs                # registry dispatch + fallback entity resolution
-|- app_state.rs             # AppState, EditorSession map-backed DraftEnvelope store
+|- app_state.rs             # AppState, EditorSession single-draft `Option<DraftEnvelope>` slot
 |- utils.rs                 # shared desktop helpers (tone/topology normalization, …)
 |- commands/
-|  |- mod.rs                # registry construction + shared response helpers
-|  |- create_commands.rs    # create npc|location|faction|item|event|god|dungeon
-|  |- npc_commands.rs       # npc show|rename|set|travel|reroll|save|cancel
-|  |- location_commands.rs  # location show|rename|set|reroll|save|cancel
-|  |- faction_commands.rs   # faction show|rename|set|reroll|save|cancel
-|  |- item_commands.rs      # item show|rename|set|reroll|save|cancel
-|  |- event_commands.rs     # event show|reroll|save|cancel
-|  |- god_commands.rs       # god show|rename|set|reroll|save|cancel
-|  |- dungeon_commands.rs   # dungeon show|rename|set|reroll|save|cancel
-|  |- entity_commands.rs    # load|show|preview|delete|undo
-|  |- system_commands.rs    # active-kind save|reroll|cancel
+|  |- mod.rs                # registry construction + entity_handler_entry + shared response helpers
+|  |- create_commands.rs    # create npc|location|faction|item|event|god (+ launches the dungeon/location wizards)
+|  |- entity_commands.rs    # generic per-kind verb dispatch (dispatch_entity_command: show|rename|set|travel|reroll|save|cancel) + load|show|preview|delete|undo
+|  |- system_commands.rs    # active-kind save|reroll|cancel + the desktop help override
 |  |- calendar_commands.rs  # calendar import
 |  |- date_commands.rs      # date / date set
 |  |- time_delta_commands.rs# +/- relative time deltas
@@ -111,7 +104,8 @@ desktop/src-tauri/src/
 |  `- domains/              # npc|location|faction|item|event|god|dungeon domain adapters
 |- wizards/                 # binds the `wizard` engine crate to AppState
 |  |- mod.rs                # impl WizardHost for AppState + build_default_wizard_registry() + re-exports
-|  `- dungeon.rs            # the dungeon wizard (declarative steps, impl Wizard<AppState>)
+|  |- dungeon.rs            # the dungeon wizard (linear steps, impl Wizard<AppState>)
+|  `- location.rs           # the location wizard (branching create-location flow, impl Wizard<AppState>)
 |- repositories/
 |  `- mod.rs                # repository traits + Prod* implementations
 `- services/
@@ -119,13 +113,15 @@ desktop/src-tauri/src/
    |- ai_generation.rs      # seed generation
    |- entity_reroll.rs      # field reroll generation
    |- entity_persistence.rs # save workflows
+   |- entity_persistence_macros.rs # impl_entity_persistence!/impl_entity_soft_delete! per-kind fan-out
    |- entity_admin.rs       # resolve/load/delete/undo/ensure helpers
    |- suggestions.rs        # autocomplete and reference suggestions
    |- vault_sync.rs         # startup vault -> db sync
    |- publish.rs            # entity frontmatter -> Obsidian markdown rendering
    |- ollama_chat.rs        # shared Ollama /api/chat plumbing (generation + reroll)
    |- mention_extraction.rs # Tier-2 LLM link generation for unknown entities
-   `- vault_ref.rs          # shared @reference index (AI context + autocomplete)
+   |- vault_ref.rs          # shared @reference index (AI context + autocomplete)
+   `- ts_export.rs          # (test-only) ts-rs export + drift guard for shared models
 ```
 
 `main.rs` is now thin application wiring, not a command business logic sink.
@@ -140,7 +136,7 @@ Entities now share one additive architecture:
 - **Schemas:** `EntitySchema` + `EntityFieldSpec` in `entities/schema.rs` declare canonical fields, aliases, value kinds, and access guards. Validation, suggestions, and help text all consume these specs.
 - **Domains:** Each entity implements the `EntityDomain` trait (`entities/domain.rs`) to encapsulate help, show, rename, set, reroll, save, and cancel flows. Domain implementations live under `entities/domains/` and use shared helpers from `entities/common.rs`.
 - **Registry:** `EntityDomainRegistry` (`entities/registry.rs`) owns `Arc<dyn EntityDomain>` instances. Command handlers resolve domains by kind, so adding a new entity means registering it once during startup.
-- **Editor session:** `app_state.rs` stores drafts in a `HashMap<EntityKind, DraftEnvelope>`. `active_kind` drives `system save/reroll/cancel`. New entities only need `set_<kind>/get_<kind>` helpers plus `DraftEnvelope` variants.
+- **Editor session:** `app_state.rs`'s `EditorSession` holds at most one draft — a single `Option<DraftEnvelope>` slot (opening, creating, or loading any entity replaces whatever was open, since the frontend only ever renders one card). `active_kind` is derived from the live draft and drives `system save/reroll/cancel`. New entities only need a `DraftEnvelope` variant plus `set_<kind>/get_<kind>/take_<kind>` helpers.
 
 This setup keeps command modules small and makes onboarding new entity types a mostly additive change set: define schema, implement domain, register it, wire persistence/reroll, and expose CLI + frontend hooks.
 
@@ -148,7 +144,7 @@ This setup keeps command modules small and makes onboarding new entity types a m
 
 Multi-step *wizards* (guided flows like `create dungeon` that ask a sequence of questions before producing an artifact) use the same additive, registry-backed pattern as entities — deliberately mirrored so the two read the same way. A wizard is **declarative data plus one trait impl**; the plumbing (dispatch, navigation verbs, clickable prompts, autocomplete context, the spinner signal) lives once and never changes per wizard.
 
-The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs` is the concrete wizard. This split is what lets core/CLI reuse the same engine — onboarding runs on it via `core/src/onboarding_wizard.rs`.
+The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs` + `wizards/location.rs` are the concrete desktop wizards. This split is what lets core/CLI reuse the same engine — onboarding runs on it via `core/src/onboarding_wizard.rs`.
 
 | Entity domain (one-shot create) | Wizard (multi-step flow) |
 |---|---|
@@ -156,7 +152,7 @@ The engine itself is the standalone **`wizard` crate**, host-agnostic and generi
 | `EntitySchema` + `EntityFieldSpec` | ordered `WizardStep`s (declarative) |
 | `EntityDomain` trait (`entities/domain.rs`) | `Wizard` trait (`wizard` crate, `wizard.rs`) |
 | `EntityDomainRegistry` + `build_default_registry()` | `WizardRegistry` + `build_default_wizard_registry()` |
-| `EditorSession` (`active_kind` + draft map) | `WizardSession` (`active_id` + cursor + history + type-erased data) |
+| `EditorSession` (`active_kind` + single-draft `Option<DraftEnvelope>` slot) | `WizardSession` (`active_id` + cursor + history + type-erased data) |
 | `InputContext::EntityEditor(kind)` | `InputContext::Wizard(id)` |
 | `CommandAvailability::EntityScoped` | `CommandAvailability::AnyWizard` (`continue`/`back`) + `AnyEditorOrWizard` (`cancel`) |
 | Card footer emits `command_ref` (`drafts.rs`) | Step prompt emits `command_ref` **by construction** (`wizard` crate, `prompt.rs`) |
@@ -170,13 +166,15 @@ Key pieces (all in the `wizard` crate unless noted):
 - **Clickability by construction** (`prompt.rs`): the sanctioned prompt builders (`wizard_menu`, `action_row`, `choice_lines`) render every `WizardChoice` as a `command_ref`, so an author *cannot* emit a non-clickable choice.
 - **Autocomplete for free**: `resolve_input_context` returns `InputContext::Wizard(id)` while a wizard is active; the suggestion service then early-returns `active_step_suggestions`, which combines the step's `suggest()` (per-step tokens + staged args) with the always-available global verbs (`back`/`cancel`/`help`). The step owns the whole command surface, so only the commands valid *here* are offered.
 
-The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the reference implementation. See §8D for the "Add a New Wizard" playbook.
+The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the simplest reference implementation — a linear sequence of steps. The location wizard (`wizards/location.rs`) is the reference for a *branching* flow: step 1 picks the `kind_type`, which routes to one of several branches (settlement/site/hideout/guildhall/custom) via `WizardTransition::Goto`. See §8D for the "Add a New Wizard" playbook.
 
 ### Combining the two: a kind can be wizard-created *and* entity-edited
 
 The wizard and entity-domain patterns are **complementary, not mutually exclusive** — and a single entity kind can use both. A wizard's `finalize()` can hand its artifact straight into an entity draft, so the kind is *created* through a guided multi-step flow and then *edited* with the ordinary one-shot entity commands.
 
-**Dungeon is the live example of both at once.** `create dungeon` launches `DungeonWizard` (registered in `build_default_wizard_registry()`); its `finalize()` generates the dungeon and then calls `editor.set_dungeon(draft)` — the exact hand-off a one-shot create handler performs. From that moment the kind behaves like any other entity: the live context flips from `InputContext::Wizard("dungeon")` to `InputContext::EntityEditor("dungeon")` (the entity editor wins precedence — see `docs/command-contexts.md` §1; the wizard session resets on `Complete`), and the full `DungeonDomain` takes over — `dungeon show|rename|set|reroll|save|cancel`. So `EntityKind::Dungeon`, `DungeonDraft` + `dungeon_entity_card` (`drafts.rs`), and the `dungeon` command module coexist with `DungeonWizard`; the two halves meet at `finalize()`.
+**Dungeon and Location are the live examples of both at once.** `create dungeon` launches `DungeonWizard` (registered in `build_default_wizard_registry()`); its `finalize()` generates the dungeon and then calls `editor.set_dungeon(draft)` — the exact hand-off a one-shot create handler performs. From that moment the kind behaves like any other entity: the live context flips from `InputContext::Wizard("dungeon")` to `InputContext::EntityEditor("dungeon")` (the entity editor wins precedence — see `docs/command-contexts.md` §1; the wizard session resets on `Complete`), and the full `DungeonDomain` takes over — `dungeon show|rename|set|reroll|save|cancel`. So `EntityKind::Dungeon`, `DungeonDraft` + `dungeon_entity_card` (`drafts.rs`), and the generic entity dispatch for the `dungeon` root coexist with `DungeonWizard`; the two halves meet at `finalize()`.
+
+**Location does the same, with a twist:** bare `create location` launches `LocationWizard`, whose `finalize()` calls `editor.set_location(draft)` and hands off to the `LocationDomain` editor — but `create location <prompt>` keeps the original one-shot lane (no wizard). So a single kind can offer a guided flow *and* a quick one-shot create, both converging on the same `LocationDraft` and entity editor. (Dungeon has no one-shot lane: both `create dungeon` and `create dungeon <args>` launch the wizard.)
 
 **Which to reach for:**
 
@@ -401,5 +399,5 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-*Last updated: 2026-06-17*  
+*Last updated: 2026-06-19*  
 *If this document drifts from the codebase, update it in the same PR as the architecture change.*

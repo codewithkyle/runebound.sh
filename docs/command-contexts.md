@@ -12,7 +12,7 @@ Every command surface (autocomplete and help) is gated by an **input context**, 
 |---|---|---|
 | `Default` | No editor open — the normal command surface | none of the contexts below is active |
 | `EntityEditor(kind)` | An entity draft is open; tag is the command root (`"npc"`, `"location"`, …) | `EditorSession::active_kind()` (desktop `AppState`) |
-| `Wizard(id)` | A multi-step wizard is running; tag is the wizard id (`"dungeon"`, `"setup"`, `"setup-vault"`, …) | `wizard_session.active_id` (desktop `AppState`) |
+| `Wizard(id)` | A multi-step wizard is running; tag is the wizard id (`"dungeon"`, `"location"`, `"setup"`, `"setup-vault"`, …) | `wizard_session.active_id` (desktop `AppState`) |
 
 Onboarding (`start setup` and the `setup vault|llm|model` sub-flows) is a **wizard** like any other, so there is no separate config context — it resolves to `Wizard("setup")` etc.
 
@@ -123,7 +123,5 @@ When you touch command visibility, parsing, help, or onboarding:
 
 ---
 
-*Last updated: 2026-06-17*
+*Last updated: 2026-06-19*
 *Keep this aligned with `command-specs/src/lib.rs`, `core/src/command_parse.rs`, and the setup flow in the same PR as any change to those.*
-</content>
-</invoke>
