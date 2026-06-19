@@ -453,9 +453,9 @@ impl AiGenerationService {
     /// (2) the GM's locked answers (control, resources, export mode, focus, owner,
     /// protection, purpose, geography) are embedded as authoritative context, so the
     /// model fills the LLM-derived fields *under* them. `kind_type`/`kind_custom` are
-    /// never requested; they are overwritten from the accumulator afterward. The
-    /// minimal/custom branch (guildhall + freeform) does NOT use this method — it
-    /// stays on the one-shot `generate_location_seed`.
+    /// never requested; they are overwritten from the accumulator afterward. Only the
+    /// freeform custom-kind lane does NOT use this method — it stays on the one-shot
+    /// `generate_location_seed`.
     pub async fn generate_location_seed_for_wizard(
         &self,
         inputs: &LocationWizardInputs,
@@ -542,6 +542,17 @@ impl AiGenerationService {
                         seed.exports = Vec::new();
                         seed.danger_level =
                             danger_lock.clone().unwrap_or_else(|| "Unknown".to_string());
+                        validate_location_prose(&seed)
+                    }
+                    LocationBranch::Guildhall => {
+                        // A public HQ: exports suppressed, but danger is LLM-derived
+                        // (incidental, like a settlement's) so it must validate.
+                        seed.exports = Vec::new();
+                        seed.danger_level = match normalize_location_danger_level(&seed.danger_level)
+                        {
+                            Ok(value) => value,
+                            Err(_) => return SeedStep::Retry,
+                        };
                         validate_location_prose(&seed)
                     }
                 };
@@ -1302,20 +1313,25 @@ pub struct NpcSeed {
 
 /// Which structured location branch a kind routes to. Drives the per-kind schema
 /// shape and prompt in [`AiGenerationService::generate_location_seed_for_wizard`].
-/// (guildhall / custom are *not* structured — they stay on the one-shot path.)
+/// (Only freeform custom kinds are *not* structured — they stay on the one-shot path.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocationBranch {
     Settlement,
     Site,
     Hideout,
+    /// A faction's public headquarters. Exports suppressed, `authority` locked to
+    /// the linked faction, `danger_level` LLM-derived (a public hall's danger is
+    /// usually incidental, like a settlement's).
+    Guildhall,
 }
 
-/// Map a GM-locked kind to its branch. Only the seven structured kinds reach the
-/// wizard generation method; anything else falls back to Settlement defensively.
+/// Map a GM-locked kind to its branch. Only the structured kinds reach the wizard
+/// generation method; anything else falls back to Settlement defensively.
 pub fn location_branch(kind_type: &str) -> LocationBranch {
     match kind_type {
         "ruin" | "landmark" | "wilderness" => LocationBranch::Site,
         "hideout" => LocationBranch::Hideout,
+        "guildhall" => LocationBranch::Guildhall,
         _ => LocationBranch::Settlement,
     }
 }
@@ -1340,6 +1356,8 @@ pub struct LocationWizardInputs {
     pub base_purpose: Option<String>,
     // GM-locked danger for Site + Hideout (Q-S2 / Q-H3)
     pub danger_lock: Option<String>,
+    // Guildhall (faction-locked public HQ): its public-facing function.
+    pub public_role: Option<String>,
     // Shared optional map anchor (Q-D / Q-S4 / Q-H5)
     pub geography: Option<String>,
     // A linked faction's canonical name (read-only), forces `authority`.
@@ -1420,6 +1438,18 @@ fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: Location
                 leash = LOCATION_PROSE_LEASH,
             )
         }
+        LocationBranch::Guildhall => {
+            let faction = opt_clause(&inputs.faction_name).unwrap_or("an established organization");
+            let role = match opt_clause(&inputs.public_role) {
+                Some(role) => format!(" It functions publicly as {role}."),
+                None => String::new(),
+            };
+            format!(
+                "You generate one usable D&D guildhall seed (a {kind}) for a game master — the PUBLIC headquarters of an established organization, NOT a settlement and NOT a hidden base. Return only JSON with fields name, visual_description, history_background, tone, authority, danger_level, current_tension. This hall is the public seat of {faction}; the authority field must name {faction}, and the visual_description, history_background, tone, and current_tension must reflect that organization's identity, methods, and goals.{role}{geo} Do not invent exports or trade goods. danger_level must be one of: {danger} — a public hall's danger is usually low unless the organization courts it.{leash}",
+                danger = LOCATION_DANGER_LEVELS.join(", "),
+                leash = LOCATION_PROSE_LEASH,
+            )
+        }
     }
 }
 
@@ -1451,6 +1481,22 @@ fn wizard_location_schema(branch: LocationBranch) -> serde_json::Value {
                 "history_background": { "type": "string", "minLength": 1 },
                 "tone": { "type": "string", "minLength": 1 },
                 "authority": { "type": "string", "minLength": 1 },
+                "current_tension": { "type": "string", "minLength": 1 }
+            },
+            "additionalProperties": false
+        }),
+        // Guildhall: exports suppressed (omitted), but danger_level is LLM-derived so
+        // it stays in the schema. `authority` is overwritten with the faction after.
+        LocationBranch::Guildhall => serde_json::json!({
+            "type": "object",
+            "required": ["name", "visual_description", "history_background", "tone", "authority", "danger_level", "current_tension"],
+            "properties": {
+                "name": { "type": "string", "minLength": 1 },
+                "visual_description": { "type": "string", "minLength": 1 },
+                "history_background": { "type": "string", "minLength": 1 },
+                "tone": { "type": "string", "minLength": 1 },
+                "authority": { "type": "string", "minLength": 1 },
+                "danger_level": { "type": "string", "enum": LOCATION_DANGER_LEVELS },
                 "current_tension": { "type": "string", "minLength": 1 }
             },
             "additionalProperties": false
@@ -1494,6 +1540,19 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
             }
             if let Some(purpose) = opt_clause(&inputs.base_purpose) {
                 parts.push(format!("Purpose: {purpose}."));
+            }
+        }
+        LocationBranch::Guildhall => {
+            // `@factions/<name>` resolves to the faction's authoritative metadata when
+            // it is a published note (the reference machinery reads it); a draft or
+            // free-typed name simply doesn't resolve and the name carries on its own.
+            if let Some(faction) = opt_clause(&inputs.faction_name) {
+                parts.push(format!(
+                    "The organization that runs this hall: @factions/{faction}."
+                ));
+            }
+            if let Some(role) = opt_clause(&inputs.public_role) {
+                parts.push(format!("Public role: {role}."));
             }
         }
     }

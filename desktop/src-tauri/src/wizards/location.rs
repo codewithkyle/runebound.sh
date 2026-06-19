@@ -1,7 +1,8 @@
 //! The location wizard: the guided `create location` flow expressed as declarative
 //! `WizardStep`s on the shared engine (docs/architecture.md §4). Step 1 picks the
-//! GM-locked `kind_type`, which routes to one of four branches — Settlement, Site,
-//! Hideout, or the minimal/custom lane — each of which ends by generating the
+//! GM-locked `kind_type`, which routes to one of five branches — Settlement, Site,
+//! Hideout, Guildhall (a faction's public HQ, so it opens on a mandatory faction
+//! link), or the minimal/custom lane — each of which ends by generating the
 //! LLM-derived fields *under* the GM's locked answers and converging on the same
 //! `LocationDraft` the one-shot `create_location` produced. So `save`/`reroll`/the
 //! card UI all keep working unchanged (the dungeon model applied to location).
@@ -66,6 +67,9 @@ struct LocationWizardData {
     base_protection: Option<String>,
     base_purpose: Option<String>,
 
+    // Guildhall (faction-locked public HQ): its public-facing function.
+    public_role: Option<String>,
+
     // GM-locked danger for Site + Hideout (Q-S2 / Q-H3)
     danger_lock: Option<String>,
 
@@ -99,8 +103,8 @@ fn location_data_mut(d: &mut WizardData) -> &mut LocationWizardData {
 }
 
 impl LocationWizardData {
-    /// The structured branches (Settlement/Site/Hideout) generate under locked
-    /// answers; `guildhall`/`other` stay on the one-shot lane.
+    /// The structured branches (Settlement/Site/Hideout/Guildhall) generate under
+    /// locked answers; only the freeform `other` lane stays on the one-shot path.
     fn is_structured(&self) -> bool {
         is_structured(&self.kind_type)
     }
@@ -117,6 +121,7 @@ impl LocationWizardData {
             base_owner: self.base_owner.clone(),
             base_protection: self.base_protection.clone(),
             base_purpose: self.base_purpose.clone(),
+            public_role: self.public_role.clone(),
             danger_lock: self.danger_lock.clone(),
             geography: self.geography.clone(),
             faction_name: self.faction_name.clone(),
@@ -124,20 +129,15 @@ impl LocationWizardData {
         }
     }
 
-    /// The one-shot prompt for the minimal/custom branch: the kind framing plus the
-    /// GM's free-text seed and any reroll hint.
+    /// The one-shot prompt for the freeform custom-kind lane: the kind framing plus
+    /// the GM's free-text seed and any reroll hint. (Guildhall is structured now, so
+    /// only `other` reaches this.)
     fn custom_prompt(&self, hint: Option<&str>) -> Option<String> {
         let mut parts: Vec<String> = Vec::new();
-        match self.kind_type.as_str() {
-            "guildhall" => {
-                parts.push("A guildhall — a public, owned guild headquarters.".to_string())
-            }
-            "other" => {
-                if let Some(custom) = trimmed_opt(&self.kind_custom) {
-                    parts.push(format!("A {custom}."));
-                }
-            }
-            _ => {}
+        if self.kind_type == "other"
+            && let Some(custom) = trimmed_opt(&self.kind_custom)
+        {
+            parts.push(format!("A {custom}."));
         }
         if let Some(seed) = trimmed_opt(&self.custom_seed) {
             parts.push(seed.to_string());
@@ -156,7 +156,7 @@ impl LocationWizardData {
 fn is_structured(kind_type: &str) -> bool {
     matches!(
         kind_type,
-        "hamlet" | "town" | "city" | "ruin" | "landmark" | "wilderness" | "hideout"
+        "hamlet" | "town" | "city" | "ruin" | "landmark" | "wilderness" | "hideout" | "guildhall"
     )
 }
 
@@ -226,25 +226,27 @@ impl WizardStep<AppState> for KindStep {
         &self,
         input: &str,
         d: &mut WizardData,
-        _state: &AppState,
+        state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        let data = location_data_mut(d);
 
         // Second phase of option 0: capture the custom kind name, then generate.
-        if data.awaiting_custom_kind {
-            if trimmed.is_empty() {
+        {
+            let data = location_data_mut(d);
+            if data.awaiting_custom_kind {
+                if trimmed.is_empty() {
+                    return Ok(WizardTransition::Stay);
+                }
+                data.kind_custom = Some(trimmed.to_string());
+                data.kind_type = "other".to_string();
+                data.awaiting_custom_kind = false;
+                return Ok(WizardTransition::Goto("custom_seed"));
+            }
+
+            if trimmed == "0" {
+                data.awaiting_custom_kind = true;
                 return Ok(WizardTransition::Stay);
             }
-            data.kind_custom = Some(trimmed.to_string());
-            data.kind_type = "other".to_string();
-            data.awaiting_custom_kind = false;
-            return Ok(WizardTransition::Goto("custom_seed"));
-        }
-
-        if trimmed == "0" {
-            data.awaiting_custom_kind = true;
-            return Ok(WizardTransition::Stay);
         }
 
         let menu = kind_menu();
@@ -255,15 +257,16 @@ impl WizardStep<AppState> for KindStep {
             return Ok(WizardTransition::Stay);
         }
         let kind = menu[n - 1];
-        data.kind_type = kind.to_string();
-        let target = match kind {
-            "hamlet" | "town" | "city" => "control",
-            "ruin" | "landmark" | "wilderness" => "site_focus",
-            "hideout" => "base_owner",
-            "guildhall" => "custom_seed", // minimal branch: owned-but-public
-            _ => return Ok(WizardTransition::Stay),
-        };
-        Ok(WizardTransition::Goto(target))
+        location_data_mut(d).kind_type = kind.to_string();
+        match kind {
+            "hamlet" | "town" | "city" => Ok(WizardTransition::Goto("control")),
+            "ruin" | "landmark" | "wilderness" => Ok(WizardTransition::Goto("site_focus")),
+            "hideout" => Ok(WizardTransition::Goto("base_owner")),
+            // A guildhall is a faction's public HQ, so it opens straight on the
+            // (mandatory) faction link rather than the minimal lane.
+            "guildhall" => enter_faction_link(d, state, "guildhall").await,
+            _ => Ok(WizardTransition::Stay),
+        }
     }
 }
 
@@ -749,6 +752,78 @@ impl WizardStep<AppState> for BasePurposeStep {
 }
 
 // ---------------------------------------------------------------------------
+// Guildhall branch — faction-locked public HQ (faction link runs first)
+// ---------------------------------------------------------------------------
+
+const GUILDHALL_ROLE_LABELS: [&str; 5] = [
+    "counting house / bank",
+    "training hall",
+    "trade exchange",
+    "lodge / chapterhouse",
+    "courthouse / tribunal",
+];
+const GUILDHALL_ROLE_VALUES: [&str; 5] = [
+    "a counting house or bank",
+    "a training hall",
+    "a trade exchange or market hall",
+    "a lodge or chapterhouse",
+    "a courthouse or tribunal",
+];
+
+struct GuildhallRoleStep;
+
+#[async_trait]
+impl WizardStep<AppState> for GuildhallRoleStep {
+    fn id(&self) -> &'static str {
+        "guildhall_role"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Optional: the hall's public function. Pick one, type your own, or skip (the model picks)."
+    }
+
+    fn prompt(&self, _data: &WizardData) -> OutputDoc {
+        let mut document = doc()
+            .with_block(heading(2, "Create Location — Guildhall — Public Role"))
+            .with_block(paragraph_with_inlines(vec![
+                text_node("What is this hall's public face? Pick one below, type your own, or "),
+                command_ref("skip", "skip"),
+                text_node(" to let the model decide."),
+            ]));
+        document = document.with_block(wizard::prompt::choice_lines(&numbered_choices(
+            &GUILDHALL_ROLE_LABELS,
+        )));
+        document
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        let mut choices = numbered_choices(&GUILDHALL_ROLE_LABELS);
+        choices.push(
+            WizardChoice::new("skip", "skip").with_help("Let the model pick the hall's role"),
+        );
+        choices
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        _state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        let trimmed = input.trim();
+        let value = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+            None
+        } else if let Some(value) = pick_value(trimmed, &GUILDHALL_ROLE_VALUES) {
+            Some(value.to_string())
+        } else {
+            Some(trimmed.to_string())
+        };
+        location_data_mut(d).public_role = value;
+        Ok(WizardTransition::Next)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Generate steps — each branch's final (optional) step + the custom seed
 // ---------------------------------------------------------------------------
 
@@ -831,6 +906,13 @@ impl WizardStep<AppState> for GenerateStep {
 /// autocomplete cap), so a huge campaign never floods the suggestion box.
 const FACTION_SUGGESTION_LIMIT: usize = 12;
 
+/// Whether the faction link is in its mandatory guildhall mode. A guildhall is a
+/// faction's public HQ, so the link is required (no `skip`) and a name that matches
+/// nothing is accepted as a brand-new faction reference rather than rejected.
+fn faction_link_is_guildhall(data: &LocationWizardData) -> bool {
+    data.faction_link_return == Some("guildhall")
+}
+
 struct FactionLinkStep;
 
 #[async_trait]
@@ -846,6 +928,22 @@ impl WizardStep<AppState> for FactionLinkStep {
     fn prompt(&self, data: &WizardData) -> OutputDoc {
         let d = location_data(data);
         let mut document = doc().with_block(heading(2, "Create Location — Link a Faction"));
+        let count = d.factions.len();
+        let noun = if count == 1 { "faction" } else { "factions" };
+
+        if faction_link_is_guildhall(d) {
+            // Mandatory: a guildhall must belong to a faction. An unknown name is
+            // accepted as a new faction reference, so there is no `skip`.
+            let body = if d.factions.is_empty() {
+                "A guildhall is the public seat of a faction. No factions exist yet — type the name of the organization that runs this hall.".to_string()
+            } else {
+                format!(
+                    "A guildhall is the public seat of a faction. Start typing to search your {count} {noun} by name — matches autocomplete as you go. Pick one, or type a new name to use a faction that isn't in your world yet."
+                )
+            };
+            return document.with_block(paragraph_text(body));
+        }
+
         if d.factions.is_empty() {
             document = document.with_block(paragraph_with_inlines(vec![
                 text_node("No factions exist yet. "),
@@ -855,8 +953,6 @@ impl WizardStep<AppState> for FactionLinkStep {
         } else {
             // A long campaign can have hundreds of factions, so search rather than
             // enumerate: typeahead (`suggest`) lists matches as the GM types.
-            let count = d.factions.len();
-            let noun = if count == 1 { "faction" } else { "factions" };
             document = document.with_block(paragraph_with_inlines(vec![
                 text_node(format!(
                     "Start typing to search your {count} {noun} by name — matches autocomplete as you go. Pick one, or "
@@ -868,9 +964,13 @@ impl WizardStep<AppState> for FactionLinkStep {
         document
     }
 
-    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+    fn choices(&self, data: &WizardData) -> Vec<WizardChoice> {
         // The faction set can be huge, so it is offered via `suggest` typeahead
-        // rather than enumerated here; `skip` is the only always-listed action.
+        // rather than enumerated here. In guildhall mode the link is mandatory, so
+        // there is no `skip`; otherwise `skip` is the always-listed action.
+        if faction_link_is_guildhall(location_data(data)) {
+            return Vec::new();
+        }
         vec![
             WizardChoice::new("skip", "skip")
                 .with_help("Don't link a faction; pick an archetype instead"),
@@ -904,8 +1004,9 @@ impl WizardStep<AppState> for FactionLinkStep {
             .take(FACTION_SUGGESTION_LIMIT)
             .map(|(name, _)| WizardChoice::new(name.clone(), name.clone()))
             .collect();
-        // Keep `skip` reachable from typeahead when it isn't filtered out.
-        if query.is_empty() || "skip".starts_with(&query) {
+        // Keep `skip` reachable from typeahead when it isn't filtered out — but never
+        // in guildhall mode, where the link is mandatory.
+        if !faction_link_is_guildhall(d) && (query.is_empty() || "skip".starts_with(&query)) {
             out.push(WizardChoice::new("skip", "skip"));
         }
         out
@@ -920,14 +1021,23 @@ impl WizardStep<AppState> for FactionLinkStep {
         let trimmed = input.trim();
         let data = location_data_mut(d);
         let return_step = data.faction_link_return.unwrap_or("control");
+        let guildhall = return_step == "guildhall";
 
-        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+        if trimmed.is_empty() {
+            // Guildhall: the link is mandatory, so re-prompt instead of skipping.
+            return Ok(if guildhall {
+                WizardTransition::Stay
+            } else {
+                WizardTransition::Goto(return_step)
+            });
+        }
+        if !guildhall && trimmed.eq_ignore_ascii_case("skip") {
             return Ok(WizardTransition::Goto(return_step));
         }
 
         // Exact name/slug wins; otherwise fall back to a unique substring match so a
-        // typed fragment resolves without forcing the whole name. Ambiguous or empty
-        // matches surface a message rather than silently re-rendering.
+        // typed fragment resolves without forcing the whole name. A linked faction
+        // carries its slug; an unmatched name has no slug.
         let exact = data
             .factions
             .iter()
@@ -935,8 +1045,8 @@ impl WizardStep<AppState> for FactionLinkStep {
                 slug.eq_ignore_ascii_case(trimmed) || name.eq_ignore_ascii_case(trimmed)
             })
             .cloned();
-        let (name, slug) = match exact {
-            Some(found) => found,
+        let (name, faction_ref): (String, Option<String>) = match exact {
+            Some((name, slug)) => (name, Some(slug)),
             None => {
                 let needle = trimmed.to_ascii_lowercase();
                 let mut hits = data
@@ -944,12 +1054,15 @@ impl WizardStep<AppState> for FactionLinkStep {
                     .iter()
                     .filter(|(name, _)| name.to_ascii_lowercase().contains(&needle));
                 match (hits.next().cloned(), hits.next()) {
-                    (Some(only), None) => only,
+                    (Some((name, slug)), None) => (name, Some(slug)),
                     (Some(_), Some(_)) => {
                         return Err(format!(
                             "Several factions match \"{trimmed}\" — pick one from the list or keep typing."
                         ));
                     }
+                    // No match: a guildhall accepts the typed text as a new faction
+                    // reference (name-only); the optional link rejects it.
+                    _ if guildhall => (trimmed.to_string(), None),
                     _ => {
                         return Err(format!(
                             "No faction matches \"{trimmed}\". Type to search, or skip."
@@ -959,15 +1072,21 @@ impl WizardStep<AppState> for FactionLinkStep {
             }
         };
 
-        let next = if return_step == "base_owner" {
-            data.base_owner = Some(name.clone());
-            "base_protection"
-        } else {
-            data.control = Some(name.clone());
-            "resources"
+        let next = match return_step {
+            "base_owner" => {
+                data.base_owner = Some(name.clone());
+                "base_protection"
+            }
+            // Guildhall locks `authority` to the faction via `faction_name`; there is
+            // no separate control/owner field to set.
+            "guildhall" => "guildhall_role",
+            _ => {
+                data.control = Some(name.clone());
+                "resources"
+            }
         };
         data.faction_name = Some(name);
-        data.faction_ref = Some(slug);
+        data.faction_ref = faction_ref;
         Ok(WizardTransition::Goto(next))
     }
 }
@@ -1014,6 +1133,14 @@ impl LocationWizard {
                     id: "geography_hideout",
                     title: "Create Location — Hideout — Map Anchor",
                     body: "Where does the base hide? (e.g. \"the city's sewers\", \"a high mountain pass\")",
+                    field: SeedField::Geography,
+                }),
+                // Guildhall (faction link runs first, from KindStep)
+                Arc::new(GuildhallRoleStep),
+                Arc::new(GenerateStep {
+                    id: "geography_guildhall",
+                    title: "Create Location — Guildhall — Map Anchor",
+                    body: "Where does the hall stand? (e.g. \"on the merchant quarter's main square\", \"the old temple district\")",
                     field: SeedField::Geography,
                 }),
                 // Minimal / custom
@@ -1214,7 +1341,8 @@ fn faction_entries_from_refs(entries: &[VaultReferenceEntry]) -> Vec<(String, St
 }
 
 /// Run kind-aware generation into the accumulator: the structured branches go
-/// through `generate_location_seed_for_wizard`; guildhall/custom stay one-shot.
+/// through `generate_location_seed_for_wizard`; only the freeform custom lane stays
+/// on the one-shot `generate_location_seed`.
 async fn generate_location_into(
     d: &mut LocationWizardData,
     state: &AppState,
@@ -1307,10 +1435,12 @@ mod tests {
             "landmark",
             "wilderness",
             "hideout",
+            "guildhall",
         ] {
             assert!(is_structured(kind), "{kind} should be structured");
         }
-        for kind in ["guildhall", "other", "dungeon", ""] {
+        // Only the freeform custom lane stays one-shot.
+        for kind in ["other", "dungeon", ""] {
             assert!(!is_structured(kind), "{kind} should not be structured");
         }
     }
@@ -1360,13 +1490,15 @@ mod tests {
     }
 
     #[test]
-    fn custom_prompt_frames_guildhall_even_when_skipped() {
+    fn custom_prompt_is_none_for_guildhall_now_structured() {
+        // Guildhall is a structured branch, so it never reaches the one-shot
+        // `custom_prompt` (only the freeform `other` lane does).
         let d = LocationWizardData {
             kind_type: "guildhall".to_string(),
             ..Default::default()
         };
-        let prompt = d.custom_prompt(None).expect("guildhall framing");
-        assert!(prompt.to_lowercase().contains("guildhall"));
+        assert!(d.custom_prompt(None).is_none());
+        assert!(d.is_structured());
     }
 
     #[test]
@@ -1490,5 +1622,87 @@ mod tests {
             .collect();
         assert!(tokens.contains(&"Silver Hand".to_string()));
         assert!(tokens.contains(&"skip".to_string()));
+    }
+
+    fn guildhall_link_data(factions: &[(&str, &str)]) -> WizardData {
+        WizardData::new(LocationWizardData {
+            faction_link_return: Some("guildhall"),
+            factions: factions
+                .iter()
+                .map(|(name, slug)| (name.to_string(), slug.to_string()))
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn faction_link_guildhall_mode_detected_by_return_step() {
+        let mut d = LocationWizardData::default();
+        assert!(!faction_link_is_guildhall(&d));
+        d.faction_link_return = Some("guildhall");
+        assert!(faction_link_is_guildhall(&d));
+        d.faction_link_return = Some("control");
+        assert!(!faction_link_is_guildhall(&d));
+    }
+
+    #[test]
+    fn guildhall_faction_link_is_mandatory_no_skip() {
+        // The link is required for a guildhall, so neither the choices nor the
+        // typeahead expose `skip`.
+        let data = guildhall_link_data(&[("Silver Hand", "silver-hand")]);
+        assert!(FactionLinkStep.choices(&data).is_empty());
+        let tokens: Vec<String> = FactionLinkStep
+            .suggest("", &data)
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        assert!(tokens.contains(&"Silver Hand".to_string()));
+        assert!(!tokens.contains(&"skip".to_string()));
+    }
+
+    #[test]
+    fn guildhall_role_offers_archetypes_then_skip() {
+        let data = WizardData::new(LocationWizardData::default());
+        let choices = GuildhallRoleStep.choices(&data);
+        assert_eq!(choices[0].token, "1");
+        assert!(choices.iter().any(|choice| choice.token == "skip"));
+        // Labels and values stay parallel.
+        assert_eq!(
+            pick_value("1", &GUILDHALL_ROLE_VALUES),
+            Some("a counting house or bank")
+        );
+        assert_eq!(GUILDHALL_ROLE_LABELS.len(), GUILDHALL_ROLE_VALUES.len());
+    }
+
+    #[test]
+    fn seed_prompt_for_guildhall_carries_faction_reference_and_role() {
+        // The `@factions/<name>` token is what lets generation pull the faction's
+        // authoritative metadata in for a published faction.
+        let d = LocationWizardData {
+            kind_type: "guildhall".to_string(),
+            faction_name: Some("Crimson Lanterns".to_string()),
+            public_role: Some("a counting house or bank".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_seed_prompt(&d).expect("seed prompt");
+        assert!(prompt.contains("guildhall"));
+        assert!(prompt.contains("@factions/Crimson Lanterns"));
+        assert!(prompt.contains("counting house"));
+    }
+
+    #[test]
+    fn guildhall_draft_locks_kind_and_suppresses_exports() {
+        let mut d = LocationWizardData {
+            kind_type: "guildhall".to_string(),
+            faction_name: Some("Crimson Lanterns".to_string()),
+            ..Default::default()
+        };
+        let mut seed = site_seed();
+        seed.exports = Vec::new(); // generation suppresses exports for a guildhall
+        d.seed = Some(seed);
+        let draft = build_location_draft(&d, "loc_guild".to_string()).expect("draft");
+        assert_eq!(draft.kind_type, "guildhall");
+        assert_eq!(draft.kind_custom, None);
+        assert!(draft.exports.is_empty());
     }
 }
