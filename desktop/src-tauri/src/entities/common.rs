@@ -11,7 +11,7 @@ use crate::entities::domain::EntityDomainResult;
 use crate::entities::kind::EntityKind;
 use crate::entities::schema::{FieldAccess, format_field_help, rerollable_fields, settable_fields};
 use crate::services::entity_persistence::EntityPersistenceService;
-use crate::utils::{normalize_optional_prompt, path_for_display};
+use crate::utils::normalize_optional_prompt;
 
 pub use crate::utils::{normalize_unknown_list, normalize_unknown_text, parse_list_csv};
 
@@ -241,7 +241,7 @@ pub fn entity_response_with_event(
 /// `save` (the default [`EntityDomain::save`] body): the seven per-kind `save`
 /// methods were mechanically identical — fetch the typed draft, persist it via
 /// [`EntityPersistenceService::save`], clear the editor, and render the
-/// `## <Kind> saved` block — diverging only in the kind heading and the
+/// `<Kind> saved` confirmation doc — diverging only in the kind heading and the
 /// no-active-draft message, both now derived from `kind`.
 pub async fn save_active_draft(kind: EntityKind, state: &AppState) -> EntityDomainResult {
     let draft = {
@@ -257,16 +257,24 @@ pub async fn save_active_draft(kind: EntityKind, state: &AppState) -> EntityDoma
         editor.clear_all();
     }
 
-    let output = [
-        format!("## {} saved", kind.display_name()),
-        format!("id: {}", outcome.id),
-        format!("slug: {}", outcome.slug),
-        format!("vault: {}", path_for_display(&outcome.vault_path)),
-        format!("updated: {}", outcome.updated_at),
-    ]
-    .join("\n");
+    // Saving persists to the local store only — it does not write the Obsidian
+    // vault (that's `publish`), so the confirmation reports just the saved
+    // identifiers. Build a structured doc so the heading actually renders rather
+    // than surfacing literal `##` markdown.
+    let heading_text = format!("{} saved", kind.display_name());
+    let document = doc()
+        .with_block(heading(2, heading_text.clone()))
+        .with_block(list(vec![
+            vec![strong("id"), text_node(format!(": {}", outcome.id))],
+            vec![strong("slug"), text_node(format!(": {}", outcome.slug))],
+        ]));
+    let plain = format!("{heading_text}\nid: {}\nslug: {}", outcome.id, outcome.slug);
 
-    entity_response_with_event(output, CommandClientEvent::ClearDrafts)
+    Ok(Some(ok_response_with_doc(
+        plain,
+        Some(document),
+        Some(CommandClientEvent::ClearDrafts),
+    )))
 }
 
 // P5.2 (cleanup-0.5.0): this helper returns a `CommandResult` as its `Err` to

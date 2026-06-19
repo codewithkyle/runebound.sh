@@ -3,6 +3,9 @@ use crate::commands::{
     DesktopHandlerInvocation, command_action_response, ok_response, ok_response_with_doc,
 };
 use dnd_core::command::CommandClientEvent;
+use runebound_models::output::{
+    command_ref, doc, heading, list, paragraph_with_inlines, strong, text_node,
+};
 use runebound_models::{CommandResponse, OutputDoc};
 
 use crate::entities::common::{
@@ -20,7 +23,7 @@ use crate::entities::{CommandResult, EntityDetail, EntityKind};
 use crate::services::entity_admin::{
     EnsureLocationInput, EntityAdminService, SoftDeleteEntityInput,
 };
-use crate::utils::{normalize_optional_prompt, path_for_display};
+use crate::utils::normalize_optional_prompt;
 
 pub async fn handle_load(
     invocation: DesktopHandlerInvocation<'_>,
@@ -147,14 +150,27 @@ pub async fn handle_delete(
         )
         .await?;
 
-    let output = [
-        "## Deleted".to_string(),
-        format!("type: {}", result.entity_type.as_str()),
-        format!("name: {}", result.name),
-        format!("slug: {}", result.slug),
-        "tip: run undo to restore it.".to_string(),
-    ]
-    .join("\n");
+    let document = doc()
+        .with_block(heading(2, "Deleted"))
+        .with_block(list(vec![
+            vec![
+                strong("type"),
+                text_node(format!(": {}", result.entity_type.as_str())),
+            ],
+            vec![strong("name"), text_node(format!(": {}", result.name))],
+            vec![strong("slug"), text_node(format!(": {}", result.slug))],
+        ]))
+        .with_block(paragraph_with_inlines(vec![
+            text_node("Run "),
+            command_ref("undo", "undo"),
+            text_node(" to restore it."),
+        ]));
+    let plain = format!(
+        "Deleted\ntype: {}\nname: {}\nslug: {}\ntip: run undo to restore it.",
+        result.entity_type.as_str(),
+        result.name,
+        result.slug
+    );
 
     let should_clear = {
         let editor = invocation.state.editor_session.lock().await;
@@ -166,13 +182,14 @@ pub async fn handle_delete(
     if should_clear {
         let mut editor = invocation.state.editor_session.lock().await;
         editor.clear_all();
-        return Ok(Some(ok_response(
-            output,
+        return Ok(Some(ok_response_with_doc(
+            plain,
+            Some(document),
             Some(CommandClientEvent::ClearDrafts),
         )));
     }
 
-    Ok(Some(ok_response(output, None)))
+    Ok(Some(ok_response_with_doc(plain, Some(document), None)))
 }
 
 pub async fn handle_undo(
@@ -182,15 +199,23 @@ pub async fn handle_undo(
     let result = admin
         .undo_last_soft_delete(invocation.state.inner())
         .await?;
-    let output = [
-        "## Undo complete".to_string(),
-        format!("type: {}", result.entity_type.as_str()),
-        format!("name: {}", result.name),
-        format!("slug: {}", result.slug),
-        format!("vault: {}", path_for_display(&result.vault_path)),
-    ]
-    .join("\n");
-    Ok(Some(ok_response(output, None)))
+    let document = doc()
+        .with_block(heading(2, "Undo complete"))
+        .with_block(list(vec![
+            vec![
+                strong("type"),
+                text_node(format!(": {}", result.entity_type.as_str())),
+            ],
+            vec![strong("name"), text_node(format!(": {}", result.name))],
+            vec![strong("slug"), text_node(format!(": {}", result.slug))],
+        ]));
+    let plain = format!(
+        "Undo complete\ntype: {}\nname: {}\nslug: {}",
+        result.entity_type.as_str(),
+        result.name,
+        result.slug
+    );
+    Ok(Some(ok_response_with_doc(plain, Some(document), None)))
 }
 
 pub(crate) async fn build_load_response(
