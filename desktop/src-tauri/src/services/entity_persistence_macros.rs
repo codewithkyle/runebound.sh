@@ -33,6 +33,7 @@ macro_rules! impl_entity_persistence {
         frontmatter: $Frontmatter:ident,
         row: $Row:ident,
         dir: $dir:literal,
+        $( vault_dir: $vault_dir:expr, )?
         kind: $kind:literal,
         repo: $repo:ident,
         store_save: $store_save:ident,
@@ -72,10 +73,24 @@ macro_rules! impl_entity_persistence {
                 .as_ref()
                 .map(|row| row.created_at.clone())
                 .unwrap_or_else(|| now.clone());
+            // The readable `.md` dir defaults to `$dir` (flat); an optional `vault_dir:`
+            // expr (Location only) may reshape it per kind. The slug + TOML store stay
+            // on `$dir`. The expr can read `draft`/`kind_type` (hygiene matches the
+            // `frontmatter_fields` value exprs). It only matters for a brand-new row —
+            // `resolve_vault_path` preserves an existing row's on-disk folder.
+            let vault_dir = {
+                // `unused_mut`/`unused_assignments` fire for the six entities that omit
+                // the optional `vault_dir:` arg (no reassignment) and for those that
+                // supply it (the `$dir` default is overwritten before being read).
+                #[allow(unused_mut, unused_assignments)]
+                let mut d = $dir.to_string();
+                $( d = $vault_dir; )?
+                d
+            };
             let (vault_path, retire_index) = resolve_vault_path(
                 document_repo.as_ref(),
                 database.as_ref(),
-                $dir,
+                &vault_dir,
                 name,
                 existing.as_ref().map(|row| ExistingRef {
                     slug: &row.slug,

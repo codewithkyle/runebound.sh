@@ -130,6 +130,13 @@ impl_entity_persistence! {
     frontmatter: LocationFrontmatter,
     row: LocationRow,
     dir: "locations",
+    // Wizard-built drafts subfolder the readable `.md` by kind; one-shots (and any
+    // non-wizard draft) pass "other" so they stay flat in `locations/`. The slug and
+    // TOML store keep `dir` ("locations") — only the Obsidian path is reshaped.
+    vault_dir: crate::services::ai_generation::location_dir_for_kind(
+        "locations",
+        if draft.wizard_subfoldered { &kind_type } else { "other" },
+    ),
     kind: "location",
     repo: location_repo,
     store_save: save_location,
@@ -506,6 +513,12 @@ fn resolve_slug(root: &Path, dir: &str, existing_slug: Option<&str>, name: &str)
 /// entity under its new name. The retirement is *returned* rather than performed
 /// here so the caller can fold it into the same transaction as the row/index
 /// upsert (P6.1).
+///
+/// `dir` is the folder a *new* row lands in. An *existing* row keeps the folder it
+/// already lives in (derived from its current path's parent), so a re-save never
+/// thrashes a subfoldered location back to flat (nor a flat one-shot into a
+/// subfolder when its kind is later edited). For the six entities that never nest,
+/// `parent_dir_of` returns exactly `dir`, so behavior is unchanged.
 async fn resolve_vault_path(
     document_repo: &dyn crate::repositories::DocumentRepository,
     database: &db::Database,
@@ -515,6 +528,7 @@ async fn resolve_vault_path(
 ) -> Result<(String, Option<String>), String> {
     match existing {
         Some(current) => {
+            let dir = parent_dir_of(current.vault_path).unwrap_or(dir);
             let readable =
                 unique_readable_vault_path(document_repo, database, dir, name, Some(current.slug))
                     .await?;
@@ -531,6 +545,14 @@ async fn resolve_vault_path(
             None,
         )),
     }
+}
+
+/// The directory portion of a relative vault path: `locations/sites/Foo.md` ->
+/// `Some("locations/sites")`, `locations/Foo.md` -> `Some("locations")`, a bare
+/// `Foo.md` -> `None`. Used to keep an existing note in its current folder on re-save.
+fn parent_dir_of(vault_path: &str) -> Option<&str> {
+    let p = vault_path.trim_end_matches('/');
+    p.rfind('/').map(|i| &p[..i])
 }
 
 /// Compute a unique `dir/Name.md` path, disambiguating collisions with a numeric
@@ -556,4 +578,112 @@ pub(crate) async fn unique_readable_vault_path(
         idx += 1;
     }
     Ok(candidate)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ExistingRef, parent_dir_of, resolve_vault_path};
+    use crate::repositories::ProdDocumentRepository;
+    use dnd_core::db::{Database, init_database_at_path};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn parent_dir_of_extracts_folder_or_none_for_flat() {
+        assert_eq!(
+            parent_dir_of("locations/sites/Foo.md"),
+            Some("locations/sites")
+        );
+        assert_eq!(parent_dir_of("locations/Foo.md"), Some("locations"));
+        assert_eq!(parent_dir_of("Foo.md"), None);
+        // Trailing slash is trimmed before splitting.
+        assert_eq!(parent_dir_of("locations/sites/"), Some("locations"));
+    }
+
+    async fn temp_db() -> Database {
+        static COUNTER: AtomicUsize = AtomicUsize::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let path = std::env::temp_dir().join(format!(
+            "dnd_persist_test_{}_{}.sqlite",
+            std::process::id(),
+            n
+        ));
+        let _ = std::fs::remove_file(&path);
+        init_database_at_path(&path).await.expect("init test db")
+    }
+
+    #[tokio::test]
+    async fn new_wizard_row_lands_in_the_kind_subfolder() {
+        let db = temp_db().await;
+        let repo = ProdDocumentRepository;
+        // The caller (macro) passes the subfoldered dir for a wizard kind.
+        let (path, retire) = resolve_vault_path(&repo, &db, "locations/sites", "Mirecairn", None)
+            .await
+            .unwrap();
+        assert_eq!(path, "locations/sites/Mirecairn.md");
+        assert!(retire.is_none());
+    }
+
+    #[tokio::test]
+    async fn new_one_shot_row_stays_flat() {
+        let db = temp_db().await;
+        let repo = ProdDocumentRepository;
+        // One-shots pass the flat dir ("other" => flat at the call site).
+        let (path, retire) = resolve_vault_path(&repo, &db, "locations", "Mirecairn", None)
+            .await
+            .unwrap();
+        assert_eq!(path, "locations/Mirecairn.md");
+        assert!(retire.is_none());
+    }
+
+    #[tokio::test]
+    async fn existing_subfoldered_note_renamed_stays_in_its_subfolder() {
+        let db = temp_db().await;
+        let repo = ProdDocumentRepository;
+        let existing = ExistingRef {
+            slug: "mirecairn",
+            vault_path: "locations/sites/Mirecairn.md",
+        };
+        let (path, retire) =
+            resolve_vault_path(&repo, &db, "locations/sites", "Deepmire", Some(existing))
+                .await
+                .unwrap();
+        // Re-filed under the new name, still inside sites/; old path retired.
+        assert_eq!(path, "locations/sites/Deepmire.md");
+        assert_eq!(retire.as_deref(), Some("locations/sites/Mirecairn.md"));
+    }
+
+    #[tokio::test]
+    async fn existing_flat_note_renamed_stays_flat() {
+        let db = temp_db().await;
+        let repo = ProdDocumentRepository;
+        let existing = ExistingRef {
+            slug: "greenhollow",
+            vault_path: "locations/Greenhollow.md",
+        };
+        let (path, retire) =
+            resolve_vault_path(&repo, &db, "locations", "Mossford", Some(existing))
+                .await
+                .unwrap();
+        assert_eq!(path, "locations/Mossford.md");
+        assert_eq!(retire.as_deref(), Some("locations/Greenhollow.md"));
+    }
+
+    #[tokio::test]
+    async fn kind_edit_of_existing_note_does_not_refolder() {
+        let db = temp_db().await;
+        let repo = ProdDocumentRepository;
+        // Existing flat note; its kind is now a structured one, so the macro passes a
+        // subfoldered dir. The folder must still come from the current path -> flat,
+        // and with the same name there is nothing to retire.
+        let existing = ExistingRef {
+            slug: "greenhollow",
+            vault_path: "locations/Greenhollow.md",
+        };
+        let (path, retire) =
+            resolve_vault_path(&repo, &db, "locations/sites", "Greenhollow", Some(existing))
+                .await
+                .unwrap();
+        assert_eq!(path, "locations/Greenhollow.md");
+        assert!(retire.is_none());
+    }
 }

@@ -1336,6 +1336,29 @@ pub fn location_branch(kind_type: &str) -> LocationBranch {
     }
 }
 
+/// Under-`locations/` subfolder for a structured wizard kind, or `None` for
+/// other/freeform/unknown (stays flat). Unlike [`location_branch`], `other` must map
+/// to `None` rather than a default branch, so match the kind strings directly. Only
+/// shapes the readable `.md` vault_path — the TOML store and DB projection stay flat.
+pub fn location_subfolder(kind_type: &str) -> Option<&'static str> {
+    match kind_type {
+        "hamlet" | "town" | "city" => Some("settlements"),
+        "ruin" | "landmark" | "wilderness" => Some("sites"),
+        "hideout" => Some("hideouts"),
+        "guildhall" => Some("guildhalls"),
+        _ => None, // other / freeform / unknown -> flat
+    }
+}
+
+/// Full relative dir for a NEW location save: `locations/<sub>` for a structured
+/// wizard kind, or flat `locations` otherwise.
+pub fn location_dir_for_kind(base: &str, kind_type: &str) -> String {
+    match location_subfolder(kind_type) {
+        Some(sub) => format!("{base}/{sub}"),
+        None => base.to_string(),
+    }
+}
+
 /// The GM's locked wizard answers, flattened into a borrow-friendly struct the
 /// wizard fills and passes to generation. Keeps `ai_generation.rs` free of the
 /// wizard's own accumulator type.
@@ -1360,6 +1383,10 @@ pub struct LocationWizardInputs {
     // existing location it stands within (or a free-typed place name).
     pub public_role: Option<String>,
     pub location_anchor: Option<String>,
+    // The anchor location's under-`locations/` subfolder (e.g. "settlements"), so the
+    // `@locations/<sub>/<anchor>` seed resolves to the right path-keyed note. Empty/None
+    // for a flat note or a free-typed place; falls back to the name-only `@locations/<anchor>`.
+    pub location_anchor_sub: Option<String>,
     // Shared optional map anchor (Q-D / Q-S4 / Q-H5)
     pub geography: Option<String>,
     // A linked faction's canonical name (read-only), forces `authority`.
@@ -1563,10 +1590,15 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
             if let Some(role) = opt_clause(&inputs.public_role) {
                 parts.push(format!("Public role: {role}."));
             }
-            // `@locations/<name>` pulls the containing place's metadata in the same
-            // way — rich for a published location, name-only otherwise.
+            // `@locations/<sub>/<anchor>` pulls the containing place's metadata in the
+            // same way — the `@reference` system is path-keyed, so a subfoldered note
+            // must carry its subfolder or grounding degrades to name-only. A flat note
+            // or free-typed place has no subfolder and falls back to `@locations/<anchor>`.
             if let Some(anchor) = opt_clause(&inputs.location_anchor) {
-                parts.push(format!("It stands within @locations/{anchor}."));
+                match opt_clause(&inputs.location_anchor_sub) {
+                    Some(sub) => parts.push(format!("It stands within @locations/{sub}/{anchor}.")),
+                    None => parts.push(format!("It stands within @locations/{anchor}.")),
+                }
             }
         }
     }
@@ -2270,10 +2302,73 @@ fn reference_payload_from_markdown(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        NPC_GEN_SAMPLING, NpcSeed, OUTPUT_RESERVE_TOKENS, build_seed_payload, capacity_notice,
-        describe_recent_npc_occupation_anchors, occupation_anchor, recent_occupation_anchor_set,
+        LocationWizardInputs, NPC_GEN_SAMPLING, NpcSeed, OUTPUT_RESERVE_TOKENS, build_seed_payload,
+        build_wizard_user_prompt, capacity_notice, describe_recent_npc_occupation_anchors,
+        location_dir_for_kind, location_subfolder, occupation_anchor, recent_occupation_anchor_set,
         reference_payload_from_markdown,
     };
+
+    #[test]
+    fn location_subfolder_maps_each_branch_and_flattens_other() {
+        assert_eq!(location_subfolder("hamlet"), Some("settlements"));
+        assert_eq!(location_subfolder("town"), Some("settlements"));
+        assert_eq!(location_subfolder("city"), Some("settlements"));
+        assert_eq!(location_subfolder("ruin"), Some("sites"));
+        assert_eq!(location_subfolder("landmark"), Some("sites"));
+        assert_eq!(location_subfolder("wilderness"), Some("sites"));
+        assert_eq!(location_subfolder("hideout"), Some("hideouts"));
+        assert_eq!(location_subfolder("guildhall"), Some("guildhalls"));
+        // other / freeform / unknown stay flat (NOT routed into settlements/).
+        assert_eq!(location_subfolder("other"), None);
+        assert_eq!(location_subfolder(""), None);
+        assert_eq!(location_subfolder("village"), None);
+    }
+
+    #[test]
+    fn location_dir_for_kind_appends_subfolder_or_stays_flat() {
+        assert_eq!(
+            location_dir_for_kind("locations", "ruin"),
+            "locations/sites"
+        );
+        assert_eq!(
+            location_dir_for_kind("locations", "town"),
+            "locations/settlements"
+        );
+        assert_eq!(
+            location_dir_for_kind("locations", "guildhall"),
+            "locations/guildhalls"
+        );
+        // other / unknown -> flat (the one-shot lane passes "other" deliberately).
+        assert_eq!(location_dir_for_kind("locations", "other"), "locations");
+        assert_eq!(location_dir_for_kind("locations", "village"), "locations");
+    }
+
+    #[test]
+    fn guildhall_prompt_threads_anchor_subfolder_when_present() {
+        // A subfoldered anchor must emit the path-keyed `@locations/<sub>/<anchor>`.
+        let inputs = LocationWizardInputs {
+            kind_type: "guildhall".to_string(),
+            location_anchor: Some("Silverhall".to_string()),
+            location_anchor_sub: Some("settlements".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_wizard_user_prompt(&inputs);
+        assert!(prompt.contains("@locations/settlements/Silverhall"));
+    }
+
+    #[test]
+    fn guildhall_prompt_falls_back_to_name_only_when_flat() {
+        // A flat note / free-typed place has no subfolder -> name-only `@locations/<anchor>`.
+        let inputs = LocationWizardInputs {
+            kind_type: "guildhall".to_string(),
+            location_anchor: Some("Silverhall".to_string()),
+            location_anchor_sub: None,
+            ..Default::default()
+        };
+        let prompt = build_wizard_user_prompt(&inputs);
+        assert!(prompt.contains("@locations/Silverhall"));
+        assert!(!prompt.contains("@locations/settlements"));
+    }
 
     #[test]
     fn seed_payload_wraps_messages_schema_and_sampling_with_num_ctx() {

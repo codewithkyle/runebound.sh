@@ -82,6 +82,9 @@ impl EntityDomain for LocationDomain {
             danger_level: row.danger_level,
             current_tension: row.current_tension,
             location: row.location,
+            // Loaded from an existing row; re-save preserves its on-disk folder
+            // regardless, so this transient flag stays false.
+            wizard_subfoldered: false,
         };
         Ok(Some(EntityDetail {
             draft: DraftEnvelope::Location(draft),
@@ -379,6 +382,9 @@ pub fn location_event_from_draft(draft: &LocationDraftSession) -> CommandClientE
         // card omits the row; the value is an entity reference, not prose.
         location: draft.location.clone(),
         seed_prompt: draft.seed_prompt.clone(),
+        // Carry the transient subfolder flag forward (serde-skipped on the wire; this
+        // copy is for the event payload only, not the editor draft that `save` reads).
+        wizard_subfoldered: draft.wizard_subfoldered,
     };
     let entity_card_doc = location_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadLocationDraftWithCard {

@@ -186,6 +186,8 @@ async fn create_location(trimmed: &str, state: tauri::State<'_, AppState>) -> Co
         current_tension: seed.current_tension,
         // The one-shot lane has no containing-location anchor (a wizard guildhall does).
         location: String::new(),
+        // One-shots always publish flat (only the wizard subfolders by kind).
+        wizard_subfoldered: false,
     };
 
     {

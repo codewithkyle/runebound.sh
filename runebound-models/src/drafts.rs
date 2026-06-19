@@ -80,6 +80,14 @@ pub struct LocationDraft {
     /// when there is no anchor; published as a `[[wikilink]]`.
     #[serde(default)]
     pub location: String,
+    /// Transient: true only when the WIZARD built this draft, requesting kind-based
+    /// subfoldering of the `.md` vault path. Never persisted, never sent to the
+    /// frontend. Consulted ONLY when persisting a brand-new row; existing rows
+    /// preserve their on-disk folder regardless (so defaulting to false on load is
+    /// harmless). `bool: Default` makes `#[serde(skip)]` read as `false` everywhere.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub wizard_subfoldered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -796,6 +804,7 @@ mod tests {
             danger_level: "deadly".to_string(),
             current_tension: "Something stirs.".to_string(),
             location: String::new(),
+            wizard_subfoldered: false,
         }
     }
 

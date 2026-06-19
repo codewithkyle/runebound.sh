@@ -30,7 +30,7 @@ use crate::entities::common::{
 };
 use crate::services::ai_generation::{
     AiGenerationService, LocationSeed, LocationWizardInputs, SeedGeneration,
-    build_wizard_user_prompt,
+    build_wizard_user_prompt, location_subfolder,
 };
 use crate::services::vault_ref::{VaultReferenceEntry, load_vault_reference_entries};
 use crate::utils::prepend_notice;
@@ -41,6 +41,16 @@ use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 // ---------------------------------------------------------------------------
 // Accumulator
 // ---------------------------------------------------------------------------
+
+/// A location the GM can anchor a guildhall to. Unlike the flat faction picker's
+/// `(name, slug)` tuple, this carries the note's under-`locations/` subfolder (`""`
+/// when flat) so the chosen anchor's `@locations/<sub>/<anchor>` seed is path-keyed.
+#[derive(Debug, Clone, Default)]
+struct LocationAnchorChoice {
+    name: String,
+    slug: String,
+    sub: String,
+}
 
 /// The per-flow answers; the cursor/history live in the engine's `WizardSession`.
 /// `seed`/`notice` carry the generated result and a one-shot capacity notice into
@@ -71,6 +81,10 @@ struct LocationWizardData {
     // existing location it stands within (or a free-typed place name).
     public_role: Option<String>,
     location_anchor: Option<String>,
+    // The chosen anchor's under-`locations/` subfolder (`Some("settlements")`, …), so
+    // the `@locations/<sub>/<anchor>` seed reference is path-keyed correctly. `None`
+    // for a flat note or a free-typed place (the seed falls back to name-only).
+    location_anchor_sub: Option<String>,
 
     // GM-locked danger for Site + Hideout (Q-S2 / Q-H3)
     danger_lock: Option<String>,
@@ -90,8 +104,10 @@ struct LocationWizardData {
     faction_link_return: Option<&'static str>,
 
     // Guildhall location anchor (Q-G3): the searchable set of existing locations
-    // loaded on entry to the anchor step; the chosen name lands in `location_anchor`.
-    locations: Vec<(String, String)>,
+    // loaded on entry to the anchor step; the chosen name lands in `location_anchor`
+    // and its subfolder in `location_anchor_sub`. Carries the subfolder (unlike the
+    // flat faction set) so the path-keyed `@reference` resolves.
+    locations: Vec<LocationAnchorChoice>,
 
     // Generated seed handed to `finalize`/the editor, plus a one-shot notice.
     seed: Option<LocationSeed>,
@@ -129,6 +145,7 @@ impl LocationWizardData {
             base_purpose: self.base_purpose.clone(),
             public_role: self.public_role.clone(),
             location_anchor: self.location_anchor.clone(),
+            location_anchor_sub: self.location_anchor_sub.clone(),
             danger_lock: self.danger_lock.clone(),
             geography: self.geography.clone(),
             faction_name: self.faction_name.clone(),
@@ -869,7 +886,8 @@ impl WizardStep<AppState> for GuildhallAnchorStep {
     }
 
     fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
-        entity_suggestions(&location_data(data).locations, input)
+        // Project to `(name, slug)` for the shared, faction-flat typeahead helper.
+        entity_suggestions(&anchor_pairs(&location_data(data).locations), input)
     }
 
     async fn accept(
@@ -883,19 +901,47 @@ impl WizardStep<AppState> for GuildhallAnchorStep {
             // Required: re-prompt rather than generating an unanchored hall.
             return Ok(WizardTransition::Stay);
         }
-        let anchor = match match_entity(&location_data(d).locations, trimmed) {
-            EntityMatch::Found(name, _) => name,
-            EntityMatch::Ambiguous => {
-                return Err(format!(
-                    "Several locations match \"{trimmed}\" — pick one from the list or keep typing."
-                ));
-            }
-            // No match: accept the typed text as a new place name.
-            EntityMatch::None => trimmed.to_string(),
-        };
-        location_data_mut(d).location_anchor = Some(anchor);
+        let (anchor, sub) = resolve_anchor(&location_data(d).locations, trimmed)?;
+        let data = location_data_mut(d);
+        data.location_anchor = Some(anchor);
+        data.location_anchor_sub = sub;
         generate_location_into(location_data_mut(d), state, None).await?;
         Ok(WizardTransition::Complete)
+    }
+}
+
+/// Project the location anchor choices down to the flat `(name, slug)` tuples the
+/// shared typeahead/match helpers (also used by the faction picker) consume.
+fn anchor_pairs(locations: &[LocationAnchorChoice]) -> Vec<(String, String)> {
+    locations
+        .iter()
+        .map(|choice| (choice.name.clone(), choice.slug.clone()))
+        .collect()
+}
+
+/// Resolve typed anchor input against the loaded locations: the anchor display name
+/// plus the subfolder to thread into the `@locations/<sub>/<anchor>` seed (`None` for
+/// a flat note or a free-typed place). `Err` on an ambiguous match. Pure, so the
+/// subfolder capture is unit-testable without the LLM round-trip that follows it.
+fn resolve_anchor(
+    locations: &[LocationAnchorChoice],
+    trimmed: &str,
+) -> Result<(String, Option<String>), String> {
+    match match_entity(&anchor_pairs(locations), trimmed) {
+        EntityMatch::Found(name, slug) => {
+            // Carry the picked note's subfolder; `""` (a flat note) maps to `None`.
+            let sub = locations
+                .iter()
+                .find(|choice| choice.slug == slug)
+                .map(|choice| choice.sub.clone())
+                .filter(|sub| !sub.is_empty());
+            Ok((name, sub))
+        }
+        EntityMatch::Ambiguous => Err(format!(
+            "Several locations match \"{trimmed}\" — pick one from the list or keep typing."
+        )),
+        // No match: accept the typed text as a new place name (no subfolder).
+        EntityMatch::None => Ok((trimmed.to_string(), None)),
     }
 }
 
@@ -1373,21 +1419,29 @@ async fn load_linkable_factions(state: &AppState) -> Result<Vec<(String, String)
 }
 
 /// Every location the GM can anchor a guildhall to, read-only: unpublished drafts
-/// from the DB plus published notes recovered from the vault. Same shape as
-/// [`load_linkable_factions`].
-async fn load_linkable_locations(state: &AppState) -> Result<Vec<(String, String)>, String> {
+/// from the DB plus published notes recovered from the vault. Like
+/// [`load_linkable_factions`] but each entry carries its subfolder: a draft's comes
+/// from its `kind_type` (it will publish there); a published note's from its path.
+async fn load_linkable_locations(state: &AppState) -> Result<Vec<LocationAnchorChoice>, String> {
     let database = state.database();
     let rows = state.location_repo().list_all(database.as_ref()).await?;
-    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+    let drafts = rows
+        .into_iter()
+        .map(|row| LocationAnchorChoice {
+            sub: location_subfolder(&row.kind_type).unwrap_or("").to_string(),
+            name: row.name,
+            slug: row.slug,
+        })
+        .collect();
 
-    let published = tokio::task::spawn_blocking(|| load_published_entity_names("locations"))
+    let published = tokio::task::spawn_blocking(load_published_locations)
         .await
         .map_err(|err| err.to_string())??;
-    Ok(merge_linkable(drafts, published))
+    Ok(merge_linkable_locations(drafts, published))
 }
 
 /// Merge DB drafts with published-note entries, deduping by slug (drafts win) and
-/// sorting by display name. Shared by the faction and location loaders.
+/// sorting by display name. Shared by the faction and location flat loaders.
 fn merge_linkable(
     mut drafts: Vec<(String, String)>,
     published: Vec<(String, String)>,
@@ -1409,10 +1463,32 @@ fn merge_linkable(
     drafts
 }
 
-/// Recover published notes from one of the Obsidian vault's entity folders (e.g.
-/// `factions/`, `locations/`). Blocking IO (recursive `read_dir`) — only call inside
-/// `spawn_blocking`.
-fn load_published_entity_names(folder: &str) -> Result<Vec<(String, String)>, String> {
+/// Location-specific merge (drafts win, sorted by name) preserving each entry's
+/// subfolder. The faction picker keeps the flat [`merge_linkable`].
+fn merge_linkable_locations(
+    mut drafts: Vec<LocationAnchorChoice>,
+    published: Vec<LocationAnchorChoice>,
+) -> Vec<LocationAnchorChoice> {
+    let mut seen: HashSet<String> = drafts
+        .iter()
+        .map(|choice| choice.slug.to_ascii_lowercase())
+        .collect();
+    for choice in published {
+        if seen.insert(choice.slug.to_ascii_lowercase()) {
+            drafts.push(choice);
+        }
+    }
+    drafts.sort_by(|left, right| {
+        left.name
+            .to_ascii_lowercase()
+            .cmp(&right.name.to_ascii_lowercase())
+    });
+    drafts
+}
+
+/// Load the vault's reference entries, or an empty set when no vault is configured.
+/// Blocking IO (recursive `read_dir`) — only call inside `spawn_blocking`.
+fn load_vault_entries_blocking() -> Result<Vec<VaultReferenceEntry>, String> {
     let loaded = load_effective().map_err(|err| err.to_string())?;
     let Some(vault_path) = loaded.effective.vault.path else {
         return Ok(Vec::new());
@@ -1421,14 +1497,39 @@ fn load_published_entity_names(folder: &str) -> Result<Vec<(String, String)>, St
     if vault.ensure_root_exists().is_err() {
         return Ok(Vec::new());
     }
-    let entries = load_vault_reference_entries(&vault)?;
-    Ok(entries_from_refs(&entries, folder))
+    load_vault_reference_entries(&vault)
 }
 
-/// Extract `(display name, slug)` for each note directly under the vault's `<folder>/`
-/// directory. The display name is the file stem; the slug is derived from it, since
-/// published notes carry no DB row. Pure, so it's unit-testable.
-fn entries_from_refs(entries: &[VaultReferenceEntry], folder: &str) -> Vec<(String, String)> {
+/// Recover published `(name, slug)` notes from one of the vault's *flat* entity
+/// folders (e.g. `factions/`). Drops the subfolder the locations folder may carry.
+/// Blocking IO — only call inside `spawn_blocking`.
+fn load_published_entity_names(folder: &str) -> Result<Vec<(String, String)>, String> {
+    let entries = load_vault_entries_blocking()?;
+    Ok(entries_from_refs(&entries, folder)
+        .into_iter()
+        .map(|(name, slug, _sub)| (name, slug))
+        .collect())
+}
+
+/// Recover published locations from the vault, keeping each note's subfolder (`""`
+/// for a flat note, `"settlements"` for `locations/settlements/Foo.md`). Blocking IO.
+fn load_published_locations() -> Result<Vec<LocationAnchorChoice>, String> {
+    let entries = load_vault_entries_blocking()?;
+    Ok(entries_from_refs(&entries, "locations")
+        .into_iter()
+        .map(|(name, slug, sub)| LocationAnchorChoice { name, slug, sub })
+        .collect())
+}
+
+/// Extract `(display name, slug, subfolder)` for each note under the vault's
+/// `<folder>/` directory, accepting the flat `<folder>/<Name>.md` (`sub` == "") and
+/// exactly one nesting level `<folder>/<sub>/<Name>.md` (`sub` == "<sub>"); anything
+/// deeper is rejected. The display name is the file stem; the slug is derived from
+/// it, since published notes carry no DB row. Pure, so it's unit-testable.
+fn entries_from_refs(
+    entries: &[VaultReferenceEntry],
+    folder: &str,
+) -> Vec<(String, String, String)> {
     let mut out = Vec::new();
     for entry in entries {
         if entry.is_dir {
@@ -1437,23 +1538,25 @@ fn entries_from_refs(entries: &[VaultReferenceEntry], folder: &str) -> Vec<(Stri
         let Some(path) = entry.markdown_path.as_deref() else {
             continue;
         };
-        let Some((dir, file)) = path.split_once('/') else {
+        let Some((dir, rest)) = path.split_once('/') else {
             continue;
         };
         if !dir.eq_ignore_ascii_case(folder) {
             continue;
         }
-        // Publish writes `<folder>/<Name>.md`; ignore anything nested deeper.
-        if file.contains('/') {
-            continue;
-        }
+        // Flat note, or exactly one subfolder level; reject anything nested deeper.
+        let (sub, file) = match rest.split_once('/') {
+            None => ("", rest),
+            Some((sub, file)) if !file.contains('/') => (sub, file),
+            Some(_) => continue,
+        };
         let name = std::path::Path::new(file)
             .file_stem()
             .and_then(|value| value.to_str())
             .map(str::trim)
             .filter(|value| !value.is_empty());
         if let Some(name) = name {
-            out.push((name.to_string(), slugify(name)));
+            out.push((name.to_string(), slugify(name), sub.to_string()));
         }
     }
     out
@@ -1521,8 +1624,11 @@ fn build_location_draft(d: &LocationWizardData, id: String) -> Option<LocationDr
         authority: seed.authority,
         danger_level: seed.danger_level,
         current_tension: seed.current_tension,
-        // The guildhall anchor (Q-G3); empty for every other branch.
+        // The guildhall anchor (Q-G3); empty for every other branch. Stays the bare
+        // name — Obsidian `[[name]]` resolves by note name regardless of folder.
         location: d.location_anchor.clone().unwrap_or_default(),
+        // Wizard-built: request kind-based subfoldering of the published `.md` path.
+        wizard_subfoldered: true,
     })
 }
 
@@ -1608,6 +1714,8 @@ mod tests {
         assert!(draft.exports.is_empty());
         assert_eq!(draft.danger_level, "deadly");
         assert_eq!(draft.slug, "mirecairn");
+        // The wizard path requests kind-based subfoldering of the published `.md`.
+        assert!(draft.wizard_subfoldered);
     }
 
     #[test]
@@ -1677,13 +1785,43 @@ mod tests {
         }
     }
 
+    fn anchor_choice(name: &str, slug: &str, sub: &str) -> LocationAnchorChoice {
+        LocationAnchorChoice {
+            name: name.to_string(),
+            slug: slug.to_string(),
+            sub: sub.to_string(),
+        }
+    }
+
     #[test]
-    fn entries_from_refs_keep_top_level_notes_in_folder_only() {
+    fn resolve_anchor_captures_subfolder_for_pick_and_none_for_free_typed() {
+        let locations = vec![
+            anchor_choice("Silverhall", "silverhall", "settlements"),
+            anchor_choice("Greenhollow", "greenhollow", ""),
+        ];
+        // A published/draft pick carries its subfolder...
+        let (name, sub) = resolve_anchor(&locations, "Silverhall").expect("match");
+        assert_eq!(name, "Silverhall");
+        assert_eq!(sub.as_deref(), Some("settlements"));
+        // ...a flat note resolves to no subfolder...
+        let (name, sub) = resolve_anchor(&locations, "Greenhollow").expect("match");
+        assert_eq!(name, "Greenhollow");
+        assert_eq!(sub, None);
+        // ...and a free-typed place (no match) is accepted with no subfolder.
+        let (name, sub) = resolve_anchor(&locations, "Brand New Place").expect("free text");
+        assert_eq!(name, "Brand New Place");
+        assert_eq!(sub, None);
+    }
+
+    #[test]
+    fn entries_from_refs_accepts_one_level_and_captures_subfolder() {
         let entries = vec![
             ref_file("factions/Crimson Lanterns"),
-            ref_file("locations/Silverhall"),
-            ref_file("factions/sub/Nested Note"), // nested → ignored
-            ref_file("npcs/Lirael Drake"),        // wrong folder → ignored
+            ref_file("locations/Silverhall"), // flat → sub ""
+            ref_file("locations/settlements/Ashford"), // one level → sub "settlements"
+            ref_file("locations/sites/Mirecairn"), // one level → sub "sites"
+            ref_file("locations/sites/deep/TooDeep"), // two levels → ignored
+            ref_file("npcs/Lirael Drake"),    // wrong folder → ignored
             VaultReferenceEntry {
                 key: "factions/".to_string(),
                 key_lower: "factions/".to_string(),
@@ -1691,17 +1829,35 @@ mod tests {
                 is_dir: true, // directory → ignored
             },
         ];
-        // The folder argument selects which entity directory is harvested.
+        // Factions never nest: a flat note keeps an empty subfolder.
         assert_eq!(
             entries_from_refs(&entries, "factions"),
             vec![(
                 "Crimson Lanterns".to_string(),
-                "crimson-lanterns".to_string()
+                "crimson-lanterns".to_string(),
+                String::new(),
             )]
         );
+        // Locations capture the one allowed nesting level; deeper paths are dropped.
         assert_eq!(
             entries_from_refs(&entries, "locations"),
-            vec![("Silverhall".to_string(), "silverhall".to_string())]
+            vec![
+                (
+                    "Silverhall".to_string(),
+                    "silverhall".to_string(),
+                    String::new()
+                ),
+                (
+                    "Ashford".to_string(),
+                    "ashford".to_string(),
+                    "settlements".to_string()
+                ),
+                (
+                    "Mirecairn".to_string(),
+                    "mirecairn".to_string(),
+                    "sites".to_string()
+                ),
+            ]
         );
     }
 
@@ -1840,8 +1996,8 @@ mod tests {
         // `skip`, and exposes no enumerated choices (typeahead-driven).
         let data = WizardData::new(LocationWizardData {
             locations: vec![
-                ("Silverhall".to_string(), "silverhall".to_string()),
-                ("Greenhollow".to_string(), "greenhollow".to_string()),
+                anchor_choice("Silverhall", "silverhall", "settlements"),
+                anchor_choice("Greenhollow", "greenhollow", ""),
             ],
             ..Default::default()
         });
@@ -1857,21 +2013,38 @@ mod tests {
     }
 
     #[test]
-    fn seed_prompt_for_guildhall_carries_faction_role_and_location_anchor() {
-        // The `@factions/<name>` and `@locations/<name>` tokens are what let
-        // generation pull each entity's authoritative metadata in for a published note.
+    fn seed_prompt_for_guildhall_carries_faction_role_and_subfoldered_anchor() {
+        // The `@factions/<name>` and `@locations/<sub>/<name>` tokens are what let
+        // generation pull each entity's authoritative metadata in for a published note;
+        // the subfolder must be present or the path-keyed `@reference` won't resolve.
         let d = LocationWizardData {
             kind_type: "guildhall".to_string(),
             faction_name: Some("Crimson Lanterns".to_string()),
             public_role: Some("a counting house or bank".to_string()),
             location_anchor: Some("Silverhall".to_string()),
+            location_anchor_sub: Some("settlements".to_string()),
             ..Default::default()
         };
         let prompt = build_seed_prompt(&d).expect("seed prompt");
         assert!(prompt.contains("guildhall"));
         assert!(prompt.contains("@factions/Crimson Lanterns"));
         assert!(prompt.contains("counting house"));
+        assert!(prompt.contains("@locations/settlements/Silverhall"));
+    }
+
+    #[test]
+    fn seed_prompt_for_guildhall_falls_back_to_name_only_anchor_when_flat() {
+        // A flat note / free-typed place has no subfolder -> name-only `@locations/<name>`.
+        let d = LocationWizardData {
+            kind_type: "guildhall".to_string(),
+            faction_name: Some("Crimson Lanterns".to_string()),
+            location_anchor: Some("Silverhall".to_string()),
+            location_anchor_sub: None,
+            ..Default::default()
+        };
+        let prompt = build_seed_prompt(&d).expect("seed prompt");
         assert!(prompt.contains("@locations/Silverhall"));
+        assert!(!prompt.contains("@locations/settlements"));
     }
 
     #[test]
