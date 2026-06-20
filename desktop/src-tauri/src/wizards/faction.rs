@@ -250,7 +250,7 @@ const POWER_BASE_LABELS: [&str; 6] = [
     "junction — a transport interchange (transfer fees)",
     "specialist — refining goods for value before shipping",
     "march — defending the realm's edge (delegated autonomy)",
-    "extraction — a point-source of ore, salt, or stone",
+    "extraction — harvesting natural resources",
 ];
 
 struct PowerBaseStep;
@@ -790,7 +790,7 @@ impl WizardStep<AppState> for AmbitionStep {
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         optional_text_prompt(
             "Create Faction — Ambition",
-            "What does this faction ultimately want? (its WOAC Want).",
+            "What does this faction ultimately want?",
         )
     }
 
@@ -866,7 +866,7 @@ impl WizardStep<AppState> for GenerateStep {
 /// - **liege** (houses vassal/lord): mandatory, free-typed name accepted → loyalty.
 /// - **patron** (establishments/religion): optional grounding → ambition.
 /// - **allies** / **rivals** (tail): repeatable per D4 — link one and stay to link
-///   another; `done` moves on. allies then flips in place to rivals.
+///   another; `skip` moves on. allies then flips in place to rivals.
 struct FactionPickStep;
 
 fn faction_pick_mode(data: &FactionWizardData) -> &'static str {
@@ -910,7 +910,7 @@ impl WizardStep<AppState> for FactionPickStep {
                 let mut document = doc().with_block(heading(2, title));
                 document = document.with_block(paragraph_with_inlines(vec![
                     text_node(format!("Link {noun} (type to search), or ")),
-                    command_ref("done", "done"),
+                    command_ref("skip", "skip"),
                     text_node(" when finished."),
                 ]));
                 if !linked.is_empty() {
@@ -927,8 +927,8 @@ impl WizardStep<AppState> for FactionPickStep {
             // Mandatory: typeahead-driven, no listed action.
             "liege" => Vec::new(),
             "patron" => vec![skip_choice("No patron; leave it open")],
-            // allies / rivals: `done` finishes the repeatable picker.
-            _ => vec![WizardChoice::new("done", "done").with_help("Finish linking")],
+            // allies / rivals: `skip` finishes the repeatable picker.
+            _ => vec![skip_choice("Finish linking")],
         }
     }
 
@@ -940,7 +940,7 @@ impl WizardStep<AppState> for FactionPickStep {
         let action = match faction_pick_mode(d) {
             "liege" => None,
             "patron" => Some("skip"),
-            _ => Some("done"),
+            _ => Some("skip"),
         };
         if let Some(token) = action
             && (query.is_empty() || token.starts_with(&query))
@@ -979,11 +979,9 @@ impl WizardStep<AppState> for FactionPickStep {
                 }
                 Ok(WizardTransition::Goto("ambition"))
             }
-            // Repeatable allies/rivals: link one and stay; `done` moves on.
+            // Repeatable allies/rivals: link one and stay; `skip` moves on.
             _ => {
-                let finished = trimmed.is_empty()
-                    || trimmed.eq_ignore_ascii_case("done")
-                    || trimmed.eq_ignore_ascii_case("skip");
+                let finished = trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip");
                 if finished {
                     return Ok(if mode == "rivals" {
                         WizardTransition::Goto("generate")
@@ -1022,18 +1020,17 @@ impl WizardStep<AppState> for NpcPickStep {
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
-        let body = if faction_data(data).npcs.is_empty() {
-            "Who leads this faction? No NPCs exist yet — type a name, or skip to leave it blank."
+        let prefix = if faction_data(data).npcs.is_empty() {
+            "Who leads this faction? No NPCs exist yet — type a name, or "
         } else {
-            "Who leads this faction? Start typing to select an NPC, type a new name, or skip."
+            "Who leads this faction? Start typing to select an NPC, type a new name, or "
         };
         doc()
             .with_block(heading(2, "Create Faction — Leader"))
             .with_block(paragraph_with_inlines(vec![
-                text_node(body),
-                text_node(" Use "),
+                text_node(prefix),
                 command_ref("skip", "skip"),
-                text_node(" to leave the leadership section blank."),
+                text_node(" to leave it blank."),
             ]))
     }
 
@@ -1587,21 +1584,21 @@ mod tests {
     }
 
     #[test]
-    fn allies_mode_offers_done_not_skip() {
+    fn allies_mode_offers_skip() {
         let data = pick_data("allies", &[("House Vey", "house-vey")]);
         let choice_tokens: Vec<String> = FactionPickStep
             .choices(&data)
             .into_iter()
             .map(|choice| choice.token)
             .collect();
-        assert!(choice_tokens.contains(&"done".to_string()));
+        assert!(choice_tokens.contains(&"skip".to_string()));
         let suggest_tokens: Vec<String> = FactionPickStep
             .suggest("", &data)
             .into_iter()
             .map(|choice| choice.token)
             .collect();
         assert!(suggest_tokens.contains(&"House Vey".to_string()));
-        assert!(suggest_tokens.contains(&"done".to_string()));
+        assert!(suggest_tokens.contains(&"skip".to_string()));
     }
 
     #[test]
