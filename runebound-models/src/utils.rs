@@ -34,33 +34,36 @@ impl LocationKindType {
     }
 }
 
+// The 9 fixed kinds across the 3 categories (design §3). There is no `other` —
+// the freeform one-shot lane still picks one of these 9.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FactionKindType {
+    // houses
+    GreatHouse,
+    MajorVassal,
+    MinorVassal,
+    IndividualLord,
+    // establishments
     Guild,
-    Cult,
-    MilitaryOrder,
-    NobleHouse,
+    Company,
     CriminalSyndicate,
-    MercantileLeague,
-    ReligiousOrder,
-    ArcaneCircle,
-    RevolutionaryCell,
-    Other,
+    // religion
+    Temple,
+    Cult,
 }
 
 impl FactionKindType {
     pub fn as_str(&self) -> &'static str {
         match self {
+            FactionKindType::GreatHouse => "great_house",
+            FactionKindType::MajorVassal => "major_vassal",
+            FactionKindType::MinorVassal => "minor_vassal",
+            FactionKindType::IndividualLord => "individual_lord",
             FactionKindType::Guild => "guild",
-            FactionKindType::Cult => "cult",
-            FactionKindType::MilitaryOrder => "military_order",
-            FactionKindType::NobleHouse => "noble_house",
+            FactionKindType::Company => "company",
             FactionKindType::CriminalSyndicate => "criminal_syndicate",
-            FactionKindType::MercantileLeague => "mercantile_league",
-            FactionKindType::ReligiousOrder => "religious_order",
-            FactionKindType::ArcaneCircle => "arcane_circle",
-            FactionKindType::RevolutionaryCell => "revolutionary_cell",
-            FactionKindType::Other => "other",
+            FactionKindType::Temple => "temple",
+            FactionKindType::Cult => "cult",
         }
     }
 }
@@ -79,17 +82,36 @@ pub const LOCATION_KIND_TYPES: [&str; 9] = [
 
 pub const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
 
-pub const FACTION_KIND_TYPES: [&str; 10] = [
+// The 9 kinds, grouped by category (design §3). Replaces the old 10-kind enum;
+// there is no `other` (the freeform one-shot picks one of these 9).
+pub const FACTION_KIND_TYPES: [&str; 9] = [
+    // houses
+    "great_house",
+    "major_vassal",
+    "minor_vassal",
+    "individual_lord",
+    // establishments
     "guild",
-    "cult",
-    "military_order",
-    "noble_house",
+    "company",
     "criminal_syndicate",
-    "mercantile_league",
-    "religious_order",
-    "arcane_circle",
-    "revolutionary_cell",
-    "other",
+    // religion
+    "temple",
+    "cult",
+];
+
+// The 3 categories each kind rolls up into; drives the wizard branch + subfolder.
+pub const FACTION_CATEGORIES: [&str; 3] = ["houses", "establishments", "religion"];
+
+// Loyalty types for houses vassals/lords (design §6). Each carries a built-in
+// fault line fed to the LLM as grounding.
+pub const LOYALTY_TYPES: [&str; 7] = [
+    "reward",
+    "marriage",
+    "military",
+    "economic",
+    "shared_enemy",
+    "oath",
+    "secret",
 ];
 
 pub const ITEM_CATEGORIES: [&str; 8] = [
@@ -490,6 +512,20 @@ pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
     }
 }
 
+pub fn normalize_loyalty_type(value: &str) -> Result<String, String> {
+    // Accept the menu's display spelling (`shared-enemy`/`shared enemy`) and store
+    // the canonical snake_case form.
+    let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    if LOYALTY_TYPES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "loyalty_type must be one of: {}",
+            LOYALTY_TYPES.join(", ")
+        ))
+    }
+}
+
 pub fn normalize_item_category(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     if ITEM_CATEGORIES.contains(&normalized.as_str()) {
@@ -763,5 +799,32 @@ mod tests {
             ]),
             vec!["Liam Vesper".to_string(), "smoked eel".to_string()]
         );
+    }
+
+    #[test]
+    fn normalize_faction_kind_type_accepts_the_new_nine() {
+        assert_eq!(
+            normalize_faction_kind_type("Great-House").unwrap(),
+            "great_house"
+        );
+        assert_eq!(normalize_faction_kind_type("temple").unwrap(), "temple");
+        // The old 10-kind vocabulary no longer validates.
+        assert!(normalize_faction_kind_type("noble_house").is_err());
+        assert!(normalize_faction_kind_type("other").is_err());
+    }
+
+    #[test]
+    fn normalize_loyalty_type_accepts_menu_spelling() {
+        assert_eq!(normalize_loyalty_type("oath").unwrap(), "oath");
+        // The picker shows `shared-enemy`; the stored form is snake_case.
+        assert_eq!(
+            normalize_loyalty_type("shared-enemy").unwrap(),
+            "shared_enemy"
+        );
+        assert_eq!(
+            normalize_loyalty_type("Shared Enemy").unwrap(),
+            "shared_enemy"
+        );
+        assert!(normalize_loyalty_type("fealty").is_err());
     }
 }

@@ -99,27 +99,43 @@ pub struct FactionDraft {
     pub slug: String,
     pub vault_path: String,
     pub kind_type: String,
-    #[serde(default)]
-    pub kind_custom: Option<String>,
+    // Visible face.
     pub public_description: String,
-    pub true_agenda: String,
-    pub methods: String,
-    pub leadership: String,
-    pub headquarters: String,
+    pub reputation: String,
+    pub symbol_description: String,
+    // WOAC engine — Want → Obstacle → Action → Consequence (design §5). Absorbs the
+    // old `true_agenda`/`current_tension`/`methods`; `consequence` is new.
+    pub want: String,
+    pub obstacle: String,
+    pub action: String,
+    pub consequence: String,
+    /// Was `leadership`. An NPC link name or free text; wizard-picked or left blank,
+    /// never LLM-generated (D3).
+    pub leader: String,
     pub sphere_of_influence: String,
     #[serde(default)]
     pub resources_assets: Vec<String>,
+    /// Picker-linked or left blank; never LLM-generated (D3/§7).
     #[serde(default)]
     pub allies: Vec<String>,
+    /// Picker-linked or left blank; never LLM-generated (D3/§7).
     #[serde(default)]
     pub rivals_enemies: Vec<String>,
-    pub reputation: String,
-    pub current_tension: String,
+    /// Houses Vassal/Lord only — the faction this one is sworn to. Picker or free
+    /// text, never LLM.
     #[serde(default)]
-    pub goals_short_term: Vec<String>,
+    pub liege: Option<String>,
+    /// Houses Vassal/Lord only — one of `LOYALTY_TYPES`. Enum-picked or random,
+    /// never LLM.
     #[serde(default)]
-    pub goals_long_term: Vec<String>,
-    pub symbol_description: String,
+    pub loyalty_type: Option<String>,
+    /// Transient: true only when the WIZARD built this draft, requesting
+    /// category-based subfoldering of the `.md` vault path. Mirrors
+    /// `LocationDraft.wizard_subfoldered` — never persisted, never sent to the
+    /// frontend; consulted only when persisting a brand-new row.
+    #[serde(skip)]
+    #[ts(skip)]
+    pub wizard_subfoldered: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
@@ -286,23 +302,31 @@ pub struct FactionFrontmatter {
     pub name: String,
     pub vault_path: String,
     pub kind_type: String,
-    #[serde(default)]
-    pub kind_custom: Option<String>,
+    /// Derived from `kind_type` at save (D2); persisted so Obsidian/dataview and the
+    /// DB can filter by category.
+    pub category: String,
+    // Visible face.
     pub public_description: String,
-    pub true_agenda: String,
-    pub methods: String,
-    pub leadership: String,
-    pub headquarters: String,
+    pub reputation: String,
+    pub symbol_description: String,
+    // WOAC engine (design §5).
+    pub want: String,
+    pub obstacle: String,
+    pub action: String,
+    pub consequence: String,
+    pub leader: String,
     pub sphere_of_influence: String,
     #[serde(deserialize_with = "crate::utils::string_or_seq_list")]
     pub resources_assets: Vec<String>,
+    #[serde(deserialize_with = "crate::utils::string_or_seq_list")]
     pub allies: Vec<String>,
+    #[serde(deserialize_with = "crate::utils::string_or_seq_list")]
     pub rivals_enemies: Vec<String>,
-    pub reputation: String,
-    pub current_tension: String,
-    pub goals_short_term: Vec<String>,
-    pub goals_long_term: Vec<String>,
-    pub symbol_description: String,
+    /// Houses Vassal/Lord only — absent for everything else.
+    #[serde(default)]
+    pub liege: Option<String>,
+    #[serde(default)]
+    pub loyalty_type: Option<String>,
     pub created_at: String,
     pub updated_at: String,
     #[serde(default)]
@@ -423,6 +447,19 @@ fn title_case_sex(value: &str) -> String {
     }
 }
 
+/// The category folder each of the 9 faction kinds rolls up into (design §3). The
+/// card derives it for display; persistence single-sources the same map via
+/// `faction_category_str` in the desktop crate (spec D2). `""` for any out-of-vocab
+/// kind, which the card renders as "Unknown".
+fn faction_category_display(kind_type: &str) -> &'static str {
+    match kind_type {
+        "great_house" | "major_vassal" | "minor_vassal" | "individual_lord" => "houses",
+        "guild" | "company" | "criminal_syndicate" => "establishments",
+        "temple" | "cult" => "religion",
+        _ => "",
+    }
+}
+
 fn location_kind_display(kind_type: &str, kind_custom: &Option<String>) -> String {
     let kind = normalize_unknown_text(kind_type);
     if kind.to_lowercase() != "other" {
@@ -528,32 +565,29 @@ pub fn location_entity_card(draft: &LocationDraft, footer: CardFooter) -> Output
 }
 
 pub fn faction_entity_card(draft: &FactionDraft, footer: CardFooter) -> OutputDoc {
-    let kind_custom_display = draft
-        .kind_custom
-        .as_deref()
-        .map(|value| {
-            let normalized = normalize_unknown_text(value);
-            if normalized == "Unknown" {
-                "(none)".to_string()
-            } else {
-                normalized
-            }
-        })
-        .unwrap_or_else(|| "(none)".to_string());
+    let category = faction_category_display(&draft.kind_type);
+    let category_display = if category.is_empty() {
+        "Unknown".to_string()
+    } else {
+        category.to_string()
+    };
 
-    let rows = vec![
+    let mut rows = vec![
         entity_row("Name:", normalize_unknown_text(&draft.name)),
         entity_row("Slug:", normalize_unknown_text(&draft.slug)),
         entity_row("Kind:", normalize_unknown_text(&draft.kind_type)),
-        entity_row("Custom Kind:", kind_custom_display),
+        entity_row("Category:", category_display),
         entity_row(
             "Public Face:",
             normalize_unknown_text(&draft.public_description),
         ),
-        entity_row("True Agenda:", normalize_unknown_text(&draft.true_agenda)),
-        entity_row("Methods:", normalize_unknown_text(&draft.methods)),
-        entity_row("Leadership:", normalize_unknown_text(&draft.leadership)),
-        entity_row("Headquarters:", normalize_unknown_text(&draft.headquarters)),
+        entity_row("Reputation:", normalize_unknown_text(&draft.reputation)),
+        entity_row("Symbol:", normalize_unknown_text(&draft.symbol_description)),
+        entity_row("Want:", normalize_unknown_text(&draft.want)),
+        entity_row("Obstacle:", normalize_unknown_text(&draft.obstacle)),
+        entity_row("Action:", normalize_unknown_text(&draft.action)),
+        entity_row("Consequence:", normalize_unknown_text(&draft.consequence)),
+        entity_row("Leader:", normalize_unknown_text(&draft.leader)),
         entity_row(
             "Sphere of Influence:",
             normalize_unknown_text(&draft.sphere_of_influence),
@@ -570,22 +604,26 @@ pub fn faction_entity_card(draft: &FactionDraft, footer: CardFooter) -> OutputDo
             "Rivals:",
             normalize_unknown_list(draft.rivals_enemies.clone()).join(", "),
         ),
-        entity_row("Reputation:", normalize_unknown_text(&draft.reputation)),
-        entity_row(
-            "Current Tension:",
-            normalize_unknown_text(&draft.current_tension),
-        ),
-        entity_row(
-            "Short-Term Goals:",
-            normalize_unknown_list(draft.goals_short_term.clone()).join(", "),
-        ),
-        entity_row(
-            "Long-Term Goals:",
-            normalize_unknown_list(draft.goals_long_term.clone()).join(", "),
-        ),
-        entity_row("Symbol:", normalize_unknown_text(&draft.symbol_description)),
-        entity_row("Path:", normalize_unknown_text(&draft.vault_path)),
     ];
+    // Liege + Loyalty are houses Vassal/Lord only — render only when set.
+    if let Some(liege) = draft
+        .liege
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        rows.push(entity_row("Liege:", liege.to_string()));
+    }
+    if let Some(loyalty) = draft
+        .loyalty_type
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        rows.push(entity_row("Loyalty:", loyalty.to_string()));
+    }
+    rows.push(entity_row("Path:", normalize_unknown_text(&draft.vault_path)));
+
     let mut output = doc().with_block(entity_card(&draft.name, rows));
     if footer == CardFooter::Show {
         output.push(paragraph_with_inlines(vec![
