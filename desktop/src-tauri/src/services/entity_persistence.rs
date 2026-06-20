@@ -23,8 +23,8 @@ use crate::utils::{
     normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist, normalize_exports,
     normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
     normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_relative_path_for_storage, normalize_sex,
-    normalize_unknown_list, normalize_unknown_text, validate_location_details,
+    normalize_location_kind_type, normalize_loyalty_type, normalize_relative_path_for_storage,
+    normalize_sex, normalize_unknown_list, normalize_unknown_text, validate_location_details,
 };
 
 pub struct EntityPersistenceService;
@@ -216,6 +216,14 @@ impl_entity_persistence! {
     frontmatter: FactionFrontmatter,
     row: FactionRow,
     dir: "factions",
+    // Wizard-built drafts subfolder the readable `.md` by category (houses /
+    // establishments / religion); one-shots pass "" so `faction_dir_for_kind`
+    // returns the flat base and they stay in `factions/`. The slug + TOML store keep
+    // `dir` ("factions") — only the Obsidian path is reshaped (mirrors location).
+    vault_dir: crate::services::ai_generation::faction_dir_for_kind(
+        "factions",
+        if draft.wizard_subfoldered { &kind_type } else { "" },
+    ),
     kind: "faction",
     repo: faction_repo,
     store_save: save_faction,
@@ -223,72 +231,81 @@ impl_entity_persistence! {
     store_delete: delete_faction,
     normalize: {
         let kind_type = normalize_faction_kind_type(&draft.kind_type)?;
-        let kind_custom = if kind_type == "other" {
-            let value = draft
-                .kind_custom
-                .as_ref()
-                .map(|value| value.trim())
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| "kind_custom is required when kind_type is other".to_string())?;
-            Some(value.to_string())
-        } else {
-            None
-        };
+        // Category is derived from kind, never user-set (D2); "" for a drifted kind.
+        let category = crate::services::ai_generation::faction_category_str(&kind_type).to_string();
         let public_description = normalize_unknown_text(&draft.public_description);
-        let true_agenda = normalize_unknown_text(&draft.true_agenda);
-        let methods = normalize_unknown_text(&draft.methods);
-        let leadership = normalize_unknown_text(&draft.leadership);
-        let headquarters = normalize_unknown_text(&draft.headquarters);
+        let reputation = normalize_unknown_text(&draft.reputation);
+        let symbol_description = normalize_unknown_text(&draft.symbol_description);
+        // WOAC engine (design §5).
+        let want = normalize_unknown_text(&draft.want);
+        let obstacle = normalize_unknown_text(&draft.obstacle);
+        let action = normalize_unknown_text(&draft.action);
+        let consequence = normalize_unknown_text(&draft.consequence);
+        // Relational/place fields: settable but never LLM-invented (D3). Keep them
+        // blank when unlinked rather than coercing "Unknown" — publish renders a
+        // blank stub the GM fills in Obsidian.
+        let leader = draft.leader.trim().to_string();
         let sphere_of_influence = normalize_unknown_text(&draft.sphere_of_influence);
         let resources_assets = normalize_unknown_list(draft.resources_assets.clone());
-        let allies = normalize_unknown_list(draft.allies.clone());
-        let rivals_enemies = normalize_unknown_list(draft.rivals_enemies.clone());
-        let reputation = normalize_unknown_text(&draft.reputation);
-        let current_tension = normalize_unknown_text(&draft.current_tension);
-        let goals_short_term = normalize_unknown_list(draft.goals_short_term.clone());
-        let goals_long_term = normalize_unknown_list(draft.goals_long_term.clone());
-        let symbol_description = normalize_unknown_text(&draft.symbol_description);
+        // Allies/Rivals are "link or leave blank" (D4): trim + drop empties, but never
+        // inject "Unknown" the way `normalize_unknown_list` would.
+        let allies = clean_link_list(&draft.allies);
+        let rivals_enemies = clean_link_list(&draft.rivals_enemies);
+        // Houses Vassal/Lord only — blank/unset collapses to None, never "Unknown".
+        let liege = draft
+            .liege
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string());
+        let loyalty_type = match draft
+            .loyalty_type
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+        {
+            Some(value) => Some(normalize_loyalty_type(value)?),
+            None => None,
+        };
         let resources_assets_db = faction_list_to_db_text(&resources_assets)?;
         let allies_db = faction_list_to_db_text(&allies)?;
         let rivals_db = faction_list_to_db_text(&rivals_enemies)?;
-        let goals_short_db = faction_list_to_db_text(&goals_short_term)?;
-        let goals_long_db = faction_list_to_db_text(&goals_long_term)?;
     },
     frontmatter_fields: {
         kind_type: kind_type.clone(),
-        kind_custom: kind_custom.clone(),
+        category: category.clone(),
         public_description: public_description.clone(),
-        true_agenda: true_agenda.clone(),
-        methods: methods.clone(),
-        leadership: leadership.clone(),
-        headquarters: headquarters.clone(),
+        reputation: reputation.clone(),
+        symbol_description: symbol_description.clone(),
+        want: want.clone(),
+        obstacle: obstacle.clone(),
+        action: action.clone(),
+        consequence: consequence.clone(),
+        leader: leader.clone(),
         sphere_of_influence: sphere_of_influence.clone(),
         resources_assets: resources_assets.clone(),
         allies: allies.clone(),
         rivals_enemies: rivals_enemies.clone(),
-        reputation: reputation.clone(),
-        current_tension: current_tension.clone(),
-        goals_short_term: goals_short_term.clone(),
-        goals_long_term: goals_long_term.clone(),
-        symbol_description: symbol_description.clone(),
+        liege: liege.clone(),
+        loyalty_type: loyalty_type.clone(),
     },
     row_fields: {
         kind_type,
-        kind_custom,
+        category,
         public_description,
-        true_agenda,
-        methods,
-        leadership,
-        headquarters,
+        reputation,
+        symbol_description,
+        want,
+        obstacle,
+        action,
+        consequence,
+        leader,
         sphere_of_influence,
         resources_assets: resources_assets_db,
         allies: allies_db,
         rivals_enemies: rivals_db,
-        reputation,
-        current_tension,
-        goals_short_term: goals_short_db,
-        goals_long_term: goals_long_db,
-        symbol_description,
+        liege,
+        loyalty_type,
     },
 }
 
@@ -491,6 +508,18 @@ impl_entity_persistence! {
 struct ExistingRef<'a> {
     slug: &'a str,
     vault_path: &'a str,
+}
+
+/// Trim and drop-empty a link list (faction allies/rivals), preserving order and —
+/// unlike [`normalize_unknown_list`] — preserving an *empty* result. Faction
+/// relational lists are "link or leave blank" (D4): an empty list must publish as a
+/// blank stub, so we must never inject a placeholder "Unknown" entry.
+fn clean_link_list(values: &[String]) -> Vec<String> {
+    values
+        .iter()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+        .collect()
 }
 
 /// Resolve the canonical slug for a save: keep the current slug when the name

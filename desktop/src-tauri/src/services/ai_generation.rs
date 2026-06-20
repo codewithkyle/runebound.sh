@@ -1359,6 +1359,63 @@ pub fn location_dir_for_kind(base: &str, kind_type: &str) -> String {
     }
 }
 
+/// The three faction categories each of the 9 kinds rolls up into (design §3). Drives
+/// the wizard branch (D5), the persisted `category` column/frontmatter (D2), and the
+/// under-`factions/` subfolder. The exact analogue of the `location_*` chain below.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FactionCategory {
+    Houses,
+    Establishments,
+    Religion,
+}
+
+/// Map a kind to its category, or `None` for an unknown kind. The faction scheme has
+/// no `other`, so `None` means "not one of the 9" (a drifted row), the way
+/// [`location_subfolder`] treats freeform locations.
+pub fn faction_category(kind_type: &str) -> Option<FactionCategory> {
+    match kind_type {
+        "great_house" | "major_vassal" | "minor_vassal" | "individual_lord" => {
+            Some(FactionCategory::Houses)
+        }
+        "guild" | "company" | "criminal_syndicate" => Some(FactionCategory::Establishments),
+        "temple" | "cult" => Some(FactionCategory::Religion),
+        _ => None,
+    }
+}
+
+/// The persisted category string for a kind: `"houses" | "establishments" |
+/// "religion"`, or `""` for an unknown kind (kept lenient so a drifted row still
+/// saves; D2). Used to fill the frontmatter/row `category`.
+pub fn faction_category_str(kind_type: &str) -> &'static str {
+    match faction_category(kind_type) {
+        Some(FactionCategory::Houses) => "houses",
+        Some(FactionCategory::Establishments) => "establishments",
+        Some(FactionCategory::Religion) => "religion",
+        None => "",
+    }
+}
+
+/// Under-`factions/` subfolder for a kind, or `None` for an unknown kind (stays
+/// flat). The category folder doubles as the subfolder, so this is just
+/// [`faction_category_str`] with `""` collapsed to `None` — mirroring
+/// [`location_subfolder`]. Only shapes the readable `.md` vault_path; the TOML store
+/// and DB projection stay on the flat `factions/` base.
+pub fn faction_subfolder(kind_type: &str) -> Option<&'static str> {
+    match faction_category_str(kind_type) {
+        "" => None,
+        sub => Some(sub),
+    }
+}
+
+/// Full relative dir for a NEW faction save: `factions/<sub>` for a known kind, or
+/// flat `factions` otherwise. Mirrors [`location_dir_for_kind`].
+pub fn faction_dir_for_kind(base: &str, kind_type: &str) -> String {
+    match faction_subfolder(kind_type) {
+        Some(sub) => format!("{base}/{sub}"),
+        None => base.to_string(),
+    }
+}
+
 /// The GM's locked wizard answers, flattened into a borrow-friendly struct the
 /// wizard fills and passes to generation. Keeps `ai_generation.rs` free of the
 /// wizard's own accumulator type.
