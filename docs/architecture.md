@@ -110,7 +110,11 @@ desktop/src-tauri/src/
 |  `- mod.rs                # repository traits + Prod* implementations
 `- services/
    |- mod.rs                # module exports
-   |- ai_generation.rs      # seed generation
+   |- ai_generation/        # seed generation, split per entity kind (mirrors entities/domains/)
+   |  |- mod.rs             # AiGenerationService + re-export wall (keeps the flat ai_generation::X path)
+   |  |- engine.rs          # kind-agnostic core: run_seed_attempts loop, build_seed_payload, SeedSampling table
+   |  |- reference.rs       # @reference vault-grounding (build_reference_context, PromptReferenceContext)
+   |  `- {npc,location,faction,god,item,event,dungeon}.rs  # per-kind slice: *Seed + generate_*_seed + dedup + tests
    |- entity_reroll.rs      # field reroll generation
    |- entity_persistence.rs # save workflows
    |- entity_persistence_macros.rs # impl_entity_persistence!/impl_entity_soft_delete! per-kind fan-out
@@ -232,6 +236,8 @@ Handlers orchestrate; services implement workflows.
 
 Alongside these orchestrating `*Service` types, `services/` also holds shared support modules (free functions, not `Service` structs): `publish.rs` (entity frontmatter → Obsidian markdown), `ollama_chat.rs` (shared Ollama `/api/chat` plumbing for generation + reroll), `vault_ref.rs` (the `@reference` index used by AI context + autocomplete), and `mention_extraction.rs` (Tier-2 LLM link generation for not-yet-known entities).
 
+**`ai_generation` is itself a per-kind module, not one file.** `services/ai_generation/` mirrors `entities/domains/`: `engine.rs` holds the kind-agnostic core (the `run_seed_attempts` retry loop, the pure `build_seed_payload`, the per-kind `SeedSampling` table, token/capacity math), `reference.rs` holds the `@reference` vault-grounding subsystem, and one file per kind (`npc.rs`, `location.rs`, …) holds that kind's `*Seed` DTO, its `generate_*_seed` method (an `impl AiGenerationService` block), its dedup/recency helpers, and its tests. `mod.rs` is a thin re-export wall that preserves the flat `crate::services::ai_generation::X` path so consumers never change. **Adding a kind means adding a file, not growing one:** declare `mod <kind>;`, add the slice, add a `<KIND>_GEN_SAMPLING` const in `engine.rs`, and call the shared `run_seed_attempts` rather than re-inlining the loop. Do not collapse this back into a single file — the "restructured LLM generation" split is exactly what this guards.
+
 Use command modules for command syntax and user-facing response behavior. Use services for heavy domain logic.
 
 ---
@@ -294,7 +300,11 @@ the ~250–550 hand-written lines it used to cost. No per-field branching.
 4. **DB**: add the migration + `*Row` struct, one `impl_entity_table!` column
    declaration in `core/src/db.rs` (generates the whole CRUD set), and the repository
    trait + prod impl (`upsert_tx`/`delete_by_id_tx` + reads).
-5. **Persistence / soft-delete / reroll**: one `impl_entity_persistence!` and one
+5. **Generation / persistence / soft-delete / reroll**: add a
+   `services/ai_generation/<kind>.rs` slice for the create path (the `*Seed` DTO, a
+   `generate_<kind>_seed` that calls the shared `run_seed_attempts` loop, a
+   `<KIND>_GEN_SAMPLING` const in `engine.rs`, and `mod <kind>;` in
+   `ai_generation/mod.rs` — see §6). Then one `impl_entity_persistence!` and one
    `impl_entity_soft_delete!` declaration, plus the reroll spec entries;
    `vault_sync`'s `*_row_from_frontmatter` projects the canonical store row.
 6. **Draft slot + command**: add the `DraftEnvelope::<Entity>` variant (the editor is
@@ -341,6 +351,7 @@ The only edits outside `wizards/<name>.rs` are the one registry line and the lau
 | Relying on context to "block" a command from running | Contexts only filter help/autocomplete, not execution | Guard inside the handler if a command must be refused |
 | New command left on the `_ => Default` availability arm | Silently hidden in every editor context | Add an explicit `command_availability` arm |
 | A bespoke per-flow interceptor in `main.rs` for a multi-step flow | Re-creates the dungeon-flow drift (no context, no typeahead, hand-built prompts) | Register a `Wizard`; the generic route, context, and clickable prompts come for free (§4) |
+| Re-inlining the seed retry loop or putting a new kind's generation in an existing `ai_generation` file | Re-monolithizes the file the split just broke up | New kind = a new `ai_generation/<kind>.rs` slice that calls the shared `run_seed_attempts` (§6, §8C) |
 
 ---
 
@@ -371,8 +382,10 @@ Remaining, deliberately-deferred follow-ups (each noted in-code):
   transactional (recovery-side, lower-risk — P6.1 covers save/soft-delete/reap);
 - `EntityStore` reads on the startup/save paths stay synchronous (not the per-keystroke
   path — P6.2 moved the `@reference` scan off the runtime);
-- `ai_generation`'s create-path LLM sampling literals are still inline (P2.5 named only
-  the `entity_reroll` half);
+- `ai_generation`'s create-path sampling values remain hardcoded consts — the
+  "restructured LLM generation" change centralized them into the per-kind
+  `*_GEN_SAMPLING` table in `ai_generation/engine.rs` (resolving the inline-literal
+  duplication P2.5 had left in the create half), but they are still not config-exposed;
 - `vault_sync` projects the canonical store → db only; the Obsidian `.md` vault is a
   publish target, not an input (P6.3 — a true disk-scan half was intentionally not built).
 
@@ -407,5 +420,5 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-*Last updated: 2026-06-19*  
+*Last updated: 2026-06-20*  
 *If this document drifts from the codebase, update it in the same PR as the architecture change.*
