@@ -1,11 +1,59 @@
 # Spellbook Feature — Implementation Plan
 
-> **Status:** Planned (not yet implemented).
+> **Status:** ✅ Implemented (2026-06-20). The sections below are the original build plan;
+> see **§0 As-built notes** for where the shipped code deviates from it.
 > **Purpose:** A self-contained build plan for the integrated spell lookup feature. Read
 > `docs/architecture.md` first — this plan follows its §8A "Add New Top-Level Command"
-> playbook and the `EntityStore` → `VaultSyncService` → `suggestions.rs` grain. Written for
-> a future implementing agent; every decision below is already made — do not re-open them
-> without a reason.
+> playbook and the `EntityStore` → `VaultSyncService` → `suggestions.rs` grain.
+
+---
+
+## 0. As-built notes (what shipped, and deviations from the plan)
+
+The feature is implemented across these files:
+
+- **Model + card:** `runebound-models/src/spells.rs` — `Spell`, `SpellBlock`, `spell_card`.
+- **Converter:** `core/src/spell_import.rs` — `import_spells_from_dir`, `strip_tags`, `slugify`.
+- **TOML store:** `core/src/spell_store.rs` (+ `spells` path in `core/src/config.rs`).
+- **Search index:** migration `core/migrations/0020_spells.sql`, `SpellRow` + `impl_entity_table!`
+  + `clear_spells`/`count_spells` in `core/src/db.rs`.
+- **Repository:** `SpellRepository`/`ProdSpellRepository` in `desktop/.../repositories/mod.rs`;
+  `AppState::spell_repo()`.
+- **Import orchestration:** `desktop/.../services/spell_library.rs`.
+- **Commands:** `desktop/.../commands/spell_commands.rs` (`handle_spell`, `handle_spellbook`,
+  `resolve_spell_doc`); registered in `commands/mod.rs`; manifest specs in `command-specs/src/lib.rs`.
+- **Bare-name lookup:** fallback in `desktop/.../router.rs` (after entity resolution).
+- **Typeahead:** `SuggestionHelperText::Spell` + `spell_search_context` in `services/suggestions.rs`;
+  regenerated `desktop/src/generated/manifest.ts`.
+- **Boot self-heal:** `SpellLibraryService::project_store_into_db` called from the `cleanup`
+  boot task in `desktop/.../boot.rs`.
+
+Deviations from the plan below, all deliberate:
+
+1. **Command surface.** Two roots, not a single `spell` root: **`spellbook import [path]`** (import;
+   opens a native folder picker when no path is given) and **`spell <name>`** (lookup). A **bare
+   spell name** (`Fireball`, no prefix) also renders the card via the router fallback — entities win
+   on a name collision (resolved first).
+2. **`SpellBlock` is flat, not recursive.** Named subsections lower to a `Heading` block followed by
+   their flattened children (rather than a nested `Subsection { body }`). This keeps the whole
+   `Spell` serializing cleanly to TOML and makes the card builder a 1:1 map.
+3. **`Spell`/`SpellBlock` are backend-only** (no `TS` derive) — only the rendered `OutputDoc` crosses
+   to the frontend, mirroring the `*Frontmatter` types. No `models.ts` change was needed.
+4. **Dedup rule + count.** Drop any entry with a `reprintedAs` field, then prefer `XPHB` by name →
+   **554** canonical spells (verified against the real dataset), with zero slug/name collisions.
+5. **No class lists.** The 2024 core data carries no `classes.fromClassList`, so the card's class
+   line is usually omitted. The field is still parsed defensively.
+6. **Boot re-projection.** The `cleanup` boot task re-projects the TOML store into the `spells`
+   table (no-op when already in sync) so a deleted/rebuilt `app.db` self-heals — matching the
+   entity-store grain.
+7. **One card, not a block sequence** (revised from §6's plan). The whole spell renders as a
+   single `OutputBlock::EntityCard`: the **name** is the card title, the level/school line is a new
+   **`subtitle`** (so there is no separate heading bar above the card), and the description +
+   higher-level scaling + source footer render in a new **`body: Vec<OutputBlock>`** *inside* the
+   card. This required adding `subtitle` and `body` to `EntityCard` (both `#[serde(default)]`;
+   `entity_card()` stays the bare stat-card helper, `entity_card_full()` builds the rich one), and
+   teaching the frontend renderer + `to_plain_text` to walk them. `spellbook help` is one line plus
+   usage; a successful import reports only the count.
 
 ---
 
@@ -157,6 +205,10 @@ rendering contract (architecture §9: no storing rendering types). Anything in `
 don't recognize collapses to `SpellBlock::Text` via `strip_tags` — never drop content.
 
 ### Card rendering (`spell_card`)
+
+> **As-built differs — see §0 #7.** The shipped card is a *single* `EntityCard` (name as title,
+> level/school as `subtitle`, body inside `body`), not the loose block sequence sketched below. The
+> sketch is kept for the lowering logic (`push_spell_block`, `level_school_line`), which is unchanged.
 
 Add `pub fn spell_card(spell: &Spell) -> OutputDoc` next to `npc_entity_card` in
 `runebound-models/src/drafts.rs` (or in `spells.rs`). **A spell card is a sequence of blocks**,

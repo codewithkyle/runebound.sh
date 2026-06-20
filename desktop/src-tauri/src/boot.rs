@@ -14,6 +14,7 @@ use runebound_models::CommandResponse;
 
 use crate::app_state::AppState;
 use crate::commands::ok_response_with_doc;
+use crate::services::spell_library::SpellLibraryService;
 use crate::services::vault_sync::VaultSyncService;
 
 #[derive(Debug, Clone, Serialize, ts_rs::TS)]
@@ -95,6 +96,11 @@ pub async fn run_boot_task(
             // publishes and projects the canonical TOML store into the db + index
             // (reaping published records), the source of truth for a rebuilt db.
             VaultSyncService
+                .project_store_into_db(state.inner())
+                .await?;
+            // Re-project the canonical spell store into the search DB so an imported
+            // library survives an app.db rebuild (no-op when already in sync).
+            SpellLibraryService
                 .project_store_into_db(state.inner())
                 .await?;
             Ok(BootTaskResult {

@@ -13,4 +13,6 @@ pub mod output;
 pub mod serialization;
 pub mod service;
 pub mod session;
+pub mod spell_import;
+pub mod spell_store;
 pub mod vault;

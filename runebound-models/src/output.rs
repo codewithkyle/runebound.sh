@@ -27,31 +27,46 @@ impl OutputDoc {
     /// `- `, and an entity card to its title + `label value` rows.
     pub fn to_plain_text(&self) -> String {
         let mut lines: Vec<String> = Vec::new();
-        for block in &self.blocks {
-            match block {
-                OutputBlock::Heading { level, text } => {
-                    let hashes = "#".repeat((*level).clamp(1, 6) as usize);
-                    lines.push(format!("{hashes} {text}"));
-                }
-                OutputBlock::Paragraph { inlines } => lines.push(inlines_to_text(inlines)),
-                OutputBlock::Status { text, .. }
-                | OutputBlock::Code { text, .. }
-                | OutputBlock::Spinner { text, .. } => lines.push(text.clone()),
-                OutputBlock::List { items } => {
-                    for item in items {
-                        lines.push(format!("- {}", inlines_to_text(item)));
-                    }
-                }
-                OutputBlock::EntityCard { title, rows } => {
-                    lines.push(format!("## {title}"));
-                    for row in rows {
-                        lines.push(format!("{} {}", row.label, row.value));
-                    }
-                }
-                OutputBlock::Image { alt, .. } => lines.push(alt.clone()),
-            }
-        }
+        push_blocks_plain(&self.blocks, &mut lines);
         lines.join("\n")
+    }
+}
+
+/// Flatten a block sequence to plain-text lines, recursing into an entity card's
+/// body so a spell card's prose survives the plain-text fallback.
+fn push_blocks_plain(blocks: &[OutputBlock], lines: &mut Vec<String>) {
+    for block in blocks {
+        match block {
+            OutputBlock::Heading { level, text } => {
+                let hashes = "#".repeat((*level).clamp(1, 6) as usize);
+                lines.push(format!("{hashes} {text}"));
+            }
+            OutputBlock::Paragraph { inlines } => lines.push(inlines_to_text(inlines)),
+            OutputBlock::Status { text, .. }
+            | OutputBlock::Code { text, .. }
+            | OutputBlock::Spinner { text, .. } => lines.push(text.clone()),
+            OutputBlock::List { items } => {
+                for item in items {
+                    lines.push(format!("- {}", inlines_to_text(item)));
+                }
+            }
+            OutputBlock::EntityCard {
+                title,
+                subtitle,
+                rows,
+                body,
+            } => {
+                lines.push(format!("## {title}"));
+                if let Some(subtitle) = subtitle {
+                    lines.push(subtitle.clone());
+                }
+                for row in rows {
+                    lines.push(format!("{} {}", row.label, row.value));
+                }
+                push_blocks_plain(body, lines);
+            }
+            OutputBlock::Image { alt, .. } => lines.push(alt.clone()),
+        }
     }
 }
 
@@ -97,7 +112,17 @@ pub enum OutputBlock {
     },
     EntityCard {
         title: String,
+        /// A secondary line beneath the title, inside the same header (e.g. a
+        /// spell's "Level 3 Evocation"). Omitted by most cards.
+        #[serde(default)]
+        subtitle: Option<String>,
         rows: Vec<EntityCardRow>,
+        /// Free-form blocks rendered *inside* the card, below the label/value rows
+        /// — prose, lists, subsection headings, tables. Lets a card carry a full
+        /// body (a spell description) rather than only stat rows. Empty for plain
+        /// stat cards.
+        #[serde(default)]
+        body: Vec<OutputBlock>,
     },
     /// A bundled illustration. `src` is a logical asset key the frontend maps to
     /// an imported (hashed) asset URL — not a path — so the backend never needs to
@@ -195,7 +220,25 @@ pub fn image(src: impl Into<String>, alt: impl Into<String>) -> OutputBlock {
 pub fn entity_card(title: impl Into<String>, rows: Vec<EntityCardRow>) -> OutputBlock {
     OutputBlock::EntityCard {
         title: title.into(),
+        subtitle: None,
         rows,
+        body: Vec::new(),
+    }
+}
+
+/// An entity card carrying a subtitle line and a free-form body rendered inside
+/// the card (used by the spell card; see [`crate::spells::spell_card`]).
+pub fn entity_card_full(
+    title: impl Into<String>,
+    subtitle: Option<String>,
+    rows: Vec<EntityCardRow>,
+    body: Vec<OutputBlock>,
+) -> OutputBlock {
+    OutputBlock::EntityCard {
+        title: title.into(),
+        subtitle,
+        rows,
+        body,
     }
 }
 

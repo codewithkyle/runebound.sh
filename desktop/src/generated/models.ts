@@ -54,7 +54,19 @@ export type StatusTone = "success" | "info" | "warning" | "error";
 
 export type SpinnerState = "running" | "success" | "error";
 
-export type OutputBlock = { "kind": "heading", level: number, text: string, } | { "kind": "paragraph", inlines: Array<InlineNode>, } | { "kind": "list", items: Array<Array<InlineNode>>, } | { "kind": "code", language: string | null, text: string, } | { "kind": "status", tone: StatusTone, text: string, } | { "kind": "spinner", state: SpinnerState, text: string, } | { "kind": "entity_card", title: string, rows: Array<EntityCardRow>, } | { "kind": "image", src: string, alt: string, };
+export type OutputBlock = { "kind": "heading", level: number, text: string, } | { "kind": "paragraph", inlines: Array<InlineNode>, } | { "kind": "list", items: Array<Array<InlineNode>>, } | { "kind": "code", language: string | null, text: string, } | { "kind": "status", tone: StatusTone, text: string, } | { "kind": "spinner", state: SpinnerState, text: string, } | { "kind": "entity_card", title: string, 
+/**
+ * A secondary line beneath the title, inside the same header (e.g. a
+ * spell's "Level 3 Evocation"). Omitted by most cards.
+ */
+subtitle: string | null, rows: Array<EntityCardRow>, 
+/**
+ * Free-form blocks rendered *inside* the card, below the label/value rows
+ * — prose, lists, subsection headings, tables. Lets a card carry a full
+ * body (a spell description) rather than only stat rows. Empty for plain
+ * stat cards.
+ */
+body: Array<OutputBlock>, } | { "kind": "image", src: string, alt: string, };
 
 export type OutputDoc = { blocks: Array<OutputBlock>, };
 

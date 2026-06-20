@@ -11,7 +11,7 @@ use crate::entities::{EntityDomainRegistry, EntityKind};
 use crate::repositories::{
     Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
     GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
-    SoftDeleteRepository, VaultRepository,
+    SoftDeleteRepository, SpellRepository, VaultRepository,
 };
 use crate::wizards::{WizardRegistry, WizardSession};
 
@@ -452,6 +452,7 @@ pub(crate) struct AppState {
     pub(crate) document_repo: Arc<dyn DocumentRepository>,
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
+    pub(crate) spell_repo: Arc<dyn SpellRepository>,
     pub(crate) domains: Arc<EntityDomainRegistry>,
     /// Registry of multi-step wizards, mirroring `domains`. Adding a wizard is one
     /// line in `build_default_wizard_registry()`.
@@ -514,6 +515,10 @@ impl AppState {
 
     pub(crate) fn soft_delete_repo(&self) -> Arc<dyn SoftDeleteRepository> {
         self.soft_delete_repo.clone()
+    }
+
+    pub(crate) fn spell_repo(&self) -> Arc<dyn SpellRepository> {
+        self.spell_repo.clone()
     }
 
     pub(crate) fn domains(&self) -> Arc<EntityDomainRegistry> {

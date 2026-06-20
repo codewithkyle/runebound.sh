@@ -174,11 +174,26 @@ body {
   padding: 2px 8px;
 }
 
+.rb-entity-card-subtitle {
+  font-style: italic;
+  opacity: 0.85;
+}
+
 .rb-entity-card-body {
   background: var(--color-surface);
   padding: 6px 8px;
   display: grid;
   gap: 2px;
+}
+
+/* Free-form body (e.g. a spell description) rendered inside the card, below the
+   stat rows. The border separates the prose from the label/value block. */
+.rb-entity-card-prose {
+  display: grid;
+  gap: 4px;
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--color-border);
 }
 
 .rb-entity-row {

@@ -5,7 +5,7 @@ use dnd_core::vault::Vault;
 pub mod db {
     pub use dnd_core::db::{
         Database, DbTransaction, DungeonRow, EventRow, FactionRow, GodRow, ItemRow, LocationRow,
-        NpcRow, SoftDeleteRow,
+        NpcRow, SoftDeleteRow, SpellRow,
     };
 }
 
@@ -806,6 +806,61 @@ impl GenerationRepository for ProdGenerationRepository {
         limit: i64,
     ) -> Result<Vec<String>, String> {
         core_db::recent_generation_prompts(&database.pool, gen_type, limit)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The imported spell library: a read-only search index over the canonical TOML
+/// spell store. Lookups search here for a slug, then load the card from the store;
+/// import/boot replace the whole table in one transaction (`clear_tx` + `upsert_tx`).
+#[async_trait]
+pub trait SpellRepository: Send + Sync {
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::SpellRow>, String>;
+    async fn count(&self, database: &Database) -> Result<i64, String>;
+    async fn clear_tx(&self, tx: &mut DbTransaction<'_>) -> Result<(), String>;
+    async fn upsert_tx(&self, tx: &mut DbTransaction<'_>, row: &db::SpellRow)
+    -> Result<(), String>;
+}
+
+pub struct ProdSpellRepository;
+
+#[async_trait]
+impl SpellRepository for ProdSpellRepository {
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::SpellRow>, String> {
+        core_db::search_spells_by_name(&database.pool, query, limit)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn count(&self, database: &Database) -> Result<i64, String> {
+        core_db::count_spells(&database.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn clear_tx(&self, tx: &mut DbTransaction<'_>) -> Result<(), String> {
+        core_db::clear_spells(&mut **tx)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::SpellRow,
+    ) -> Result<(), String> {
+        core_db::upsert_spell(&mut **tx, row)
             .await
             .map_err(|e| e.to_string())
     }

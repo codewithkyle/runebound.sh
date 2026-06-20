@@ -1,4 +1,4 @@
-import { For, type JSX } from "solid-js";
+import { For, Show, type JSX } from "solid-js";
 import { commandRefClass, spinnerClass, spinnerTextClass, statusClass } from "./theme";
 import type { InlineNode, OutputBlock, OutputDoc, SpinnerState } from "../generated/models";
 import topologyImage from "../assets/topology.png";
@@ -69,7 +69,12 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
   if (block.kind === "entity_card") {
     return (
       <div class="rb-entity-card">
-        <div class="rb-entity-card-header rb-on-fg">{block.title}</div>
+        <div class="rb-entity-card-header rb-on-fg">
+          <span class="rb-entity-card-title">{block.title}</span>
+          <Show when={block.subtitle}>
+            {(subtitle) => <span class="rb-entity-card-subtitle"> — {subtitle()}</span>}
+          </Show>
+        </div>
         <div class="rb-entity-card-body">
           <For each={block.rows}>
             {(row) => (
@@ -79,6 +84,11 @@ function renderBlock(block: OutputBlock, onRunCommand: (command: string) => void
               </div>
             )}
           </For>
+          <Show when={block.body.length > 0}>
+            <div class="rb-entity-card-prose">
+              <For each={block.body}>{(child) => renderBlock(child, onRunCommand)}</For>
+            </div>
+          </Show>
         </div>
       </div>
     );

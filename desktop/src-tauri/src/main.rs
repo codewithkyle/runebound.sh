@@ -25,8 +25,8 @@ use crate::repositories::{
     GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
     ProdDocumentRepository, ProdDungeonRepository, ProdEventRepository, ProdFactionRepository,
     ProdGenerationRepository, ProdGodRepository, ProdItemRepository, ProdLocationRepository,
-    ProdNpcRepository, ProdSoftDeleteRepository, ProdVaultRepository, SoftDeleteRepository,
-    VaultRepository,
+    ProdNpcRepository, ProdSoftDeleteRepository, ProdSpellRepository, ProdVaultRepository,
+    SoftDeleteRepository, SpellRepository, VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
 use crate::wizards::build_default_wizard_registry;
@@ -159,6 +159,7 @@ fn main() {
     let document_repo: Arc<dyn DocumentRepository> = Arc::new(ProdDocumentRepository);
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
+    let spell_repo: Arc<dyn SpellRepository> = Arc::new(ProdSpellRepository);
 
     let command_service = dnd_core::service::CommandService::new();
 
@@ -180,6 +181,7 @@ fn main() {
         document_repo: document_repo.clone(),
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
+        spell_repo: spell_repo.clone(),
         domains,
         wizards,
         wizard_session: Mutex::new(crate::wizards::WizardSession::default()),

@@ -183,6 +183,20 @@ pub struct NpcRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct SpellRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub level: i64,
+    pub school: String,
+    pub source: String,
+    pub ritual: bool,
+    pub concentration: bool,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct SoftDeleteRow {
     pub id: i64,
     pub entity_type: String,
@@ -391,6 +405,55 @@ impl_entity_table! {
         strict vault_path,
         strict body,
     ],
+}
+
+// Spells are a read-only reference library imported from the user's own 5etools
+// copy, so they have no `vault_path` (never published) and the full set is replaced
+// wholesale on re-import (see `clear_spells`). The generated `search_spells_by_name`
+// is the LIKE-based typeahead — 554 rows, no FTS5 needed.
+impl_entity_table! {
+    table: "spells",
+    row: SpellRow,
+    upsert: upsert_spell,
+    find_by_id: find_spell_by_id,
+    find_by_slug: find_spell_by_slug,
+    find_by_name_or_slug: find_spell_by_name_or_slug,
+    list: list_spells,
+    search_by_name: search_spells_by_name,
+    delete_by_id: delete_spell_by_id,
+    row_to: row_to_spell,
+    columns: [
+        strict slug,
+        strict name,
+        strict level,
+        strict school,
+        strict source,
+        strict ritual,
+        strict concentration,
+    ],
+}
+
+/// Remove every spell row. Executor-generic so a re-import can clear + repopulate
+/// the table in one transaction (the canonical TOML store is the source of truth).
+pub async fn clear_spells<'e, E>(executor: E) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    sqlx::query("DELETE FROM spells")
+        .execute(executor)
+        .await
+        .context("failed to clear spells")?;
+    Ok(())
+}
+
+/// Count of imported spells — drives the import summary and the "did you run
+/// spellbook import?" empty-library hint.
+pub async fn count_spells(pool: &SqlitePool) -> Result<i64> {
+    let row = sqlx::query("SELECT COUNT(*) AS n FROM spells")
+        .fetch_one(pool)
+        .await
+        .context("failed to count spells")?;
+    Ok(row.try_get("n").unwrap_or(0))
 }
 
 pub async fn init_database() -> Result<Database> {

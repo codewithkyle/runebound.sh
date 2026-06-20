@@ -5,7 +5,10 @@ use tauri::State;
 
 use crate::app_state::AppState;
 use crate::commands::entity_commands::build_load_response;
-use crate::commands::{DesktopHandlerInvocation, desktop_handler_registry, ok_response};
+use crate::commands::spell_commands::resolve_spell_doc;
+use crate::commands::{
+    DesktopHandlerInvocation, desktop_handler_registry, ok_response, ok_response_with_doc,
+};
 use crate::services::entity_admin::EntityAdminService;
 use crate::services::suggestions::starts_with_known_command_root;
 
@@ -50,6 +53,15 @@ pub(crate) async fn dispatch_desktop_command(
         {
             let (output, event) = build_load_response(entity, state).await;
             return Ok(Some(ok_response(output, event)));
+        }
+        // Bare spell name (e.g. "Fireball"): render its card. Entities are resolved
+        // first above, so a saved entity wins on a name collision.
+        if let Some(card) = resolve_spell_doc(state.inner(), trimmed).await? {
+            return Ok(Some(ok_response_with_doc(
+                card.to_plain_text(),
+                Some(card),
+                None,
+            )));
         }
     }
 
