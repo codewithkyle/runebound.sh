@@ -19,7 +19,7 @@ use crate::utils::{
 };
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
-use dnd_core::serialization::faction_list_from_db_text;
+use dnd_core::serialization::{faction_link_list_from_db_text, faction_list_from_db_text};
 
 pub struct FactionDomain;
 
@@ -83,8 +83,10 @@ impl EntityDomain for FactionDomain {
             leader: row.leader,
             sphere_of_influence: row.sphere_of_influence,
             resources_assets: faction_list_from_db_text(&row.resources_assets),
-            allies: faction_list_from_db_text(&row.allies),
-            rivals_enemies: faction_list_from_db_text(&row.rivals_enemies),
+            // Relational lists preserve blank (D4): never coerce an empty list to
+            // ["Unknown"] the way LLM-content `resources_assets` does.
+            allies: faction_link_list_from_db_text(&row.allies),
+            rivals_enemies: faction_link_list_from_db_text(&row.rivals_enemies),
             liege: row.liege,
             loyalty_type: row.loyalty_type,
             // `category` (row column, D2) is derived from kind, not stored on the

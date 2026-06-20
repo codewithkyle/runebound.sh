@@ -610,27 +610,24 @@ impl AiGenerationService {
         let notice = capacity_notice(estimated_tokens, config.ollama.num_ctx);
         let enforce_unique_name = reference_context.system_context.is_empty();
 
+        // WOAC schema (design §5): the visible face + the want/obstacle/action/
+        // consequence spine. No relational/place fields (leader/allies/rivals/liege/
+        // loyalty/headquarters) — the GM adds those (D3). `kind_type` is one of the 9.
         let schema = serde_json::json!({
             "type": "object",
-            "required": ["name", "kind_type", "public_description", "true_agenda", "methods", "leadership", "headquarters", "sphere_of_influence", "resources_assets", "allies", "rivals_enemies", "reputation", "current_tension", "goals_short_term", "goals_long_term", "symbol_description"],
+            "required": ["name", "kind_type", "public_description", "reputation", "symbol_description", "want", "obstacle", "action", "consequence", "sphere_of_influence", "resources_assets"],
             "properties": {
                 "name": { "type": "string", "minLength": 1 },
                 "kind_type": { "type": "string", "enum": FACTION_KIND_TYPES },
-                "kind_custom": { "type": ["string", "null"] },
                 "public_description": { "type": "string", "minLength": 1 },
-                "true_agenda": { "type": "string", "minLength": 1 },
-                "methods": { "type": "string", "minLength": 1 },
-                "leadership": { "type": "string", "minLength": 1 },
-                "headquarters": { "type": "string", "minLength": 1 },
-                "sphere_of_influence": { "type": "string", "minLength": 1 },
-                "resources_assets": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
-                "allies": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
-                "rivals_enemies": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
                 "reputation": { "type": "string", "minLength": 1 },
-                "current_tension": { "type": "string", "minLength": 1 },
-                "goals_short_term": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
-                "goals_long_term": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } },
-                "symbol_description": { "type": "string", "minLength": 1 }
+                "symbol_description": { "type": "string", "minLength": 1 },
+                "want": { "type": "string", "minLength": 1 },
+                "obstacle": { "type": "string", "minLength": 1 },
+                "action": { "type": "string", "minLength": 1 },
+                "consequence": { "type": "string", "minLength": 1 },
+                "sphere_of_influence": { "type": "string", "minLength": 1 },
+                "resources_assets": { "type": "array", "minItems": 1, "maxItems": 5, "items": { "type": "string", "minLength": 1 } }
             },
             "additionalProperties": false
         });
@@ -652,8 +649,11 @@ impl AiGenerationService {
             database,
             generation_repo,
             |note| format!(
-                "You generate usable D&D faction seeds. Return only JSON with fields name, kind_type, kind_custom, public_description, true_agenda, methods, leadership, headquarters, sphere_of_influence, resources_assets, allies, rivals_enemies, reputation, current_tension, goals_short_term, goals_long_term, symbol_description. symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. If kind_type is not other, kind_custom must be null. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {}.{}{}{}",
-                recent_context, note, reference_suffix, detail_directive(verbosity)
+                "You generate usable D&D faction seeds built on the WOAC engine. Return only JSON with fields name, kind_type, public_description, reputation, symbol_description, want, obstacle, action, consequence, sphere_of_influence, resources_assets. kind_type must be one of the 9 kinds: {kinds}. Pick the one that best fits. The visible face — public_description, reputation, symbol_description — is the faction's public claim; the real leverage and friction show through the WOAC fields. want = the faction's deep aim (1-2 sentences). obstacle = what stands in its way (1-2 sentences). action = what it is doing about it (1-2 sentences). consequence = what is at stake if it wins or loses (1-2 sentences). symbol_description should be exactly 1 sentence describing symbol/sigil/colors/banner/iconography. Do not invent a leader, allies, rivals, a liege, or a headquarters — the game master adds those. If referenced vault metadata includes an established name for an organization, group, guild, or house, reuse that exact canonical name instead of inventing a new one. Avoid these recent seeds: {recent}.{note}{reference_suffix}{detail}",
+                kinds = FACTION_KIND_TYPES.join(", "),
+                recent = recent_context,
+                reference_suffix = reference_suffix,
+                detail = detail_directive(verbosity),
             ),
             || "failed to generate valid structured faction output from ollama".to_string(),
             |seed: FactionSeed| {
@@ -1695,25 +1695,30 @@ pub struct LocationSeed {
     pub current_tension: String,
 }
 
+/// The LLM-filled fields of a faction (design §5 WOAC engine). The relational/place
+/// fields — `leader`, `allies`, `rivals_enemies`, `liege`, `loyalty_type`,
+/// `headquarters` — are intentionally absent: they are picker-linked or left blank,
+/// never generated (D3).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FactionSeed {
     pub name: String,
+    // GM-locked in the wizard (omitted from the wizard schema), so default to empty
+    // when absent; the one-shot schema still requires it and the model picks one of
+    // the 9 kinds. Overwritten from the accumulator in the wizard path. Mirrors
+    // `LocationSeed.kind_type`.
+    #[serde(default)]
     pub kind_type: String,
-    pub kind_custom: Option<String>,
+    // Visible face.
     pub public_description: String,
-    pub true_agenda: String,
-    pub methods: String,
-    pub leadership: String,
-    pub headquarters: String,
+    pub reputation: String,
+    pub symbol_description: String,
+    // WOAC engine.
+    pub want: String,
+    pub obstacle: String,
+    pub action: String,
+    pub consequence: String,
     pub sphere_of_influence: String,
     pub resources_assets: Vec<String>,
-    pub allies: Vec<String>,
-    pub rivals_enemies: Vec<String>,
-    pub reputation: String,
-    pub current_tension: String,
-    pub goals_short_term: Vec<String>,
-    pub goals_long_term: Vec<String>,
-    pub symbol_description: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]

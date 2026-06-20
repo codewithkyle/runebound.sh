@@ -1175,25 +1175,28 @@ pub struct RerollLocationFieldResult {
     pub exports: Option<Vec<String>>,
 }
 
+/// The full faction shape passed to per-field reroll for grounding. It carries every
+/// field — including the never-rerolled relational ones (`leader`/`allies`/`rivals`/
+/// `liege`/`loyalty_type`) — so the LLM can ground a rerolled WOAC/face field in the
+/// faction's existing relationships even though it will not regenerate them (D3).
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct FactionRerollContext {
     pub name: String,
     pub kind_type: String,
-    pub kind_custom: Option<String>,
     pub public_description: String,
-    pub true_agenda: String,
-    pub methods: String,
-    pub leadership: String,
-    pub headquarters: String,
+    pub reputation: String,
+    pub symbol_description: String,
+    pub want: String,
+    pub obstacle: String,
+    pub action: String,
+    pub consequence: String,
+    pub leader: String,
     pub sphere_of_influence: String,
     pub resources_assets: Vec<String>,
     pub allies: Vec<String>,
     pub rivals_enemies: Vec<String>,
-    pub reputation: String,
-    pub current_tension: String,
-    pub goals_short_term: Vec<String>,
-    pub goals_long_term: Vec<String>,
-    pub symbol_description: String,
+    pub liege: Option<String>,
+    pub loyalty_type: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Deserialize)]
@@ -1360,27 +1363,26 @@ fn location_context_summary(context: &LocationRerollContext) -> String {
 
 fn faction_context_summary(context: &FactionRerollContext) -> String {
     format!(
-        "name={}, kind_type={}, kind_custom={}, public_description={}, true_agenda={}, methods={}, leadership={}, headquarters={}, sphere_of_influence={}, resources_assets={}, allies={}, rivals_enemies={}, reputation={}, current_tension={}, goals_short_term={}, goals_long_term={}, symbol_description={}",
+        "name={}, kind_type={}, public_description={}, reputation={}, symbol_description={}, want={}, obstacle={}, action={}, consequence={}, leader={}, sphere_of_influence={}, resources_assets={}, allies={}, rivals_enemies={}, liege={}, loyalty_type={}",
         context.name,
         context.kind_type,
-        context
-            .kind_custom
-            .clone()
-            .unwrap_or_else(|| "(none)".to_string()),
         context.public_description,
-        context.true_agenda,
-        context.methods,
-        context.leadership,
-        context.headquarters,
+        context.reputation,
+        context.symbol_description,
+        context.want,
+        context.obstacle,
+        context.action,
+        context.consequence,
+        context.leader,
         context.sphere_of_influence,
         context.resources_assets.join(", "),
         context.allies.join(", "),
         context.rivals_enemies.join(", "),
-        context.reputation,
-        context.current_tension,
-        context.goals_short_term.join(", "),
-        context.goals_long_term.join(", "),
-        context.symbol_description,
+        context.liege.clone().unwrap_or_else(|| "(none)".to_string()),
+        context
+            .loyalty_type
+            .clone()
+            .unwrap_or_else(|| "(none)".to_string()),
     )
 }
 
