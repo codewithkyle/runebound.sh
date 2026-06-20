@@ -38,8 +38,47 @@ use crate::wizards::entity_link::{
     resolve_link_name,
 };
 
-use wizard::prompt::wizard_menu;
+use wizard::prompt::{
+    numbered_choices, optional_text, optional_text_prompt, pick_value, skip_choice, wizard_menu,
+};
 use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
+
+// ---------------------------------------------------------------------------
+// Step ids + picker routing modes
+// ---------------------------------------------------------------------------
+//
+// Every step id and routing key is a named constant so a typo or rename is a compile
+// error, not a path that fails only when a GM walks it (code-review M3). `STEP_*` is the
+// wizard's single id registry; `every_declared_step_id_is_registered_once` asserts it
+// matches the steps actually registered in `FactionWizard::new`, which (since every
+// `Goto`/`enter_*` target is one of these consts) guarantees no route dangles.
+
+const STEP_CATEGORY: &str = "category";
+const STEP_HOUSES_LAYER: &str = "houses_layer";
+const STEP_POWER_BASE: &str = "power_base";
+const STEP_POWER_SPECIFICS: &str = "power_specifics";
+const STEP_BRAND: &str = "brand";
+const STEP_LOYALTY_TYPE: &str = "loyalty_type";
+const STEP_EST_KIND: &str = "est_kind";
+const STEP_CONTROL_TYPE: &str = "control_type";
+const STEP_CONTROL_SPECIFICS: &str = "control_specifics";
+const STEP_REL_KIND: &str = "rel_kind";
+const STEP_MANDATE: &str = "mandate";
+const STEP_MANDATE_SPECIFICS: &str = "mandate_specifics";
+const STEP_REACH: &str = "reach";
+const STEP_AMBITION: &str = "ambition";
+const STEP_GENERATE: &str = "generate";
+const STEP_FACTION_PICK: &str = "faction_pick";
+const STEP_RELATION_PICK: &str = "relation_pick";
+const STEP_NPC_PICK: &str = "npc_pick";
+const STEP_GOD_PICK: &str = "god_pick";
+
+/// The faction picker's single-value modes (mandatory liege vs optional patron).
+const MODE_LIEGE: &str = "liege";
+const MODE_PATRON: &str = "patron";
+/// The relation picker's repeatable modes (allies first, then it flips to rivals).
+const MODE_ALLIES: &str = "allies";
+const MODE_RIVALS: &str = "rivals";
 
 // ---------------------------------------------------------------------------
 // Accumulator
@@ -89,9 +128,13 @@ struct FactionWizardData {
     factions: Vec<(String, String)>,
     npcs: Vec<(String, String)>,
     gods: Vec<(String, String)>,
-    /// Which mode the shared faction picker is in (liege / patron / allies / rivals),
-    /// so one step serves four link points (mirrors `faction_link_return`).
+    /// Which mode the single-value faction picker is in (liege / patron), so one step
+    /// serves both link points (mirrors location's `faction_link_return`).
     link_return: Option<&'static str>,
+    /// Which mode the repeatable relation picker is in (allies / rivals). Kept separate
+    /// from `link_return` so the single-shot and repeatable pickers never share mutable
+    /// mode state (code-review M2/H3).
+    relation_mode: Option<&'static str>,
 
     // Generated seed handed to `finalize`/the editor, plus a one-shot notice.
     seed: Option<FactionSeed>,
@@ -152,7 +195,7 @@ struct CategoryStep;
 #[async_trait]
 impl WizardStep<AppState> for CategoryStep {
     fn id(&self) -> &'static str {
-        "category"
+        STEP_CATEGORY
     }
 
     fn summary(&self) -> &'static str {
@@ -183,9 +226,9 @@ impl WizardStep<AppState> for CategoryStep {
         // The kind (and thus the category) is locked at the next step; here we only
         // route to that category's kind step (D5).
         let next = match n {
-            1 => "houses_layer",
-            2 => "est_kind",
-            3 => "rel_kind",
+            1 => STEP_HOUSES_LAYER,
+            2 => STEP_EST_KIND,
+            3 => STEP_REL_KIND,
             _ => return Ok(WizardTransition::Stay),
         };
         Ok(WizardTransition::Goto(next))
@@ -214,7 +257,7 @@ struct HouseLayerStep;
 #[async_trait]
 impl WizardStep<AppState> for HouseLayerStep {
     fn id(&self) -> &'static str {
-        "houses_layer"
+        STEP_HOUSES_LAYER
     }
 
     fn summary(&self) -> &'static str {
@@ -243,7 +286,7 @@ impl WizardStep<AppState> for HouseLayerStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).kind_type = kind.to_string();
-        Ok(WizardTransition::Goto("power_base"))
+        Ok(WizardTransition::Goto(STEP_POWER_BASE))
     }
 }
 
@@ -261,7 +304,7 @@ struct PowerBaseStep;
 #[async_trait]
 impl WizardStep<AppState> for PowerBaseStep {
     fn id(&self) -> &'static str {
-        "power_base"
+        STEP_POWER_BASE
     }
 
     fn summary(&self) -> &'static str {
@@ -291,7 +334,7 @@ impl WizardStep<AppState> for PowerBaseStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).power_base = Some(base.to_string());
-        Ok(WizardTransition::Goto("power_specifics"))
+        Ok(WizardTransition::Goto(STEP_POWER_SPECIFICS))
     }
 }
 
@@ -306,7 +349,7 @@ struct PowerSpecificsStep;
 #[async_trait]
 impl WizardStep<AppState> for PowerSpecificsStep {
     fn id(&self) -> &'static str {
-        "power_specifics"
+        STEP_POWER_SPECIFICS
     }
 
     fn summary(&self) -> &'static str {
@@ -332,10 +375,13 @@ impl WizardStep<AppState> for PowerSpecificsStep {
     ) -> Result<WizardTransition, String> {
         faction_data_mut(d).power_specifics = optional_text(input);
         if power_specifics_next_is_brand(&faction_data(d).kind_type) {
-            Ok(WizardTransition::Goto("brand"))
+            // Re-entering brand (e.g. after a `back`) must start on the menu, not a stale
+            // custom-entry screen — `back` rolls back the cursor, not the accumulator (H3).
+            faction_data_mut(d).awaiting_custom_brand = false;
+            Ok(WizardTransition::Goto(STEP_BRAND))
         } else {
             // Vassal / lord: who are they sworn to? (mandatory liege picker)
-            enter_faction_pick(d, state, "liege").await
+            enter_faction_pick(d, state, MODE_LIEGE).await
         }
     }
 }
@@ -345,7 +391,7 @@ struct BrandStep;
 #[async_trait]
 impl WizardStep<AppState> for BrandStep {
     fn id(&self) -> &'static str {
-        "brand"
+        STEP_BRAND
     }
 
     fn summary(&self) -> &'static str {
@@ -392,7 +438,7 @@ impl WizardStep<AppState> for BrandStep {
             let data = faction_data_mut(d);
             data.brand = Some(trimmed.to_string());
             data.awaiting_custom_brand = false;
-            return Ok(WizardTransition::Goto("ambition"));
+            return Ok(WizardTransition::Goto(STEP_AMBITION));
         }
 
         if trimmed == "0" {
@@ -405,7 +451,7 @@ impl WizardStep<AppState> for BrandStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).brand = Some(brand.to_string());
-        Ok(WizardTransition::Goto("ambition"))
+        Ok(WizardTransition::Goto(STEP_AMBITION))
     }
 }
 
@@ -424,7 +470,7 @@ struct LoyaltyTypeStep;
 #[async_trait]
 impl WizardStep<AppState> for LoyaltyTypeStep {
     fn id(&self) -> &'static str {
-        "loyalty_type"
+        STEP_LOYALTY_TYPE
     }
 
     fn summary(&self) -> &'static str {
@@ -462,7 +508,7 @@ impl WizardStep<AppState> for LoyaltyTypeStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).loyalty_type = Some(value);
-        Ok(WizardTransition::Goto("ambition"))
+        Ok(WizardTransition::Goto(STEP_AMBITION))
     }
 }
 
@@ -482,7 +528,7 @@ struct EstKindStep;
 #[async_trait]
 impl WizardStep<AppState> for EstKindStep {
     fn id(&self) -> &'static str {
-        "est_kind"
+        STEP_EST_KIND
     }
 
     fn summary(&self) -> &'static str {
@@ -511,7 +557,7 @@ impl WizardStep<AppState> for EstKindStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).kind_type = kind.to_string();
-        Ok(WizardTransition::Goto("control_type"))
+        Ok(WizardTransition::Goto(STEP_CONTROL_TYPE))
     }
 }
 
@@ -528,7 +574,7 @@ struct ControlTypeStep;
 #[async_trait]
 impl WizardStep<AppState> for ControlTypeStep {
     fn id(&self) -> &'static str {
-        "control_type"
+        STEP_CONTROL_TYPE
     }
 
     fn summary(&self) -> &'static str {
@@ -557,7 +603,7 @@ impl WizardStep<AppState> for ControlTypeStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).control_type = Some(control.to_string());
-        Ok(WizardTransition::Goto("control_specifics"))
+        Ok(WizardTransition::Goto(STEP_CONTROL_SPECIFICS))
     }
 }
 
@@ -566,7 +612,7 @@ struct ControlSpecificsStep;
 #[async_trait]
 impl WizardStep<AppState> for ControlSpecificsStep {
     fn id(&self) -> &'static str {
-        "control_specifics"
+        STEP_CONTROL_SPECIFICS
     }
 
     fn summary(&self) -> &'static str {
@@ -591,7 +637,7 @@ impl WizardStep<AppState> for ControlSpecificsStep {
         _state: &AppState,
     ) -> Result<WizardTransition, String> {
         faction_data_mut(d).control_specifics = optional_text(input);
-        Ok(WizardTransition::Goto("reach"))
+        Ok(WizardTransition::Goto(STEP_REACH))
     }
 }
 
@@ -610,7 +656,7 @@ struct RelKindStep;
 #[async_trait]
 impl WizardStep<AppState> for RelKindStep {
     fn id(&self) -> &'static str {
-        "rel_kind"
+        STEP_REL_KIND
     }
 
     fn summary(&self) -> &'static str {
@@ -658,7 +704,7 @@ struct MandateStep;
 #[async_trait]
 impl WizardStep<AppState> for MandateStep {
     fn id(&self) -> &'static str {
-        "mandate"
+        STEP_MANDATE
     }
 
     fn summary(&self) -> &'static str {
@@ -687,7 +733,7 @@ impl WizardStep<AppState> for MandateStep {
             return Ok(WizardTransition::Stay);
         };
         faction_data_mut(d).mandate = Some(mandate.to_string());
-        Ok(WizardTransition::Goto("mandate_specifics"))
+        Ok(WizardTransition::Goto(STEP_MANDATE_SPECIFICS))
     }
 }
 
@@ -696,7 +742,7 @@ struct MandateSpecificsStep;
 #[async_trait]
 impl WizardStep<AppState> for MandateSpecificsStep {
     fn id(&self) -> &'static str {
-        "mandate_specifics"
+        STEP_MANDATE_SPECIFICS
     }
 
     fn summary(&self) -> &'static str {
@@ -721,7 +767,7 @@ impl WizardStep<AppState> for MandateSpecificsStep {
         _state: &AppState,
     ) -> Result<WizardTransition, String> {
         faction_data_mut(d).mandate_specifics = optional_text(input);
-        Ok(WizardTransition::Goto("reach"))
+        Ok(WizardTransition::Goto(STEP_REACH))
     }
 }
 
@@ -740,7 +786,7 @@ struct ReachStep;
 #[async_trait]
 impl WizardStep<AppState> for ReachStep {
     fn id(&self) -> &'static str {
-        "reach"
+        STEP_REACH
     }
 
     fn summary(&self) -> &'static str {
@@ -770,7 +816,7 @@ impl WizardStep<AppState> for ReachStep {
         };
         faction_data_mut(d).reach = Some(reach.to_string());
         // Both establishments and religion ask for an optional patron next.
-        enter_faction_pick(d, state, "patron").await
+        enter_faction_pick(d, state, MODE_PATRON).await
     }
 }
 
@@ -783,7 +829,7 @@ struct AmbitionStep;
 #[async_trait]
 impl WizardStep<AppState> for AmbitionStep {
     fn id(&self) -> &'static str {
-        "ambition"
+        STEP_AMBITION
     }
 
     fn summary(&self) -> &'static str {
@@ -823,7 +869,7 @@ struct GenerateStep;
 #[async_trait]
 impl WizardStep<AppState> for GenerateStep {
     fn id(&self) -> &'static str {
-        "generate"
+        STEP_GENERATE
     }
 
     fn summary(&self) -> &'static str {
@@ -845,7 +891,7 @@ impl WizardStep<AppState> for GenerateStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![WizardChoice::new("skip", "skip").with_help("Generate without adding this")]
+        vec![skip_choice("Generate without adding this")]
     }
 
     async fn accept(
@@ -864,22 +910,23 @@ impl WizardStep<AppState> for GenerateStep {
 // Shared pickers
 // ---------------------------------------------------------------------------
 
-/// The shared faction picker, parameterized by `link_return` (mirrors location's
-/// `FactionLinkStep`). It serves four link points:
+/// The single-value faction picker, parameterized by `link_return` (mirrors location's
+/// `FactionLinkStep`). It serves two link points (spec §5.3):
 /// - **liege** (houses vassal/lord): mandatory, free-typed name accepted → loyalty.
 /// - **patron** (establishments/religion): optional grounding → ambition.
-/// - **allies** / **rivals** (tail): repeatable per D4 — link one and stay to link
-///   another; `done` finishes the list. allies then flips in place to rivals.
+///
+/// The repeatable allies/rivals flow lives in [`RelationPickStep`] so this step never has
+/// to reason about a `Stay`-loop or accumulating lists (code-review M2).
 struct FactionPickStep;
 
 fn faction_pick_mode(data: &FactionWizardData) -> &'static str {
-    data.link_return.unwrap_or("patron")
+    data.link_return.unwrap_or(MODE_PATRON)
 }
 
 #[async_trait]
 impl WizardStep<AppState> for FactionPickStep {
     fn id(&self) -> &'static str {
-        "faction_pick"
+        STEP_FACTION_PICK
     }
 
     fn summary(&self) -> &'static str {
@@ -887,14 +934,14 @@ impl WizardStep<AppState> for FactionPickStep {
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
-        let d = faction_data(data);
-        match faction_pick_mode(d) {
-            "liege" => doc()
+        if faction_pick_mode(faction_data(data)) == MODE_LIEGE {
+            doc()
                 .with_block(heading(2, "Create Faction — Liege"))
                 .with_block(paragraph_text(
                     "Who is this house sworn to? Start typing to select a Great House, or type a new name (required).",
-                )),
-            "patron" => doc()
+                ))
+        } else {
+            doc()
                 .with_block(heading(2, "Create Faction — Patron / Charter"))
                 .with_block(paragraph_with_inlines(vec![
                     text_node(
@@ -902,53 +949,28 @@ impl WizardStep<AppState> for FactionPickStep {
                     ),
                     command_ref("skip", "skip"),
                     text_node(" for none."),
-                ])),
-            mode => {
-                let (title, noun) = if mode == "rivals" {
-                    ("Create Faction — Rivals", "a rival faction")
-                } else {
-                    ("Create Faction — Allies", "an ally faction")
-                };
-                let linked = if mode == "rivals" { &d.rivals } else { &d.allies };
-                let mut document = doc().with_block(heading(2, title));
-                document = document.with_block(paragraph_with_inlines(vec![
-                    text_node(format!("Link {noun} (type to search) — link as many as you like, or ")),
-                    command_ref("done", "done"),
-                    text_node(" when finished."),
-                ]));
-                if !linked.is_empty() {
-                    document = document
-                        .with_block(paragraph_text(format!("Linked so far: {}.", linked.join(", "))));
-                }
-                document
-            }
+                ]))
         }
     }
 
     fn choices(&self, data: &WizardData) -> Vec<WizardChoice> {
-        match faction_pick_mode(faction_data(data)) {
-            // Mandatory: typeahead-driven, no listed action.
-            "liege" => Vec::new(),
-            "patron" => vec![skip_choice("No patron; leave it open")],
-            // allies / rivals: `done` finishes the repeatable picker (link several first).
-            _ => vec![WizardChoice::new("done", "done").with_help("Finish linking")],
+        // Liege is mandatory (typeahead-driven, no listed action); patron may be skipped.
+        if faction_pick_mode(faction_data(data)) == MODE_LIEGE {
+            Vec::new()
+        } else {
+            vec![skip_choice("No patron; leave it open")]
         }
     }
 
     fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
         let d = faction_data(data);
         let mut out = entity_suggestions(&d.factions, input);
-        let query = input.trim().to_ascii_lowercase();
-        // The trailing action depends on the mode; liege has none (mandatory).
-        let action = match faction_pick_mode(d) {
-            "liege" => None,
-            "patron" => Some("skip"),
-            _ => Some("done"),
-        };
-        if let Some(token) = action
-            && (query.is_empty() || token.starts_with(&query))
-        {
-            out.push(WizardChoice::new(token, token));
+        // Liege is mandatory, so it offers no trailing action; patron offers `skip`.
+        if faction_pick_mode(d) == MODE_PATRON {
+            let query = input.trim().to_ascii_lowercase();
+            if query.is_empty() || "skip".starts_with(&query) {
+                out.push(WizardChoice::new("skip", "skip"));
+            }
         }
         out
     }
@@ -960,52 +982,117 @@ impl WizardStep<AppState> for FactionPickStep {
         _state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        let mode = faction_pick_mode(faction_data(d));
-
-        match mode {
-            "liege" => {
-                if trimmed.is_empty() {
-                    // Mandatory: re-prompt rather than advancing without a liege.
-                    return Ok(WizardTransition::Stay);
-                }
-                let name = resolve_link_name(&faction_data(d).factions, trimmed, "factions")?;
-                faction_data_mut(d).liege = Some(name);
-                Ok(WizardTransition::Goto("loyalty_type"))
+        if faction_pick_mode(faction_data(d)) == MODE_LIEGE {
+            if trimmed.is_empty() {
+                // Mandatory: re-prompt rather than advancing without a liege.
+                return Ok(WizardTransition::Stay);
             }
-            "patron" => {
-                let data = faction_data_mut(d);
-                if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
-                    data.patron = None;
-                } else {
-                    let name = resolve_link_name(&data.factions, trimmed, "factions")?;
-                    faction_data_mut(d).patron = Some(name);
-                }
-                Ok(WizardTransition::Goto("ambition"))
-            }
-            // Repeatable allies/rivals: link one and stay; `done` finishes the list.
-            _ => {
-                let finished = trimmed.is_empty() || trimmed.eq_ignore_ascii_case("done");
-                if finished {
-                    return Ok(if mode == "rivals" {
-                        WizardTransition::Goto("generate")
-                    } else {
-                        // allies finished → flip the same step in place to rivals.
-                        faction_data_mut(d).link_return = Some("rivals");
-                        WizardTransition::Stay
-                    });
-                }
-                let name = resolve_link_name(&faction_data(d).factions, trimmed, "factions")?;
-                let data = faction_data_mut(d);
-                let list = if mode == "rivals" {
-                    &mut data.rivals
-                } else {
-                    &mut data.allies
-                };
-                add_link(list, &name);
-                // Stay on the step to link another.
-                Ok(WizardTransition::Stay)
-            }
+            let name = resolve_link_name(&faction_data(d).factions, trimmed, "factions")?;
+            faction_data_mut(d).liege = Some(name);
+            return Ok(WizardTransition::Goto(STEP_LOYALTY_TYPE));
         }
+        // Patron (optional grounding): resolve the owned name first, then take a single
+        // `_mut` borrow — no re-borrow dance (code-review L2).
+        let patron = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+            None
+        } else {
+            Some(resolve_link_name(&faction_data(d).factions, trimmed, "factions")?)
+        };
+        faction_data_mut(d).patron = patron;
+        Ok(WizardTransition::Goto(STEP_AMBITION))
+    }
+}
+
+/// The repeatable allies → rivals picker (design D4). Entered in `allies` mode via
+/// [`enter_relation_pick`]: it links one faction and *stays* so the GM can link several;
+/// `done` finishes the allies list and flips the same step in place to `rivals`; `done`
+/// again generates. Split out of [`FactionPickStep`] so its `Stay`-loop and accumulating
+/// "Linked so far" state never entangle with the single-value liege/patron picker
+/// (code-review M2/H3). Its mode lives in `relation_mode`, distinct from `link_return`.
+struct RelationPickStep;
+
+fn relation_pick_mode(data: &FactionWizardData) -> &'static str {
+    data.relation_mode.unwrap_or(MODE_ALLIES)
+}
+
+#[async_trait]
+impl WizardStep<AppState> for RelationPickStep {
+    fn id(&self) -> &'static str {
+        STEP_RELATION_PICK
+    }
+
+    fn summary(&self) -> &'static str {
+        "Type to search your factions by name; an unmatched name is accepted as-is."
+    }
+
+    fn prompt(&self, data: &WizardData) -> OutputDoc {
+        let d = faction_data(data);
+        let rivals = relation_pick_mode(d) == MODE_RIVALS;
+        let (title, noun) = if rivals {
+            ("Create Faction — Rivals", "a rival faction")
+        } else {
+            ("Create Faction — Allies", "an ally faction")
+        };
+        let linked = if rivals { &d.rivals } else { &d.allies };
+        let mut document = doc().with_block(heading(2, title));
+        document = document.with_block(paragraph_with_inlines(vec![
+            text_node(format!(
+                "Link {noun} (type to search) — link as many as you like, or "
+            )),
+            command_ref("done", "done"),
+            text_node(" when finished."),
+        ]));
+        if !linked.is_empty() {
+            document = document
+                .with_block(paragraph_text(format!("Linked so far: {}.", linked.join(", "))));
+        }
+        document
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        // allies / rivals are repeatable, so the finishing action is `done` (not `skip`).
+        vec![WizardChoice::new("done", "done").with_help("Finish linking")]
+    }
+
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        let d = faction_data(data);
+        let mut out = entity_suggestions(&d.factions, input);
+        let query = input.trim().to_ascii_lowercase();
+        if query.is_empty() || "done".starts_with(&query) {
+            out.push(WizardChoice::new("done", "done"));
+        }
+        out
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        _state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        let trimmed = input.trim();
+        let rivals = relation_pick_mode(faction_data(d)) == MODE_RIVALS;
+
+        // `done` / empty finishes the current list.
+        if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("done") {
+            return Ok(if rivals {
+                WizardTransition::Goto(STEP_GENERATE)
+            } else {
+                // allies finished → flip the same step in place to rivals.
+                faction_data_mut(d).relation_mode = Some(MODE_RIVALS);
+                WizardTransition::Stay
+            });
+        }
+        let name = resolve_link_name(&faction_data(d).factions, trimmed, "factions")?;
+        let data = faction_data_mut(d);
+        let list = if rivals {
+            &mut data.rivals
+        } else {
+            &mut data.allies
+        };
+        add_link(list, &name);
+        // Stay on the step to link another.
+        Ok(WizardTransition::Stay)
     }
 }
 
@@ -1015,7 +1102,7 @@ struct NpcPickStep;
 #[async_trait]
 impl WizardStep<AppState> for NpcPickStep {
     fn id(&self) -> &'static str {
-        "npc_pick"
+        STEP_NPC_PICK
     }
 
     fn summary(&self) -> &'static str {
@@ -1064,8 +1151,8 @@ impl WizardStep<AppState> for NpcPickStep {
             let name = resolve_link_name(&faction_data(d).npcs, trimmed, "npcs")?;
             faction_data_mut(d).leader = Some(name);
         }
-        // Leader done → the (repeatable) allies picker.
-        enter_faction_pick(d, state, "allies").await
+        // Leader done → the (repeatable) allies → rivals picker.
+        enter_relation_pick(d, state).await
     }
 }
 
@@ -1075,7 +1162,7 @@ struct GodPickStep;
 #[async_trait]
 impl WizardStep<AppState> for GodPickStep {
     fn id(&self) -> &'static str {
-        "god_pick"
+        STEP_GOD_PICK
     }
 
     fn summary(&self) -> &'static str {
@@ -1115,7 +1202,7 @@ impl WizardStep<AppState> for GodPickStep {
         }
         let name = resolve_link_name(&faction_data(d).gods, trimmed, "gods")?;
         faction_data_mut(d).god = Some(name);
-        Ok(WizardTransition::Goto("mandate"))
+        Ok(WizardTransition::Goto(STEP_MANDATE))
     }
 }
 
@@ -1153,6 +1240,7 @@ impl FactionWizard {
                 Arc::new(GenerateStep),
                 // Shared pickers (parameterized by link_return / loaded on entry)
                 Arc::new(FactionPickStep),
+                Arc::new(RelationPickStep),
                 Arc::new(NpcPickStep),
                 Arc::new(GodPickStep),
             ],
@@ -1208,53 +1296,6 @@ impl Wizard<AppState> for FactionWizard {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Numbered, clickable choices from a label slice: `["a","b"]` → `1: a`/`2: b` with
-/// tokens `1`/`2`. (Duplicated from the location wizard per spec §5.3.)
-fn numbered_choices(labels: &[&str]) -> Vec<WizardChoice> {
-    labels
-        .iter()
-        .enumerate()
-        .map(|(i, label)| WizardChoice::new(format!("{}: {label}", i + 1), (i + 1).to_string()))
-        .collect()
-}
-
-/// Map a numeric token (`1`-based) to its value in a parallel slice. (Duplicated from
-/// the location wizard per spec §5.3.)
-fn pick_value<'a>(input: &str, values: &[&'a str]) -> Option<&'a str> {
-    let n = input.parse::<usize>().ok()?;
-    if (1..=values.len()).contains(&n) {
-        Some(values[n - 1])
-    } else {
-        None
-    }
-}
-
-/// The shared `skip` action choice.
-fn skip_choice(help: &'static str) -> WizardChoice {
-    WizardChoice::new("skip", "skip").with_help(help)
-}
-
-/// An optional-free-text step's prompt: a heading, the body, and a `skip` link.
-fn optional_text_prompt(title: &str, body: &str) -> OutputDoc {
-    doc()
-        .with_block(heading(2, title))
-        .with_block(paragraph_with_inlines(vec![
-            text_node(format!("{body} Or ")),
-            command_ref("skip", "skip"),
-            text_node(" to move on."),
-        ]))
-}
-
-/// Normalize an optional-text submission: trim, and treat empty / `skip` as `None`.
-fn optional_text(input: &str) -> Option<String> {
-    let trimmed = input.trim();
-    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
-        None
-    } else {
-        Some(trimmed.to_string())
-    }
-}
-
 /// Append a link name to a list, deduping case-insensitively (the repeatable
 /// allies/rivals pickers can re-enter the same name). Returns whether it was added.
 fn add_link(list: &mut Vec<String>, name: &str) -> bool {
@@ -1292,18 +1333,13 @@ fn brand_phrase(token: &str) -> &'static str {
 }
 
 /// Pick a loyalty type at random (option `0`); always resolves to a value (design §6).
-/// Seeded off the wall clock to avoid a new dependency — randomness need not be strong.
+/// Uses the engine's weak wall-clock RNG — randomness need not be strong here.
 fn random_loyalty() -> &'static str {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let nanos = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.subsec_nanos())
-        .unwrap_or(0);
-    LOYALTY_TYPES[(nanos as usize) % LOYALTY_TYPES.len()]
+    LOYALTY_TYPES[wizard::weak_random_index(LOYALTY_TYPES.len())]
 }
 
-/// Load the linkable factions (read-only) into the accumulator and jump to the shared
-/// faction picker in the given mode (liege / patron / allies / rivals).
+/// Load the linkable factions (read-only) into the accumulator and jump to the
+/// single-value faction picker in the given mode (liege / patron).
 async fn enter_faction_pick(
     d: &mut WizardData,
     state: &AppState,
@@ -1313,21 +1349,43 @@ async fn enter_faction_pick(
     let data = faction_data_mut(d);
     data.factions = factions;
     data.link_return = Some(mode);
-    Ok(WizardTransition::Goto("faction_pick"))
+    Ok(WizardTransition::Goto(STEP_FACTION_PICK))
+}
+
+/// Reset the repeatable relation sub-flow to a clean `allies` start: clear any prior
+/// allies/rivals so re-entering after a `back` restarts fresh rather than re-rendering
+/// stale links. `back` rolls back the cursor only, not the accumulator (code-review H3).
+fn begin_relations(data: &mut FactionWizardData) {
+    data.relation_mode = Some(MODE_ALLIES);
+    data.allies.clear();
+    data.rivals.clear();
+}
+
+/// Load the linkable factions (read-only) and jump to the repeatable relation picker,
+/// always starting in `allies` mode with the lists reset (see [`begin_relations`]).
+async fn enter_relation_pick(
+    d: &mut WizardData,
+    state: &AppState,
+) -> Result<WizardTransition, String> {
+    let factions = load_linkable_factions(state).await?;
+    let data = faction_data_mut(d);
+    data.factions = factions;
+    begin_relations(data);
+    Ok(WizardTransition::Goto(STEP_RELATION_PICK))
 }
 
 /// Load the linkable NPCs (read-only) into the accumulator and jump to the leader picker.
 async fn enter_npc_pick(d: &mut WizardData, state: &AppState) -> Result<WizardTransition, String> {
     let npcs = load_linkable_npcs(state).await?;
     faction_data_mut(d).npcs = npcs;
-    Ok(WizardTransition::Goto("npc_pick"))
+    Ok(WizardTransition::Goto(STEP_NPC_PICK))
 }
 
 /// Load the linkable gods (read-only) into the accumulator and jump to the god picker.
 async fn enter_god_pick(d: &mut WizardData, state: &AppState) -> Result<WizardTransition, String> {
     let gods = load_linkable_gods(state).await?;
     faction_data_mut(d).gods = gods;
-    Ok(WizardTransition::Goto("god_pick"))
+    Ok(WizardTransition::Goto(STEP_GOD_PICK))
 }
 
 /// Run wizard generation into the accumulator. Factions are always structured (there
@@ -1350,9 +1408,12 @@ async fn generate_faction_into(d: &mut FactionWizardData, state: &AppState) -> R
 }
 
 /// Flatten the locked answers into a single bias string so a later `faction reroll
-/// <field>` reuses the GM's intent (the reroll service merges `seed_prompt`).
-fn build_seed_prompt(d: &FactionWizardData) -> Option<String> {
-    Some(build_faction_wizard_user_prompt(&d.as_inputs()))
+/// <field>` reuses the GM's intent (the reroll service merges `seed_prompt`). Always
+/// present — every faction wizard run is structured (unlike location's freeform lane,
+/// whose equivalent can be `None`), so this returns `String` and the caller wraps it
+/// (code-review L4).
+fn build_seed_prompt(d: &FactionWizardData) -> String {
+    build_faction_wizard_user_prompt(&d.as_inputs())
 }
 
 /// Build the editable `FactionDraft` from the accumulator's generated seed + locked
@@ -1364,7 +1425,7 @@ fn build_faction_draft(d: &FactionWizardData, id: String) -> Option<FactionDraft
     let seed = d.seed.clone()?;
     Some(FactionDraftSession {
         id,
-        seed_prompt: build_seed_prompt(d),
+        seed_prompt: Some(build_seed_prompt(d)),
         slug: slugify(&seed.name),
         name: seed.name,
         vault_path: String::new(),
@@ -1498,6 +1559,39 @@ mod tests {
     }
 
     #[test]
+    fn menu_labels_stay_parallel_to_their_canonical_value_arrays() {
+        // The `*_LABELS` arrays live in this file; the value arrays are the canonical vocab
+        // in `ai_generation`/`utils`. `accept` shows label[i] but stores VALUES[i], so a
+        // reorder *there* would silently mislabel every menu with no compile error. Pin
+        // length + a representative index mapping per pair (code-review H1). Labels begin
+        // with their token's readable form, so `starts_with` is a cheap order check (skip
+        // the two underscore tokens — `secret_knowledge`, `shared_enemy` — whose labels
+        // render with a space).
+        assert_eq!(POWER_BASE_LABELS.len(), LORD_TYPES.len());
+        assert!(POWER_BASE_LABELS[0].starts_with(LORD_TYPES[0])); // chokepoint
+        assert!(POWER_BASE_LABELS[5].starts_with(LORD_TYPES[5])); // extraction
+
+        assert_eq!(CONTROL_LABELS.len(), CONTROL_TYPES.len());
+        assert!(CONTROL_LABELS[0].starts_with(CONTROL_TYPES[0])); // craft
+        assert!(CONTROL_LABELS[4].starts_with(CONTROL_TYPES[4])); // knowledge
+
+        assert_eq!(MANDATE_LABELS.len(), MANDATES.len());
+        assert!(MANDATE_LABELS[0].starts_with(MANDATES[0])); // devotion
+        assert!(MANDATE_LABELS[2].starts_with(MANDATES[2])); // conquest
+        assert!(MANDATE_LABELS[5].starts_with(MANDATES[5])); // cycle
+
+        assert_eq!(REACH_LABELS.len(), REACH.len());
+        assert!(REACH_LABELS[0].starts_with(REACH[0])); // local
+        assert!(REACH_LABELS[1].starts_with(REACH[1])); // regional
+        assert!(REACH_LABELS[2].starts_with(REACH[2])); // realm(-spanning)
+
+        assert_eq!(LOYALTY_LABELS.len(), LOYALTY_TYPES.len());
+        assert!(LOYALTY_LABELS[0].starts_with(LOYALTY_TYPES[0])); // reward
+        assert!(LOYALTY_LABELS[5].starts_with(LOYALTY_TYPES[5])); // oath
+        assert!(LOYALTY_LABELS[6].starts_with(LOYALTY_TYPES[6])); // secret
+    }
+
+    #[test]
     fn brand_labels_cover_all_house_brands() {
         assert_eq!(brand_labels().len(), HOUSE_BRANDS.len());
         // "martial" reads as "martial might" so the menu phrase is natural.
@@ -1522,9 +1616,22 @@ mod tests {
         );
     }
 
+    /// Accumulator for the single-value faction picker (liege / patron), via `link_return`.
     fn pick_data(mode: &'static str, factions: &[(&str, &str)]) -> WizardData {
         WizardData::new(FactionWizardData {
             link_return: Some(mode),
+            factions: factions
+                .iter()
+                .map(|(name, slug)| (name.to_string(), slug.to_string()))
+                .collect(),
+            ..Default::default()
+        })
+    }
+
+    /// Accumulator for the repeatable relation picker (allies / rivals), via `relation_mode`.
+    fn relation_data(mode: &'static str, factions: &[(&str, &str)]) -> WizardData {
+        WizardData::new(FactionWizardData {
+            relation_mode: Some(mode),
             factions: factions
                 .iter()
                 .map(|(name, slug)| (name.to_string(), slug.to_string()))
@@ -1537,7 +1644,7 @@ mod tests {
     fn liege_mode_is_mandatory_no_skip() {
         // The liege link is required, so neither the choices nor the typeahead expose
         // a `skip` or `done`.
-        let data = pick_data("liege", &[("House Vaurel", "house-vaurel")]);
+        let data = pick_data(MODE_LIEGE, &[("House Vaurel", "house-vaurel")]);
         assert!(FactionPickStep.choices(&data).is_empty());
         let tokens: Vec<String> = FactionPickStep
             .suggest("", &data)
@@ -1551,7 +1658,7 @@ mod tests {
 
     #[test]
     fn patron_mode_offers_skip_and_typeahead() {
-        let data = pick_data("patron", &[("House Vaurel", "house-vaurel")]);
+        let data = pick_data(MODE_PATRON, &[("House Vaurel", "house-vaurel")]);
         let choice_tokens: Vec<String> = FactionPickStep
             .choices(&data)
             .into_iter()
@@ -1568,18 +1675,18 @@ mod tests {
     }
 
     #[test]
-    fn allies_mode_offers_done() {
+    fn relation_picker_is_repeatable_with_done_not_skip() {
         // Allies/rivals are repeatable (link several), so the finishing action is `done`,
         // not `skip` — and `skip` must not linger as a stale alias.
-        let data = pick_data("allies", &[("House Vey", "house-vey")]);
-        let choice_tokens: Vec<String> = FactionPickStep
+        let data = relation_data(MODE_ALLIES, &[("House Vey", "house-vey")]);
+        let choice_tokens: Vec<String> = RelationPickStep
             .choices(&data)
             .into_iter()
             .map(|choice| choice.token)
             .collect();
         assert!(choice_tokens.contains(&"done".to_string()));
         assert!(!choice_tokens.contains(&"skip".to_string()));
-        let suggest_tokens: Vec<String> = FactionPickStep
+        let suggest_tokens: Vec<String> = RelationPickStep
             .suggest("", &data)
             .into_iter()
             .map(|choice| choice.token)
@@ -1587,6 +1694,32 @@ mod tests {
         assert!(suggest_tokens.contains(&"House Vey".to_string()));
         assert!(suggest_tokens.contains(&"done".to_string()));
         assert!(!suggest_tokens.contains(&"skip".to_string()));
+    }
+
+    #[test]
+    fn relation_picker_defaults_to_allies_and_flips_to_rivals_title() {
+        // Unset mode reads as allies; the rivals title appears only once flipped.
+        let allies = relation_data(MODE_ALLIES, &[("House Vey", "house-vey")]);
+        assert_eq!(relation_pick_mode(faction_data(&allies)), MODE_ALLIES);
+        let rivals = relation_data(MODE_RIVALS, &[]);
+        assert_eq!(relation_pick_mode(faction_data(&rivals)), MODE_RIVALS);
+    }
+
+    #[test]
+    fn begin_relations_resets_lists_and_mode_on_reentry() {
+        // Re-entering the relation picker (e.g. after a `back` out and back in) must start
+        // clean: prior allies/rivals are cleared and the mode resets to allies, since
+        // `back` rolls back the cursor only, not the accumulator (H3).
+        let mut d = FactionWizardData {
+            relation_mode: Some(MODE_RIVALS),
+            allies: vec!["House Vey".to_string()],
+            rivals: vec!["The Dust Choir".to_string()],
+            ..Default::default()
+        };
+        begin_relations(&mut d);
+        assert_eq!(d.relation_mode, Some(MODE_ALLIES));
+        assert!(d.allies.is_empty());
+        assert!(d.rivals.is_empty());
     }
 
     #[test]
@@ -1599,11 +1732,45 @@ mod tests {
             want: Some("Corner the salt trade".to_string()),
             ..Default::default()
         };
-        let prompt = build_seed_prompt(&d).expect("seed prompt");
+        let prompt = build_seed_prompt(&d);
         assert!(prompt.contains("major_vassal"));
         assert!(prompt.contains("extraction"));
         // The liege is emitted as an `@factions/` probe so its metadata is pulled in.
         assert!(prompt.contains("@factions/House Vaurel"));
         assert!(prompt.contains("Corner the salt trade"));
+    }
+
+    #[test]
+    fn every_declared_step_id_is_registered_once() {
+        // The single id registry. Every `Goto`/`enter_*` target is one of these consts, so
+        // asserting the declared set equals the registered set proves no route can dangle
+        // (the engine errors on an unknown `Goto` only at runtime — this catches it in CI,
+        // code-review H2/M3).
+        const ALL_STEP_IDS: [&str; 19] = [
+            STEP_CATEGORY,
+            STEP_HOUSES_LAYER,
+            STEP_POWER_BASE,
+            STEP_POWER_SPECIFICS,
+            STEP_BRAND,
+            STEP_LOYALTY_TYPE,
+            STEP_EST_KIND,
+            STEP_CONTROL_TYPE,
+            STEP_CONTROL_SPECIFICS,
+            STEP_REL_KIND,
+            STEP_MANDATE,
+            STEP_MANDATE_SPECIFICS,
+            STEP_REACH,
+            STEP_AMBITION,
+            STEP_GENERATE,
+            STEP_FACTION_PICK,
+            STEP_RELATION_PICK,
+            STEP_NPC_PICK,
+            STEP_GOD_PICK,
+        ];
+        let registered: Vec<&str> = FactionWizard::new().steps().iter().map(|s| s.id()).collect();
+        let unique: std::collections::HashSet<&str> = registered.iter().copied().collect();
+        assert_eq!(unique.len(), registered.len(), "duplicate step id registered");
+        let declared: std::collections::HashSet<&str> = ALL_STEP_IDS.iter().copied().collect();
+        assert_eq!(declared, unique, "declared step ids must match the registered set");
     }
 }

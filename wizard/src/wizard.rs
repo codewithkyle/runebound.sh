@@ -59,7 +59,10 @@ pub enum WizardTransition {
     Next,
     /// Jump to a step by id (supports review loops).
     Goto(&'static str),
-    /// Step backward to the previous step (restoring its accumulated answer).
+    /// Step backward to the previous step. Restores the *cursor* only — the accumulator
+    /// is **not** rolled back, so a step that parks transient sub-state in the accumulator
+    /// (a mode flag, an "awaiting custom input" toggle, an accumulating list) must reset
+    /// that state when it is (re)entered rather than assume `Back` clears it.
     Back,
     /// Run `Wizard::finalize` and exit.
     Complete,

@@ -85,6 +85,54 @@ pub fn action_row(choices: &[WizardChoice]) -> OutputBlock {
     paragraph_with_inlines(inlines)
 }
 
+/// Numbered, clickable choices from a label slice: `["a","b"]` → `1: a`/`2: b` with
+/// tokens `1`/`2`. The 1-based token pairs with [`pick_value`] over a parallel value
+/// slice. Shared by the menu-style wizard steps (location, faction).
+pub fn numbered_choices(labels: &[&str]) -> Vec<WizardChoice> {
+    labels
+        .iter()
+        .enumerate()
+        .map(|(i, label)| WizardChoice::new(format!("{}: {label}", i + 1), (i + 1).to_string()))
+        .collect()
+}
+
+/// Map a numeric token (`1`-based, as produced by [`numbered_choices`]) to its value
+/// in a parallel slice. `None` for a non-numeric or out-of-range token.
+pub fn pick_value<'a>(input: &str, values: &[&'a str]) -> Option<&'a str> {
+    let n = input.parse::<usize>().ok()?;
+    if (1..=values.len()).contains(&n) {
+        Some(values[n - 1])
+    } else {
+        None
+    }
+}
+
+/// The shared `skip` action choice with a one-line help description.
+pub fn skip_choice(help: &'static str) -> WizardChoice {
+    WizardChoice::new("skip", "skip").with_help(help)
+}
+
+/// Normalize an optional-text submission: trim, and treat empty / `skip` as `None`.
+pub fn optional_text(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+        None
+    } else {
+        Some(trimmed.to_string())
+    }
+}
+
+/// An optional-free-text step's prompt: a heading, the body, and a clickable `skip`.
+pub fn optional_text_prompt(title: &str, body: &str) -> OutputDoc {
+    doc()
+        .with_block(heading(2, title))
+        .with_block(paragraph_with_inlines(vec![
+            text_node(format!("{body} Or ")),
+            command_ref("skip", "skip"),
+            text_node(" to move on."),
+        ]))
+}
+
 /// Flatten a doc to plain text for the `output` fallback field (terminal history
 /// and the no-`output_doc` render path). Keeps headings, renders command refs as
 /// their label, and skips images.
@@ -151,5 +199,32 @@ mod tests {
     fn filter_choices_empty_prefix_keeps_all() {
         let choices = vec![WizardChoice::new("generate", "generate")];
         assert_eq!(filter_choices(&choices, "").len(), 1);
+    }
+
+    #[test]
+    fn numbered_choices_are_one_based_with_numeric_tokens() {
+        let choices = numbered_choices(&["raw", "refined"]);
+        assert_eq!(choices.len(), 2);
+        assert_eq!(choices[0].label, "1: raw");
+        assert_eq!(choices[0].token, "1");
+        assert_eq!(choices[1].token, "2");
+    }
+
+    #[test]
+    fn pick_value_maps_one_based_index_and_rejects_out_of_range() {
+        let values = ["a", "b", "c"];
+        assert_eq!(pick_value("1", &values), Some("a"));
+        assert_eq!(pick_value("3", &values), Some("c"));
+        assert_eq!(pick_value("0", &values), None);
+        assert_eq!(pick_value("4", &values), None);
+        assert_eq!(pick_value("x", &values), None);
+    }
+
+    #[test]
+    fn optional_text_trims_and_treats_empty_or_skip_as_none() {
+        assert_eq!(optional_text("  Ser Aldric "), Some("Ser Aldric".to_string()));
+        assert_eq!(optional_text("   "), None);
+        assert_eq!(optional_text("skip"), None);
+        assert_eq!(optional_text("SKIP"), None);
     }
 }

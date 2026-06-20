@@ -22,6 +22,22 @@ use runebound_models::CommandResponse;
 /// failed. Mirrors the host's own `CommandResult` alias (same underlying type).
 pub type CommandResult = Result<Option<CommandResponse>, String>;
 
+/// A weak, dependency-free random index in `0..len`, seeded off the wall clock. For
+/// cosmetic "pick one at random" affordances (a default that needn't be unpredictable),
+/// never anything security- or fairness-sensitive. Returns 0 for an empty range. Hoisted
+/// here so wizards stop re-implementing the nanos trick (code-review L3).
+pub fn weak_random_index(len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|elapsed| elapsed.subsec_nanos())
+        .unwrap_or(0);
+    (nanos as usize) % len
+}
+
 pub use registry::WizardRegistry;
 pub use runtime::{WizardHost, active_step_suggestions, start_wizard, try_execute_active_wizard};
 pub use session::{WizardData, WizardSession};

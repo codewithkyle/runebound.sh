@@ -713,7 +713,7 @@ fn reroll_room(d: &mut DungeonWizardData, rest: &str) -> Result<(), String> {
     let Some(plan) = d.plan.as_mut() else {
         return Err("no content plan to edit".to_string());
     };
-    let pick = SETTABLE_ROOM_TYPES[(plan_seed() as usize) % SETTABLE_ROOM_TYPES.len()];
+    let pick = SETTABLE_ROOM_TYPES[wizard::weak_random_index(SETTABLE_ROOM_TYPES.len())];
     plan.anchors[index] = pick.to_string();
     Ok(())
 }

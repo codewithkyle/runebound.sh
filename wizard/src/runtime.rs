@@ -380,6 +380,7 @@ mod tests {
             let mut registry = WizardRegistry::new();
             registry.register(Arc::new(TestWizard::new()));
             registry.register(Arc::new(StayWizard::new()));
+            registry.register(Arc::new(BackWizard::new()));
             Self {
                 registry,
                 session: Mutex::new(WizardSession::default()),
@@ -621,6 +622,111 @@ mod tests {
         assert_eq!(
             data(&active(&session).data).picked.as_deref(),
             Some("/picked")
+        );
+    }
+
+    /// `a` then `b`: `a` records its input and advances (`Next`); `b` records and stays.
+    /// Lets a test build history via `Next`, then `back`, to pin the engine's contract
+    /// that `Back` restores the cursor but does *not* roll back the accumulator.
+    struct AStep;
+    #[async_trait]
+    impl WizardStep<FakeHost> for AStep {
+        fn id(&self) -> &'static str {
+            "a"
+        }
+        fn prompt(&self, _data: &WizardData) -> OutputDoc {
+            doc().with_block(paragraph_text("a"))
+        }
+        async fn accept(
+            &self,
+            input: &str,
+            d: &mut WizardData,
+            _host: &FakeHost,
+        ) -> Result<WizardTransition, String> {
+            d.downcast_mut::<TestData>().expect("test data").picked = Some(input.to_string());
+            Ok(WizardTransition::Next)
+        }
+    }
+
+    struct BStep;
+    #[async_trait]
+    impl WizardStep<FakeHost> for BStep {
+        fn id(&self) -> &'static str {
+            "b"
+        }
+        fn prompt(&self, _data: &WizardData) -> OutputDoc {
+            doc().with_block(paragraph_text("b"))
+        }
+        async fn accept(
+            &self,
+            input: &str,
+            d: &mut WizardData,
+            _host: &FakeHost,
+        ) -> Result<WizardTransition, String> {
+            d.downcast_mut::<TestData>().expect("test data").picked = Some(input.to_string());
+            Ok(WizardTransition::Stay)
+        }
+    }
+
+    struct BackWizard {
+        steps: Vec<Arc<dyn WizardStep<FakeHost>>>,
+    }
+    impl BackWizard {
+        fn new() -> Self {
+            Self {
+                steps: vec![Arc::new(AStep), Arc::new(BStep)],
+            }
+        }
+    }
+    #[async_trait]
+    impl Wizard<FakeHost> for BackWizard {
+        fn id(&self) -> &'static str {
+            "backw"
+        }
+        fn title(&self) -> &'static str {
+            "BackW"
+        }
+        fn steps(&self) -> &[Arc<dyn WizardStep<FakeHost>>] {
+            &self.steps
+        }
+        async fn seed(&self, _host: &FakeHost) -> Result<WizardData, String> {
+            Ok(WizardData::new(TestData::default()))
+        }
+        async fn finalize(&self, _host: &FakeHost, _d: &WizardData) -> CommandResult {
+            Ok(Some(ok_response_with_doc("done".to_string(), doc())))
+        }
+    }
+
+    #[tokio::test]
+    async fn back_restores_the_cursor_but_not_the_accumulator() {
+        let host = FakeHost::new(NativeOutcome::Cancelled);
+        start_wizard("backw", &host).await.expect("start");
+        // Advance off step `a` (records "first", `Next` → cursor 1, history [0]).
+        try_execute_active_wizard("first", &host)
+            .await
+            .expect("handled")
+            .expect("response");
+        {
+            let session = host.session.lock().await;
+            assert_eq!(active(&session).cursor, 1);
+            assert_eq!(
+                data(&active(&session).data).picked.as_deref(),
+                Some("first")
+            );
+        }
+        // `back` pops history to step `a`...
+        try_execute_active_wizard("back", &host)
+            .await
+            .expect("handled")
+            .expect("response");
+        let session = host.session.lock().await;
+        assert_eq!(active(&session).cursor, 0);
+        assert!(active(&session).history.is_empty());
+        // ...but the accumulator is NOT rolled back — the value recorded on `a` survives.
+        // This documents the engine contract relied on by the wizards' reset-on-entry.
+        assert_eq!(
+            data(&active(&session).data).picked.as_deref(),
+            Some("first")
         );
     }
 }
