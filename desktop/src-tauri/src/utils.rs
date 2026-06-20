@@ -6,8 +6,8 @@ pub use runebound_models::utils::{
     normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist, normalize_exports,
     normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
     normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_sex, normalize_unknown_list, normalize_unknown_text,
-    parse_list_csv,
+    normalize_location_kind_type, normalize_loyalty_type, normalize_sex, normalize_unknown_list,
+    normalize_unknown_text, parse_list_csv,
 };
 
 pub fn parse_carrying_csv(value: &str) -> Vec<String> {

@@ -13,7 +13,10 @@ use crate::entities::schema::{
 use crate::services::entity_reroll::{
     EntityRerollService, FactionRerollContext, RerollFactionFieldInput,
 };
-use crate::utils::{normalize_optional_prompt, path_for_display};
+use crate::utils::{
+    normalize_faction_kind_type, normalize_loyalty_type, normalize_optional_prompt,
+    path_for_display,
+};
 use dnd_core::command::CommandClientEvent;
 use dnd_core::npc::slugify;
 use dnd_core::serialization::faction_list_from_db_text;
@@ -70,21 +73,24 @@ impl EntityDomain for FactionDomain {
             slug: row.slug,
             vault_path: path_for_display(&row.vault_path),
             kind_type: row.kind_type,
-            kind_custom: row.kind_custom,
             public_description: row.public_description,
-            true_agenda: row.true_agenda,
-            methods: row.methods,
-            leadership: row.leadership,
-            headquarters: row.headquarters,
+            reputation: row.reputation,
+            symbol_description: row.symbol_description,
+            want: row.want,
+            obstacle: row.obstacle,
+            action: row.action,
+            consequence: row.consequence,
+            leader: row.leader,
             sphere_of_influence: row.sphere_of_influence,
             resources_assets: faction_list_from_db_text(&row.resources_assets),
             allies: faction_list_from_db_text(&row.allies),
             rivals_enemies: faction_list_from_db_text(&row.rivals_enemies),
-            reputation: row.reputation,
-            current_tension: row.current_tension,
-            goals_short_term: faction_list_from_db_text(&row.goals_short_term),
-            goals_long_term: faction_list_from_db_text(&row.goals_long_term),
-            symbol_description: row.symbol_description,
+            liege: row.liege,
+            loyalty_type: row.loyalty_type,
+            // `category` (row column, D2) is derived from kind, not stored on the
+            // draft. Loading an existing row never re-subfolders it (mirrors
+            // location), so `wizard_subfoldered` is always false here.
+            wizard_subfoldered: false,
         };
         Ok(Some(EntityDetail {
             draft: DraftEnvelope::Faction(draft),
@@ -154,50 +160,28 @@ impl EntityDomain for FactionDomain {
                     draft.name = trimmed_value.to_string();
                     draft.slug = slugify(trimmed_value);
                 }
-                "kind_type" => {
-                    draft.kind_type = normalize_faction_kind_type(trimmed_value)?;
-                    if draft.kind_type == "other" && draft.kind_custom.is_none() {
-                        draft.kind_custom = Some("Unknown".to_string());
-                    }
-                }
-                "kind_custom" => draft.kind_custom = Some(trimmed_value.to_string()),
+                "kind_type" => draft.kind_type = normalize_faction_kind_type(trimmed_value)?,
                 "public_description" => draft.public_description = trimmed_value.to_string(),
-                "true_agenda" => draft.true_agenda = trimmed_value.to_string(),
-                "methods" => draft.methods = trimmed_value.to_string(),
-                "leadership" => draft.leadership = trimmed_value.to_string(),
-                "headquarters" => draft.headquarters = trimmed_value.to_string(),
+                "reputation" => draft.reputation = trimmed_value.to_string(),
+                "symbol_description" => draft.symbol_description = trimmed_value.to_string(),
+                "want" => draft.want = trimmed_value.to_string(),
+                "obstacle" => draft.obstacle = trimmed_value.to_string(),
+                "action" => draft.action = trimmed_value.to_string(),
+                "consequence" => draft.consequence = trimmed_value.to_string(),
                 "sphere_of_influence" => draft.sphere_of_influence = trimmed_value.to_string(),
                 "resources_assets" => {
                     draft.resources_assets = normalize_unknown_list(parse_list_csv(trimmed_value));
                 }
+                "leader" => draft.leader = trimmed_value.to_string(),
                 "allies" => draft.allies = normalize_unknown_list(parse_list_csv(trimmed_value)),
                 "rivals_enemies" => {
                     draft.rivals_enemies = normalize_unknown_list(parse_list_csv(trimmed_value));
                 }
-                "reputation" => draft.reputation = trimmed_value.to_string(),
-                "current_tension" => draft.current_tension = trimmed_value.to_string(),
-                "goals_short_term" => {
-                    draft.goals_short_term = normalize_unknown_list(parse_list_csv(trimmed_value));
+                "liege" => draft.liege = Some(trimmed_value.to_string()),
+                "loyalty_type" => {
+                    draft.loyalty_type = Some(normalize_loyalty_type(trimmed_value)?);
                 }
-                "goals_long_term" => {
-                    draft.goals_long_term = normalize_unknown_list(parse_list_csv(trimmed_value));
-                }
-                "symbol_description" => draft.symbol_description = trimmed_value.to_string(),
                 _ => {}
-            }
-
-            if draft.kind_type == "other"
-                && draft
-                    .kind_custom
-                    .as_ref()
-                    .is_none_or(|item| item.trim().is_empty())
-            {
-                return entity_message_response(
-                    "kind_custom is required when kind is other. use faction set kind_custom <value>.",
-                );
-            }
-            if draft.kind_type != "other" {
-                draft.kind_custom = None;
             }
 
             draft.clone()
@@ -240,21 +224,20 @@ impl EntityDomain for FactionDomain {
                     faction: FactionRerollContext {
                         name: draft.name.clone(),
                         kind_type: draft.kind_type.clone(),
-                        kind_custom: draft.kind_custom.clone(),
                         public_description: draft.public_description.clone(),
-                        true_agenda: draft.true_agenda.clone(),
-                        methods: draft.methods.clone(),
-                        leadership: draft.leadership.clone(),
-                        headquarters: draft.headquarters.clone(),
+                        reputation: draft.reputation.clone(),
+                        symbol_description: draft.symbol_description.clone(),
+                        want: draft.want.clone(),
+                        obstacle: draft.obstacle.clone(),
+                        action: draft.action.clone(),
+                        consequence: draft.consequence.clone(),
+                        leader: draft.leader.clone(),
                         sphere_of_influence: draft.sphere_of_influence.clone(),
                         resources_assets: draft.resources_assets.clone(),
                         allies: draft.allies.clone(),
                         rivals_enemies: draft.rivals_enemies.clone(),
-                        reputation: draft.reputation.clone(),
-                        current_tension: draft.current_tension.clone(),
-                        goals_short_term: draft.goals_short_term.clone(),
-                        goals_long_term: draft.goals_long_term.clone(),
-                        symbol_description: draft.symbol_description.clone(),
+                        liege: draft.liege.clone(),
+                        loyalty_type: draft.loyalty_type.clone(),
                     },
                 },
                 database.as_ref(),
@@ -262,6 +245,9 @@ impl EntityDomain for FactionDomain {
             )
             .await?;
 
+        // Only the rerollable subset is generated (D3): the relational/place fields
+        // (leader, allies, rivals, liege, loyalty_type) are never LLM-rerolled, so
+        // they have no arms here.
         match rerolled.field.as_str() {
             "name" => {
                 if let Some(value) = rerolled.value {
@@ -272,16 +258,6 @@ impl EntityDomain for FactionDomain {
             "kind_type" => {
                 if let Some(value) = rerolled.value {
                     draft.kind_type = normalize_faction_kind_type(&value)?;
-                    if draft.kind_type != "other" {
-                        draft.kind_custom = None;
-                    } else if draft.kind_custom.is_none() {
-                        draft.kind_custom = Some("Unknown".to_string());
-                    }
-                }
-            }
-            "kind_custom" => {
-                if let Some(value) = rerolled.value {
-                    draft.kind_custom = Some(value);
                 }
             }
             "public_description" => {
@@ -289,24 +265,34 @@ impl EntityDomain for FactionDomain {
                     draft.public_description = value;
                 }
             }
-            "true_agenda" => {
+            "reputation" => {
                 if let Some(value) = rerolled.value {
-                    draft.true_agenda = value;
+                    draft.reputation = value;
                 }
             }
-            "methods" => {
+            "symbol_description" => {
                 if let Some(value) = rerolled.value {
-                    draft.methods = value;
+                    draft.symbol_description = value;
                 }
             }
-            "leadership" => {
+            "want" => {
                 if let Some(value) = rerolled.value {
-                    draft.leadership = value;
+                    draft.want = value;
                 }
             }
-            "headquarters" => {
+            "obstacle" => {
                 if let Some(value) = rerolled.value {
-                    draft.headquarters = value;
+                    draft.obstacle = value;
+                }
+            }
+            "action" => {
+                if let Some(value) = rerolled.value {
+                    draft.action = value;
+                }
+            }
+            "consequence" => {
+                if let Some(value) = rerolled.value {
+                    draft.consequence = value;
                 }
             }
             "sphere_of_influence" => {
@@ -317,41 +303,6 @@ impl EntityDomain for FactionDomain {
             "resources_assets" => {
                 if let Some(value) = rerolled.list_value {
                     draft.resources_assets = value;
-                }
-            }
-            "allies" => {
-                if let Some(value) = rerolled.list_value {
-                    draft.allies = value;
-                }
-            }
-            "rivals_enemies" => {
-                if let Some(value) = rerolled.list_value {
-                    draft.rivals_enemies = value;
-                }
-            }
-            "reputation" => {
-                if let Some(value) = rerolled.value {
-                    draft.reputation = value;
-                }
-            }
-            "current_tension" => {
-                if let Some(value) = rerolled.value {
-                    draft.current_tension = value;
-                }
-            }
-            "goals_short_term" => {
-                if let Some(value) = rerolled.list_value {
-                    draft.goals_short_term = value;
-                }
-            }
-            "goals_long_term" => {
-                if let Some(value) = rerolled.list_value {
-                    draft.goals_long_term = value;
-                }
-            }
-            "symbol_description" => {
-                if let Some(value) = rerolled.value {
-                    draft.symbol_description = value;
                 }
             }
             _ => {}
@@ -381,51 +332,26 @@ impl EntityDomain for FactionDomain {
     }
 }
 
-pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
-    const FACTION_KIND_TYPES: [&str; 10] = [
-        "guild",
-        "cult",
-        "military_order",
-        "noble_house",
-        "criminal_syndicate",
-        "mercantile_league",
-        "religious_order",
-        "arcane_circle",
-        "revolutionary_cell",
-        "other",
-    ];
-    let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
-    if FACTION_KIND_TYPES.contains(&normalized.as_str()) {
-        Ok(normalized)
-    } else {
-        Err(format!(
-            "kind_type must be one of: {}",
-            FACTION_KIND_TYPES.join(", ")
-        ))
-    }
-}
-
 pub fn faction_summary_text(draft: &FactionDraftSession) -> String {
     format!(
-        "## Faction Draft\nname: {}\nslug: {}\nkind: {}\nkind_custom: {}\npublic: {}\nagenda: {}\nmethods: {}\nleadership: {}\nheadquarters: {}\ninfluence: {}\nresources: {}\nallies: {}\nrivals: {}\nreputation: {}\ntension: {}\ngoals_short: {}\ngoals_long: {}\nsymbol: {}\npath: {}",
+        "## Faction Draft\nname: {}\nslug: {}\nkind: {}\npublic: {}\nreputation: {}\nsymbol: {}\nwant: {}\nobstacle: {}\naction: {}\nconsequence: {}\nleader: {}\ninfluence: {}\nresources: {}\nallies: {}\nrivals: {}\nliege: {}\nloyalty: {}\npath: {}",
         draft.name,
         draft.slug,
         draft.kind_type,
-        draft.kind_custom.as_deref().unwrap_or("(none)"),
         draft.public_description,
-        draft.true_agenda,
-        draft.methods,
-        draft.leadership,
-        draft.headquarters,
+        draft.reputation,
+        draft.symbol_description,
+        draft.want,
+        draft.obstacle,
+        draft.action,
+        draft.consequence,
+        draft.leader,
         draft.sphere_of_influence,
         draft.resources_assets.join(", "),
         draft.allies.join(", "),
         draft.rivals_enemies.join(", "),
-        draft.reputation,
-        draft.current_tension,
-        draft.goals_short_term.join(", "),
-        draft.goals_long_term.join(", "),
-        draft.symbol_description,
+        draft.liege.as_deref().unwrap_or("(none)"),
+        draft.loyalty_type.as_deref().unwrap_or("(none)"),
         draft.vault_path,
     )
 }
@@ -435,26 +361,28 @@ pub fn faction_event_from_draft(draft: &FactionDraftSession) -> CommandClientEve
 
     let normalized_draft = FactionDraftSession {
         id: draft.id.clone(),
+        seed_prompt: draft.seed_prompt.clone(),
         name: draft.name.clone(),
         slug: draft.slug.clone(),
         vault_path: draft.vault_path.clone(),
         kind_type: draft.kind_type.clone(),
-        kind_custom: draft.kind_custom.clone(),
         public_description: normalize_unknown_text(&draft.public_description),
-        true_agenda: normalize_unknown_text(&draft.true_agenda),
-        methods: normalize_unknown_text(&draft.methods),
-        leadership: normalize_unknown_text(&draft.leadership),
-        headquarters: normalize_unknown_text(&draft.headquarters),
+        reputation: normalize_unknown_text(&draft.reputation),
+        symbol_description: normalize_unknown_text(&draft.symbol_description),
+        want: normalize_unknown_text(&draft.want),
+        obstacle: normalize_unknown_text(&draft.obstacle),
+        action: normalize_unknown_text(&draft.action),
+        consequence: normalize_unknown_text(&draft.consequence),
+        leader: normalize_unknown_text(&draft.leader),
         sphere_of_influence: normalize_unknown_text(&draft.sphere_of_influence),
         resources_assets: normalize_unknown_list(draft.resources_assets.clone()),
         allies: normalize_unknown_list(draft.allies.clone()),
         rivals_enemies: normalize_unknown_list(draft.rivals_enemies.clone()),
-        reputation: normalize_unknown_text(&draft.reputation),
-        current_tension: normalize_unknown_text(&draft.current_tension),
-        goals_short_term: normalize_unknown_list(draft.goals_short_term.clone()),
-        goals_long_term: normalize_unknown_list(draft.goals_long_term.clone()),
-        symbol_description: normalize_unknown_text(&draft.symbol_description),
-        seed_prompt: draft.seed_prompt.clone(),
+        // Relational stubs pass through as-is — the card renders Liege/Loyalty only
+        // when set, so leave None as None rather than normalizing to "Unknown".
+        liege: draft.liege.clone(),
+        loyalty_type: draft.loyalty_type.clone(),
+        wizard_subfoldered: draft.wizard_subfoldered,
     };
     let entity_card_doc = faction_entity_card(&normalized_draft, CardFooter::Show);
     CommandClientEvent::LoadFactionDraftWithCard {
