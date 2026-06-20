@@ -222,7 +222,10 @@ mod tests {
 
     #[test]
     fn optional_text_trims_and_treats_empty_or_skip_as_none() {
-        assert_eq!(optional_text("  Ser Aldric "), Some("Ser Aldric".to_string()));
+        assert_eq!(
+            optional_text("  Ser Aldric "),
+            Some("Ser Aldric".to_string())
+        );
         assert_eq!(optional_text("   "), None);
         assert_eq!(optional_text("skip"), None);
         assert_eq!(optional_text("SKIP"), None);

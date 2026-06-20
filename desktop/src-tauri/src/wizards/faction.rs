@@ -996,7 +996,11 @@ impl WizardStep<AppState> for FactionPickStep {
         let patron = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
             None
         } else {
-            Some(resolve_link_name(&faction_data(d).factions, trimmed, "factions")?)
+            Some(resolve_link_name(
+                &faction_data(d).factions,
+                trimmed,
+                "factions",
+            )?)
         };
         faction_data_mut(d).patron = patron;
         Ok(WizardTransition::Goto(STEP_AMBITION))
@@ -1043,8 +1047,10 @@ impl WizardStep<AppState> for RelationPickStep {
             text_node(" when finished."),
         ]));
         if !linked.is_empty() {
-            document = document
-                .with_block(paragraph_text(format!("Linked so far: {}.", linked.join(", "))));
+            document = document.with_block(paragraph_text(format!(
+                "Linked so far: {}.",
+                linked.join(", ")
+            )));
         }
         document
     }
@@ -1767,10 +1773,21 @@ mod tests {
             STEP_NPC_PICK,
             STEP_GOD_PICK,
         ];
-        let registered: Vec<&str> = FactionWizard::new().steps().iter().map(|s| s.id()).collect();
+        let registered: Vec<&str> = FactionWizard::new()
+            .steps()
+            .iter()
+            .map(|s| s.id())
+            .collect();
         let unique: std::collections::HashSet<&str> = registered.iter().copied().collect();
-        assert_eq!(unique.len(), registered.len(), "duplicate step id registered");
+        assert_eq!(
+            unique.len(),
+            registered.len(),
+            "duplicate step id registered"
+        );
         let declared: std::collections::HashSet<&str> = ALL_STEP_IDS.iter().copied().collect();
-        assert_eq!(declared, unique, "declared step ids must match the registered set");
+        assert_eq!(
+            declared, unique,
+            "declared step ids must match the registered set"
+        );
     }
 }

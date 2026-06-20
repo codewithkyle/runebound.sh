@@ -1628,7 +1628,10 @@ mod tests {
         // pair (code-review H1). GUILDHALL_ROLE and the holy-site draw index are guarded by
         // their own tests; this covers the remaining settlement/site/hideout/danger pairs.
         assert_eq!(CONTROL_LABELS.len(), CONTROL_VALUES.len());
-        assert_eq!(pick_value("1", &CONTROL_VALUES), Some("a noble house or lord"));
+        assert_eq!(
+            pick_value("1", &CONTROL_VALUES),
+            Some("a noble house or lord")
+        );
         assert_eq!(
             pick_value("4", &CONTROL_VALUES),
             Some("independent or contested rule")
@@ -1645,7 +1648,10 @@ mod tests {
         );
 
         assert_eq!(BASE_OWNER_LABELS.len(), BASE_OWNER_VALUES.len());
-        assert_eq!(pick_value("1", &BASE_OWNER_VALUES), Some("a faction or guild"));
+        assert_eq!(
+            pick_value("1", &BASE_OWNER_VALUES),
+            Some("a faction or guild")
+        );
 
         // "let the model decide" (label index 4) maps to the schema's Unknown.
         assert_eq!(DANGER_LABELS.len(), DANGER_VALUES.len());
@@ -1995,9 +2001,16 @@ mod tests {
             .map(|s| s.id())
             .collect();
         let unique: HashSet<&str> = registered.iter().copied().collect();
-        assert_eq!(unique.len(), registered.len(), "duplicate step id registered");
+        assert_eq!(
+            unique.len(),
+            registered.len(),
+            "duplicate step id registered"
+        );
         let declared: HashSet<&str> = ALL_STEP_IDS.iter().copied().collect();
-        assert_eq!(declared, unique, "declared step ids must match the registered set");
+        assert_eq!(
+            declared, unique,
+            "declared step ids must match the registered set"
+        );
     }
 
     #[test]
