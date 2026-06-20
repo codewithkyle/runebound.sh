@@ -74,7 +74,7 @@ Example entity classes: `item`, `dungeon`, `quest`.
 1. Add DB schema and CRUD in `core/src/db.rs` (+ migration)
 2. Add repository trait + production implementation in `desktop/src-tauri/src/repositories/mod.rs`
 3. Add persistence workflow in `desktop/src-tauri/src/services/entity_persistence.rs`
-4. Add reroll + AI-generation helpers in `desktop/src-tauri/src/services/entity_reroll.rs` (and `services/ai_generation.rs` if seed prompts change)
+4. Add the create-path seed generator as a new `services/ai_generation/<kind>.rs` slice (the `*Seed` DTO + a `generate_<kind>_seed` that calls the shared `run_seed_attempts` loop, plus `mod <kind>;` in `ai_generation/mod.rs`), and field-reroll helpers in `services/entity_reroll.rs`. `ai_generation` is a per-kind module — add a file, don't grow one; see `docs/architecture.md` §6
 5. Add admin resolution/load/delete/undo support in `desktop/src-tauri/src/services/entity_admin.rs`
 6. Wire the canonical `EntityStore` sync in `desktop/src-tauri/src/services/vault_sync.rs` so DB + search indexes mirror the TOML records (no Markdown parsing)
 
@@ -238,4 +238,4 @@ Then manually test the affected command flows in desktop UI:
 
 ---
 
-*Last updated: 2026-06-19*
+*Last updated: 2026-06-20*
