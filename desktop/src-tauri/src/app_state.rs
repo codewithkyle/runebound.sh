@@ -376,7 +376,6 @@ impl EditorSession {
             .and_then(DraftEnvelope::as_event)
     }
 
-    #[allow(dead_code)]
     pub(crate) fn get_event_mut(&mut self) -> Option<&mut EventDraftSession> {
         self.draft_mut(EntityKind::Event)
             .and_then(DraftEnvelope::as_event_mut)

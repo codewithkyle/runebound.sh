@@ -25,13 +25,6 @@ impl EntityDomainRegistry {
     pub fn domain(&self, kind: EntityKind) -> Option<Arc<dyn EntityDomain>> {
         self.domains.get(&kind).cloned()
     }
-
-    #[allow(dead_code)]
-    pub fn iter(&self) -> impl Iterator<Item = (EntityKind, Arc<dyn EntityDomain>)> + '_ {
-        self.domains
-            .iter()
-            .map(|(kind, domain)| (*kind, domain.clone()))
-    }
 }
 
 pub fn build_default_registry() -> EntityDomainRegistry {

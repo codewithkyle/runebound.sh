@@ -10,6 +10,7 @@ import type {
   OutputSegment,
   WizardView,
 } from "./generated/models";
+import type { BootPlan, BootTaskResult } from "./generated/boot";
 
 type EntryKind = "input" | "output" | "error" | "info" | "banner" | "spinner";
 
@@ -74,10 +75,6 @@ const BANNER_DOC: OutputDoc = {
     }
   ]
 };
-
-type BootTaskInfo = { id: string; label: string };
-type BootPlan = { needs_setup: boolean; tasks: BootTaskInfo[] };
-type BootTaskResult = { ok: boolean; tone: string; detail: string };
 
 const delay = (ms: number): Promise<void> => new Promise((resolve) => window.setTimeout(resolve, ms));
 
