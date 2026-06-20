@@ -2010,8 +2010,15 @@ fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: Location
             let resources = opt_clause(&inputs.resources)
                 .unwrap_or("whatever the surrounding land naturally provides");
             let export_mode = opt_clause(&inputs.export_mode).unwrap_or("mixed");
+            let exports_clause = if export_mode == "none" {
+                " This settlement exports nothing — return an empty exports list (a consuming frontier or garrison town that lives off imports, not a producer).".to_string()
+            } else {
+                format!(
+                    " Its exports are {export_mode} — produce a 1-3 item exports list consistent with that: raw → ship the resource roughly as-is; refined → the processed or finished good made from it; mixed → some of both."
+                )
+            };
             format!(
-                "You generate one usable D&D settlement seed (a {kind}) for a game master. Return only JSON with fields name, visual_description, history_background, exports, tone, authority, danger_level, current_tension. This settlement is controlled by {control}; the authority field must reflect that. Its natural resources are: {resources}. Its exports are {export_mode} — produce a 1-3 item exports list consistent with that: raw → ship the resource roughly as-is; refined → the processed or finished good made from it; mixed → some of both.{geo} danger_level must be one of: {danger}.{leash}",
+                "You generate one usable D&D settlement seed (a {kind}) for a game master. Return only JSON with fields name, visual_description, history_background, exports, tone, authority, danger_level, current_tension. This settlement is controlled by {control}; the authority field must reflect that. Its natural resources are: {resources}.{exports_clause}{geo} danger_level must be one of: {danger}.{leash}",
                 danger = LOCATION_DANGER_LEVELS.join(", "),
                 leash = LOCATION_PROSE_LEASH,
             )
@@ -2141,7 +2148,11 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
                 parts.push(format!("Natural resources: {resources}."));
             }
             if let Some(mode) = opt_clause(&inputs.export_mode) {
-                parts.push(format!("Export mode: {mode}."));
+                if mode == "none" {
+                    parts.push("Exports: none (a consuming town).".to_string());
+                } else {
+                    parts.push(format!("Export mode: {mode}."));
+                }
             }
         }
         LocationBranch::Site => {
@@ -2896,12 +2907,13 @@ fn reference_payload_from_markdown(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        FactionCategory, FactionWizardInputs, LocationWizardInputs, NPC_GEN_SAMPLING, NpcSeed,
-        OUTPUT_RESERVE_TOKENS, build_faction_wizard_user_prompt, build_seed_payload,
-        build_wizard_user_prompt, capacity_notice, describe_recent_npc_occupation_anchors,
-        faction_dir_for_kind, faction_subfolder, location_dir_for_kind, location_subfolder,
-        occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown,
-        wizard_faction_schema, wizard_faction_system_prompt,
+        FactionCategory, FactionWizardInputs, LocationBranch, LocationWizardInputs,
+        NPC_GEN_SAMPLING, NpcSeed, OUTPUT_RESERVE_TOKENS, build_faction_wizard_user_prompt,
+        build_seed_payload, build_wizard_user_prompt, capacity_notice,
+        describe_recent_npc_occupation_anchors, faction_dir_for_kind, faction_subfolder,
+        location_dir_for_kind, location_subfolder, occupation_anchor, recent_occupation_anchor_set,
+        reference_payload_from_markdown, wizard_faction_schema, wizard_faction_system_prompt,
+        wizard_location_system_prompt,
     };
 
     #[test]
@@ -2987,6 +2999,25 @@ mod tests {
         let prompt = build_wizard_user_prompt(&archetype);
         assert!(prompt.contains("Controlled by: a noble house or lord."));
         assert!(!prompt.contains("@factions/"));
+    }
+
+    #[test]
+    fn settlement_none_export_mode_asks_for_an_empty_exports_list() {
+        // A frontier/march town may export nothing — "none" must steer the model to an
+        // empty exports list, not coax a 1-3 item list as raw/refined/mixed do.
+        let inputs = LocationWizardInputs {
+            kind_type: "town".to_string(),
+            export_mode: Some("none".to_string()),
+            ..Default::default()
+        };
+        let system = wizard_location_system_prompt(&inputs, LocationBranch::Settlement);
+        assert!(system.contains("exports nothing"));
+        assert!(system.contains("empty exports list"));
+        assert!(!system.contains("Its exports are none"));
+
+        let user = build_wizard_user_prompt(&inputs);
+        assert!(user.contains("Exports: none (a consuming town)."));
+        assert!(!user.contains("Export mode: none."));
     }
 
     #[test]

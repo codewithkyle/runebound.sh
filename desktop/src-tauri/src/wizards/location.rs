@@ -297,21 +297,20 @@ impl WizardStep<AppState> for KindStep {
 // Settlement branch (Q-A…Q-D)
 // ---------------------------------------------------------------------------
 
-const CONTROL_LABELS: [&str; 5] = [
+const CONTROL_LABELS: [&str; 4] = [
     "noble house / lord",
-    "faction or guild",
-    "council / free city",
+    "faction, council, or guild",
+    "free city",
     "independent / contested",
-    "let the model decide",
 ];
-/// Parallel to `CONTROL_LABELS`; the authoritative phrasing fed to generation. An
-/// empty string means "let the model decide" → `control = None`.
-const CONTROL_VALUES: [&str; 5] = [
+/// Parallel to `CONTROL_LABELS`; the authoritative phrasing fed to generation.
+/// Every archetype is concrete — a settlement must have a stated power, so there is
+/// no "let the model decide" escape hatch here.
+const CONTROL_VALUES: [&str; 4] = [
     "a noble house or lord",
-    "a faction or guild",
-    "a ruling council or free city",
+    "a faction, council, or guild",
+    "a free city",
     "independent or contested rule",
-    "",
 ];
 
 struct ControlStep;
@@ -352,11 +351,11 @@ impl WizardStep<AppState> for ControlStep {
         // Re-answering control clears any prior faction link.
         data.faction_name = None;
         data.faction_ref = None;
-        data.control = (!value.is_empty()).then(|| value.to_string());
-        // A noble house/lord or a faction/guild is a concrete organization, so let the
-        // GM link the specific one — grounding the prose — falling back to this
-        // archetype on skip. The other archetypes (council, contested, the model's
-        // choice) need no link.
+        data.control = Some(value.to_string());
+        // A noble house/lord or a faction/council/guild is a concrete organization, so
+        // let the GM link the specific one — grounding the prose — falling back to this
+        // archetype on skip. A free city or contested rule has no single controlling
+        // organization to link.
         if value == CONTROL_VALUES[0] || value == CONTROL_VALUES[1] {
             return enter_faction_link(d, state, "control").await;
         }
@@ -397,7 +396,7 @@ impl WizardStep<AppState> for ResourcesStep {
     }
 }
 
-const EXPORT_MODE_LABELS: [&str; 3] = ["raw", "refined", "mixed"];
+const EXPORT_MODE_LABELS: [&str; 4] = ["raw", "refined", "mixed", "none"];
 
 struct ExportModeStep;
 
@@ -408,13 +407,13 @@ impl WizardStep<AppState> for ExportModeStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Are its exports raw, refined, or mixed? (transport logistics)"
+        "What does it export — raw, refined, mixed, or none? (transport logistics)"
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
         wizard_menu(
             "Create Location — Settlement — Exports",
-            "Are its exports raw, refined, or mixed?",
+            "What does it export? (a frontier town may export nothing)",
             &self.choices(data),
         )
     }
@@ -1510,8 +1509,9 @@ mod tests {
     fn pick_value_maps_one_based_index() {
         assert_eq!(pick_value("1", &EXPORT_MODE_LABELS), Some("raw"));
         assert_eq!(pick_value("3", &EXPORT_MODE_LABELS), Some("mixed"));
+        assert_eq!(pick_value("4", &EXPORT_MODE_LABELS), Some("none"));
         assert_eq!(pick_value("0", &EXPORT_MODE_LABELS), None);
-        assert_eq!(pick_value("4", &EXPORT_MODE_LABELS), None);
+        assert_eq!(pick_value("5", &EXPORT_MODE_LABELS), None);
         assert_eq!(pick_value("x", &EXPORT_MODE_LABELS), None);
     }
 
