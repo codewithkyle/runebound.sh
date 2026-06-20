@@ -154,6 +154,29 @@ impl SuggestionService {
             }
         }
 
+        // Spell typeahead: under the explicit `spell <fragment>` root, and as a
+        // bare-name fallback so typing `fire` surfaces Fireball next to entities.
+        if let Some((spell_query, use_root_prefix)) = spell_search_context(trimmed, &manifest)
+            && !spell_query.is_empty()
+        {
+            let rows = state
+                .spell_repo()
+                .search_by_name(state.database().as_ref(), &spell_query, 6)
+                .await?;
+            for row in rows {
+                let completion = if use_root_prefix {
+                    format!("spell {}", row.name)
+                } else {
+                    row.name.clone()
+                };
+                suggestions.push(CommandSuggestion {
+                    label: row.name,
+                    completion,
+                    helper_text: Some(SuggestionHelperText::Spell),
+                });
+            }
+        }
+
         if is_npc && let Some(location_query) = npc_travel_location_query(trimmed) {
             let location_names = search_location_names(state, location_query, Some(8)).await?;
             for location_name in location_names {
@@ -206,6 +229,7 @@ pub enum SuggestionHelperText {
     God,
     Dungeon,
     Reference,
+    Spell,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -605,6 +629,30 @@ fn wizard_choices_to_suggestions(choices: Vec<WizardChoice>) -> Vec<CommandSugge
             helper_text: Some(SuggestionHelperText::Command),
         })
         .collect()
+}
+
+/// Decide whether (and how) to surface spell typeahead for `trimmed`. Returns
+/// `Some((query, use_root_prefix))`: with `use_root_prefix`, completions are
+/// `spell <name>` (the explicit `spell <fragment>` lookup); without it, the bare
+/// name (the no-prefix fallback, so a typed name resolves via the router). `None`
+/// skips spell search entirely.
+fn spell_search_context(trimmed: &str, manifest: &CommandManifest) -> Option<(String, bool)> {
+    let lowered = trimmed.to_ascii_lowercase();
+    // Explicit `spell <fragment>` lookup — but not `spell help` or the bare root.
+    if let Some(rest) = lowered.strip_prefix("spell ") {
+        if rest.trim() == "help" {
+            return None;
+        }
+        return Some((trimmed["spell ".len()..].trim().to_string(), true));
+    }
+    if lowered == "spell" {
+        return None; // the root suggestion handles bare `spell`
+    }
+    // Bare fragment with no known command root: surface spells next to entities.
+    if !starts_with_known_command_root(trimmed, manifest) {
+        return Some((trimmed.to_string(), false));
+    }
+    None
 }
 
 fn entity_kind_for_root(root: &str) -> Option<EntityKind> {

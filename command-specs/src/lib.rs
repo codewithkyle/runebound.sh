@@ -1229,6 +1229,60 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "spell".to_string(),
+                summary: "Look up a spell and render its card".to_string(),
+                examples: vec![
+                    "spell fireball".to_string(),
+                    "spell fire bolt".to_string(),
+                    "Fireball".to_string(),
+                ],
+                subcommands: vec![SubcommandSpec {
+                    name: "help".to_string(),
+                    summary: "Show spell command help".to_string(),
+                    options: Vec::new(),
+                    examples: vec!["spell help".to_string()],
+                }],
+                options: Vec::new(),
+                // Takes a free-form spell name (like `show`/`publish`), so it must not
+                // require a subcommand or `spell fireball` would be rejected.
+                requires_subcommand: false,
+                canonical_help_command: Some("spell help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
+                name: "spellbook".to_string(),
+                summary: "Import the spell library from a local 5etools copy".to_string(),
+                examples: vec![
+                    "spellbook import".to_string(),
+                    "spellbook import ~/5etools-src".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "import".to_string(),
+                        summary: "Import spells from a 5etools data directory (opens a folder \
+                                  picker when no path is given)"
+                            .to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "spellbook import".to_string(),
+                            "spellbook import ~/5etools-src".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show spellbook command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["spellbook help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("spellbook help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "publish".to_string(),
                 summary: "Render an entity's markdown into the Obsidian vault".to_string(),
                 examples: vec![
@@ -1515,8 +1569,27 @@ mod tests {
     #[test]
     fn default_surface_commands_are_an_explicit_known_set() {
         let expected_default: HashSet<&str> = [
-            "status", "create", "config", "start", "load", "show", "preview", "delete", "undo",
-            "setup", "calendar", "date", "history", "+", "-", "moon", "exit", "model", "ping",
+            "status",
+            "create",
+            "config",
+            "start",
+            "load",
+            "show",
+            "preview",
+            "delete",
+            "undo",
+            "setup",
+            "calendar",
+            "date",
+            "history",
+            "+",
+            "-",
+            "moon",
+            "exit",
+            "model",
+            "ping",
+            "spell",
+            "spellbook",
         ]
         .into_iter()
         .collect();

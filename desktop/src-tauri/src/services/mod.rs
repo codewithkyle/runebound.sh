@@ -6,6 +6,7 @@ pub mod entity_reroll;
 pub mod mention_extraction;
 pub mod ollama_chat;
 pub mod publish;
+pub mod spell_library;
 pub mod suggestions;
 #[cfg(test)]
 mod ts_export;

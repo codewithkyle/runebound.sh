@@ -5,6 +5,7 @@ pub mod entity_commands;
 pub mod moon_commands;
 pub mod publish_commands;
 pub mod setup_commands;
+pub mod spell_commands;
 pub mod system_commands;
 pub mod time_delta_commands;
 
@@ -100,6 +101,8 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(time_delta_subtract_handler_entry());
     registry.register(moon_handler_entry());
     registry.register(publish_handler_entry());
+    registry.register(spell_handler_entry());
+    registry.register(spellbook_handler_entry());
     registry
 }
 
@@ -450,6 +453,26 @@ pub fn moon_handler_entry() -> HandlerEntry<DesktopHandler> {
         metadata_for("moon"),
         DesktopHandler::new(|invocation| {
             Box::pin(async move { moon_commands::handle_moon(invocation).await })
+        }),
+    )
+}
+
+pub fn spell_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "spell",
+        metadata_for("spell"),
+        DesktopHandler::new(|invocation| {
+            Box::pin(async move { spell_commands::handle_spell(invocation).await })
+        }),
+    )
+}
+
+pub fn spellbook_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "spellbook",
+        metadata_for("spellbook"),
+        DesktopHandler::new(|invocation| {
+            Box::pin(async move { spell_commands::handle_spellbook(invocation).await })
         }),
     )
 }

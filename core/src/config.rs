@@ -98,6 +98,9 @@ pub struct ConfigPaths {
     pub global: PathBuf,
     pub calendar: PathBuf,
     pub entities: PathBuf,
+    /// Canonical store for imported spell cards (`spells/<slug>.toml`). Sibling of
+    /// `entities`; the SQLite `spells` table is a rebuildable projection of it.
+    pub spells: PathBuf,
 }
 
 #[derive(Debug, Clone)]
@@ -228,11 +231,13 @@ pub fn config_paths() -> Result<ConfigPaths> {
     let global = app_root.join("config.toml");
     let calendar = app_root.join("calendar.toml");
     let entities = app_root.join("entities");
+    let spells = app_root.join("spells");
 
     Ok(ConfigPaths {
         global,
         calendar,
         entities,
+        spells,
     })
 }
 

@@ -26,6 +26,6 @@ export type CommandManifest = { commands: Array<CommandSpec>, aliases: Array<Com
  */
 spinner_hints: Array<SpinnerHint>, };
 
-export type SuggestionHelperText = "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon" | "reference";
+export type SuggestionHelperText = "command" | "npc" | "location" | "faction" | "item" | "event" | "god" | "dungeon" | "reference" | "spell";
 
 export type CommandSuggestion = { label: string, completion: string, helper_text: SuggestionHelperText | null, };
