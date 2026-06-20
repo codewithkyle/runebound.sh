@@ -124,6 +124,34 @@ pub(crate) async fn load_linkable_factions(
     Ok(merge_linkable(drafts, published))
 }
 
+/// Every NPC the GM can link as a faction's leader, read-only: unpublished drafts
+/// from the DB plus published notes recovered from the vault. Deduped by slug,
+/// sorted by name. Sibling of [`load_linkable_factions`] (swaps the repo + folder).
+pub(crate) async fn load_linkable_npcs(state: &AppState) -> Result<Vec<(String, String)>, String> {
+    let database = state.database();
+    let rows = state.npc_repo().list_all(database.as_ref()).await?;
+    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+
+    let published = tokio::task::spawn_blocking(|| load_published_entity_names("npcs"))
+        .await
+        .map_err(|err| err.to_string())??;
+    Ok(merge_linkable(drafts, published))
+}
+
+/// Every god the GM can link to a temple/cult, read-only: unpublished drafts from
+/// the DB plus published notes recovered from the vault. Deduped by slug, sorted by
+/// name. Sibling of [`load_linkable_factions`] (swaps the repo + folder).
+pub(crate) async fn load_linkable_gods(state: &AppState) -> Result<Vec<(String, String)>, String> {
+    let database = state.database();
+    let rows = state.god_repo().list_all(database.as_ref()).await?;
+    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+
+    let published = tokio::task::spawn_blocking(|| load_published_entity_names("gods"))
+        .await
+        .map_err(|err| err.to_string())??;
+    Ok(merge_linkable(drafts, published))
+}
+
 /// Load the vault's reference entries, or an empty set when no vault is configured.
 /// Blocking IO (recursive `read_dir`) — only call inside `spawn_blocking`.
 pub(crate) fn load_vault_entries_blocking() -> Result<Vec<VaultReferenceEntry>, String> {

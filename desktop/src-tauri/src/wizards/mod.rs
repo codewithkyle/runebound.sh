@@ -22,9 +22,11 @@ use crate::commands::setup_commands::{FolderPick, pick_vault_folder};
 
 pub mod dungeon;
 pub mod entity_link;
+pub mod faction;
 pub mod location;
 
 use dungeon::DungeonWizard;
+use faction::FactionWizard;
 use location::LocationWizard;
 
 // Re-export the engine surface used across the desktop crate so existing call
@@ -41,6 +43,7 @@ pub fn build_default_wizard_registry() -> WizardRegistry<AppState> {
     let mut registry = WizardRegistry::new();
     registry.register(Arc::new(DungeonWizard::new()));
     registry.register(Arc::new(LocationWizard::new()));
+    registry.register(Arc::new(FactionWizard::new()));
     register_onboarding_wizards(&mut registry);
     registry
 }
