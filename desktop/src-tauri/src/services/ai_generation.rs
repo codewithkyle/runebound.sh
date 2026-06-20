@@ -1681,9 +1681,12 @@ fn reach_phrase(token: &str) -> &'static str {
 
 /// The GM's locked faction-wizard answers, flattened into a borrow-friendly struct
 /// the wizard fills and passes to generation. The relational fields that feed the
-/// LLM as *grounding* (liege, loyalty, patron, god) live here; the ones that are
-/// only ever linked/blank (leader, allies, rivals) do not — they never touch the
-/// prompt (D3). Mirrors [`LocationWizardInputs`].
+/// LLM as *grounding* (leader, liege, loyalty, patron, god) live here; the ones that
+/// are only ever linked/blank (allies, rivals) do not. Grounding is not generation:
+/// the leader is still picker-set, excluded from the schema, and never rerolled (D3)
+/// — feeding its name/metadata just keeps the generated prose consistent with the
+/// established leader instead of inventing a different one. Mirrors
+/// [`LocationWizardInputs`].
 #[derive(Debug, Clone, Default)]
 pub struct FactionWizardInputs {
     pub kind_type: String,
@@ -1703,7 +1706,8 @@ pub struct FactionWizardInputs {
     pub god: Option<String>,
     pub mandate: Option<String>,
     pub mandate_specifics: Option<String>,
-    // Shared tail
+    // Shared tail. `leader` is the linked NPC (grounding only, never generated).
+    pub leader: Option<String>,
     pub want: Option<String>,
     pub hint: Option<String>,
 }
@@ -1823,6 +1827,12 @@ fn wizard_faction_system_prompt(inputs: &FactionWizardInputs, category: FactionC
         }
     }
 
+    if let Some(leader) = opt_clause(&inputs.leader) {
+        prompt.push_str(&format!(
+            " The game master has already named this faction's leader: {leader}. Wherever the prose refers to its leadership, use that exact name and keep it consistent with any referenced metadata about them; do not invent a different leader."
+        ));
+    }
+
     if let Some(want) = opt_clause(&inputs.want) {
         prompt.push_str(&format!(
             " The game master has fixed the faction's Want: {want}. Build the obstacle, action, and consequence to serve that Want."
@@ -1857,10 +1867,11 @@ fn wizard_faction_schema(_category: FactionCategory) -> serde_json::Value {
 }
 
 /// The user-message seed for the wizard request: a concise restatement of the
-/// locked answers that doubles as the `@reference` probe — it emits `@gods/<god>`,
-/// `@factions/<liege>`, and `@factions/<patron>` tokens so each linked entity's
-/// metadata is pulled into context (mirroring the guildhall's `@factions/<name>`).
-/// Reused by the wizard's `build_seed_prompt` to persist GM intent as reroll bias.
+/// locked answers that doubles as the `@reference` probe — it emits `@npcs/<leader>`,
+/// `@gods/<god>`, `@factions/<liege>`, and `@factions/<patron>` tokens so each linked
+/// entity's metadata is pulled into context (mirroring the guildhall's
+/// `@factions/<name>`). Reused by the wizard's `build_seed_prompt` to persist GM
+/// intent as reroll bias.
 pub(crate) fn build_faction_wizard_user_prompt(inputs: &FactionWizardInputs) -> String {
     let kind = &inputs.kind_type;
     let mut parts = vec![format!("Create a {kind}.")];
@@ -1914,6 +1925,9 @@ pub(crate) fn build_faction_wizard_user_prompt(inputs: &FactionWizardInputs) -> 
             }
         }
         None => {}
+    }
+    if let Some(leader) = opt_clause(&inputs.leader) {
+        parts.push(format!("Led by @npcs/{leader}."));
     }
     if let Some(want) = opt_clause(&inputs.want) {
         parts.push(format!("Ambition (Want): {want}."));
@@ -3155,6 +3169,25 @@ mod tests {
         assert!(prompt.contains("@factions/House Vaurel"));
         assert!(prompt.contains("Loyalty type: oath."));
         assert!(prompt.contains("Ambition (Want): Corner the salt trade."));
+    }
+
+    #[test]
+    fn faction_wizard_grounds_the_linked_leader_in_prompt_and_system() {
+        // A picked leader NPC is fed as `@npcs/<name>` so its vault metadata is pulled
+        // into context, and the system prompt names it so the prose stays consistent
+        // instead of inventing a different leader — while it never enters the schema (D3).
+        let inputs = FactionWizardInputs {
+            kind_type: "great_house".to_string(),
+            power_base: Some("march".to_string()),
+            leader: Some("Lord Everwood".to_string()),
+            ..Default::default()
+        };
+        let user_prompt = build_faction_wizard_user_prompt(&inputs);
+        assert!(user_prompt.contains("Led by @npcs/Lord Everwood."));
+
+        let system_prompt = wizard_faction_system_prompt(&inputs, FactionCategory::Houses);
+        assert!(system_prompt.contains("already named this faction's leader: Lord Everwood"));
+        assert!(system_prompt.contains("do not invent a different leader"));
     }
 
     #[test]

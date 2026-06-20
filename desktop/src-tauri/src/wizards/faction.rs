@@ -110,8 +110,10 @@ fn faction_data_mut(d: &mut WizardData) -> &mut FactionWizardData {
 
 impl FactionWizardData {
     /// Project the locked answers into the generation inputs. `category` is the
-    /// GM-picked branch; the rest are each branch's answers. The relational fields the
-    /// LLM never sees (leader/allies/rivals) are deliberately absent (D3).
+    /// GM-picked branch; the rest are each branch's answers. The `leader` is passed as
+    /// *grounding* (its name + vault metadata keep the prose consistent) but is still
+    /// never LLM-generated or rerolled (D3); the other link-only fields (allies/rivals)
+    /// stay out of the prompt entirely.
     fn as_inputs(&self) -> FactionWizardInputs {
         FactionWizardInputs {
             kind_type: self.kind_type.clone(),
@@ -127,6 +129,7 @@ impl FactionWizardData {
             god: self.god.clone(),
             mandate: self.mandate.clone(),
             mandate_specifics: self.mandate_specifics.clone(),
+            leader: self.leader.clone(),
             want: self.want.clone(),
             // The generate step's extra detail doubles as the reroll hint.
             hint: self.detail.clone(),
