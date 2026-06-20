@@ -1,7 +1,6 @@
 use async_trait::async_trait;
 use dnd_core::db as core_db;
 use dnd_core::vault::Vault;
-use std::path::PathBuf;
 
 pub mod db {
     pub use dnd_core::db::{
@@ -20,97 +19,15 @@ pub use db::Database;
 pub use db::DbTransaction;
 
 pub trait VaultRepository: Send + Sync {
-    #[allow(dead_code)]
-    fn read_file(&self, vault: &Vault, path: &str) -> Result<Option<String>, String>;
-    #[allow(dead_code)]
-    fn write_file(&self, vault: &Vault, path: &str, contents: &str) -> Result<(), String>;
-    #[allow(dead_code)]
-    fn move_file(&self, vault: &Vault, from: &str, to: &str) -> Result<(), String>;
-    #[allow(dead_code)]
-    fn file_exists(&self, vault: &Vault, path: &str) -> Result<bool, String>;
-    #[allow(dead_code)]
-    fn resolve_path(&self, vault: &Vault, path: &str) -> Result<PathBuf, String>;
-    #[allow(dead_code)]
-    fn ensure_root_exists(&self, vault: &Vault) -> Result<(), String>;
     fn ensure_structure(&self, vault: &Vault) -> Result<(), String>;
 }
 
 pub struct ProdVaultRepository;
 
 impl VaultRepository for ProdVaultRepository {
-    fn read_file(&self, vault: &Vault, path: &str) -> Result<Option<String>, String> {
-        let relative = PathBuf::from(normalize_relative_path(path));
-        let full = vault
-            .resolve_relative(&relative)
-            .map_err(|e| e.to_string())?;
-        if !full.exists() {
-            return Ok(None);
-        }
-        std::fs::read_to_string(&full)
-            .map(Some)
-            .map_err(|e| format!("failed to read vault file {}: {}", full.display(), e))
-    }
-
-    fn write_file(&self, vault: &Vault, path: &str, contents: &str) -> Result<(), String> {
-        vault
-            .write_relative(&PathBuf::from(path), contents)
-            .map_err(|e| e.to_string())
-    }
-
-    fn move_file(&self, vault: &Vault, from: &str, to: &str) -> Result<(), String> {
-        let from_normalized = normalize_relative_path(from);
-        let to_normalized = normalize_relative_path(to);
-        let from_full = vault
-            .resolve_relative(&PathBuf::from(&from_normalized))
-            .map_err(|e| e.to_string())?;
-        if !from_full.exists() {
-            return Err(format!(
-                "source file does not exist: {}",
-                from_full.display()
-            ));
-        }
-        let to_full = vault
-            .resolve_relative(&PathBuf::from(&to_normalized))
-            .map_err(|e| e.to_string())?;
-        if let Some(parent) = to_full.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("failed to create directory {}: {}", parent.display(), e))?;
-        }
-        std::fs::rename(&from_full, &to_full).map_err(|e| {
-            format!(
-                "failed to move file from {} to {}: {}",
-                from_full.display(),
-                to_full.display(),
-                e
-            )
-        })
-    }
-
-    fn file_exists(&self, vault: &Vault, path: &str) -> Result<bool, String> {
-        let full = vault
-            .resolve_relative(&PathBuf::from(path))
-            .map_err(|e| e.to_string())?;
-        Ok(full.exists())
-    }
-
-    fn resolve_path(&self, vault: &Vault, path: &str) -> Result<PathBuf, String> {
-        vault
-            .resolve_relative(&PathBuf::from(path))
-            .map_err(|e| e.to_string())
-    }
-
-    fn ensure_root_exists(&self, vault: &Vault) -> Result<(), String> {
-        vault.ensure_root_exists().map_err(|e| e.to_string())
-    }
-
     fn ensure_structure(&self, vault: &Vault) -> Result<(), String> {
         vault.ensure_structure().map_err(|e| e.to_string())
     }
-}
-
-#[allow(dead_code)]
-fn normalize_relative_path(path: &str) -> String {
-    path.replace('\\', "/")
 }
 
 #[async_trait]

@@ -335,6 +335,7 @@ pub fn command_manifest() -> CommandManifest {
                         .to_string(),
                     "create location".to_string(),
                     "create location a swamp trade post controlled by smugglers".to_string(),
+                    "create faction".to_string(),
                     "create faction a secretive maritime trade cartel".to_string(),
                     "create item a cursed blade woven from stormglass".to_string(),
                     "create event the night the old bridge burned".to_string(),
@@ -358,9 +359,13 @@ pub fn command_manifest() -> CommandManifest {
                     },
                     SubcommandSpec {
                         name: "faction".to_string(),
-                        summary: "Start guided faction creation".to_string(),
+                        summary: "Start the guided faction flow (or `create faction <prompt>` for one-shot)"
+                            .to_string(),
                         options: Vec::new(),
-                        examples: vec!["create faction".to_string()],
+                        examples: vec![
+                            "create faction".to_string(),
+                            "create faction a secretive maritime trade cartel".to_string(),
+                        ],
                     },
                     SubcommandSpec {
                         name: "item".to_string(),
@@ -653,8 +658,8 @@ pub fn command_manifest() -> CommandManifest {
                 examples: vec![
                     "faction show".to_string(),
                     "faction rename Crimson Lantern Syndicate".to_string(),
-                    "faction set agenda Control every harbor tax office.".to_string(),
-                    "faction reroll symbol".to_string(),
+                    "faction set want Control every harbor tax office.".to_string(),
+                    "faction reroll obstacle".to_string(),
                     "faction save".to_string(),
                 ],
                 subcommands: vec![
@@ -677,8 +682,11 @@ pub fn command_manifest() -> CommandManifest {
                         examples: vec![
                             "faction set kind guild".to_string(),
                             "faction set public Smugglers posing as licensed traders.".to_string(),
-                            "faction set agenda Control every harbor tax office.".to_string(),
-                            "faction set goals_short bribe customs, sabotage rivals".to_string(),
+                            "faction set want Control every harbor tax office.".to_string(),
+                            "faction set obstacle A rival cartel undercuts every contract."
+                                .to_string(),
+                            "faction set loyalty oath".to_string(),
+                            "faction set liege House Vaurel".to_string(),
                             "faction set symbol A crimson lantern on black sails.".to_string(),
                         ],
                     },
@@ -687,8 +695,8 @@ pub fn command_manifest() -> CommandManifest {
                         summary: "Reroll one faction field with optional prompt".to_string(),
                         options: Vec::new(),
                         examples: vec![
-                            "faction reroll methods".to_string(),
-                            "faction reroll goals_long seize inland trade routes".to_string(),
+                            "faction reroll action".to_string(),
+                            "faction reroll obstacle a richer deposit opens elsewhere".to_string(),
                             "faction reroll symbol nautical but menacing".to_string(),
                         ],
                     },

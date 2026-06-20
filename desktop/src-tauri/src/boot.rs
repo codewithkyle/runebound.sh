@@ -16,14 +16,14 @@ use crate::app_state::AppState;
 use crate::commands::ok_response_with_doc;
 use crate::services::vault_sync::VaultSyncService;
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct BootTaskInfo {
     pub id: String,
     /// Fun, in-world label shown next to the spinner.
     pub label: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct BootPlan {
     /// When true the app is not configured yet; the frontend skips the spinners
     /// and shows the first-time setup message instead.
@@ -31,12 +31,26 @@ pub struct BootPlan {
     pub tasks: Vec<BootTaskInfo>,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
 pub struct BootTaskResult {
     pub ok: bool,
-    /// Status tone for the finished spinner: "success" | "warning" | "error".
-    pub tone: String,
+    /// Status tone for the finished spinner.
+    pub tone: BootTone,
     pub detail: String,
+}
+
+/// Status tone for a finished boot spinner. The `snake_case` rename keeps the
+/// wire form (`"success"`/`"warning"`/`"error"`) identical to the prior string.
+#[derive(Debug, Clone, Serialize, ts_rs::TS)]
+#[serde(rename_all = "snake_case")]
+pub enum BootTone {
+    Success,
+    Warning,
+    /// Part of the documented tone vocabulary exposed to the frontend (and the
+    /// generated `BootTone` TS union), but not currently produced Rust-side: a
+    /// failing task either returns a `Warning` result or propagates `Err`.
+    #[allow(dead_code)]
+    Error,
 }
 
 fn boot_task_infos() -> Vec<BootTaskInfo> {
@@ -85,7 +99,7 @@ pub async fn run_boot_task(
                 .await?;
             Ok(BootTaskResult {
                 ok: true,
-                tone: "success".to_string(),
+                tone: BootTone::Success,
                 detail: "vault and database are tidy".to_string(),
             })
         }
@@ -96,12 +110,12 @@ pub async fn run_boot_task(
             match dnd_core::calendar::load_calendar() {
                 Ok(_) => Ok(BootTaskResult {
                     ok: true,
-                    tone: "success".to_string(),
+                    tone: BootTone::Success,
                     detail: "calendar looks good".to_string(),
                 }),
                 Err(err) => Ok(BootTaskResult {
                     ok: false,
-                    tone: "warning".to_string(),
+                    tone: BootTone::Warning,
                     detail: format!("Calendar problem: {err:#}"),
                 }),
             }
@@ -111,13 +125,13 @@ pub async fn run_boot_task(
             let health = check_ollama_health(&loaded.effective, OLLAMA_BOOT_TIMEOUT_SECONDS).await;
 
             let tone = if health.reachable && health.model_available {
-                "success"
+                BootTone::Success
             } else {
-                "warning"
+                BootTone::Warning
             };
             let result = BootTaskResult {
                 ok: health.reachable && health.model_available,
-                tone: tone.to_string(),
+                tone,
                 detail: health.detail.clone(),
             };
 

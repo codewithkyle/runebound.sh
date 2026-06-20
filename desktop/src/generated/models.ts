@@ -11,7 +11,30 @@ export type LocationDraft = { id: string, seed_prompt: string | null, name: stri
  */
 location: string, };
 
-export type FactionDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, kind_custom: string | null, public_description: string, true_agenda: string, methods: string, leadership: string, headquarters: string, sphere_of_influence: string, resources_assets: Array<string>, allies: Array<string>, rivals_enemies: Array<string>, reputation: string, current_tension: string, goals_short_term: Array<string>, goals_long_term: Array<string>, symbol_description: string, };
+export type FactionDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, kind_type: string, public_description: string, reputation: string, symbol_description: string, want: string, obstacle: string, action: string, consequence: string, 
+/**
+ * Was `leadership`. An NPC link name or free text; wizard-picked or left blank,
+ * never LLM-generated (D3).
+ */
+leader: string, sphere_of_influence: string, resources_assets: Array<string>, 
+/**
+ * Picker-linked or left blank; never LLM-generated (D3/§7).
+ */
+allies: Array<string>, 
+/**
+ * Picker-linked or left blank; never LLM-generated (D3/§7).
+ */
+rivals_enemies: Array<string>, 
+/**
+ * Houses Vassal/Lord only — the faction this one is sworn to. Picker or free
+ * text, never LLM.
+ */
+liege: string | null, 
+/**
+ * Houses Vassal/Lord only — one of `LOYALTY_TYPES`. Enum-picked or random,
+ * never LLM.
+ */
+loyalty_type: string | null, };
 
 export type ItemDraft = { id: string, seed_prompt: string | null, name: string, slug: string, vault_path: string, category: string, rarity: string, attunement: string, materials: Array<string>, appearance: string, abilities: string, drawbacks: string, history: string, value: string, location: string, };
 

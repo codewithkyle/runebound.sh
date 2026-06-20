@@ -318,6 +318,14 @@ Mirrors C, but for a sequence of prompts rather than a one-shot create. The plum
 
 The only edits outside `wizards/<name>.rs` are the one registry line and the launch call. If a wizard needs a new step *capability* (a new `WizardTransition`, a config seed), that is an engine change in the `wizard` crate shared by all wizards (the onboarding wizards in `core/src/onboarding_wizard.rs` are the reference for engine-level seed/native extensions).
 
+**Authoring conventions (faction/location are the references; each is test-enforced):**
+
+- **Step ids are `const`s, not bare strings.** Declare one `const STEP_*: &str` per step (plus `const MODE_*` for picker routing keys that aren't step ids) and use them for both `id()` and every `Goto`/`enter_*` target, so a typo or rename is a compile error. A `every_declared_step_id_is_registered_once` test asserts the declared id set equals the registered set — which, since every `Goto` uses a const, proves no route dangles (the engine otherwise rejects an unknown `Goto` only at runtime).
+- **`Next` couples to declaration order; `Goto` does not.** `Next` is `cursor += 1`, so an intra-branch `Next`-chain only works while its steps stay contiguous and ordered in the `steps()` Vec. Either route every step with `Goto` (faction) or add a contiguity test pinning the adjacencies (location's `next_chains_stay_contiguous_in_declared_order`).
+- **`back` rolls back the cursor, not the accumulator.** A step that parks transient sub-state in the accumulator (a mode flag, an "awaiting custom input" toggle, an accumulating list) must reset it when the step is (re)entered — do it in the `enter_*` helper or at the inbound `Goto` site, never by assuming `back` clears it.
+- **Multiplex a picker over one entity set; split a repeatable accumulator out.** One step may serve several single-value link points via a mode field (the faction picker: liege/patron). But a *repeatable* picker that accumulates a list (allies→rivals) gets its **own** step and its **own** mode field, so its `Stay`-loop and "linked so far" state never entangle with single-value modes.
+- **Lift pure step helpers into `wizard::prompt`, don't copy them.** `numbered_choices`/`pick_value`/`skip_choice`/`optional_text`/`optional_text_prompt` and `weak_random_index` live in the shared crate; menu `*_LABELS` arrays that pair with a canonical `*_VALUES`/vocab array carry an alignment test (length + a representative index) so a reorder can't silently mislabel a menu.
+
 ---
 
 ## 9. Anti-Patterns

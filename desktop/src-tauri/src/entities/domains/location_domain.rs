@@ -7,9 +7,7 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    FieldAccess, LOCATION_SCHEMA, canonical_field_name, format_valid_field_list,
-};
+use crate::entities::schema::{FieldAccess, canonical_field_name, format_valid_field_list};
 use crate::services::entity_reroll::{
     EntityRerollService, LocationRerollContext, RerollLocationFieldInput,
 };
@@ -33,10 +31,6 @@ impl LocationDomain {
 impl EntityDomain for LocationDomain {
     fn kind(&self) -> EntityKind {
         EntityKind::Location
-    }
-
-    fn schema(&self) -> &'static crate::entities::schema::EntitySchema {
-        &LOCATION_SCHEMA
     }
 
     fn help_text(&self) -> String {

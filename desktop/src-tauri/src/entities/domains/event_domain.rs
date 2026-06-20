@@ -7,7 +7,6 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt, no_active_draft_message,
 };
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
-use crate::entities::schema::EVENT_SCHEMA;
 use crate::services::ai_generation::{AiGenerationService, SeedGeneration};
 use crate::utils::prepend_notice;
 use dnd_core::command::CommandClientEvent;
@@ -25,10 +24,6 @@ impl EventDomain {
 impl EntityDomain for EventDomain {
     fn kind(&self) -> EntityKind {
         EntityKind::Event
-    }
-
-    fn schema(&self) -> &'static crate::entities::schema::EntitySchema {
-        &EVENT_SCHEMA
     }
 
     fn help_text(&self) -> String {

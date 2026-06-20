@@ -4,7 +4,6 @@ use crate::app_state::{AppState, DraftEnvelope};
 use runebound_models::CommandResponse;
 
 use super::kind::EntityKind;
-use super::schema::EntitySchema;
 
 pub type EntityDomainResult = Result<Option<CommandResponse>, String>;
 
@@ -34,8 +33,6 @@ impl EntityDetail {
 #[async_trait]
 pub trait EntityDomain: Send + Sync {
     fn kind(&self) -> EntityKind;
-    #[allow(dead_code)]
-    fn schema(&self) -> &'static EntitySchema;
     fn help_text(&self) -> String;
 
     /// Look up a saved entity of this kind by name-or-slug, returning it as an

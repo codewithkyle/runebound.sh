@@ -32,12 +32,48 @@ use crate::services::ai_generation::{
 };
 use crate::utils::prepend_notice;
 use crate::wizards::entity_link::{
-    EntityMatch, entity_suggestions, entries_from_refs, load_linkable_factions,
-    load_vault_entries_blocking, match_entity,
+    EntityMatch, entity_suggestions, entries_from_refs, load_linkable_factions, load_linkable_gods,
+    load_vault_entries_blocking, match_entity, resolve_link_name,
 };
 
-use wizard::prompt::wizard_menu;
+use wizard::prompt::{numbered_choices, optional_text, pick_value, skip_choice, wizard_menu};
 use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
+
+// ---------------------------------------------------------------------------
+// Step ids + faction-link routing mode
+// ---------------------------------------------------------------------------
+//
+// Every step id and `Goto` target is a named constant so a typo or rename is a compile
+// error, not a path that fails only when a GM walks it (code-review M3). `STEP_*` is the
+// wizard's single id registry; `every_declared_step_id_is_registered_once` asserts it
+// matches the steps actually registered in `LocationWizard::new`. NOTE: these are *step
+// ids*, distinct from the `kind_type` vocab (`"guildhall"`, `"hamlet"`, …) the router
+// matches on — only `MODE_GUILDHALL` below doubles as a routing key that isn't a step.
+
+const STEP_KIND: &str = "kind";
+const STEP_CONTROL: &str = "control";
+const STEP_RESOURCES: &str = "resources";
+const STEP_EXPORT_MODE: &str = "export_mode";
+const STEP_GEOGRAPHY_SETTLEMENT: &str = "geography_settlement";
+const STEP_SITE_FOCUS: &str = "site_focus";
+const STEP_SITE_DANGER: &str = "site_danger";
+const STEP_SITE_DRAW: &str = "site_draw";
+const STEP_GEOGRAPHY_SITE: &str = "geography_site";
+const STEP_BASE_OWNER: &str = "base_owner";
+const STEP_BASE_PROTECTION: &str = "base_protection";
+const STEP_BASE_DANGER: &str = "base_danger";
+const STEP_BASE_PURPOSE: &str = "base_purpose";
+const STEP_GEOGRAPHY_HIDEOUT: &str = "geography_hideout";
+const STEP_GUILDHALL_ROLE: &str = "guildhall_role";
+const STEP_GUILDHALL_ANCHOR: &str = "guildhall_anchor";
+const STEP_CUSTOM_SEED: &str = "custom_seed";
+const STEP_FACTION_LINK: &str = "faction_link";
+const STEP_SITE_GOD: &str = "site_god";
+
+/// The one `faction_link_return` value that isn't a step id: a guildhall's link is
+/// mandatory. The other return values are the originating step ids (`STEP_CONTROL`,
+/// `STEP_BASE_OWNER`), which the link step routes back from.
+const MODE_GUILDHALL: &str = "guildhall";
 
 // ---------------------------------------------------------------------------
 // Accumulator
@@ -62,6 +98,9 @@ struct LocationWizardData {
     kind_type: String,
     kind_custom: Option<String>,
     /// Set after option `0`: the next submission on the kind step is the custom name.
+    /// Unlike the faction wizard's `awaiting_custom_brand`, this needs no reset-on-entry:
+    /// `kind` is the root step (cursor 0, empty history), so `back` can never leave its
+    /// custom-entry sub-screen and the flag cannot bleed into another step (H3).
     awaiting_custom_kind: bool,
 
     // Settlement (Q-A…Q-D)
@@ -72,6 +111,10 @@ struct LocationWizardData {
     // Site (Q-S1…Q-S3)
     site_focus: Option<String>,
     site_draw: Option<String>,
+    // The deity a "holy site" draw is dedicated to (Q-S3a). The god's vault note is
+    // pulled in as authoritative context via `@gods/<name>` so the prose stays in its
+    // domain. Set only when the GM picked the holy-site draw; blank otherwise.
+    site_god: Option<String>,
 
     // Hideout (Q-H1…Q-H4)
     base_owner: Option<String>,
@@ -110,6 +153,10 @@ struct LocationWizardData {
     // flat faction set) so the path-keyed `@reference` resolves.
     locations: Vec<LocationAnchorChoice>,
 
+    // Holy-site god picker (Q-S3a): the searchable set of gods loaded on entry; the
+    // chosen name lands in `site_god`.
+    gods: Vec<(String, String)>,
+
     // Generated seed handed to `finalize`/the editor, plus a one-shot notice.
     seed: Option<LocationSeed>,
     notice: Option<String>,
@@ -141,6 +188,7 @@ impl LocationWizardData {
             export_mode: self.export_mode.clone(),
             site_focus: self.site_focus.clone(),
             site_draw: self.site_draw.clone(),
+            site_god: self.site_god.clone(),
             base_owner: self.base_owner.clone(),
             base_protection: self.base_protection.clone(),
             base_purpose: self.base_purpose.clone(),
@@ -208,7 +256,7 @@ struct KindStep;
 #[async_trait]
 impl WizardStep<AppState> for KindStep {
     fn id(&self) -> &'static str {
-        "kind"
+        STEP_KIND
     }
 
     fn summary(&self) -> &'static str {
@@ -263,7 +311,7 @@ impl WizardStep<AppState> for KindStep {
                 data.kind_custom = Some(trimmed.to_string());
                 data.kind_type = "other".to_string();
                 data.awaiting_custom_kind = false;
-                return Ok(WizardTransition::Goto("custom_seed"));
+                return Ok(WizardTransition::Goto(STEP_CUSTOM_SEED));
             }
 
             if trimmed == "0" {
@@ -282,12 +330,12 @@ impl WizardStep<AppState> for KindStep {
         let kind = menu[n - 1];
         location_data_mut(d).kind_type = kind.to_string();
         match kind {
-            "hamlet" | "town" | "city" => Ok(WizardTransition::Goto("control")),
-            "ruin" | "landmark" | "wilderness" => Ok(WizardTransition::Goto("site_focus")),
-            "hideout" => Ok(WizardTransition::Goto("base_owner")),
+            "hamlet" | "town" | "city" => Ok(WizardTransition::Goto(STEP_CONTROL)),
+            "ruin" | "landmark" | "wilderness" => Ok(WizardTransition::Goto(STEP_SITE_FOCUS)),
+            "hideout" => Ok(WizardTransition::Goto(STEP_BASE_OWNER)),
             // A guildhall is a faction's public HQ, so it opens straight on the
             // (mandatory) faction link rather than the minimal lane.
-            "guildhall" => enter_faction_link(d, state, "guildhall").await,
+            "guildhall" => enter_faction_link(d, state, MODE_GUILDHALL).await,
             _ => Ok(WizardTransition::Stay),
         }
     }
@@ -297,21 +345,20 @@ impl WizardStep<AppState> for KindStep {
 // Settlement branch (Q-A…Q-D)
 // ---------------------------------------------------------------------------
 
-const CONTROL_LABELS: [&str; 5] = [
+const CONTROL_LABELS: [&str; 4] = [
     "noble house / lord",
-    "faction or guild",
-    "council / free city",
+    "faction, council, or guild",
+    "free city",
     "independent / contested",
-    "let the model decide",
 ];
-/// Parallel to `CONTROL_LABELS`; the authoritative phrasing fed to generation. An
-/// empty string means "let the model decide" → `control = None`.
-const CONTROL_VALUES: [&str; 5] = [
+/// Parallel to `CONTROL_LABELS`; the authoritative phrasing fed to generation.
+/// Every archetype is concrete — a settlement must have a stated power, so there is
+/// no "let the model decide" escape hatch here.
+const CONTROL_VALUES: [&str; 4] = [
     "a noble house or lord",
-    "a faction or guild",
-    "a ruling council or free city",
+    "a faction, council, or guild",
+    "a free city",
     "independent or contested rule",
-    "",
 ];
 
 struct ControlStep;
@@ -319,11 +366,11 @@ struct ControlStep;
 #[async_trait]
 impl WizardStep<AppState> for ControlStep {
     fn id(&self) -> &'static str {
-        "control"
+        STEP_CONTROL
     }
 
     fn summary(&self) -> &'static str {
-        "Who controls this settlement? Pick an archetype, or link an existing faction."
+        "Who controls this settlement? A house or a faction/guild links a specific faction."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -335,12 +382,7 @@ impl WizardStep<AppState> for ControlStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        // Linking is always option 0, above the archetypes.
-        let mut choices = vec![link_faction_choice(
-            "Point control at a faction already in your world",
-        )];
-        choices.extend(numbered_choices(&CONTROL_LABELS));
-        choices
+        numbered_choices(&CONTROL_LABELS)
     }
 
     async fn accept(
@@ -350,17 +392,21 @@ impl WizardStep<AppState> for ControlStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if trimmed == "0" || trimmed.eq_ignore_ascii_case("link") {
-            return enter_faction_link(d, state, "control").await;
-        }
         let Some(value) = pick_value(trimmed, &CONTROL_VALUES) else {
             return Ok(WizardTransition::Stay);
         };
         let data = location_data_mut(d);
-        data.control = (!value.is_empty()).then(|| value.to_string());
         // Re-answering control clears any prior faction link.
         data.faction_name = None;
         data.faction_ref = None;
+        data.control = Some(value.to_string());
+        // A noble house/lord or a faction/council/guild is a concrete organization, so
+        // let the GM link the specific one — grounding the prose — falling back to this
+        // archetype on skip. A free city or contested rule has no single controlling
+        // organization to link.
+        if value == CONTROL_VALUES[0] || value == CONTROL_VALUES[1] {
+            return enter_faction_link(d, state, STEP_CONTROL).await;
+        }
         Ok(WizardTransition::Next)
     }
 }
@@ -370,7 +416,7 @@ struct ResourcesStep;
 #[async_trait]
 impl WizardStep<AppState> for ResourcesStep {
     fn id(&self) -> &'static str {
-        "resources"
+        STEP_RESOURCES
     }
 
     fn summary(&self) -> &'static str {
@@ -398,24 +444,24 @@ impl WizardStep<AppState> for ResourcesStep {
     }
 }
 
-const EXPORT_MODE_LABELS: [&str; 3] = ["raw", "refined", "mixed"];
+const EXPORT_MODE_LABELS: [&str; 4] = ["raw", "refined", "mixed", "none"];
 
 struct ExportModeStep;
 
 #[async_trait]
 impl WizardStep<AppState> for ExportModeStep {
     fn id(&self) -> &'static str {
-        "export_mode"
+        STEP_EXPORT_MODE
     }
 
     fn summary(&self) -> &'static str {
-        "Are its exports raw, refined, or mixed? (transport logistics)"
+        "What does it export — raw, refined, mixed, or none? (transport logistics)"
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
         wizard_menu(
             "Create Location — Settlement — Exports",
-            "Are its exports raw, refined, or mixed?",
+            "What does it export? (a frontier town may export nothing)",
             &self.choices(data),
         )
     }
@@ -450,7 +496,7 @@ struct SiteFocusStep;
 #[async_trait]
 impl WizardStep<AppState> for SiteFocusStep {
     fn id(&self) -> &'static str {
-        "site_focus"
+        STEP_SITE_FOCUS
     }
 
     fn summary(&self) -> &'static str {
@@ -488,7 +534,7 @@ struct SiteDangerStep;
 #[async_trait]
 impl WizardStep<AppState> for SiteDangerStep {
     fn id(&self) -> &'static str {
-        "site_danger"
+        STEP_SITE_DANGER
     }
 
     fn summary(&self) -> &'static str {
@@ -521,27 +567,36 @@ impl WizardStep<AppState> for SiteDangerStep {
     }
 }
 
-const SITE_DRAW_LABELS: [&str; 5] = [
+const SITE_DRAW_LABELS: [&str; 7] = [
     "loot",
     "quest objective",
     "passage / shortcut",
     "a person who lives here",
     "buried lore",
+    "holy site",
+    "oddity",
 ];
-const SITE_DRAW_VALUES: [&str; 5] = [
+const SITE_DRAW_VALUES: [&str; 7] = [
     "loot waiting to be claimed",
     "a quest objective",
     "a passage or shortcut to somewhere else",
     "a person who lives here",
     "buried lore",
+    "a holy site devoted to a specific god",
+    "an inexplicable oddity — something that makes players ask \"why is this here?\"",
 ];
+
+/// The index of the holy-site draw in `SITE_DRAW_LABELS`/`VALUES`. Picking it routes to
+/// the mandatory god picker so the chosen deity's vault note grounds the prose; every
+/// other draw flows straight on to generation.
+const HOLY_SITE_DRAW_INDEX: usize = 5;
 
 struct SiteDrawStep;
 
 #[async_trait]
 impl WizardStep<AppState> for SiteDrawStep {
     fn id(&self) -> &'static str {
-        "site_draw"
+        STEP_SITE_DRAW
     }
 
     fn summary(&self) -> &'static str {
@@ -564,7 +619,7 @@ impl WizardStep<AppState> for SiteDrawStep {
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
         let mut choices = numbered_choices(&SITE_DRAW_LABELS);
-        choices.push(WizardChoice::new("skip", "skip").with_help("Let the model pick the draw"));
+        choices.push(skip_choice("Let the model pick the draw"));
         choices
     }
 
@@ -572,7 +627,7 @@ impl WizardStep<AppState> for SiteDrawStep {
         &self,
         input: &str,
         d: &mut WizardData,
-        _state: &AppState,
+        state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
         let value = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
@@ -582,8 +637,72 @@ impl WizardStep<AppState> for SiteDrawStep {
         } else {
             Some(trimmed.to_string())
         };
-        location_data_mut(d).site_draw = value;
+        {
+            let data = location_data_mut(d);
+            data.site_draw = value.clone();
+            // Re-answering the draw clears any prior holy-site god link.
+            data.site_god = None;
+        }
+        // A holy site is dedicated to a specific deity — route to the (mandatory) god
+        // picker so its vault metadata grounds the prose. Every other draw goes straight
+        // to generation.
+        if value.as_deref() == Some(SITE_DRAW_VALUES[HOLY_SITE_DRAW_INDEX]) {
+            return enter_site_god_pick(d, state).await;
+        }
         Ok(WizardTransition::Next)
+    }
+}
+
+/// The holy-site god picker (reached only from the holy-site draw). Mandatory — a holy
+/// site is devoted to *someone* — and typeahead-driven; a free-typed name is accepted
+/// as a new ad hoc god reference. The chosen name grounds the prose via `@gods/<name>`.
+/// Continues to the site's generate step (its only inbound path is the draw step).
+struct SiteGodStep;
+
+#[async_trait]
+impl WizardStep<AppState> for SiteGodStep {
+    fn id(&self) -> &'static str {
+        STEP_SITE_GOD
+    }
+
+    fn summary(&self) -> &'static str {
+        "Which god is this site holy to? Type to search your gods, or type a new name."
+    }
+
+    fn prompt(&self, data: &WizardData) -> OutputDoc {
+        let body = if location_data(data).gods.is_empty() {
+            "Which god is this site holy to? No gods exist yet — type a name."
+        } else {
+            "Which god is this site holy to? Start typing to select a god, or type a new name."
+        };
+        doc()
+            .with_block(heading(2, "Create Location — Site — Patron God"))
+            .with_block(paragraph_text(body))
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        // Mandatory and typeahead-driven, so no listed action (and no `skip`).
+        Vec::new()
+    }
+
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        entity_suggestions(&location_data(data).gods, input)
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        _state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            // Mandatory: a holy site serves a specific deity.
+            return Ok(WizardTransition::Stay);
+        }
+        let name = resolve_link_name(&location_data(d).gods, trimmed, "gods")?;
+        location_data_mut(d).site_god = Some(name);
+        Ok(WizardTransition::Goto(STEP_GEOGRAPHY_SITE))
     }
 }
 
@@ -609,11 +728,11 @@ struct BaseOwnerStep;
 #[async_trait]
 impl WizardStep<AppState> for BaseOwnerStep {
     fn id(&self) -> &'static str {
-        "base_owner"
+        STEP_BASE_OWNER
     }
 
     fn summary(&self) -> &'static str {
-        "Whose base is it? Pick an owner, or link an existing faction."
+        "Whose base is it? A faction/guild links a specific faction."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -625,12 +744,7 @@ impl WizardStep<AppState> for BaseOwnerStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        // Linking is always option 0, above the archetypes.
-        let mut choices = vec![link_faction_choice(
-            "Point ownership at a faction already in your world",
-        )];
-        choices.extend(numbered_choices(&BASE_OWNER_LABELS));
-        choices
+        numbered_choices(&BASE_OWNER_LABELS)
     }
 
     async fn accept(
@@ -640,16 +754,20 @@ impl WizardStep<AppState> for BaseOwnerStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if trimmed == "0" || trimmed.eq_ignore_ascii_case("link") {
-            return enter_faction_link(d, state, "base_owner").await;
-        }
         let Some(value) = pick_value(trimmed, &BASE_OWNER_VALUES) else {
             return Ok(WizardTransition::Stay);
         };
         let data = location_data_mut(d);
-        data.base_owner = Some(value.to_string());
+        // Re-answering ownership clears any prior faction link.
         data.faction_name = None;
         data.faction_ref = None;
+        data.base_owner = Some(value.to_string());
+        // A faction or guild is a concrete organization, so let the GM link the specific
+        // one — grounding the prose — falling back to this archetype on skip. The other
+        // owners (a lone operator, a creature, a cult) need no link.
+        if value == BASE_OWNER_VALUES[0] {
+            return enter_faction_link(d, state, STEP_BASE_OWNER).await;
+        }
         Ok(WizardTransition::Next)
     }
 }
@@ -661,7 +779,7 @@ struct BaseProtectionStep;
 #[async_trait]
 impl WizardStep<AppState> for BaseProtectionStep {
     fn id(&self) -> &'static str {
-        "base_protection"
+        STEP_BASE_PROTECTION
     }
 
     fn summary(&self) -> &'static str {
@@ -699,7 +817,7 @@ struct BaseDangerStep;
 #[async_trait]
 impl WizardStep<AppState> for BaseDangerStep {
     fn id(&self) -> &'static str {
-        "base_danger"
+        STEP_BASE_DANGER
     }
 
     fn summary(&self) -> &'static str {
@@ -739,7 +857,7 @@ struct BasePurposeStep;
 #[async_trait]
 impl WizardStep<AppState> for BasePurposeStep {
     fn id(&self) -> &'static str {
-        "base_purpose"
+        STEP_BASE_PURPOSE
     }
 
     fn summary(&self) -> &'static str {
@@ -796,7 +914,7 @@ struct GuildhallRoleStep;
 #[async_trait]
 impl WizardStep<AppState> for GuildhallRoleStep {
     fn id(&self) -> &'static str {
-        "guildhall_role"
+        STEP_GUILDHALL_ROLE
     }
 
     fn summary(&self) -> &'static str {
@@ -819,9 +937,7 @@ impl WizardStep<AppState> for GuildhallRoleStep {
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
         let mut choices = numbered_choices(&GUILDHALL_ROLE_LABELS);
-        choices.push(
-            WizardChoice::new("skip", "skip").with_help("Let the model pick the hall's role"),
-        );
+        choices.push(skip_choice("Let the model pick the hall's role"));
         choices
     }
 
@@ -854,7 +970,7 @@ struct GuildhallAnchorStep;
 #[async_trait]
 impl WizardStep<AppState> for GuildhallAnchorStep {
     fn id(&self) -> &'static str {
-        "guildhall_anchor"
+        STEP_GUILDHALL_ANCHOR
     }
 
     fn summary(&self) -> &'static str {
@@ -990,7 +1106,7 @@ impl WizardStep<AppState> for GenerateStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![WizardChoice::new("skip", "skip").with_help("Generate without adding this")]
+        vec![skip_choice("Generate without adding this")]
     }
 
     async fn accept(
@@ -999,12 +1115,7 @@ impl WizardStep<AppState> for GenerateStep {
         d: &mut WizardData,
         state: &AppState,
     ) -> Result<WizardTransition, String> {
-        let trimmed = input.trim();
-        let value = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
-            None
-        } else {
-            Some(trimmed.to_string())
-        };
+        let value = optional_text(input);
         {
             let data = location_data_mut(d);
             match self.field {
@@ -1025,7 +1136,7 @@ impl WizardStep<AppState> for GenerateStep {
 /// faction's public HQ, so the link is required (no `skip`) and a name that matches
 /// nothing is accepted as a brand-new faction reference rather than rejected.
 fn faction_link_is_guildhall(data: &LocationWizardData) -> bool {
-    data.faction_link_return == Some("guildhall")
+    data.faction_link_return == Some(MODE_GUILDHALL)
 }
 
 struct FactionLinkStep;
@@ -1033,11 +1144,11 @@ struct FactionLinkStep;
 #[async_trait]
 impl WizardStep<AppState> for FactionLinkStep {
     fn id(&self) -> &'static str {
-        "faction_link"
+        STEP_FACTION_LINK
     }
 
     fn summary(&self) -> &'static str {
-        "Type to search your factions by name (autocomplete helps), or skip to pick an archetype."
+        "Type to search your factions by name to link a specific one, or skip to let the model invent it."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -1052,19 +1163,22 @@ impl WizardStep<AppState> for FactionLinkStep {
             ));
         }
 
+        // The GM already chose the archetype (a house, a faction/guild, …); linking just
+        // pins it to a specific faction so its metadata grounds the prose. Skipping keeps
+        // that archetype and lets the model invent the specifics.
         if d.factions.is_empty() {
             document = document.with_block(paragraph_with_inlines(vec![
                 text_node("No factions exist yet. "),
                 command_ref("skip", "skip"),
-                text_node(" to pick an archetype instead."),
+                text_node(" to let the model invent one."),
             ]));
         } else {
             // A long campaign can have hundreds of factions, so search rather than
             // enumerate: typeahead (`suggest`) lists matches as the GM types.
             document = document.with_block(paragraph_with_inlines(vec![
-                text_node("Search your factions by name, or "),
+                text_node("Search your factions to link the specific one, or "),
                 command_ref("skip", "skip"),
-                text_node(" to choose an archetype instead."),
+                text_node(" to let the model invent it."),
             ]));
         }
         document
@@ -1077,10 +1191,9 @@ impl WizardStep<AppState> for FactionLinkStep {
         if faction_link_is_guildhall(location_data(data)) {
             return Vec::new();
         }
-        vec![
-            WizardChoice::new("skip", "skip")
-                .with_help("Don't link a faction; pick an archetype instead"),
-        ]
+        vec![skip_choice(
+            "Don't link a specific faction; let the model invent it",
+        )]
     }
 
     /// Typeahead over the factions loaded on entry; `accept` resolves the submitted
@@ -1103,19 +1216,27 @@ impl WizardStep<AppState> for FactionLinkStep {
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
         let data = location_data_mut(d);
-        let return_step = data.faction_link_return.unwrap_or("control");
-        let guildhall = return_step == "guildhall";
+        let return_step = data.faction_link_return.unwrap_or(STEP_CONTROL);
+        let guildhall = return_step == MODE_GUILDHALL;
 
-        if trimmed.is_empty() {
-            // Guildhall: the link is mandatory, so re-prompt instead of skipping.
+        // Where the flow continues after the (optional) link. The control/owner step
+        // already locked its archetype, so the link only *refines* it — skipping or
+        // linking both move forward to the same next step.
+        let next = match return_step {
+            STEP_BASE_OWNER => STEP_BASE_PROTECTION,
+            MODE_GUILDHALL => STEP_GUILDHALL_ROLE,
+            _ => STEP_RESOURCES,
+        };
+
+        // Skip / empty: a guildhall link is mandatory (re-prompt); otherwise the
+        // archetype the GM already picked stands as the control/owner, so continue
+        // forward without pinning a specific faction.
+        if trimmed.is_empty() || (!guildhall && trimmed.eq_ignore_ascii_case("skip")) {
             return Ok(if guildhall {
                 WizardTransition::Stay
             } else {
-                WizardTransition::Goto(return_step)
+                WizardTransition::Goto(next)
             });
-        }
-        if !guildhall && trimmed.eq_ignore_ascii_case("skip") {
-            return Ok(WizardTransition::Goto(return_step));
         }
 
         // A linked faction carries its slug; an unmatched name has none. A guildhall
@@ -1139,19 +1260,14 @@ impl WizardStep<AppState> for FactionLinkStep {
             }
         };
 
-        let next = match return_step {
-            "base_owner" => {
-                data.base_owner = Some(name.clone());
-                "base_protection"
-            }
-            // Guildhall locks `authority` to the faction via `faction_name`; there is
-            // no separate control/owner field to set.
-            "guildhall" => "guildhall_role",
-            _ => {
-                data.control = Some(name.clone());
-                "resources"
-            }
-        };
+        // The linked faction's name overrides the archetype phrasing on the relevant
+        // field; the guildhall locks `authority` via `faction_name` and has no separate
+        // control/owner field.
+        match return_step {
+            STEP_BASE_OWNER => data.base_owner = Some(name.clone()),
+            MODE_GUILDHALL => {}
+            _ => data.control = Some(name.clone()),
+        }
         data.faction_name = Some(name);
         data.faction_ref = faction_ref;
         Ok(WizardTransition::Goto(next))
@@ -1176,7 +1292,7 @@ impl LocationWizard {
                 Arc::new(ResourcesStep),
                 Arc::new(ExportModeStep),
                 Arc::new(GenerateStep {
-                    id: "geography_settlement",
+                    id: STEP_GEOGRAPHY_SETTLEMENT,
                     title: "Create Location — Settlement — Geography",
                     body: "Geography / trade route?",
                     field: SeedField::Geography,
@@ -1186,7 +1302,7 @@ impl LocationWizard {
                 Arc::new(SiteDangerStep),
                 Arc::new(SiteDrawStep),
                 Arc::new(GenerateStep {
-                    id: "geography_site",
+                    id: STEP_GEOGRAPHY_SITE,
                     title: "Create Location — Site — Map Anchor",
                     body: "Geography / map anchor?",
                     field: SeedField::Geography,
@@ -1197,7 +1313,7 @@ impl LocationWizard {
                 Arc::new(BaseDangerStep),
                 Arc::new(BasePurposeStep),
                 Arc::new(GenerateStep {
-                    id: "geography_hideout",
+                    id: STEP_GEOGRAPHY_HIDEOUT,
                     title: "Create Location — Hideout — Map Anchor",
                     body: "Where does the base hide?",
                     field: SeedField::Geography,
@@ -1207,13 +1323,15 @@ impl LocationWizard {
                 Arc::new(GuildhallAnchorStep),
                 // Minimal / custom
                 Arc::new(GenerateStep {
-                    id: "custom_seed",
+                    id: STEP_CUSTOM_SEED,
                     title: "Create Location — Describe It",
                     body: "Describe this place in a sentence or two.",
                     field: SeedField::CustomSeed,
                 }),
                 // Shared read-only faction link (reached from control / base_owner)
                 Arc::new(FactionLinkStep),
+                // Holy-site god link (reached from the site draw step only)
+                Arc::new(SiteGodStep),
             ],
         }
     }
@@ -1267,26 +1385,6 @@ impl Wizard<AppState> for LocationWizard {
 // Shared helpers
 // ---------------------------------------------------------------------------
 
-/// Numbered, clickable choices from a label slice: `["raw","refined"]` →
-/// `1: raw`/`2: refined` with tokens `1`/`2`.
-fn numbered_choices(labels: &[&str]) -> Vec<WizardChoice> {
-    labels
-        .iter()
-        .enumerate()
-        .map(|(i, label)| WizardChoice::new(format!("{}: {label}", i + 1), (i + 1).to_string()))
-        .collect()
-}
-
-/// Map a numeric token (`1`-based) to its value in a parallel slice.
-fn pick_value<'a>(input: &str, values: &[&'a str]) -> Option<&'a str> {
-    let n = input.parse::<usize>().ok()?;
-    if (1..=values.len()).contains(&n) {
-        Some(values[n - 1])
-    } else {
-        None
-    }
-}
-
 const DANGER_LABELS: [&str; 5] = ["safe", "guarded", "risky", "deadly", "let the model decide"];
 const DANGER_VALUES: [&str; 5] = ["safe", "guarded", "risky", "deadly", "Unknown"];
 
@@ -1302,12 +1400,6 @@ fn pick_danger(input: &str) -> Option<String> {
         .then(|| value.to_string())
 }
 
-/// The leading "0: link an existing faction" entry shared by the control/owner
-/// menus, so linking is always option 0 (above the numbered archetypes).
-fn link_faction_choice(help: &'static str) -> WizardChoice {
-    WizardChoice::new("0: link an existing faction", "0").with_help(help)
-}
-
 /// Load the linkable factions (read-only) into the accumulator and jump to the
 /// faction-link step, remembering which step asked so `skip` can return there.
 async fn enter_faction_link(
@@ -1319,7 +1411,7 @@ async fn enter_faction_link(
     let data = location_data_mut(d);
     data.factions = factions;
     data.faction_link_return = Some(from_step);
-    Ok(WizardTransition::Goto("faction_link"))
+    Ok(WizardTransition::Goto(STEP_FACTION_LINK))
 }
 
 /// Load the existing locations (read-only) into the accumulator and jump to the
@@ -1330,7 +1422,18 @@ async fn enter_location_anchor(
 ) -> Result<WizardTransition, String> {
     let locations = load_linkable_locations(state).await?;
     location_data_mut(d).locations = locations;
-    Ok(WizardTransition::Goto("guildhall_anchor"))
+    Ok(WizardTransition::Goto(STEP_GUILDHALL_ANCHOR))
+}
+
+/// Load the linkable gods (read-only) into the accumulator and jump to the holy-site
+/// god picker. Mirrors [`enter_faction_link`] for the god picker.
+async fn enter_site_god_pick(
+    d: &mut WizardData,
+    state: &AppState,
+) -> Result<WizardTransition, String> {
+    let gods = load_linkable_gods(state).await?;
+    location_data_mut(d).gods = gods;
+    Ok(WizardTransition::Goto(STEP_SITE_GOD))
 }
 
 /// Every location the GM can anchor a guildhall to, read-only: unpublished drafts
@@ -1512,9 +1615,47 @@ mod tests {
     fn pick_value_maps_one_based_index() {
         assert_eq!(pick_value("1", &EXPORT_MODE_LABELS), Some("raw"));
         assert_eq!(pick_value("3", &EXPORT_MODE_LABELS), Some("mixed"));
+        assert_eq!(pick_value("4", &EXPORT_MODE_LABELS), Some("none"));
         assert_eq!(pick_value("0", &EXPORT_MODE_LABELS), None);
-        assert_eq!(pick_value("4", &EXPORT_MODE_LABELS), None);
+        assert_eq!(pick_value("5", &EXPORT_MODE_LABELS), None);
         assert_eq!(pick_value("x", &EXPORT_MODE_LABELS), None);
+    }
+
+    #[test]
+    fn menu_labels_stay_parallel_to_their_value_arrays() {
+        // Each step shows label[i] but stores VALUES[i]; a reorder of one array but not the
+        // other would silently desync the menu. Pin length + a representative mapping per
+        // pair (code-review H1). GUILDHALL_ROLE and the holy-site draw index are guarded by
+        // their own tests; this covers the remaining settlement/site/hideout/danger pairs.
+        assert_eq!(CONTROL_LABELS.len(), CONTROL_VALUES.len());
+        assert_eq!(
+            pick_value("1", &CONTROL_VALUES),
+            Some("a noble house or lord")
+        );
+        assert_eq!(
+            pick_value("4", &CONTROL_VALUES),
+            Some("independent or contested rule")
+        );
+
+        assert_eq!(SITE_FOCUS_LABELS.len(), SITE_FOCUS_VALUES.len());
+        assert_eq!(pick_value("1", &SITE_FOCUS_VALUES), Some("past"));
+        assert_eq!(pick_value("3", &SITE_FOCUS_VALUES), Some("balanced"));
+
+        assert_eq!(SITE_DRAW_LABELS.len(), SITE_DRAW_VALUES.len());
+        assert_eq!(
+            pick_value("1", &SITE_DRAW_VALUES),
+            Some("loot waiting to be claimed")
+        );
+
+        assert_eq!(BASE_OWNER_LABELS.len(), BASE_OWNER_VALUES.len());
+        assert_eq!(
+            pick_value("1", &BASE_OWNER_VALUES),
+            Some("a faction or guild")
+        );
+
+        // "let the model decide" (label index 4) maps to the schema's Unknown.
+        assert_eq!(DANGER_LABELS.len(), DANGER_VALUES.len());
+        assert_eq!(pick_value("5", &DANGER_VALUES), Some("Unknown"));
     }
 
     #[test]
@@ -1585,21 +1726,50 @@ mod tests {
     }
 
     #[test]
-    fn link_faction_is_always_option_zero() {
+    fn holy_site_draw_index_matches_its_label_and_value() {
+        // Guard the routing constant against label/value drift: the holy-site draw is the
+        // only one that branches to the god picker, keyed by this index.
+        assert_eq!(SITE_DRAW_LABELS[HOLY_SITE_DRAW_INDEX], "holy site");
+        assert_eq!(
+            SITE_DRAW_VALUES[HOLY_SITE_DRAW_INDEX],
+            "a holy site devoted to a specific god"
+        );
+    }
+
+    #[test]
+    fn seed_prompt_for_a_holy_site_grounds_the_linked_god() {
+        // A holy-site draw links a deity; the seed prompt must carry `@gods/<name>` so
+        // the god's vault note is pulled into context as authoritative flavor.
+        let d = LocationWizardData {
+            kind_type: "landmark".to_string(),
+            site_draw: Some(SITE_DRAW_VALUES[HOLY_SITE_DRAW_INDEX].to_string()),
+            site_god: Some("Maelra".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_seed_prompt(&d).expect("seed prompt");
+        assert!(prompt.contains("@gods/Maelra"));
+    }
+
+    #[test]
+    fn site_god_picker_is_mandatory_no_skip() {
+        // A holy site serves a specific deity, so the picker offers no `skip` action
+        // (mirrors the faction wizard's god picker and the guildhall anchor).
+        let data = WizardData::new(LocationWizardData::default());
+        assert!(SiteGodStep.choices(&data).is_empty());
+    }
+
+    #[test]
+    fn control_and_owner_menus_have_no_link_option() {
+        // The explicit "link a faction" option was removed; choosing a house / faction
+        // archetype now routes to the link step instead. So the menus start at the first
+        // archetype (token "1") and expose no token-"0" link entry.
         let data = WizardData::new(LocationWizardData::default());
         for choices in [ControlStep.choices(&data), BaseOwnerStep.choices(&data)] {
-            let first = &choices[0];
-            assert_eq!(first.token, "0", "link must submit token 0");
+            assert_eq!(choices[0].token, "1", "archetypes start at 1");
             assert!(
-                first
-                    .label
-                    .to_lowercase()
-                    .contains("link an existing faction"),
-                "option 0 should be the faction link, got {:?}",
-                first.label
+                !choices.iter().any(|choice| choice.token == "0"),
+                "no faction-link option should remain in the menu",
             );
-            // The archetypes follow, still numbered from 1.
-            assert_eq!(choices[1].token, "1");
         }
     }
 
@@ -1678,7 +1848,7 @@ mod tests {
 
     fn guildhall_link_data(factions: &[(&str, &str)]) -> WizardData {
         WizardData::new(LocationWizardData {
-            faction_link_return: Some("guildhall"),
+            faction_link_return: Some(MODE_GUILDHALL),
             factions: factions
                 .iter()
                 .map(|(name, slug)| (name.to_string(), slug.to_string()))
@@ -1691,9 +1861,9 @@ mod tests {
     fn faction_link_guildhall_mode_detected_by_return_step() {
         let mut d = LocationWizardData::default();
         assert!(!faction_link_is_guildhall(&d));
-        d.faction_link_return = Some("guildhall");
+        d.faction_link_return = Some(MODE_GUILDHALL);
         assert!(faction_link_is_guildhall(&d));
-        d.faction_link_return = Some("control");
+        d.faction_link_return = Some(STEP_CONTROL);
         assert!(!faction_link_is_guildhall(&d));
     }
 
@@ -1797,5 +1967,77 @@ mod tests {
         assert_eq!(draft.kind_type, "guildhall");
         assert_eq!(draft.kind_custom, None);
         assert!(draft.exports.is_empty());
+    }
+
+    #[test]
+    fn every_declared_step_id_is_registered_once() {
+        // The single id registry. Every `Goto`/`enter_*` target is one of these consts, so
+        // declared == registered proves no route dangles (engine errors on an unknown
+        // `Goto` only at runtime — this catches it in CI, code-review H2/M3).
+        const ALL_STEP_IDS: [&str; 19] = [
+            STEP_KIND,
+            STEP_CONTROL,
+            STEP_RESOURCES,
+            STEP_EXPORT_MODE,
+            STEP_GEOGRAPHY_SETTLEMENT,
+            STEP_SITE_FOCUS,
+            STEP_SITE_DANGER,
+            STEP_SITE_DRAW,
+            STEP_GEOGRAPHY_SITE,
+            STEP_BASE_OWNER,
+            STEP_BASE_PROTECTION,
+            STEP_BASE_DANGER,
+            STEP_BASE_PURPOSE,
+            STEP_GEOGRAPHY_HIDEOUT,
+            STEP_GUILDHALL_ROLE,
+            STEP_GUILDHALL_ANCHOR,
+            STEP_CUSTOM_SEED,
+            STEP_FACTION_LINK,
+            STEP_SITE_GOD,
+        ];
+        let registered: Vec<&str> = LocationWizard::new()
+            .steps()
+            .iter()
+            .map(|s| s.id())
+            .collect();
+        let unique: HashSet<&str> = registered.iter().copied().collect();
+        assert_eq!(
+            unique.len(),
+            registered.len(),
+            "duplicate step id registered"
+        );
+        let declared: HashSet<&str> = ALL_STEP_IDS.iter().copied().collect();
+        assert_eq!(
+            declared, unique,
+            "declared step ids must match the registered set"
+        );
+    }
+
+    #[test]
+    fn next_chains_stay_contiguous_in_declared_order() {
+        // Intra-branch `Next` is `cursor += 1`, so each chain only works while its steps
+        // stay adjacent and ordered in the steps() Vec. Pin those adjacencies so a reorder
+        // or inserted step fails in CI instead of mis-routing a GM mid-flow (code-review H2).
+        let wizard = LocationWizard::new();
+        let idx = |id: &str| {
+            wizard
+                .steps()
+                .iter()
+                .position(|s| s.id() == id)
+                .unwrap_or_else(|| panic!("step {id} not registered"))
+        };
+        // Settlement: control → resources → export_mode → geography_settlement.
+        assert_eq!(idx(STEP_RESOURCES), idx(STEP_CONTROL) + 1);
+        assert_eq!(idx(STEP_EXPORT_MODE), idx(STEP_RESOURCES) + 1);
+        assert_eq!(idx(STEP_GEOGRAPHY_SETTLEMENT), idx(STEP_EXPORT_MODE) + 1);
+        // Site: site_focus → site_danger → site_draw → geography_site.
+        assert_eq!(idx(STEP_SITE_DANGER), idx(STEP_SITE_FOCUS) + 1);
+        assert_eq!(idx(STEP_SITE_DRAW), idx(STEP_SITE_DANGER) + 1);
+        assert_eq!(idx(STEP_GEOGRAPHY_SITE), idx(STEP_SITE_DRAW) + 1);
+        // Hideout: base_owner → base_protection → base_danger → base_purpose → geography_hideout.
+        assert_eq!(idx(STEP_BASE_PROTECTION), idx(STEP_BASE_OWNER) + 1);
+        assert_eq!(idx(STEP_BASE_DANGER), idx(STEP_BASE_PROTECTION) + 1);
+        assert_eq!(idx(STEP_BASE_PURPOSE), idx(STEP_BASE_DANGER) + 1);
+        assert_eq!(idx(STEP_GEOGRAPHY_HIDEOUT), idx(STEP_BASE_PURPOSE) + 1);
     }
 }

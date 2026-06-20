@@ -7,9 +7,7 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text,
 };
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    FieldAccess, NPC_SCHEMA, canonical_field_name, format_valid_field_list,
-};
+use crate::entities::schema::{FieldAccess, canonical_field_name, format_valid_field_list};
 use crate::services::entity_reroll::{EntityRerollService, NpcRerollContext, RerollNpcFieldInput};
 use crate::utils::{normalize_sex, parse_carrying_csv};
 use dnd_core::command::CommandClientEvent;
@@ -28,10 +26,6 @@ impl NpcDomain {
 impl EntityDomain for NpcDomain {
     fn kind(&self) -> EntityKind {
         EntityKind::Npc
-    }
-
-    fn schema(&self) -> &'static crate::entities::schema::EntitySchema {
-        &NPC_SCHEMA
     }
 
     fn help_text(&self) -> String {

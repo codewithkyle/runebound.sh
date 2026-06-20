@@ -8,9 +8,7 @@ use crate::entities::common::{
     normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    FieldAccess, ITEM_SCHEMA, canonical_field_name, format_valid_field_list,
-};
+use crate::entities::schema::{FieldAccess, canonical_field_name, format_valid_field_list};
 use crate::services::entity_reroll::{
     EntityRerollService, ItemRerollContext, RerollItemFieldInput,
 };
@@ -31,10 +29,6 @@ impl ItemDomain {
 impl EntityDomain for ItemDomain {
     fn kind(&self) -> EntityKind {
         EntityKind::Item
-    }
-
-    fn schema(&self) -> &'static crate::entities::schema::EntitySchema {
-        &ITEM_SCHEMA
     }
 
     fn help_text(&self) -> String {

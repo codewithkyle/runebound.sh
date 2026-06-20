@@ -7,9 +7,7 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt, normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    FieldAccess, GOD_SCHEMA, canonical_field_name, format_valid_field_list,
-};
+use crate::entities::schema::{FieldAccess, canonical_field_name, format_valid_field_list};
 use crate::services::entity_reroll::{EntityRerollService, GodRerollContext, RerollGodFieldInput};
 use crate::utils::{
     normalize_god_alignment, normalize_god_rank, normalize_optional_prompt, path_for_display,
@@ -30,10 +28,6 @@ impl GodDomain {
 impl EntityDomain for GodDomain {
     fn kind(&self) -> EntityKind {
         EntityKind::God
-    }
-
-    fn schema(&self) -> &'static crate::entities::schema::EntitySchema {
-        &GOD_SCHEMA
     }
 
     fn help_text(&self) -> String {

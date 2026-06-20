@@ -6,8 +6,8 @@ pub use runebound_models::utils::{
     normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist, normalize_exports,
     normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
     normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_sex, normalize_unknown_list, normalize_unknown_text,
-    parse_list_csv,
+    normalize_location_kind_type, normalize_loyalty_type, normalize_name, normalize_sex,
+    normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 
 pub fn parse_carrying_csv(value: &str) -> Vec<String> {
@@ -88,7 +88,7 @@ pub fn validate_sentence_range(
 }
 
 pub fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, String> {
-    seed.name = seed.name.trim().to_string();
+    seed.name = normalize_name(&seed.name);
     seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
     seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
     if seed.kind_type == "other" {
@@ -151,34 +151,17 @@ pub fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
 }
 
 pub fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, String> {
-    seed.name = seed.name.trim().to_string();
+    seed.name = normalize_name(&seed.name);
     seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
-    seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
-    if seed.kind_type == "other" {
-        if seed
-            .kind_custom
-            .as_ref()
-            .is_none_or(|value| value.trim().is_empty())
-        {
-            return Err("kind_custom is required when kind_type is other".to_string());
-        }
-    } else {
-        seed.kind_custom = None;
-    }
     seed.public_description = normalize_unknown_text(&seed.public_description);
-    seed.true_agenda = normalize_unknown_text(&seed.true_agenda);
-    seed.methods = normalize_unknown_text(&seed.methods);
-    seed.leadership = normalize_unknown_text(&seed.leadership);
-    seed.headquarters = normalize_unknown_text(&seed.headquarters);
+    seed.reputation = normalize_unknown_text(&seed.reputation);
+    seed.symbol_description = normalize_unknown_text(&seed.symbol_description);
+    seed.want = normalize_unknown_text(&seed.want);
+    seed.obstacle = normalize_unknown_text(&seed.obstacle);
+    seed.action = normalize_unknown_text(&seed.action);
+    seed.consequence = normalize_unknown_text(&seed.consequence);
     seed.sphere_of_influence = normalize_unknown_text(&seed.sphere_of_influence);
     seed.resources_assets = normalize_unknown_list(seed.resources_assets);
-    seed.allies = normalize_unknown_list(seed.allies);
-    seed.rivals_enemies = normalize_unknown_list(seed.rivals_enemies);
-    seed.reputation = normalize_unknown_text(&seed.reputation);
-    seed.current_tension = normalize_unknown_text(&seed.current_tension);
-    seed.goals_short_term = normalize_unknown_list(seed.goals_short_term);
-    seed.goals_long_term = normalize_unknown_list(seed.goals_long_term);
-    seed.symbol_description = normalize_unknown_text(&seed.symbol_description);
     Ok(seed)
 }
 
@@ -189,11 +172,18 @@ pub fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
     if seed.public_description != "Unknown" {
         validate_sentence_range(&seed.public_description, 1, 3, "public_description")?;
     }
-    if seed.true_agenda != "Unknown" {
-        validate_sentence_range(&seed.true_agenda, 1, 3, "true_agenda")?;
+    // WOAC fields are each a 1-2 sentence beat.
+    if seed.want != "Unknown" {
+        validate_sentence_range(&seed.want, 1, 2, "want")?;
     }
-    if seed.current_tension != "Unknown" {
-        validate_sentence_range(&seed.current_tension, 1, 2, "current_tension")?;
+    if seed.obstacle != "Unknown" {
+        validate_sentence_range(&seed.obstacle, 1, 2, "obstacle")?;
+    }
+    if seed.action != "Unknown" {
+        validate_sentence_range(&seed.action, 1, 2, "action")?;
+    }
+    if seed.consequence != "Unknown" {
+        validate_sentence_range(&seed.consequence, 1, 2, "consequence")?;
     }
     if seed.symbol_description != "Unknown" {
         validate_sentence_range(&seed.symbol_description, 1, 1, "symbol_description")?;
@@ -202,7 +192,7 @@ pub fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
 }
 
 pub fn normalize_god_seed(mut seed: GodSeed) -> Result<GodSeed, String> {
-    seed.name = seed.name.trim().to_string();
+    seed.name = normalize_name(&seed.name);
     seed.rank = normalize_god_rank(&seed.rank)?;
     seed.rank_custom = seed.rank_custom.map(|value| value.trim().to_string());
     if seed.rank == "other" {
@@ -331,21 +321,15 @@ mod tests {
         let seed = FactionSeed {
             name: "Amber Syndicate".to_string(),
             kind_type: "guild".to_string(),
-            kind_custom: None,
             public_description: "Unknown".to_string(),
-            true_agenda: "Unknown".to_string(),
-            methods: "Unknown".to_string(),
-            leadership: "Unknown".to_string(),
-            headquarters: "Unknown".to_string(),
+            reputation: "Unknown".to_string(),
+            symbol_description: "Unknown".to_string(),
+            want: "Unknown".to_string(),
+            obstacle: "Unknown".to_string(),
+            action: "Unknown".to_string(),
+            consequence: "Unknown".to_string(),
             sphere_of_influence: "Unknown".to_string(),
             resources_assets: vec!["Unknown".to_string()],
-            allies: vec!["Unknown".to_string()],
-            rivals_enemies: vec!["Unknown".to_string()],
-            reputation: "Unknown".to_string(),
-            current_tension: "Unknown".to_string(),
-            goals_short_term: vec!["Unknown".to_string()],
-            goals_long_term: vec!["Unknown".to_string()],
-            symbol_description: "Unknown".to_string(),
         };
 
         let normalized = normalize_faction_seed(seed).expect("normalize succeeds");

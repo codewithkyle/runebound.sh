@@ -356,24 +356,21 @@ async fn reroll_current_faction(
     let SeedGeneration { seed, notice } = ai
         .generate_faction_seed(merged_prompt, database.as_ref(), generation_repo.as_ref())
         .await?;
+    // Whole-draft reroll regenerates only the LLM-filled fields (the WOAC seed). The
+    // relational/place fields — leader, allies, rivals_enemies, liege, loyalty_type —
+    // are GM-set and never LLM-generated (D3), so they are preserved across a reroll.
     draft.slug = slugify(&seed.name);
     draft.name = seed.name;
     draft.kind_type = seed.kind_type;
-    draft.kind_custom = seed.kind_custom;
     draft.public_description = seed.public_description;
-    draft.true_agenda = seed.true_agenda;
-    draft.methods = seed.methods;
-    draft.leadership = seed.leadership;
-    draft.headquarters = seed.headquarters;
+    draft.reputation = seed.reputation;
+    draft.symbol_description = seed.symbol_description;
+    draft.want = seed.want;
+    draft.obstacle = seed.obstacle;
+    draft.action = seed.action;
+    draft.consequence = seed.consequence;
     draft.sphere_of_influence = seed.sphere_of_influence;
     draft.resources_assets = seed.resources_assets;
-    draft.allies = seed.allies;
-    draft.rivals_enemies = seed.rivals_enemies;
-    draft.reputation = seed.reputation;
-    draft.current_tension = seed.current_tension;
-    draft.goals_short_term = seed.goals_short_term;
-    draft.goals_long_term = seed.goals_long_term;
-    draft.symbol_description = seed.symbol_description;
 
     {
         let mut editor = state.editor_session.lock().await;

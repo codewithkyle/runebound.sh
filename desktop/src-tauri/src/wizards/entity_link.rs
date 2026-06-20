@@ -83,6 +83,25 @@ pub(crate) fn match_entity(entities: &[(String, String)], trimmed: &str) -> Enti
     }
 }
 
+/// Resolve a submitted link name against a loaded `(name, slug)` set: an exact/unique
+/// match resolves to its canonical name; an unmatched name is accepted as free text
+/// (it renders as a `[[wikilink]]` that resolves by name in Obsidian, even before the
+/// entity exists); an ambiguous one asks the GM to narrow it. `kind` only labels the
+/// error message. Shared by the faction and location pickers.
+pub(crate) fn resolve_link_name(
+    entries: &[(String, String)],
+    trimmed: &str,
+    kind: &str,
+) -> Result<String, String> {
+    match match_entity(entries, trimmed) {
+        EntityMatch::Found(name, _) => Ok(name),
+        EntityMatch::None => Ok(trimmed.to_string()),
+        EntityMatch::Ambiguous => Err(format!(
+            "Several {kind} match \"{trimmed}\" — pick one from the list or keep typing."
+        )),
+    }
+}
+
 /// Merge DB drafts with published-note entries, deduping by slug (drafts win) and
 /// sorting by display name. The flat counterpart for any `(name, slug)` entity; the
 /// location picker keeps its own subfolder-preserving merge.
@@ -119,6 +138,34 @@ pub(crate) async fn load_linkable_factions(
 
     // Reading the vault is recursive, blocking IO; keep it off the async runtime.
     let published = tokio::task::spawn_blocking(|| load_published_entity_names("factions"))
+        .await
+        .map_err(|err| err.to_string())??;
+    Ok(merge_linkable(drafts, published))
+}
+
+/// Every NPC the GM can link as a faction's leader, read-only: unpublished drafts
+/// from the DB plus published notes recovered from the vault. Deduped by slug,
+/// sorted by name. Sibling of [`load_linkable_factions`] (swaps the repo + folder).
+pub(crate) async fn load_linkable_npcs(state: &AppState) -> Result<Vec<(String, String)>, String> {
+    let database = state.database();
+    let rows = state.npc_repo().list_all(database.as_ref()).await?;
+    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+
+    let published = tokio::task::spawn_blocking(|| load_published_entity_names("npcs"))
+        .await
+        .map_err(|err| err.to_string())??;
+    Ok(merge_linkable(drafts, published))
+}
+
+/// Every god the GM can link to a temple/cult, read-only: unpublished drafts from
+/// the DB plus published notes recovered from the vault. Deduped by slug, sorted by
+/// name. Sibling of [`load_linkable_factions`] (swaps the repo + folder).
+pub(crate) async fn load_linkable_gods(state: &AppState) -> Result<Vec<(String, String)>, String> {
+    let database = state.database();
+    let rows = state.god_repo().list_all(database.as_ref()).await?;
+    let drafts = rows.into_iter().map(|row| (row.name, row.slug)).collect();
+
+    let published = tokio::task::spawn_blocking(|| load_published_entity_names("gods"))
         .await
         .map_err(|err| err.to_string())??;
     Ok(merge_linkable(drafts, published))

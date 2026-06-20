@@ -7,9 +7,7 @@ use crate::entities::common::{
     merge_seed_and_reroll_prompt,
 };
 use crate::entities::domain::{EntityDetail, EntityDomain, EntityDomainResult};
-use crate::entities::schema::{
-    DUNGEON_SCHEMA, FieldAccess, canonical_field_name, format_valid_field_list,
-};
+use crate::entities::schema::{FieldAccess, canonical_field_name, format_valid_field_list};
 use crate::services::entity_reroll::{
     DungeonRerollContext, EntityRerollService, RerollDungeonBeatInput, RerollDungeonFieldInput,
 };
@@ -70,10 +68,6 @@ fn canonical_beat_field(raw: &str) -> Option<&'static str> {
 impl EntityDomain for DungeonDomain {
     fn kind(&self) -> EntityKind {
         EntityKind::Dungeon
-    }
-
-    fn schema(&self) -> &'static crate::entities::schema::EntitySchema {
-        &DUNGEON_SCHEMA
     }
 
     fn help_text(&self) -> String {

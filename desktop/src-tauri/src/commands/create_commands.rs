@@ -71,7 +71,13 @@ pub async fn handle_create(invocation: DesktopHandlerInvocation<'_>) -> CommandR
         return create_location(trimmed, invocation.state.clone()).await;
     }
 
-    if lowered == "create faction" || lowered.starts_with("create faction ") {
+    if lowered == "create faction" {
+        // Bare `create faction` launches the guided wizard (mirrors `create
+        // location`); the `<prompt>` form below stays the one-shot lane.
+        return crate::wizards::start_wizard("faction", invocation.state.inner()).await;
+    }
+
+    if lowered.starts_with("create faction ") {
         return create_faction(trimmed, invocation.state.clone()).await;
     }
 
@@ -231,21 +237,25 @@ async fn create_faction(trimmed: &str, state: tauri::State<'_, AppState>) -> Com
         name: seed.name,
         vault_path: String::new(),
         kind_type: seed.kind_type,
-        kind_custom: seed.kind_custom,
         public_description: seed.public_description,
-        true_agenda: seed.true_agenda,
-        methods: seed.methods,
-        leadership: seed.leadership,
-        headquarters: seed.headquarters,
+        reputation: seed.reputation,
+        symbol_description: seed.symbol_description,
+        want: seed.want,
+        obstacle: seed.obstacle,
+        action: seed.action,
+        consequence: seed.consequence,
         sphere_of_influence: seed.sphere_of_influence,
         resources_assets: seed.resources_assets,
-        allies: seed.allies,
-        rivals_enemies: seed.rivals_enemies,
-        reputation: seed.reputation,
-        current_tension: seed.current_tension,
-        goals_short_term: seed.goals_short_term,
-        goals_long_term: seed.goals_long_term,
-        symbol_description: seed.symbol_description,
+        // Relational/place fields are never generated (D3): a one-shot leaves them
+        // blank for the GM to link later. liege/loyalty_type apply only to houses
+        // vassals/lords, set in the wizard.
+        leader: String::new(),
+        allies: Vec::new(),
+        rivals_enemies: Vec::new(),
+        liege: None,
+        loyalty_type: None,
+        // One-shots always publish flat (only the wizard subfolders by category).
+        wizard_subfoldered: false,
     };
 
     {

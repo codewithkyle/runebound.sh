@@ -34,33 +34,36 @@ impl LocationKindType {
     }
 }
 
+// The 9 fixed kinds across the 3 categories (design §3). There is no `other` —
+// the freeform one-shot lane still picks one of these 9.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum FactionKindType {
+    // houses
+    GreatHouse,
+    MajorVassal,
+    MinorVassal,
+    IndividualLord,
+    // establishments
     Guild,
-    Cult,
-    MilitaryOrder,
-    NobleHouse,
+    Company,
     CriminalSyndicate,
-    MercantileLeague,
-    ReligiousOrder,
-    ArcaneCircle,
-    RevolutionaryCell,
-    Other,
+    // religion
+    Temple,
+    Cult,
 }
 
 impl FactionKindType {
     pub fn as_str(&self) -> &'static str {
         match self {
+            FactionKindType::GreatHouse => "great_house",
+            FactionKindType::MajorVassal => "major_vassal",
+            FactionKindType::MinorVassal => "minor_vassal",
+            FactionKindType::IndividualLord => "individual_lord",
             FactionKindType::Guild => "guild",
-            FactionKindType::Cult => "cult",
-            FactionKindType::MilitaryOrder => "military_order",
-            FactionKindType::NobleHouse => "noble_house",
+            FactionKindType::Company => "company",
             FactionKindType::CriminalSyndicate => "criminal_syndicate",
-            FactionKindType::MercantileLeague => "mercantile_league",
-            FactionKindType::ReligiousOrder => "religious_order",
-            FactionKindType::ArcaneCircle => "arcane_circle",
-            FactionKindType::RevolutionaryCell => "revolutionary_cell",
-            FactionKindType::Other => "other",
+            FactionKindType::Temple => "temple",
+            FactionKindType::Cult => "cult",
         }
     }
 }
@@ -79,17 +82,36 @@ pub const LOCATION_KIND_TYPES: [&str; 9] = [
 
 pub const LOCATION_DANGER_LEVELS: [&str; 5] = ["Unknown", "safe", "guarded", "risky", "deadly"];
 
-pub const FACTION_KIND_TYPES: [&str; 10] = [
+// The 9 kinds, grouped by category (design §3). Replaces the old 10-kind enum;
+// there is no `other` (the freeform one-shot picks one of these 9).
+pub const FACTION_KIND_TYPES: [&str; 9] = [
+    // houses
+    "great_house",
+    "major_vassal",
+    "minor_vassal",
+    "individual_lord",
+    // establishments
     "guild",
-    "cult",
-    "military_order",
-    "noble_house",
+    "company",
     "criminal_syndicate",
-    "mercantile_league",
-    "religious_order",
-    "arcane_circle",
-    "revolutionary_cell",
-    "other",
+    // religion
+    "temple",
+    "cult",
+];
+
+// The 3 categories each kind rolls up into; drives the wizard branch + subfolder.
+pub const FACTION_CATEGORIES: [&str; 3] = ["houses", "establishments", "religion"];
+
+// Loyalty types for houses vassals/lords (design §6). Each carries a built-in
+// fault line fed to the LLM as grounding.
+pub const LOYALTY_TYPES: [&str; 7] = [
+    "reward",
+    "marriage",
+    "military",
+    "economic",
+    "shared_enemy",
+    "oath",
+    "secret",
 ];
 
 pub const ITEM_CATEGORIES: [&str; 8] = [
@@ -407,6 +429,23 @@ fn reference_path_prefix_len(s: &str) -> Option<usize> {
     Some(last_slash + 1)
 }
 
+/// Remove Markdown code formatting from generated text. The model sometimes wraps a
+/// name or a whole passage in backticks — inline `` `like this` `` or a fenced
+/// ```` ```block``` ````. Rendered, that becomes code, which breaks wikilinks (Obsidian
+/// ignores `[[…]]` inside code spans/blocks), corrupts slugs, and is never wanted in
+/// narrative content — we never style story prose or names as code. So every backtick
+/// is stripped.
+pub fn strip_code_formatting(text: &str) -> String {
+    text.replace('`', "")
+}
+
+/// Finalize a generated entity name: strip any code formatting the model wrapped it in
+/// (a backtick'd name breaks both its wikilink and its slug) and trim. Empty stays
+/// empty — name presence is each caller's own validation, not ours.
+pub fn normalize_name(value: &str) -> String {
+    strip_code_formatting(value).trim().to_string()
+}
+
 pub fn normalize_unknown_text(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -414,7 +453,8 @@ pub fn normalize_unknown_text(value: &str) -> String {
     }
 
     let stripped = strip_reference_syntax(trimmed);
-    let sanitized = stripped
+    let decoded = strip_code_formatting(&stripped);
+    let sanitized = decoded
         .trim()
         .trim_matches(|ch: char| matches!(ch, ',' | ';'))
         .trim();
@@ -429,7 +469,11 @@ pub fn normalize_unknown_text(value: &str) -> String {
 pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
-        .map(|value| strip_reference_syntax(value.trim()).trim().to_string())
+        .map(|value| {
+            strip_code_formatting(&strip_reference_syntax(value.trim()))
+                .trim()
+                .to_string()
+        })
         .filter(|value| !value.is_empty())
         .collect();
 
@@ -490,6 +534,20 @@ pub fn normalize_faction_kind_type(value: &str) -> Result<String, String> {
     }
 }
 
+pub fn normalize_loyalty_type(value: &str) -> Result<String, String> {
+    // Accept the menu's display spelling (`shared-enemy`/`shared enemy`) and store
+    // the canonical snake_case form.
+    let normalized = value.trim().to_ascii_lowercase().replace([' ', '-'], "_");
+    if LOYALTY_TYPES.contains(&normalized.as_str()) {
+        Ok(normalized)
+    } else {
+        Err(format!(
+            "loyalty_type must be one of: {}",
+            LOYALTY_TYPES.join(", ")
+        ))
+    }
+}
+
 pub fn normalize_item_category(value: &str) -> Result<String, String> {
     let normalized = value.trim().to_ascii_lowercase().replace('-', "_");
     if ITEM_CATEGORIES.contains(&normalized.as_str()) {
@@ -546,7 +604,7 @@ pub fn parse_list_csv(value: &str) -> Vec<String> {
 pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
-        .map(|value| value.trim().to_string())
+        .map(|value| strip_code_formatting(value.trim()).trim().to_string())
         .filter(|value| !value.is_empty())
         .collect();
     if cleaned.is_empty() {
@@ -651,6 +709,35 @@ mod tests {
         assert_eq!(normalize_unknown_text(",133"), "133");
         assert_eq!(normalize_unknown_text("243,"), "243");
         assert_eq!(normalize_unknown_text(",523,"), "523");
+    }
+
+    #[test]
+    fn normalize_unknown_text_strips_code_formatting() {
+        // The model occasionally wraps a name or a whole passage in backticks, which
+        // would render as code and break embedded wikilinks. We never want code styling.
+        assert_eq!(normalize_unknown_text("`House Everwood`"), "House Everwood");
+        assert_eq!(
+            normalize_unknown_text("```\nThe house seeks the throne.\n```"),
+            "The house seeks the throne."
+        );
+        // A value that was only backticks collapses to the Unknown sentinel.
+        assert_eq!(normalize_unknown_text("``"), "Unknown");
+    }
+
+    #[test]
+    fn normalize_name_strips_backticks_and_trims() {
+        assert_eq!(normalize_name("  `House Everwood` "), "House Everwood");
+        assert_eq!(normalize_name("House Everwood"), "House Everwood");
+        // Unlike prose, an empty name stays empty (the caller validates presence).
+        assert_eq!(normalize_name("``"), "");
+    }
+
+    #[test]
+    fn normalize_unknown_list_strips_code_formatting() {
+        assert_eq!(
+            normalize_unknown_list(vec!["`silver ore`".to_string(), "salt".to_string()]),
+            vec!["silver ore".to_string(), "salt".to_string()]
+        );
     }
 
     #[test]
@@ -763,5 +850,32 @@ mod tests {
             ]),
             vec!["Liam Vesper".to_string(), "smoked eel".to_string()]
         );
+    }
+
+    #[test]
+    fn normalize_faction_kind_type_accepts_the_new_nine() {
+        assert_eq!(
+            normalize_faction_kind_type("Great-House").unwrap(),
+            "great_house"
+        );
+        assert_eq!(normalize_faction_kind_type("temple").unwrap(), "temple");
+        // The old 10-kind vocabulary no longer validates.
+        assert!(normalize_faction_kind_type("noble_house").is_err());
+        assert!(normalize_faction_kind_type("other").is_err());
+    }
+
+    #[test]
+    fn normalize_loyalty_type_accepts_menu_spelling() {
+        assert_eq!(normalize_loyalty_type("oath").unwrap(), "oath");
+        // The picker shows `shared-enemy`; the stored form is snake_case.
+        assert_eq!(
+            normalize_loyalty_type("shared-enemy").unwrap(),
+            "shared_enemy"
+        );
+        assert_eq!(
+            normalize_loyalty_type("Shared Enemy").unwrap(),
+            "shared_enemy"
+        );
+        assert!(normalize_loyalty_type("fealty").is_err());
     }
 }
