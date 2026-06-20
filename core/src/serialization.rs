@@ -39,7 +39,8 @@ pub fn faction_list_from_db_text(value: &str) -> Vec<String> {
 /// "Unknown". This is the read-side mirror of `clean_link_list` on the save path, so
 /// a blank-stub list survives a save -> reload round-trip as blank.
 pub fn faction_link_list_from_db_text(value: &str) -> Vec<String> {
-    let items = serde_json::from_str::<Vec<String>>(value).unwrap_or_else(|_| parse_list_csv(value));
+    let items =
+        serde_json::from_str::<Vec<String>>(value).unwrap_or_else(|_| parse_list_csv(value));
     items
         .into_iter()
         .map(|item| item.trim().to_string())

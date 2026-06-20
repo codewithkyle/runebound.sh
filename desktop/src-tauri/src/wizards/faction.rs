@@ -34,8 +34,8 @@ use crate::services::ai_generation::{
 };
 use crate::utils::prepend_notice;
 use crate::wizards::entity_link::{
-    EntityMatch, entity_suggestions, load_linkable_factions, load_linkable_gods, load_linkable_npcs,
-    match_entity,
+    EntityMatch, entity_suggestions, load_linkable_factions, load_linkable_gods,
+    load_linkable_npcs, match_entity,
 };
 
 use wizard::prompt::wizard_menu;
@@ -795,7 +795,9 @@ impl WizardStep<AppState> for AmbitionStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        vec![skip_choice("Let the model infer the Want from the locked answers")]
+        vec![skip_choice(
+            "Let the model infer the Want from the locked answers",
+        )]
     }
 
     async fn accept(
@@ -940,10 +942,10 @@ impl WizardStep<AppState> for FactionPickStep {
             "patron" => Some("skip"),
             _ => Some("done"),
         };
-        if let Some(token) = action {
-            if query.is_empty() || token.starts_with(&query) {
-                out.push(WizardChoice::new(token, token));
-            }
+        if let Some(token) = action
+            && (query.is_empty() || token.starts_with(&query))
+        {
+            out.push(WizardChoice::new(token, token));
         }
         out
     }
@@ -1275,7 +1277,10 @@ fn resolve_link_name(
 /// Append a link name to a list, deduping case-insensitively (the repeatable
 /// allies/rivals pickers can re-enter the same name). Returns whether it was added.
 fn add_link(list: &mut Vec<String>, name: &str) -> bool {
-    if list.iter().any(|existing| existing.eq_ignore_ascii_case(name)) {
+    if list
+        .iter()
+        .any(|existing| existing.eq_ignore_ascii_case(name))
+    {
         return false;
     }
     list.push(name.to_string());
@@ -1286,7 +1291,10 @@ fn add_link(list: &mut Vec<String>, name: &str) -> bool {
 /// tokens so the menu can't drift from the vocab. The stored brand is the readable
 /// phrase (or custom free text).
 fn brand_labels() -> Vec<&'static str> {
-    HOUSE_BRANDS.iter().map(|token| brand_phrase(token)).collect()
+    HOUSE_BRANDS
+        .iter()
+        .map(|token| brand_phrase(token))
+        .collect()
 }
 
 /// A readable phrase for a `HOUSE_BRANDS` token (the menu label + stored value).
@@ -1495,8 +1503,7 @@ mod tests {
             );
         }
         // The three branch menus together cover all 9 kinds exactly once.
-        let menu_count =
-            HOUSE_LAYER_VALUES.len() + EST_KIND_VALUES.len() + REL_KIND_VALUES.len();
+        let menu_count = HOUSE_LAYER_VALUES.len() + EST_KIND_VALUES.len() + REL_KIND_VALUES.len();
         assert_eq!(menu_count, FACTION_KIND_TYPES.len());
     }
 
@@ -1528,7 +1535,10 @@ mod tests {
         // Same name (any case) is not re-added.
         assert!(!add_link(&mut list, "house vey"));
         assert!(add_link(&mut list, "The Dust Choir"));
-        assert_eq!(list, vec!["House Vey".to_string(), "The Dust Choir".to_string()]);
+        assert_eq!(
+            list,
+            vec!["House Vey".to_string(), "The Dust Choir".to_string()]
+        );
     }
 
     fn pick_data(mode: &'static str, factions: &[(&str, &str)]) -> WizardData {

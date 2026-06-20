@@ -121,7 +121,11 @@ pub fn render_faction_markdown_with_links(
     // controlling location usually doesn't exist yet at faction-creation time (§7).
     write_blank_section(&mut out, "Headquarters");
 
-    write_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
+    write_list_section(
+        &mut out,
+        "Resources & Assets",
+        &frontmatter.resources_assets,
+    );
     // Allies / Rivals — `[[wikilink]]` each when linked, else a blank stub (D4).
     write_linked_list_or_blank(&mut out, "Allies", &frontmatter.allies);
     write_linked_list_or_blank(&mut out, "Rivals", &frontmatter.rivals_enemies);

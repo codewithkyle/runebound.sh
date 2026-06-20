@@ -1378,7 +1378,10 @@ fn faction_context_summary(context: &FactionRerollContext) -> String {
         context.resources_assets.join(", "),
         context.allies.join(", "),
         context.rivals_enemies.join(", "),
-        context.liege.clone().unwrap_or_else(|| "(none)".to_string()),
+        context
+            .liege
+            .clone()
+            .unwrap_or_else(|| "(none)".to_string()),
         context
             .loyalty_type
             .clone()

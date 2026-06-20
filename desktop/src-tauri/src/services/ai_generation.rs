@@ -1556,12 +1556,7 @@ pub const REACH: [&str; 3] = ["local", "regional", "realm"];
 /// What a Great House is known for (design §8.1, Q3a); a menu the wizard also lets
 /// the GM override with custom free text.
 pub const HOUSE_BRANDS: [&str; 6] = [
-    "wealth",
-    "loyalty",
-    "martial",
-    "piety",
-    "cunning",
-    "lineage",
+    "wealth", "loyalty", "martial", "piety", "cunning", "lineage",
 ];
 
 /// `(lever, vulnerability → obstacle)` for a houses lord-type (design §4, Appendix B).
@@ -1663,7 +1658,9 @@ fn loyalty_fault(token: &str) -> Option<&'static str> {
     Some(match token {
         "reward" => "rewards slight everyone passed over and inflate the next demand",
         "marriage" => "a marriage bond splits loyalty and turns kin into hostages",
-        "military" => "one failure cracks it, and a vassal grown too strong is feared rather than trusted",
+        "military" => {
+            "one failure cracks it, and a vassal grown too strong is feared rather than trusted"
+        }
         "economic" => "a rival's better terms can buy the bond away",
         "shared_enemy" => "the bond dissolves the moment the common enemy is gone",
         "oath" => "an oath lasts only while someone still cares that it was sworn",
@@ -1747,12 +1744,12 @@ fn wizard_faction_system_prompt(inputs: &FactionWizardInputs, category: FactionC
             } else {
                 let liege = opt_clause(&inputs.liege).unwrap_or("its liege");
                 prompt.push_str(&format!(" It is sworn to {liege}."));
-                if let Some(loyalty) = opt_clause(&inputs.loyalty_type) {
-                    if let Some(fault) = loyalty_fault(loyalty) {
-                        prompt.push_str(&format!(
-                            " The bond is one of {loyalty}; let that loyalty's fault line surface in the obstacle: {fault}."
-                        ));
-                    }
+                if let Some(loyalty) = opt_clause(&inputs.loyalty_type)
+                    && let Some(fault) = loyalty_fault(loyalty)
+                {
+                    prompt.push_str(&format!(
+                        " The bond is one of {loyalty}; let that loyalty's fault line surface in the obstacle: {fault}."
+                    ));
                 }
                 prompt.push_str(
                     " Scale sphere_of_influence to its layer — a vassal or lord answers upward and holds less than a Great House.",
@@ -1760,7 +1757,8 @@ fn wizard_faction_system_prompt(inputs: &FactionWizardInputs, category: FactionC
             }
         }
         FactionCategory::Establishments => {
-            if let Some((what, vuln)) = opt_clause(&inputs.control_type).and_then(control_type_facts)
+            if let Some((what, vuln)) =
+                opt_clause(&inputs.control_type).and_then(control_type_facts)
             {
                 prompt.push_str(&format!(
                     " It makes its living by {what}; resources_assets must reflect that. Seed the obstacle from that vulnerability: {vuln}."
@@ -2874,10 +2872,12 @@ fn reference_payload_from_markdown(contents: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        LocationWizardInputs, NPC_GEN_SAMPLING, NpcSeed, OUTPUT_RESERVE_TOKENS, build_seed_payload,
+        FactionCategory, FactionWizardInputs, LocationWizardInputs, NPC_GEN_SAMPLING, NpcSeed,
+        OUTPUT_RESERVE_TOKENS, build_faction_wizard_user_prompt, build_seed_payload,
         build_wizard_user_prompt, capacity_notice, describe_recent_npc_occupation_anchors,
-        location_dir_for_kind, location_subfolder, occupation_anchor, recent_occupation_anchor_set,
-        reference_payload_from_markdown,
+        faction_dir_for_kind, faction_subfolder, location_dir_for_kind, location_subfolder,
+        occupation_anchor, recent_occupation_anchor_set, reference_payload_from_markdown,
+        wizard_faction_schema, wizard_faction_system_prompt,
     };
 
     #[test]
@@ -3089,5 +3089,227 @@ mod tests {
         let payload = reference_payload_from_markdown(markdown).expect("payload");
         assert!(payload.contains("Notes about Jimmy"));
         assert!(payload.contains("No runebound block"));
+    }
+
+    // ----------------------------------------------------------------------
+    // Faction wizard generation (Phase 5 §5.1)
+    // ----------------------------------------------------------------------
+
+    #[test]
+    fn faction_subfolder_maps_all_nine_kinds() {
+        // Houses.
+        for kind in [
+            "great_house",
+            "major_vassal",
+            "minor_vassal",
+            "individual_lord",
+        ] {
+            assert_eq!(faction_subfolder(kind), Some("houses"), "{kind}");
+        }
+        // Establishments.
+        for kind in ["guild", "company", "criminal_syndicate"] {
+            assert_eq!(faction_subfolder(kind), Some("establishments"), "{kind}");
+        }
+        // Religion.
+        for kind in ["temple", "cult"] {
+            assert_eq!(faction_subfolder(kind), Some("religion"), "{kind}");
+        }
+        // An unknown kind stays flat (no `other` in the faction scheme; D1).
+        assert_eq!(faction_subfolder("other"), None);
+        assert_eq!(faction_subfolder(""), None);
+    }
+
+    #[test]
+    fn faction_dir_for_kind_appends_category_or_stays_flat() {
+        assert_eq!(
+            faction_dir_for_kind("factions", "major_vassal"),
+            "factions/houses"
+        );
+        assert_eq!(
+            faction_dir_for_kind("factions", "guild"),
+            "factions/establishments"
+        );
+        assert_eq!(
+            faction_dir_for_kind("factions", "cult"),
+            "factions/religion"
+        );
+        // A one-shot / unknown kind publishes flat.
+        assert_eq!(faction_dir_for_kind("factions", ""), "factions");
+    }
+
+    #[test]
+    fn faction_wizard_prompt_emits_reference_tokens_for_houses() {
+        // Houses vassal: the liege is probed as `@factions/<name>` so its metadata is
+        // pulled into context.
+        let inputs = FactionWizardInputs {
+            kind_type: "major_vassal".to_string(),
+            power_base: Some("extraction".to_string()),
+            liege: Some("House Vaurel".to_string()),
+            loyalty_type: Some("oath".to_string()),
+            want: Some("Corner the salt trade".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_faction_wizard_user_prompt(&inputs);
+        assert!(prompt.contains("Create a major_vassal."));
+        assert!(prompt.contains("Power base: extraction."));
+        assert!(prompt.contains("@factions/House Vaurel"));
+        assert!(prompt.contains("Loyalty type: oath."));
+        assert!(prompt.contains("Ambition (Want): Corner the salt trade."));
+    }
+
+    #[test]
+    fn faction_wizard_prompt_emits_god_and_patron_tokens_for_religion() {
+        // Religion: the god is `@gods/<name>` and the patron is `@factions/<name>`.
+        let inputs = FactionWizardInputs {
+            kind_type: "cult".to_string(),
+            god: Some("Maelra".to_string()),
+            mandate: Some("sacrifice".to_string()),
+            patron: Some("House Vaurel".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_faction_wizard_user_prompt(&inputs);
+        assert!(prompt.contains("@gods/Maelra"));
+        assert!(prompt.contains("Mandate: sacrifice."));
+        assert!(prompt.contains("@factions/House Vaurel"));
+    }
+
+    #[test]
+    fn faction_wizard_prompt_emits_patron_token_for_establishments() {
+        let inputs = FactionWizardInputs {
+            kind_type: "guild".to_string(),
+            control_type: Some("craft".to_string()),
+            reach: Some("regional".to_string()),
+            patron: Some("House Vaurel".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_faction_wizard_user_prompt(&inputs);
+        assert!(prompt.contains("Controls: craft."));
+        assert!(prompt.contains("Reach: regional."));
+        assert!(prompt.contains("@factions/House Vaurel"));
+    }
+
+    #[test]
+    fn wizard_faction_schema_omits_kind_type_and_relational_fields() {
+        // The schema is GM-locked-kind + WOAC only: `kind_type` and every relational
+        // field (leader/allies/rivals/liege/loyalty) are excluded (D3).
+        for category in [
+            FactionCategory::Houses,
+            FactionCategory::Establishments,
+            FactionCategory::Religion,
+        ] {
+            let schema = wizard_faction_schema(category);
+            let props = schema["properties"].as_object().expect("properties object");
+            for required in [
+                "name",
+                "public_description",
+                "reputation",
+                "symbol_description",
+                "want",
+                "obstacle",
+                "action",
+                "consequence",
+                "sphere_of_influence",
+                "resources_assets",
+            ] {
+                assert!(
+                    props.contains_key(required),
+                    "schema must declare {required}"
+                );
+            }
+            for forbidden in [
+                "kind_type",
+                "category",
+                "leader",
+                "allies",
+                "rivals_enemies",
+                "liege",
+                "loyalty_type",
+                "headquarters",
+            ] {
+                assert!(
+                    !props.contains_key(forbidden),
+                    "schema must omit {forbidden}"
+                );
+            }
+            // Closed schema: the model can't slip extra fields in.
+            assert_eq!(
+                schema["additionalProperties"],
+                serde_json::Value::Bool(false)
+            );
+        }
+    }
+
+    #[test]
+    fn wizard_faction_system_prompt_seeds_obstacle_from_lord_type_vulnerability() {
+        // Each houses lord-type pre-seeds the Obstacle with its built-in fault line
+        // (Appendix B): March → the crown reclaims the autonomy; Extraction → the vein.
+        let march = FactionWizardInputs {
+            kind_type: "great_house".to_string(),
+            power_base: Some("march".to_string()),
+            ..Default::default()
+        };
+        let prompt = wizard_faction_system_prompt(&march, FactionCategory::Houses);
+        assert!(prompt.contains("Seed the obstacle from its built-in vulnerability"));
+        assert!(prompt.contains("crown reclaim the autonomy"));
+        // Great House framing: no direct peer assault.
+        assert!(prompt.contains("cannot directly assault its peers"));
+
+        let extraction = FactionWizardInputs {
+            kind_type: "minor_vassal".to_string(),
+            power_base: Some("extraction".to_string()),
+            liege: Some("House Vaurel".to_string()),
+            loyalty_type: Some("oath".to_string()),
+            ..Default::default()
+        };
+        let prompt = wizard_faction_system_prompt(&extraction, FactionCategory::Houses);
+        assert!(prompt.contains("the vein runs dry"));
+        // Vassal/lord framing: the liege + the loyalty fault line both surface.
+        assert!(prompt.contains("sworn to House Vaurel"));
+        assert!(prompt.contains("oath"));
+        assert!(prompt.contains("only while someone still cares"));
+    }
+
+    #[test]
+    fn wizard_faction_system_prompt_seeds_obstacle_from_control_type_and_mandate() {
+        // Establishment control type → its vulnerability.
+        let vice = FactionWizardInputs {
+            kind_type: "criminal_syndicate".to_string(),
+            control_type: Some("vice".to_string()),
+            reach: Some("local".to_string()),
+            ..Default::default()
+        };
+        let prompt = wizard_faction_system_prompt(&vice, FactionCategory::Establishments);
+        assert!(prompt.contains("the law, a rival crew, or a crackdown"));
+        // Syndicate widens the public/true gap.
+        assert!(prompt.contains("widen the gap between its public front and its true racket"));
+
+        // Religion mandate → its vulnerability, sharpened by the cult tone.
+        let cult = FactionWizardInputs {
+            kind_type: "cult".to_string(),
+            god: Some("Maelra".to_string()),
+            mandate: Some("secret_knowledge".to_string()),
+            reach: Some("regional".to_string()),
+            ..Default::default()
+        };
+        let prompt = wizard_faction_system_prompt(&cult, FactionCategory::Religion);
+        assert!(prompt.contains("the secret leaks"));
+        assert!(prompt.contains("widen the gap between its public creed and its true creed"));
+    }
+
+    #[test]
+    fn wizard_faction_system_prompt_locks_gm_want() {
+        let inputs = FactionWizardInputs {
+            kind_type: "great_house".to_string(),
+            power_base: Some("chokepoint".to_string()),
+            brand: Some("ancient lineage".to_string()),
+            want: Some("Hold the only bridge over the Ironwash".to_string()),
+            ..Default::default()
+        };
+        let prompt = wizard_faction_system_prompt(&inputs, FactionCategory::Houses);
+        // A GM-seeded Want is named in the prompt and the rest of WOAC is told to serve it.
+        assert!(prompt.contains("fixed the faction's Want"));
+        assert!(prompt.contains("Hold the only bridge over the Ironwash"));
+        // The Great House brand colors the visible face.
+        assert!(prompt.contains("known above all for ancient lineage"));
     }
 }

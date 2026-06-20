@@ -622,7 +622,10 @@ pub fn faction_entity_card(draft: &FactionDraft, footer: CardFooter) -> OutputDo
     {
         rows.push(entity_row("Loyalty:", loyalty.to_string()));
     }
-    rows.push(entity_row("Path:", normalize_unknown_text(&draft.vault_path)));
+    rows.push(entity_row(
+        "Path:",
+        normalize_unknown_text(&draft.vault_path),
+    ));
 
     let mut output = doc().with_block(entity_card(&draft.name, rows));
     if footer == CardFooter::Show {

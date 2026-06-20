@@ -1296,7 +1296,11 @@ mod tests {
         // (D3), so they must not surface as `reroll <field>` completions.
         let manifest = command_manifest::command_manifest();
         let command = find_command(&manifest, "faction").expect("missing faction command");
-        for input in ["faction reroll l", "faction reroll all", "faction reroll riv"] {
+        for input in [
+            "faction reroll l",
+            "faction reroll all",
+            "faction reroll riv",
+        ] {
             let parsed = command_parse::parse_command_input(input);
             let suggestions = build_entity_field_argument_suggestions(
                 EntityKind::Faction,
