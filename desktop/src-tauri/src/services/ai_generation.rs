@@ -2128,7 +2128,13 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
     let mut parts = vec![format!("Create a {kind}.")];
     match location_branch(kind) {
         LocationBranch::Settlement => {
-            if let Some(control) = opt_clause(&inputs.control) {
+            // A linked faction is emitted as `@factions/<name>` so its vault metadata
+            // grounds the prose (mirrors the guildhall); an archetype phrasing carries
+            // as plain text. `faction_name` is set only when the GM linked one at the
+            // control step (and `control` then equals that name).
+            if let Some(faction) = opt_clause(&inputs.faction_name) {
+                parts.push(format!("Controlled by @factions/{faction}."));
+            } else if let Some(control) = opt_clause(&inputs.control) {
                 parts.push(format!("Controlled by: {control}."));
             }
             if let Some(resources) = opt_clause(&inputs.resources) {
@@ -2147,7 +2153,11 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
             }
         }
         LocationBranch::Hideout => {
-            if let Some(owner) = opt_clause(&inputs.base_owner) {
+            // As with the settlement's control, a linked faction owner grounds the prose
+            // via `@factions/<name>`; an archetype owner carries as plain text.
+            if let Some(faction) = opt_clause(&inputs.faction_name) {
+                parts.push(format!("Owner: @factions/{faction}."));
+            } else if let Some(owner) = opt_clause(&inputs.base_owner) {
                 parts.push(format!("Owner: {owner}."));
             }
             if let Some(protection) = opt_clause(&inputs.base_protection) {
@@ -2954,6 +2964,41 @@ mod tests {
         let prompt = build_wizard_user_prompt(&inputs);
         assert!(prompt.contains("@locations/Silverhall"));
         assert!(!prompt.contains("@locations/settlements"));
+    }
+
+    #[test]
+    fn settlement_prompt_grounds_a_linked_controlling_faction() {
+        // A linked controlling faction is emitted as `@factions/<name>` so its metadata
+        // is pulled into context (like the guildhall); a bare archetype stays plain text.
+        let linked = LocationWizardInputs {
+            kind_type: "town".to_string(),
+            control: Some("House Everwood".to_string()),
+            faction_name: Some("House Everwood".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_wizard_user_prompt(&linked);
+        assert!(prompt.contains("Controlled by @factions/House Everwood."));
+
+        let archetype = LocationWizardInputs {
+            kind_type: "town".to_string(),
+            control: Some("a noble house or lord".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_wizard_user_prompt(&archetype);
+        assert!(prompt.contains("Controlled by: a noble house or lord."));
+        assert!(!prompt.contains("@factions/"));
+    }
+
+    #[test]
+    fn hideout_prompt_grounds_a_linked_owning_faction() {
+        let inputs = LocationWizardInputs {
+            kind_type: "hideout".to_string(),
+            base_owner: Some("The Ashen Veil".to_string()),
+            faction_name: Some("The Ashen Veil".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_wizard_user_prompt(&inputs);
+        assert!(prompt.contains("Owner: @factions/The Ashen Veil."));
     }
 
     #[test]

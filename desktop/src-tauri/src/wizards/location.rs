@@ -323,7 +323,7 @@ impl WizardStep<AppState> for ControlStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Who controls this settlement? Pick an archetype, or link an existing faction."
+        "Who controls this settlement? A house or a faction/guild links a specific faction."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -335,12 +335,7 @@ impl WizardStep<AppState> for ControlStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        // Linking is always option 0, above the archetypes.
-        let mut choices = vec![link_faction_choice(
-            "Point control at a faction already in your world",
-        )];
-        choices.extend(numbered_choices(&CONTROL_LABELS));
-        choices
+        numbered_choices(&CONTROL_LABELS)
     }
 
     async fn accept(
@@ -350,17 +345,21 @@ impl WizardStep<AppState> for ControlStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if trimmed == "0" || trimmed.eq_ignore_ascii_case("link") {
-            return enter_faction_link(d, state, "control").await;
-        }
         let Some(value) = pick_value(trimmed, &CONTROL_VALUES) else {
             return Ok(WizardTransition::Stay);
         };
         let data = location_data_mut(d);
-        data.control = (!value.is_empty()).then(|| value.to_string());
         // Re-answering control clears any prior faction link.
         data.faction_name = None;
         data.faction_ref = None;
+        data.control = (!value.is_empty()).then(|| value.to_string());
+        // A noble house/lord or a faction/guild is a concrete organization, so let the
+        // GM link the specific one — grounding the prose — falling back to this
+        // archetype on skip. The other archetypes (council, contested, the model's
+        // choice) need no link.
+        if value == CONTROL_VALUES[0] || value == CONTROL_VALUES[1] {
+            return enter_faction_link(d, state, "control").await;
+        }
         Ok(WizardTransition::Next)
     }
 }
@@ -613,7 +612,7 @@ impl WizardStep<AppState> for BaseOwnerStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Whose base is it? Pick an owner, or link an existing faction."
+        "Whose base is it? A faction/guild links a specific faction."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -625,12 +624,7 @@ impl WizardStep<AppState> for BaseOwnerStep {
     }
 
     fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
-        // Linking is always option 0, above the archetypes.
-        let mut choices = vec![link_faction_choice(
-            "Point ownership at a faction already in your world",
-        )];
-        choices.extend(numbered_choices(&BASE_OWNER_LABELS));
-        choices
+        numbered_choices(&BASE_OWNER_LABELS)
     }
 
     async fn accept(
@@ -640,16 +634,20 @@ impl WizardStep<AppState> for BaseOwnerStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if trimmed == "0" || trimmed.eq_ignore_ascii_case("link") {
-            return enter_faction_link(d, state, "base_owner").await;
-        }
         let Some(value) = pick_value(trimmed, &BASE_OWNER_VALUES) else {
             return Ok(WizardTransition::Stay);
         };
         let data = location_data_mut(d);
-        data.base_owner = Some(value.to_string());
+        // Re-answering ownership clears any prior faction link.
         data.faction_name = None;
         data.faction_ref = None;
+        data.base_owner = Some(value.to_string());
+        // A faction or guild is a concrete organization, so let the GM link the specific
+        // one — grounding the prose — falling back to this archetype on skip. The other
+        // owners (a lone operator, a creature, a cult) need no link.
+        if value == BASE_OWNER_VALUES[0] {
+            return enter_faction_link(d, state, "base_owner").await;
+        }
         Ok(WizardTransition::Next)
     }
 }
@@ -1037,7 +1035,7 @@ impl WizardStep<AppState> for FactionLinkStep {
     }
 
     fn summary(&self) -> &'static str {
-        "Type to search your factions by name (autocomplete helps), or skip to pick an archetype."
+        "Type to search your factions by name to link a specific one, or skip to let the model invent it."
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
@@ -1052,19 +1050,22 @@ impl WizardStep<AppState> for FactionLinkStep {
             ));
         }
 
+        // The GM already chose the archetype (a house, a faction/guild, …); linking just
+        // pins it to a specific faction so its metadata grounds the prose. Skipping keeps
+        // that archetype and lets the model invent the specifics.
         if d.factions.is_empty() {
             document = document.with_block(paragraph_with_inlines(vec![
                 text_node("No factions exist yet. "),
                 command_ref("skip", "skip"),
-                text_node(" to pick an archetype instead."),
+                text_node(" to let the model invent one."),
             ]));
         } else {
             // A long campaign can have hundreds of factions, so search rather than
             // enumerate: typeahead (`suggest`) lists matches as the GM types.
             document = document.with_block(paragraph_with_inlines(vec![
-                text_node("Search your factions by name, or "),
+                text_node("Search your factions to link the specific one, or "),
                 command_ref("skip", "skip"),
-                text_node(" to choose an archetype instead."),
+                text_node(" to let the model invent it."),
             ]));
         }
         document
@@ -1079,7 +1080,7 @@ impl WizardStep<AppState> for FactionLinkStep {
         }
         vec![
             WizardChoice::new("skip", "skip")
-                .with_help("Don't link a faction; pick an archetype instead"),
+                .with_help("Don't link a specific faction; let the model invent it"),
         ]
     }
 
@@ -1106,16 +1107,24 @@ impl WizardStep<AppState> for FactionLinkStep {
         let return_step = data.faction_link_return.unwrap_or("control");
         let guildhall = return_step == "guildhall";
 
-        if trimmed.is_empty() {
-            // Guildhall: the link is mandatory, so re-prompt instead of skipping.
+        // Where the flow continues after the (optional) link. The control/owner step
+        // already locked its archetype, so the link only *refines* it — skipping or
+        // linking both move forward to the same next step.
+        let next = match return_step {
+            "base_owner" => "base_protection",
+            "guildhall" => "guildhall_role",
+            _ => "resources",
+        };
+
+        // Skip / empty: a guildhall link is mandatory (re-prompt); otherwise the
+        // archetype the GM already picked stands as the control/owner, so continue
+        // forward without pinning a specific faction.
+        if trimmed.is_empty() || (!guildhall && trimmed.eq_ignore_ascii_case("skip")) {
             return Ok(if guildhall {
                 WizardTransition::Stay
             } else {
-                WizardTransition::Goto(return_step)
+                WizardTransition::Goto(next)
             });
-        }
-        if !guildhall && trimmed.eq_ignore_ascii_case("skip") {
-            return Ok(WizardTransition::Goto(return_step));
         }
 
         // A linked faction carries its slug; an unmatched name has none. A guildhall
@@ -1139,19 +1148,14 @@ impl WizardStep<AppState> for FactionLinkStep {
             }
         };
 
-        let next = match return_step {
-            "base_owner" => {
-                data.base_owner = Some(name.clone());
-                "base_protection"
-            }
-            // Guildhall locks `authority` to the faction via `faction_name`; there is
-            // no separate control/owner field to set.
-            "guildhall" => "guildhall_role",
-            _ => {
-                data.control = Some(name.clone());
-                "resources"
-            }
-        };
+        // The linked faction's name overrides the archetype phrasing on the relevant
+        // field; the guildhall locks `authority` via `faction_name` and has no separate
+        // control/owner field.
+        match return_step {
+            "base_owner" => data.base_owner = Some(name.clone()),
+            "guildhall" => {}
+            _ => data.control = Some(name.clone()),
+        }
         data.faction_name = Some(name);
         data.faction_ref = faction_ref;
         Ok(WizardTransition::Goto(next))
@@ -1300,12 +1304,6 @@ fn pick_danger(input: &str) -> Option<String> {
     LOCATION_DANGER_LEVELS
         .contains(&value)
         .then(|| value.to_string())
-}
-
-/// The leading "0: link an existing faction" entry shared by the control/owner
-/// menus, so linking is always option 0 (above the numbered archetypes).
-fn link_faction_choice(help: &'static str) -> WizardChoice {
-    WizardChoice::new("0: link an existing faction", "0").with_help(help)
 }
 
 /// Load the linkable factions (read-only) into the accumulator and jump to the
@@ -1585,21 +1583,17 @@ mod tests {
     }
 
     #[test]
-    fn link_faction_is_always_option_zero() {
+    fn control_and_owner_menus_have_no_link_option() {
+        // The explicit "link a faction" option was removed; choosing a house / faction
+        // archetype now routes to the link step instead. So the menus start at the first
+        // archetype (token "1") and expose no token-"0" link entry.
         let data = WizardData::new(LocationWizardData::default());
         for choices in [ControlStep.choices(&data), BaseOwnerStep.choices(&data)] {
-            let first = &choices[0];
-            assert_eq!(first.token, "0", "link must submit token 0");
+            assert_eq!(choices[0].token, "1", "archetypes start at 1");
             assert!(
-                first
-                    .label
-                    .to_lowercase()
-                    .contains("link an existing faction"),
-                "option 0 should be the faction link, got {:?}",
-                first.label
+                !choices.iter().any(|choice| choice.token == "0"),
+                "no faction-link option should remain in the menu",
             );
-            // The archetypes follow, still numbered from 1.
-            assert_eq!(choices[1].token, "1");
         }
     }
 
