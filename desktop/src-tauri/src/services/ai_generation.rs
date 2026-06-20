@@ -1952,6 +1952,10 @@ pub struct LocationWizardInputs {
     // Site (Q-S1…Q-S3)
     pub site_focus: Option<String>,
     pub site_draw: Option<String>,
+    // The deity a "holy site" draw is devoted to. Emitted as `@gods/<name>` so the
+    // god's vault note grounds the prose (mirrors the faction's god link). Grounding
+    // only — never generated.
+    pub site_god: Option<String>,
     // Hideout (Q-H1…Q-H4)
     pub base_owner: Option<String>,
     pub base_protection: Option<String>,
@@ -2037,9 +2041,15 @@ fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: Location
                 Some(draw) => format!(" The reason players are drawn here: {draw}."),
                 None => String::new(),
             };
+            let holy = match opt_clause(&inputs.site_god) {
+                Some(god) => format!(
+                    " This place is holy to {god}; steep its iconography, history_background, and current_tension in that deity's domain and worship, name its presiding clergy or sacred guardian in authority, and keep any name consistent with the referenced metadata about that god."
+                ),
+                None => String::new(),
+            };
             let danger = locked_danger_clause(&inputs.danger_lock);
             format!(
-                "You generate one usable D&D site seed (a {kind}) for a game master — a place the party stumbles upon, NOT a settlement. Return only JSON with fields name, visual_description, history_background, tone, authority, current_tension. Weight the writing toward {focus}.{draw}{geo} Do not invent rulers, governments, or exports; authority should name the lone occupant or guardian of the place, or 'Unknown' if it stands empty.{danger}{leash}",
+                "You generate one usable D&D site seed (a {kind}) for a game master — a place the party stumbles upon, NOT a settlement. Return only JSON with fields name, visual_description, history_background, tone, authority, current_tension. Weight the writing toward {focus}.{draw}{holy}{geo} Do not invent rulers, governments, or exports; authority should name the lone occupant or guardian of the place, or 'Unknown' if it stands empty.{danger}{leash}",
                 leash = LOCATION_PROSE_LEASH,
             )
         }
@@ -2161,6 +2171,11 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
             }
             if let Some(draw) = opt_clause(&inputs.site_draw) {
                 parts.push(format!("Draw: {draw}."));
+            }
+            // A holy-site draw links a deity; `@gods/<name>` pulls its vault metadata
+            // into context so the prose stays in that god's domain.
+            if let Some(god) = opt_clause(&inputs.site_god) {
+                parts.push(format!("Holy to @gods/{god}."));
             }
         }
         LocationBranch::Hideout => {
@@ -3018,6 +3033,32 @@ mod tests {
         let user = build_wizard_user_prompt(&inputs);
         assert!(user.contains("Exports: none (a consuming town)."));
         assert!(!user.contains("Export mode: none."));
+    }
+
+    #[test]
+    fn holy_site_grounds_its_linked_god_in_prompt_and_system() {
+        // A holy-site draw links a deity: the user prompt emits `@gods/<name>` (pulling
+        // its vault note into context) and the system prompt steers the prose into that
+        // god's domain — mirroring how the faction wizard grounds its god.
+        let inputs = LocationWizardInputs {
+            kind_type: "landmark".to_string(),
+            site_draw: Some("a holy site devoted to a specific god".to_string()),
+            site_god: Some("Maelra".to_string()),
+            ..Default::default()
+        };
+        let user = build_wizard_user_prompt(&inputs);
+        assert!(user.contains("Holy to @gods/Maelra."));
+
+        let system = wizard_location_system_prompt(&inputs, LocationBranch::Site);
+        assert!(system.contains("holy to Maelra"));
+
+        // A site with no linked god gets neither clause.
+        let plain = LocationWizardInputs {
+            kind_type: "ruin".to_string(),
+            ..Default::default()
+        };
+        assert!(!build_wizard_user_prompt(&plain).contains("@gods/"));
+        assert!(!wizard_location_system_prompt(&plain, LocationBranch::Site).contains("holy to"));
     }
 
     #[test]

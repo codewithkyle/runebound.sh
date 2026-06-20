@@ -32,8 +32,8 @@ use crate::services::ai_generation::{
 };
 use crate::utils::prepend_notice;
 use crate::wizards::entity_link::{
-    EntityMatch, entity_suggestions, entries_from_refs, load_linkable_factions,
-    load_vault_entries_blocking, match_entity,
+    EntityMatch, entity_suggestions, entries_from_refs, load_linkable_factions, load_linkable_gods,
+    load_vault_entries_blocking, match_entity, resolve_link_name,
 };
 
 use wizard::prompt::wizard_menu;
@@ -72,6 +72,10 @@ struct LocationWizardData {
     // Site (Q-S1…Q-S3)
     site_focus: Option<String>,
     site_draw: Option<String>,
+    // The deity a "holy site" draw is dedicated to (Q-S3a). The god's vault note is
+    // pulled in as authoritative context via `@gods/<name>` so the prose stays in its
+    // domain. Set only when the GM picked the holy-site draw; blank otherwise.
+    site_god: Option<String>,
 
     // Hideout (Q-H1…Q-H4)
     base_owner: Option<String>,
@@ -110,6 +114,10 @@ struct LocationWizardData {
     // flat faction set) so the path-keyed `@reference` resolves.
     locations: Vec<LocationAnchorChoice>,
 
+    // Holy-site god picker (Q-S3a): the searchable set of gods loaded on entry; the
+    // chosen name lands in `site_god`.
+    gods: Vec<(String, String)>,
+
     // Generated seed handed to `finalize`/the editor, plus a one-shot notice.
     seed: Option<LocationSeed>,
     notice: Option<String>,
@@ -141,6 +149,7 @@ impl LocationWizardData {
             export_mode: self.export_mode.clone(),
             site_focus: self.site_focus.clone(),
             site_draw: self.site_draw.clone(),
+            site_god: self.site_god.clone(),
             base_owner: self.base_owner.clone(),
             base_protection: self.base_protection.clone(),
             base_purpose: self.base_purpose.clone(),
@@ -519,20 +528,29 @@ impl WizardStep<AppState> for SiteDangerStep {
     }
 }
 
-const SITE_DRAW_LABELS: [&str; 5] = [
+const SITE_DRAW_LABELS: [&str; 7] = [
     "loot",
     "quest objective",
     "passage / shortcut",
     "a person who lives here",
     "buried lore",
+    "holy site",
+    "oddity",
 ];
-const SITE_DRAW_VALUES: [&str; 5] = [
+const SITE_DRAW_VALUES: [&str; 7] = [
     "loot waiting to be claimed",
     "a quest objective",
     "a passage or shortcut to somewhere else",
     "a person who lives here",
     "buried lore",
+    "a holy site devoted to a specific god",
+    "an inexplicable oddity — something that makes players ask \"why is this here?\"",
 ];
+
+/// The index of the holy-site draw in `SITE_DRAW_LABELS`/`VALUES`. Picking it routes to
+/// the mandatory god picker so the chosen deity's vault note grounds the prose; every
+/// other draw flows straight on to generation.
+const HOLY_SITE_DRAW_INDEX: usize = 5;
 
 struct SiteDrawStep;
 
@@ -570,7 +588,7 @@ impl WizardStep<AppState> for SiteDrawStep {
         &self,
         input: &str,
         d: &mut WizardData,
-        _state: &AppState,
+        state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
         let value = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
@@ -580,8 +598,72 @@ impl WizardStep<AppState> for SiteDrawStep {
         } else {
             Some(trimmed.to_string())
         };
-        location_data_mut(d).site_draw = value;
+        {
+            let data = location_data_mut(d);
+            data.site_draw = value.clone();
+            // Re-answering the draw clears any prior holy-site god link.
+            data.site_god = None;
+        }
+        // A holy site is dedicated to a specific deity — route to the (mandatory) god
+        // picker so its vault metadata grounds the prose. Every other draw goes straight
+        // to generation.
+        if value.as_deref() == Some(SITE_DRAW_VALUES[HOLY_SITE_DRAW_INDEX]) {
+            return enter_site_god_pick(d, state).await;
+        }
         Ok(WizardTransition::Next)
+    }
+}
+
+/// The holy-site god picker (reached only from the holy-site draw). Mandatory — a holy
+/// site is devoted to *someone* — and typeahead-driven; a free-typed name is accepted
+/// as a new ad hoc god reference. The chosen name grounds the prose via `@gods/<name>`.
+/// Continues to the site's generate step (its only inbound path is the draw step).
+struct SiteGodStep;
+
+#[async_trait]
+impl WizardStep<AppState> for SiteGodStep {
+    fn id(&self) -> &'static str {
+        "site_god"
+    }
+
+    fn summary(&self) -> &'static str {
+        "Which god is this site holy to? Type to search your gods, or type a new name."
+    }
+
+    fn prompt(&self, data: &WizardData) -> OutputDoc {
+        let body = if location_data(data).gods.is_empty() {
+            "Which god is this site holy to? No gods exist yet — type a name."
+        } else {
+            "Which god is this site holy to? Start typing to select a god, or type a new name."
+        };
+        doc()
+            .with_block(heading(2, "Create Location — Site — Patron God"))
+            .with_block(paragraph_text(body))
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        // Mandatory and typeahead-driven, so no listed action (and no `skip`).
+        Vec::new()
+    }
+
+    fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
+        entity_suggestions(&location_data(data).gods, input)
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        _state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            // Mandatory: a holy site serves a specific deity.
+            return Ok(WizardTransition::Stay);
+        }
+        let name = resolve_link_name(&location_data(d).gods, trimmed, "gods")?;
+        location_data_mut(d).site_god = Some(name);
+        Ok(WizardTransition::Goto("geography_site"))
     }
 }
 
@@ -1217,6 +1299,8 @@ impl LocationWizard {
                 }),
                 // Shared read-only faction link (reached from control / base_owner)
                 Arc::new(FactionLinkStep),
+                // Holy-site god link (reached from the site draw step only)
+                Arc::new(SiteGodStep),
             ],
         }
     }
@@ -1328,6 +1412,17 @@ async fn enter_location_anchor(
     let locations = load_linkable_locations(state).await?;
     location_data_mut(d).locations = locations;
     Ok(WizardTransition::Goto("guildhall_anchor"))
+}
+
+/// Load the linkable gods (read-only) into the accumulator and jump to the holy-site
+/// god picker. Mirrors [`enter_faction_link`] for the god picker.
+async fn enter_site_god_pick(
+    d: &mut WizardData,
+    state: &AppState,
+) -> Result<WizardTransition, String> {
+    let gods = load_linkable_gods(state).await?;
+    location_data_mut(d).gods = gods;
+    Ok(WizardTransition::Goto("site_god"))
 }
 
 /// Every location the GM can anchor a guildhall to, read-only: unpublished drafts
@@ -1580,6 +1675,39 @@ mod tests {
         let prompt = build_seed_prompt(&d).expect("seed prompt");
         assert!(prompt.contains("town"));
         assert!(prompt.contains("silver ore"));
+    }
+
+    #[test]
+    fn holy_site_draw_index_matches_its_label_and_value() {
+        // Guard the routing constant against label/value drift: the holy-site draw is the
+        // only one that branches to the god picker, keyed by this index.
+        assert_eq!(SITE_DRAW_LABELS[HOLY_SITE_DRAW_INDEX], "holy site");
+        assert_eq!(
+            SITE_DRAW_VALUES[HOLY_SITE_DRAW_INDEX],
+            "a holy site devoted to a specific god"
+        );
+    }
+
+    #[test]
+    fn seed_prompt_for_a_holy_site_grounds_the_linked_god() {
+        // A holy-site draw links a deity; the seed prompt must carry `@gods/<name>` so
+        // the god's vault note is pulled into context as authoritative flavor.
+        let d = LocationWizardData {
+            kind_type: "landmark".to_string(),
+            site_draw: Some(SITE_DRAW_VALUES[HOLY_SITE_DRAW_INDEX].to_string()),
+            site_god: Some("Maelra".to_string()),
+            ..Default::default()
+        };
+        let prompt = build_seed_prompt(&d).expect("seed prompt");
+        assert!(prompt.contains("@gods/Maelra"));
+    }
+
+    #[test]
+    fn site_god_picker_is_mandatory_no_skip() {
+        // A holy site serves a specific deity, so the picker offers no `skip` action
+        // (mirrors the faction wizard's god picker and the guildhall anchor).
+        let data = WizardData::new(LocationWizardData::default());
+        assert!(SiteGodStep.choices(&data).is_empty());
     }
 
     #[test]

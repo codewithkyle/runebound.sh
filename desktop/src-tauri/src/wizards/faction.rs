@@ -34,8 +34,8 @@ use crate::services::ai_generation::{
 };
 use crate::utils::prepend_notice;
 use crate::wizards::entity_link::{
-    EntityMatch, entity_suggestions, load_linkable_factions, load_linkable_gods,
-    load_linkable_npcs, match_entity,
+    entity_suggestions, load_linkable_factions, load_linkable_gods, load_linkable_npcs,
+    resolve_link_name,
 };
 
 use wizard::prompt::wizard_menu;
@@ -1252,25 +1252,6 @@ fn optional_text(input: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
-    }
-}
-
-/// Resolve a submitted link name against a loaded `(name, slug)` set: an exact/unique
-/// match resolves to its canonical name; an unmatched name is accepted as free text
-/// (it renders as a `[[wikilink]]` that resolves by name in Obsidian, even before the
-/// entity exists); an ambiguous one asks the GM to narrow it. `kind` only labels the
-/// error message.
-fn resolve_link_name(
-    entries: &[(String, String)],
-    trimmed: &str,
-    kind: &str,
-) -> Result<String, String> {
-    match match_entity(entries, trimmed) {
-        EntityMatch::Found(name, _) => Ok(name),
-        EntityMatch::None => Ok(trimmed.to_string()),
-        EntityMatch::Ambiguous => Err(format!(
-            "Several {kind} match \"{trimmed}\" — pick one from the list or keep typing."
-        )),
     }
 }
 
