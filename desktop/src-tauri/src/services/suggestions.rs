@@ -1234,6 +1234,96 @@ mod tests {
     }
 
     #[test]
+    fn faction_set_field_suggestions_include_woac_and_relational() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "faction").expect("missing faction command");
+
+        // WOAC + relational fields are all settable, so they complete after `set`.
+        for (input, completion) in [
+            ("faction set w", "faction set want "),
+            ("faction set obs", "faction set obstacle "),
+            ("faction set loy", "faction set loyalty "),
+            ("faction set lie", "faction set liege "),
+        ] {
+            let parsed = command_parse::parse_command_input(input);
+            let suggestions = build_entity_field_argument_suggestions(
+                EntityKind::Faction,
+                command,
+                Some("set"),
+                &parsed,
+                input,
+            )
+            .expect("expected suggestions");
+            assert!(
+                suggestions
+                    .iter()
+                    .any(|suggestion| suggestion.completion == completion),
+                "missing `{completion}` for input `{input}`"
+            );
+        }
+    }
+
+    #[test]
+    fn faction_reroll_field_suggestions_include_woac_fields() {
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "faction").expect("missing faction command");
+
+        for (input, completion) in [
+            ("faction reroll a", "faction reroll action "),
+            ("faction reroll o", "faction reroll obstacle "),
+        ] {
+            let parsed = command_parse::parse_command_input(input);
+            let suggestions = build_entity_field_argument_suggestions(
+                EntityKind::Faction,
+                command,
+                Some("reroll"),
+                &parsed,
+                input,
+            )
+            .expect("expected suggestions");
+            assert!(
+                suggestions
+                    .iter()
+                    .any(|suggestion| suggestion.completion == completion),
+                "missing `{completion}` for input `{input}`"
+            );
+        }
+    }
+
+    #[test]
+    fn faction_reroll_excludes_relational_fields() {
+        // leader / allies / rivals / liege / loyalty are settable but NEVER rerollable
+        // (D3), so they must not surface as `reroll <field>` completions.
+        let manifest = command_manifest::command_manifest();
+        let command = find_command(&manifest, "faction").expect("missing faction command");
+        for input in ["faction reroll l", "faction reroll all", "faction reroll riv"] {
+            let parsed = command_parse::parse_command_input(input);
+            let suggestions = build_entity_field_argument_suggestions(
+                EntityKind::Faction,
+                command,
+                Some("reroll"),
+                &parsed,
+                input,
+            )
+            .unwrap_or_default();
+            for forbidden in [
+                "faction reroll leader ",
+                "faction reroll liege ",
+                "faction reroll loyalty ",
+                "faction reroll allies ",
+                "faction reroll rivals ",
+            ] {
+                assert!(
+                    !suggestions
+                        .iter()
+                        .any(|suggestion| suggestion.completion == forbidden),
+                    "reroll must exclude `{forbidden}` (input `{input}`)"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn entity_kind_for_dungeon_root_maps_to_dungeon_kind() {
         assert_eq!(entity_kind_for_root("dungeon"), Some(EntityKind::Dungeon));
     }

@@ -87,46 +87,53 @@ pub fn render_faction_markdown_with_links(
     linker: &EntityLinker,
 ) -> String {
     let mut out = String::new();
-    write_attr_line(&mut out, "Kind", &frontmatter.kind_type);
-    if let Some(custom) = &frontmatter.kind_custom
-        && !custom.trim().is_empty()
-    {
-        write_attr_line(&mut out, "Kind (custom)", custom);
-    }
+    // Attr lines: the kind in display form + the derived category (D2).
+    write_attr_line(&mut out, "Kind", &faction_kind_display(frontmatter));
+    write_attr_line(&mut out, "Category", &title_case(&frontmatter.category));
     writeln!(&mut out).ok();
-    write_section(&mut out, "Headquarters", &frontmatter.headquarters, linker);
-    write_section(
-        &mut out,
-        "Sphere of Influence",
-        &frontmatter.sphere_of_influence,
-        linker,
-    );
-    write_section(&mut out, "Reputation", &frontmatter.reputation, linker);
+
+    // Visible face (design §5): the public claim, separate from the engine below.
     write_section(
         &mut out,
         "Public Description",
         &frontmatter.public_description,
         linker,
     );
-    write_section(&mut out, "True Agenda", &frontmatter.true_agenda, linker);
-    write_section(&mut out, "Methods", &frontmatter.methods, linker);
-    write_section(&mut out, "Leadership", &frontmatter.leadership, linker);
-    write_list_section(
-        &mut out,
-        "Resources & Assets",
-        &frontmatter.resources_assets,
-    );
-    write_linked_list_section(&mut out, "Allies", &frontmatter.allies);
-    write_linked_list_section(&mut out, "Rivals", &frontmatter.rivals_enemies);
+    write_section(&mut out, "Reputation", &frontmatter.reputation, linker);
+    write_section(&mut out, "Symbol", &frontmatter.symbol_description, linker);
+
+    // WOAC engine — Want → Obstacle → Action → Consequence — then its reach.
+    write_section(&mut out, "Want", &frontmatter.want, linker);
+    write_section(&mut out, "Obstacle", &frontmatter.obstacle, linker);
+    write_section(&mut out, "Action", &frontmatter.action, linker);
+    write_section(&mut out, "Consequence", &frontmatter.consequence, linker);
     write_section(
         &mut out,
-        "Current Tension",
-        &frontmatter.current_tension,
+        "Sphere of Influence",
+        &frontmatter.sphere_of_influence,
         linker,
     );
-    write_list_section(&mut out, "Short-Term Goals", &frontmatter.goals_short_term);
-    write_list_section(&mut out, "Long-Term Goals", &frontmatter.goals_long_term);
-    write_section(&mut out, "Symbol", &frontmatter.symbol_description, linker);
+
+    // Leadership — the NPC link when set, else a blank stub for the GM to fill in
+    // Obsidian (never LLM-generated; D3/§7).
+    write_linked_section(&mut out, "Leadership", &frontmatter.leader);
+    // Headquarters — dropped from the data, still rendered as a blank stub: the
+    // controlling location usually doesn't exist yet at faction-creation time (§7).
+    write_blank_section(&mut out, "Headquarters");
+
+    write_list_section(&mut out, "Resources & Assets", &frontmatter.resources_assets);
+    // Allies / Rivals — `[[wikilink]]` each when linked, else a blank stub (D4).
+    write_linked_list_or_blank(&mut out, "Allies", &frontmatter.allies);
+    write_linked_list_or_blank(&mut out, "Rivals", &frontmatter.rivals_enemies);
+
+    // Houses Vassal/Lord only (design §6): the liege link + the loyalty type. Absent
+    // (rendered nothing) for every other faction.
+    if let Some(liege) = frontmatter.liege.as_deref() {
+        write_attr_line_linked(&mut out, "Liege", liege);
+    }
+    if let Some(loyalty) = frontmatter.loyalty_type.as_deref() {
+        write_attr_line(&mut out, "Loyalty", loyalty);
+    }
 
     out
 }
@@ -313,16 +320,17 @@ pub fn location_prose(frontmatter: &LocationFrontmatter) -> String {
 }
 
 pub fn faction_prose(frontmatter: &FactionFrontmatter) -> String {
+    // The free-text prose sections (mirrors the `write_section` calls in
+    // `render_faction_markdown_with_links`); the relational/list fields are excluded.
     join_prose(&[
-        &frontmatter.headquarters,
-        &frontmatter.sphere_of_influence,
-        &frontmatter.reputation,
         &frontmatter.public_description,
-        &frontmatter.true_agenda,
-        &frontmatter.methods,
-        &frontmatter.leadership,
-        &frontmatter.current_tension,
+        &frontmatter.reputation,
         &frontmatter.symbol_description,
+        &frontmatter.want,
+        &frontmatter.obstacle,
+        &frontmatter.action,
+        &frontmatter.consequence,
+        &frontmatter.sphere_of_influence,
     ])
 }
 
@@ -552,6 +560,48 @@ fn write_attr_line_linked(out: &mut String, label: &str, value: &str) {
     }
 }
 
+/// A blank `## {title}` heading followed by an empty line — a stub the GM fills in
+/// Obsidian. Used for the never-generated faction fields (Headquarters always; and
+/// Leadership / Allies / Rivals when nothing was linked; design §7 / D3+D4).
+fn write_blank_section(out: &mut String, title: &str) {
+    writeln!(out, "## {title}").ok();
+    writeln!(out).ok();
+}
+
+/// A section whose whole value is a single entity reference, rendered as one
+/// `[[wikilink]]` (e.g. a faction's Leadership NPC). Falls back to a blank stub when
+/// unset, so the heading is always present for the GM to fill in.
+fn write_linked_section(out: &mut String, title: &str, value: &str) {
+    let normalized = normalize_unknown_text(value);
+    if normalized == "Unknown" {
+        write_blank_section(out, title);
+        return;
+    }
+    writeln!(out, "## {title}").ok();
+    writeln!(out, "{}", wikilink(&normalized)).ok();
+    writeln!(out).ok();
+}
+
+/// Like [`write_linked_list_section`], but emits a blank stub (rather than nothing)
+/// when the list is empty — the faction Allies/Rivals "link or leave blank" mode (D4).
+fn write_linked_list_or_blank(out: &mut String, title: &str, values: &[String]) {
+    let items: Vec<String> = values
+        .iter()
+        .map(|v| normalize_unknown_text(v))
+        .filter(|v| v != "Unknown")
+        .map(|v| wikilink(&v))
+        .collect();
+    if items.is_empty() {
+        write_blank_section(out, title);
+        return;
+    }
+    writeln!(out, "## {title}").ok();
+    for item in items {
+        writeln!(out, "- {}", item).ok();
+    }
+    writeln!(out).ok();
+}
+
 fn write_section(out: &mut String, title: &str, value: &str, linker: &EntityLinker) {
     let normalized = normalize_unknown_text(value);
     if normalized == "Unknown" {
@@ -595,6 +645,33 @@ fn write_linked_list_section(out: &mut String, title: &str, values: &[String]) {
         writeln!(out, "- {}", item).ok();
     }
     writeln!(out).ok();
+}
+
+/// Title-case a `snake_case` token for display: `"criminal_syndicate"` →
+/// `"Criminal Syndicate"`, `"houses"` → `"Houses"`, `""` → `""`.
+fn title_case(value: &str) -> String {
+    value
+        .split('_')
+        .filter(|word| !word.is_empty())
+        .map(|word| {
+            let mut chars = word.chars();
+            match chars.next() {
+                Some(first) => first.to_uppercase().collect::<String>() + chars.as_str(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// The faction kind in display form. There is no `other`/`kind_custom` (D1), so this
+/// is just the title-cased kind token (or `Unknown` for a drifted/empty row).
+fn faction_kind_display(frontmatter: &FactionFrontmatter) -> String {
+    let kind = normalize_unknown_text(&frontmatter.kind_type);
+    if kind == "Unknown" {
+        return kind;
+    }
+    title_case(&kind)
 }
 
 fn kind_display(frontmatter: &LocationFrontmatter) -> String {
@@ -718,32 +795,37 @@ mod tests {
             id: "fac_1".to_string(),
             slug: "ashen-circle".to_string(),
             name: "Ashen Circle".to_string(),
-            vault_path: "factions/Ashen Circle.md".to_string(),
+            vault_path: "factions/establishments/Ashen Circle.md".to_string(),
             kind_type: "guild".to_string(),
-            kind_custom: None,
+            category: "establishments".to_string(),
             public_description: "A secretive guild.".to_string(),
-            true_agenda: "Protect forbidden lore.".to_string(),
-            methods: "Shadow operations.".to_string(),
-            leadership: "Triumvirate".to_string(),
-            headquarters: "Smolderkeep".to_string(),
+            reputation: "Feared".to_string(),
+            symbol_description: "A burned coin.".to_string(),
+            want: "Protect forbidden lore.".to_string(),
+            obstacle: "Hunters closing in.".to_string(),
+            action: "Shadow operations.".to_string(),
+            consequence: "The lore is lost if they fall.".to_string(),
+            leader: "Triumvirate".to_string(),
             sphere_of_influence: "Borderlands".to_string(),
             resources_assets: vec!["Hidden vaults".to_string(), "Arcane scouts".to_string()],
             allies: vec![],
             rivals_enemies: vec![],
-            reputation: "Feared".to_string(),
-            current_tension: "Hunters closing in.".to_string(),
-            goals_short_term: vec![],
-            goals_long_term: vec![],
-            symbol_description: "A burned coin.".to_string(),
+            liege: None,
+            loyalty_type: None,
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
             published_at: None,
         };
 
         let markdown = render_faction_markdown(&frontmatter);
+        assert!(markdown.contains("**Kind:** Guild"));
+        assert!(markdown.contains("**Category:** Establishments"));
         assert!(markdown.contains("## Resources & Assets"));
         assert!(markdown.contains("- Hidden vaults"));
         assert!(markdown.contains("- Arcane scouts"));
+        // An establishment is not a houses vassal/lord, so it carries no liege/loyalty.
+        assert!(!markdown.contains("**Liege:**"));
+        assert!(!markdown.contains("**Loyalty:**"));
     }
 
     // ----------------------------------------------------------------------
@@ -882,23 +964,23 @@ mod tests {
             id: "fac_1".to_string(),
             slug: "ashen-circle".to_string(),
             name: "Ashen Circle".to_string(),
-            vault_path: "factions/Ashen Circle.md".to_string(),
+            vault_path: "factions/establishments/Ashen Circle.md".to_string(),
             kind_type: "guild".to_string(),
-            kind_custom: None,
+            category: "establishments".to_string(),
             public_description: "A secretive guild.".to_string(),
-            true_agenda: "Protect forbidden lore.".to_string(),
-            methods: "Shadow operations.".to_string(),
-            leadership: "Triumvirate".to_string(),
-            headquarters: "Smolderkeep".to_string(),
+            reputation: "Feared".to_string(),
+            symbol_description: "A burned coin.".to_string(),
+            want: "Protect forbidden lore.".to_string(),
+            obstacle: "Hunters closing in.".to_string(),
+            action: "Shadow operations.".to_string(),
+            consequence: "The lore is lost if they fall.".to_string(),
+            leader: "Triumvirate".to_string(),
             sphere_of_influence: "Borderlands".to_string(),
             resources_assets: vec!["Hidden vaults".to_string()],
             allies: vec!["Crimson Lantern Syndicate".to_string()],
             rivals_enemies: vec!["Harbor Watch".to_string()],
-            reputation: "Feared".to_string(),
-            current_tension: "Hunters closing in.".to_string(),
-            goals_short_term: vec![],
-            goals_long_term: vec![],
-            symbol_description: "A burned coin.".to_string(),
+            liege: None,
+            loyalty_type: None,
             created_at: "2026-06-15T00:00:00Z".to_string(),
             updated_at: "2026-06-15T00:00:00Z".to_string(),
             published_at: None,
@@ -912,9 +994,60 @@ mod tests {
             markdown.contains("- [[Harbor Watch]]"),
             "expected linked rival, got:\n{markdown}"
         );
-        // Short-term goals are descriptive sentences elsewhere — confirm we did
-        // not start linking non-relational list sections.
+        // Resources are descriptive, not entity references — confirm we did not start
+        // linking non-relational list sections.
         assert!(!markdown.contains("[[Hidden vaults]]"));
+    }
+
+    #[test]
+    fn faction_houses_vassal_renders_liege_loyalty_and_blank_stubs() {
+        // A houses vassal with no leader and no allies/rivals linked: the WOAC sections
+        // render, Headquarters/Leadership/Allies/Rivals are blank stubs, and the
+        // liege + loyalty render (they appear only for houses vassals/lords).
+        let frontmatter = FactionFrontmatter {
+            doc_type: "faction".to_string(),
+            id: "fac_2".to_string(),
+            slug: "house-corvane".to_string(),
+            name: "House Corvane".to_string(),
+            vault_path: "factions/houses/House Corvane.md".to_string(),
+            kind_type: "major_vassal".to_string(),
+            category: "houses".to_string(),
+            public_description: "An old salt-house.".to_string(),
+            reputation: "Respected, quietly feared.".to_string(),
+            symbol_description: "A black salt-crystal on grey.".to_string(),
+            want: "Control every grain of salt in the basin.".to_string(),
+            obstacle: "The vein is running dry.".to_string(),
+            action: "Buying up rival pans before the news spreads.".to_string(),
+            consequence: "If they fail, the preservation trade collapses.".to_string(),
+            // No leader picked → a blank Leadership stub.
+            leader: String::new(),
+            sphere_of_influence: "The coastal salt flats.".to_string(),
+            resources_assets: vec!["Salt pans".to_string()],
+            allies: vec![],
+            rivals_enemies: vec![],
+            liege: Some("House Vaurel".to_string()),
+            loyalty_type: Some("oath".to_string()),
+            created_at: "2026-06-15T00:00:00Z".to_string(),
+            updated_at: "2026-06-15T00:00:00Z".to_string(),
+            published_at: None,
+        };
+        let markdown = render_faction_markdown(&frontmatter);
+        assert!(markdown.contains("**Kind:** Major Vassal"));
+        assert!(markdown.contains("**Category:** Houses"));
+        // WOAC sections present.
+        assert!(markdown.contains("## Want"));
+        assert!(markdown.contains("## Obstacle"));
+        assert!(markdown.contains("## Action"));
+        assert!(markdown.contains("## Consequence"));
+        // Blank stubs (heading present, no linked body) for the never-generated fields.
+        assert!(markdown.contains("## Leadership"));
+        assert!(!markdown.contains("[[Ser"));
+        assert!(markdown.contains("## Headquarters"));
+        assert!(markdown.contains("## Allies"));
+        assert!(markdown.contains("## Rivals"));
+        // Liege link + loyalty type render for a houses vassal.
+        assert!(markdown.contains("**Liege:** [[House Vaurel]]"));
+        assert!(markdown.contains("**Loyalty:** oath"));
     }
 
     #[test]

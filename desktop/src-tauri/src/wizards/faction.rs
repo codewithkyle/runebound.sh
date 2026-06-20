@@ -50,9 +50,9 @@ use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 /// the `finalize` hand-off that opens the faction editor.
 #[derive(Debug, Clone, Default)]
 struct FactionWizardData {
-    // Routing
-    category: String, // houses | establishments | religion (set at CategoryStep)
-    kind_type: String, // one of the 9 (set at the layer/kind step)
+    // Routing. `kind_type` (one of the 9) is set at the layer/kind step; the category
+    // it rolls up into is derived from it (D2), never stored separately.
+    kind_type: String,
 
     // Houses
     power_base: Option<String>,
@@ -115,7 +115,6 @@ impl FactionWizardData {
     fn as_inputs(&self) -> FactionWizardInputs {
         FactionWizardInputs {
             kind_type: self.kind_type.clone(),
-            category: self.category.clone(),
             power_base: self.power_base.clone(),
             power_specifics: self.power_specifics.clone(),
             brand: self.brand.clone(),
@@ -172,19 +171,20 @@ impl WizardStep<AppState> for CategoryStep {
     async fn accept(
         &self,
         input: &str,
-        d: &mut WizardData,
+        _d: &mut WizardData,
         _state: &AppState,
     ) -> Result<WizardTransition, String> {
         let Ok(n) = input.trim().parse::<usize>() else {
             return Ok(WizardTransition::Stay);
         };
-        let (category, next) = match n {
-            1 => ("houses", "houses_layer"),
-            2 => ("establishments", "est_kind"),
-            3 => ("religion", "rel_kind"),
+        // The kind (and thus the category) is locked at the next step; here we only
+        // route to that category's kind step (D5).
+        let next = match n {
+            1 => "houses_layer",
+            2 => "est_kind",
+            3 => "rel_kind",
             _ => return Ok(WizardTransition::Stay),
         };
-        faction_data_mut(d).category = category.to_string();
         Ok(WizardTransition::Goto(next))
     }
 }
@@ -1597,7 +1597,6 @@ mod tests {
     #[test]
     fn seed_prompt_carries_locked_answers() {
         let d = FactionWizardData {
-            category: "houses".to_string(),
             kind_type: "major_vassal".to_string(),
             power_base: Some("extraction".to_string()),
             liege: Some("House Vaurel".to_string()),

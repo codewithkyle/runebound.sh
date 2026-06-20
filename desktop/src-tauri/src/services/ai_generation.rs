@@ -1690,7 +1690,6 @@ fn reach_phrase(token: &str) -> &'static str {
 #[derive(Debug, Clone, Default)]
 pub struct FactionWizardInputs {
     pub kind_type: String,
-    pub category: String,
     // Houses
     pub power_base: Option<String>,
     pub power_specifics: Option<String>,

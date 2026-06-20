@@ -71,7 +71,13 @@ pub async fn handle_create(invocation: DesktopHandlerInvocation<'_>) -> CommandR
         return create_location(trimmed, invocation.state.clone()).await;
     }
 
-    if lowered == "create faction" || lowered.starts_with("create faction ") {
+    if lowered == "create faction" {
+        // Bare `create faction` launches the guided wizard (mirrors `create
+        // location`); the `<prompt>` form below stays the one-shot lane.
+        return crate::wizards::start_wizard("faction", invocation.state.inner()).await;
+    }
+
+    if lowered.starts_with("create faction ") {
         return create_faction(trimmed, invocation.state.clone()).await;
     }
 
