@@ -6,8 +6,8 @@ pub use runebound_models::utils::{
     normalize_dungeon_tone, normalize_dungeon_topology, normalize_dungeon_twist, normalize_exports,
     normalize_faction_kind_type, normalize_god_alignment, normalize_god_rank,
     normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
-    normalize_location_kind_type, normalize_loyalty_type, normalize_sex, normalize_unknown_list,
-    normalize_unknown_text, parse_list_csv,
+    normalize_location_kind_type, normalize_loyalty_type, normalize_name, normalize_sex,
+    normalize_unknown_list, normalize_unknown_text, parse_list_csv,
 };
 
 pub fn parse_carrying_csv(value: &str) -> Vec<String> {
@@ -88,7 +88,7 @@ pub fn validate_sentence_range(
 }
 
 pub fn normalize_location_seed(mut seed: LocationSeed) -> Result<LocationSeed, String> {
-    seed.name = seed.name.trim().to_string();
+    seed.name = normalize_name(&seed.name);
     seed.kind_type = normalize_location_kind_type(&seed.kind_type)?;
     seed.kind_custom = seed.kind_custom.map(|value| value.trim().to_string());
     if seed.kind_type == "other" {
@@ -151,7 +151,7 @@ pub fn validate_location_details(seed: &LocationSeed) -> Result<(), String> {
 }
 
 pub fn normalize_faction_seed(mut seed: FactionSeed) -> Result<FactionSeed, String> {
-    seed.name = seed.name.trim().to_string();
+    seed.name = normalize_name(&seed.name);
     seed.kind_type = normalize_faction_kind_type(&seed.kind_type)?;
     seed.public_description = normalize_unknown_text(&seed.public_description);
     seed.reputation = normalize_unknown_text(&seed.reputation);
@@ -192,7 +192,7 @@ pub fn validate_faction_details(seed: &FactionSeed) -> Result<(), String> {
 }
 
 pub fn normalize_god_seed(mut seed: GodSeed) -> Result<GodSeed, String> {
-    seed.name = seed.name.trim().to_string();
+    seed.name = normalize_name(&seed.name);
     seed.rank = normalize_god_rank(&seed.rank)?;
     seed.rank_custom = seed.rank_custom.map(|value| value.trim().to_string());
     if seed.rank == "other" {

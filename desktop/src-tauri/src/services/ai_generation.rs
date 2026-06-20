@@ -9,7 +9,7 @@ use crate::services::vault_ref::{
 use crate::utils::{
     estimate_tokens, normalize_exports, normalize_faction_seed, normalize_god_seed,
     normalize_item_category, normalize_item_rarity, normalize_location_danger_level,
-    normalize_location_seed, normalize_relative_path_for_storage, normalize_sex,
+    normalize_location_seed, normalize_name, normalize_relative_path_for_storage, normalize_sex,
     normalize_unknown_list, normalize_unknown_text, validate_faction_details, validate_god_details,
     validate_location_details, validate_location_prose,
 };
@@ -308,7 +308,7 @@ impl AiGenerationService {
             ),
             || "failed to generate valid structured NPC output from ollama".to_string(),
             |mut seed: NpcSeed| {
-                seed.name = seed.name.trim().to_string();
+                seed.name = normalize_name(&seed.name);
                 seed.race = seed.race.trim().to_string();
                 seed.occupation = normalize_unknown_text(&seed.occupation);
                 seed.sex = match normalize_sex(&seed.sex) {
@@ -513,7 +513,7 @@ impl AiGenerationService {
             ),
             || "failed to generate valid structured location output from ollama".to_string(),
             |mut seed: LocationSeed| {
-                seed.name = seed.name.trim().to_string();
+                seed.name = normalize_name(&seed.name);
                 if seed.name.is_empty() {
                     return SeedStep::Retry;
                 }
@@ -954,7 +954,7 @@ impl AiGenerationService {
             ),
             || "failed to generate valid structured item output from ollama".to_string(),
             |mut seed: ItemSeed| {
-                seed.name = seed.name.trim().to_string();
+                seed.name = normalize_name(&seed.name);
                 seed.category = match normalize_item_category(&seed.category) {
                     Ok(value) => value,
                     Err(err) => return SeedStep::Fail(err),
@@ -1044,7 +1044,7 @@ impl AiGenerationService {
             ),
             || "failed to generate valid structured event output from ollama".to_string(),
             |mut seed: EventSeed| {
-                seed.title = seed.title.trim().to_string();
+                seed.title = normalize_name(&seed.title);
                 seed.body = seed.body.trim().to_string();
 
                 if seed.title.is_empty() || seed.body.is_empty() {
@@ -2319,7 +2319,7 @@ impl DungeonSeed {
     /// Normalize narrative fields and the conditional loot line. `function` is
     /// assigned later in `to_beats`, not here, so the skeleton stays ours.
     fn normalize(&mut self) {
-        self.name = self.name.trim().to_string();
+        self.name = normalize_name(&self.name);
         self.location = normalize_unknown_text(&self.location);
         self.premise = normalize_unknown_text(&self.premise);
         for beat in self.beats.iter_mut() {
@@ -2375,7 +2375,7 @@ pub struct DungeonStory {
 
 impl DungeonStory {
     fn normalize(&mut self) {
-        self.name = self.name.trim().to_string();
+        self.name = normalize_name(&self.name);
         self.location = normalize_unknown_text(&self.location);
         self.story = self.story.trim().to_string();
     }

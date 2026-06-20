@@ -429,6 +429,23 @@ fn reference_path_prefix_len(s: &str) -> Option<usize> {
     Some(last_slash + 1)
 }
 
+/// Remove Markdown code formatting from generated text. The model sometimes wraps a
+/// name or a whole passage in backticks — inline `` `like this` `` or a fenced
+/// ```` ```block``` ````. Rendered, that becomes code, which breaks wikilinks (Obsidian
+/// ignores `[[…]]` inside code spans/blocks), corrupts slugs, and is never wanted in
+/// narrative content — we never style story prose or names as code. So every backtick
+/// is stripped.
+pub fn strip_code_formatting(text: &str) -> String {
+    text.replace('`', "")
+}
+
+/// Finalize a generated entity name: strip any code formatting the model wrapped it in
+/// (a backtick'd name breaks both its wikilink and its slug) and trim. Empty stays
+/// empty — name presence is each caller's own validation, not ours.
+pub fn normalize_name(value: &str) -> String {
+    strip_code_formatting(value).trim().to_string()
+}
+
 pub fn normalize_unknown_text(value: &str) -> String {
     let trimmed = value.trim();
     if trimmed.is_empty() {
@@ -436,7 +453,8 @@ pub fn normalize_unknown_text(value: &str) -> String {
     }
 
     let stripped = strip_reference_syntax(trimmed);
-    let sanitized = stripped
+    let decoded = strip_code_formatting(&stripped);
+    let sanitized = decoded
         .trim()
         .trim_matches(|ch: char| matches!(ch, ',' | ';'))
         .trim();
@@ -451,7 +469,11 @@ pub fn normalize_unknown_text(value: &str) -> String {
 pub fn normalize_unknown_list(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
-        .map(|value| strip_reference_syntax(value.trim()).trim().to_string())
+        .map(|value| {
+            strip_code_formatting(&strip_reference_syntax(value.trim()))
+                .trim()
+                .to_string()
+        })
         .filter(|value| !value.is_empty())
         .collect();
 
@@ -582,7 +604,7 @@ pub fn parse_list_csv(value: &str) -> Vec<String> {
 pub fn normalize_exports(values: Vec<String>) -> Vec<String> {
     let cleaned: Vec<String> = values
         .into_iter()
-        .map(|value| value.trim().to_string())
+        .map(|value| strip_code_formatting(value.trim()).trim().to_string())
         .filter(|value| !value.is_empty())
         .collect();
     if cleaned.is_empty() {
@@ -687,6 +709,35 @@ mod tests {
         assert_eq!(normalize_unknown_text(",133"), "133");
         assert_eq!(normalize_unknown_text("243,"), "243");
         assert_eq!(normalize_unknown_text(",523,"), "523");
+    }
+
+    #[test]
+    fn normalize_unknown_text_strips_code_formatting() {
+        // The model occasionally wraps a name or a whole passage in backticks, which
+        // would render as code and break embedded wikilinks. We never want code styling.
+        assert_eq!(normalize_unknown_text("`House Everwood`"), "House Everwood");
+        assert_eq!(
+            normalize_unknown_text("```\nThe house seeks the throne.\n```"),
+            "The house seeks the throne."
+        );
+        // A value that was only backticks collapses to the Unknown sentinel.
+        assert_eq!(normalize_unknown_text("``"), "Unknown");
+    }
+
+    #[test]
+    fn normalize_name_strips_backticks_and_trims() {
+        assert_eq!(normalize_name("  `House Everwood` "), "House Everwood");
+        assert_eq!(normalize_name("House Everwood"), "House Everwood");
+        // Unlike prose, an empty name stays empty (the caller validates presence).
+        assert_eq!(normalize_name("``"), "");
+    }
+
+    #[test]
+    fn normalize_unknown_list_strips_code_formatting() {
+        assert_eq!(
+            normalize_unknown_list(vec!["`silver ore`".to_string(), "salt".to_string()]),
+            vec!["silver ore".to_string(), "salt".to_string()]
+        );
     }
 
     #[test]
