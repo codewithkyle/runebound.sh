@@ -22,12 +22,12 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
-use runebound_models::monsters::{Monster, StatAbility, StatBlock, StatSection};
+use runebound_models::monsters::{Monster, Span, StatAbility, StatBlock, StatSection};
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::monster_copy::resolve_copies;
-use crate::spell_import::{slugify, strip_tags};
+use crate::spell_import::{render_inline, slugify, strip_tags};
 
 /// The outcome of an import: the canonical monsters plus how many `_copy` variants
 /// were resolved (Phase 2 materializes them) vs. dropped because their base could
@@ -222,6 +222,27 @@ struct RawGroupFile {
     legendary_group: Vec<RawLegendaryGroup>,
 }
 
+/// A `fluff-bestiary-*.json` file: lore prose + artwork keyed by `(name, source)`.
+/// We consume only `entries` (the prose); `images` are intentionally ignored (the
+/// frontend resolves only built-in asset keys, not external 5etools image files).
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawFluffFile {
+    #[serde(default)]
+    monster_fluff: Vec<Value>,
+}
+
+/// One monster's fluff entry, after `_copy` resolution. `entries` is the same
+/// nested block shape as a stat-block section, so the stat-block lowering applies.
+#[derive(Debug, Deserialize)]
+struct RawFluff {
+    name: String,
+    #[serde(default)]
+    source: Option<String>,
+    #[serde(default, deserialize_with = "null_default")]
+    entries: Vec<Entry>,
+}
+
 /// A `5etools` `entries` element: a string or a typed block (shared shape with the
 /// spell importer, kept local so each importer owns its own raw schema).
 #[derive(Debug, Deserialize)]
@@ -238,6 +259,10 @@ struct EntryBlock {
     kind: String,
     #[serde(default)]
     name: Option<String>,
+    /// Singular `entry` (used by fluff list items like "Habitat:"/"Treasure:");
+    /// stat-block list items use `entries` instead.
+    #[serde(default)]
+    entry: Option<String>,
     #[serde(default, deserialize_with = "null_default")]
     entries: Vec<Entry>,
     #[serde(default, deserialize_with = "null_default")]
@@ -294,10 +319,11 @@ pub fn import_monsters_from_dir(dir: &Path) -> Result<ImportSummary> {
         .collect();
 
     let legendary_groups = load_legendary_groups(&bestiary_dir)?;
+    let fluff = load_fluff(&bestiary_dir)?;
     let canonical = dedup_to_canonical(raw_monsters);
     let mut monsters: Vec<Monster> = canonical
         .iter()
-        .map(|raw| convert_monster(raw, &legendary_groups))
+        .map(|raw| convert_monster(raw, &legendary_groups, &fluff))
         .collect();
     disambiguate_slugs(&mut monsters);
     monsters.sort_by(|a, b| {
@@ -345,6 +371,44 @@ fn load_legendary_groups(bestiary_dir: &Path) -> Result<Vec<RawLegendaryGroup>> 
     let file: RawGroupFile = serde_json::from_str(&raw)
         .with_context(|| format!("failed to parse {}", path.display()))?;
     Ok(file.legendary_group)
+}
+
+/// Load monster fluff (lore prose) from the bestiary dir, resolving the `_copy`
+/// inheritance fluff uses (≈1100 of ~4000 entries copy a base's prose). Reads
+/// `fluff-index.json` (source → filename, like `index.json`); a missing index just
+/// means no lore. Returns the resolved, typed fluff entries.
+fn load_fluff(bestiary_dir: &Path) -> Result<Vec<RawFluff>> {
+    let index_path = bestiary_dir.join("fluff-index.json");
+    if !index_path.is_file() {
+        return Ok(Vec::new());
+    }
+    let index_raw = std::fs::read_to_string(&index_path)
+        .with_context(|| format!("failed to read {}", index_path.display()))?;
+    let index: BTreeMap<String, String> = serde_json::from_str(&index_raw)
+        .with_context(|| format!("failed to parse {}", index_path.display()))?;
+
+    let mut raw_values: Vec<Value> = Vec::new();
+    for filename in index.values() {
+        let path = bestiary_dir.join(filename);
+        if !path.is_file() {
+            continue; // index can name files absent from a partial checkout
+        }
+        let raw = std::fs::read_to_string(&path)
+            .with_context(|| format!("failed to read fluff file {}", path.display()))?;
+        let file: RawFluffFile = serde_json::from_str(&raw)
+            .with_context(|| format!("failed to parse fluff file {}", path.display()))?;
+        raw_values.extend(file.monster_fluff);
+    }
+
+    // Fluff `_copy` is the same base-fill + `_mod` mechanic as monsters (no
+    // templates), so the copy engine resolves it. Entries that copy a missing base
+    // are simply dropped — that monster gets no lore.
+    let resolved = resolve_copies(raw_values, Vec::new());
+    Ok(resolved
+        .monsters
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect())
 }
 
 /// Load `template.json`'s `monsterTemplate` array (raw values) from the bestiary dir,
@@ -403,7 +467,11 @@ fn disambiguate_slugs(monsters: &mut [Monster]) {
 // Per-monster conversion
 // ---------------------------------------------------------------------------
 
-fn convert_monster(raw: &RawMonster, legendary_groups: &[RawLegendaryGroup]) -> Monster {
+fn convert_monster(
+    raw: &RawMonster,
+    legendary_groups: &[RawLegendaryGroup],
+    fluff: &[RawFluff],
+) -> Monster {
     let abilities: [i16; 6] = [
         ability_score(&raw.strength),
         ability_score(&raw.dexterity),
@@ -435,7 +503,56 @@ fn convert_monster(raw: &RawMonster, legendary_groups: &[RawLegendaryGroup]) -> 
         cr: format_cr(&raw.cr),
         gear: format_gear(&raw.gear),
         sections: build_sections(raw, legendary_groups),
+        lore: resolve_fluff(fluff, &raw.name, &raw.source)
+            .map(|entry| lower_fluff(&entry.entries, &raw.name))
+            .unwrap_or_default(),
     }
+}
+
+/// Find a monster's fluff by `(name, source)`, falling back to name-only (reprint
+/// source drift), mirroring [`resolve_group`].
+fn resolve_fluff<'a>(fluff: &'a [RawFluff], name: &str, source: &str) -> Option<&'a RawFluff> {
+    let name_lc = name.to_ascii_lowercase();
+    let source_lc = source.to_ascii_lowercase();
+    fluff
+        .iter()
+        .find(|entry| {
+            entry.name.to_ascii_lowercase() == name_lc
+                && entry.source.as_deref().map(str::to_ascii_lowercase) == Some(source_lc.clone())
+        })
+        .or_else(|| {
+            fluff
+                .iter()
+                .find(|entry| entry.name.to_ascii_lowercase() == name_lc)
+        })
+}
+
+/// Lower fluff prose to render-ready blocks. A wrapping section named after the
+/// monster (the common shape) is unwrapped so the lore doesn't repeat the card
+/// title as a redundant lead-in; everything else lowers like a stat-block section.
+fn lower_fluff(entries: &[Entry], monster_name: &str) -> Vec<StatBlock> {
+    let name_lc = monster_name.to_ascii_lowercase();
+    let mut out = Vec::new();
+    for entry in entries {
+        match entry {
+            // Section/wrapper whose name == the monster: drop the lead-in, recurse.
+            Entry::Block(block)
+                if matches!(block.kind.as_str(), "section" | "entries" | "")
+                    && block.name.as_deref().map(str::to_ascii_lowercase)
+                        == Some(name_lc.clone()) =>
+            {
+                out.extend(lower_fluff(&block.entries, monster_name));
+            }
+            Entry::Text(text) => {
+                let spans = render_inline(text);
+                if spans_non_empty(&spans) {
+                    out.push(StatBlock::Text { spans });
+                }
+            }
+            Entry::Block(block) => lower_block(block, &mut out),
+        }
+    }
+    out
 }
 
 /// An ability score, defaulting to 10. Usually a number; a PB-scaling string
@@ -598,18 +715,14 @@ fn lower_spellcasting(block: &RawSpellcasting) -> StatAbility {
     let hidden = |bucket: &str| block.hidden.iter().any(|h| h == bucket);
 
     if !block.will.is_empty() && !hidden("will") {
-        body.push(StatBlock::Text {
-            text: format!("At Will: {}", join_spells(&block.will)),
-        });
+        body.push(spell_bucket("At Will", &block.will));
     }
 
     if !hidden("daily") {
         let mut keys: Vec<&String> = block.daily.keys().collect();
         keys.sort_by_key(|key| std::cmp::Reverse(daily_count(key))); // highest per-day first
         for key in keys {
-            body.push(StatBlock::Text {
-                text: format!("{}: {}", daily_label(key), join_spells(&block.daily[key])),
-            });
+            body.push(spell_bucket(&daily_label(key), &block.daily[key]));
         }
     }
 
@@ -618,13 +731,7 @@ fn lower_spellcasting(block: &RawSpellcasting) -> StatAbility {
         keys.sort_by_key(|key| key.parse::<u32>().unwrap_or(0));
         for key in keys {
             let level = &block.spells[key];
-            body.push(StatBlock::Text {
-                text: format!(
-                    "{}: {}",
-                    slot_label(key, level.slots),
-                    join_spells(&level.spells)
-                ),
-            });
+            body.push(spell_bucket(&slot_label(key, level.slots), &level.spells));
         }
     }
 
@@ -639,14 +746,31 @@ fn lower_spellcasting(block: &RawSpellcasting) -> StatAbility {
     }
 }
 
-/// Render a list of spell values (`{@spell X}` strings) to "a, b, c".
-fn join_spells(values: &[Value]) -> String {
-    values
-        .iter()
-        .filter_map(|value| value.as_str())
-        .map(strip_tags)
-        .collect::<Vec<_>>()
-        .join(", ")
+/// One spellcasting bucket line ("At Will: …", "2/Day Each: …", "Cantrips (at
+/// will): …") as a text block whose individual spells stay clickable links.
+fn spell_bucket(label: &str, values: &[Value]) -> StatBlock {
+    let mut spans = vec![Span::Text {
+        text: format!("{label}: "),
+    }];
+    spans.extend(spell_spans(values));
+    StatBlock::Text {
+        spans: coalesce(spans),
+    }
+}
+
+/// Render a list of spell values (`{@spell X}` strings) to spans, each spell a
+/// clickable link, separated by ", ".
+fn spell_spans(values: &[Value]) -> Vec<Span> {
+    let mut spans: Vec<Span> = Vec::new();
+    for value in values.iter().filter_map(Value::as_str) {
+        if !spans.is_empty() {
+            spans.push(Span::Text {
+                text: ", ".to_string(),
+            });
+        }
+        spans.extend(render_inline(value));
+    }
+    coalesce(spans)
 }
 
 /// The numeric per-day count from a `daily` key: "2e"/"2" → 2.
@@ -1193,9 +1317,9 @@ fn lower_entries(entries: &[Entry]) -> Vec<StatBlock> {
     for entry in entries {
         match entry {
             Entry::Text(text) => {
-                let text = strip_tags(text);
-                if !text.trim().is_empty() {
-                    out.push(StatBlock::Text { text });
+                let spans = render_inline(text);
+                if spans_non_empty(&spans) {
+                    out.push(StatBlock::Text { spans });
                 }
             }
             Entry::Block(block) => lower_block(block, &mut out),
@@ -1207,11 +1331,11 @@ fn lower_entries(entries: &[Entry]) -> Vec<StatBlock> {
 fn lower_block(block: &EntryBlock, out: &mut Vec<StatBlock>) {
     match block.kind.as_str() {
         "list" => {
-            let items: Vec<String> = block
+            let items: Vec<Vec<Span>> = block
                 .items
                 .iter()
                 .map(lower_list_item)
-                .filter(|item| !item.is_empty())
+                .filter(|item| spans_non_empty(item))
                 .collect();
             if !items.is_empty() {
                 out.push(StatBlock::Bullets { items });
@@ -1231,7 +1355,9 @@ fn lower_block(block: &EntryBlock, out: &mut Vec<StatBlock>) {
         _ => {
             if let Some(name) = block.name.as_deref().filter(|n| !n.is_empty()) {
                 out.push(StatBlock::Text {
-                    text: format!("{}.", strip_tags(name)),
+                    spans: vec![Span::Text {
+                        text: format!("{}.", strip_tags(name)),
+                    }],
                 });
             }
             out.extend(lower_entries(&block.entries));
@@ -1239,32 +1365,72 @@ fn lower_block(block: &EntryBlock, out: &mut Vec<StatBlock>) {
     }
 }
 
-fn lower_list_item(item: &ListItem) -> String {
+/// Lower one list item to a span run. A named item (`{name, entry/entries}`) reads
+/// "Name. body"; the cross-links in the body survive.
+fn lower_list_item(item: &ListItem) -> Vec<Span> {
     match item {
-        ListItem::Text(text) => strip_tags(text),
+        ListItem::Text(text) => coalesce(render_inline(text)),
         ListItem::Item(block) => {
-            let body = block
-                .entries
-                .iter()
-                .filter_map(|entry| match entry {
-                    Entry::Text(text) => Some(strip_tags(text)),
-                    Entry::Block(_) => None,
-                })
-                .collect::<Vec<_>>()
-                .join(" ");
+            let body = item_body_spans(block);
             match block.name.as_deref().filter(|n| !n.is_empty()) {
                 Some(name) => {
                     let name = strip_tags(name);
                     if body.is_empty() {
-                        name
+                        vec![Span::Text { text: name }]
                     } else {
-                        format!("{name}. {body}")
+                        let mut spans = vec![Span::Text {
+                            text: format!("{name}. "),
+                        }];
+                        spans.extend(body);
+                        coalesce(spans)
                     }
                 }
-                None => body,
+                None => coalesce(body),
             }
         }
     }
+}
+
+/// The body of a named list item: the singular `entry` (fluff's Habitat/Treasure
+/// shape) then any `entries` text, each lowered to spans and space-joined. Nested
+/// block children are skipped, as before.
+fn item_body_spans(block: &EntryBlock) -> Vec<Span> {
+    let mut spans: Vec<Span> = Vec::new();
+    let push_text = |spans: &mut Vec<Span>, text: &str| {
+        if !spans.is_empty() {
+            spans.push(Span::Text {
+                text: " ".to_string(),
+            });
+        }
+        spans.extend(render_inline(text));
+    };
+    if let Some(entry) = block.entry.as_deref() {
+        push_text(&mut spans, entry);
+    }
+    for entry in &block.entries {
+        if let Entry::Text(text) = entry {
+            push_text(&mut spans, text);
+        }
+    }
+    spans
+}
+
+/// Merge consecutive `Text` spans into one so a run is minimal; `Link` spans stay
+/// as boundaries. Keeps the stored card payload tidy and round-trip-stable.
+fn coalesce(spans: Vec<Span>) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match (out.last_mut(), span) {
+            (Some(Span::Text { text: prev }), Span::Text { text }) => prev.push_str(&text),
+            (_, span) => out.push(span),
+        }
+    }
+    out
+}
+
+/// Whether a span run has any visible (non-whitespace) text.
+fn spans_non_empty(spans: &[Span]) -> bool {
+    spans.iter().any(|span| !span.text().trim().is_empty())
 }
 
 fn cell_to_string(value: &Value) -> String {
@@ -1282,9 +1448,9 @@ fn cell_to_string(value: &Value) -> String {
 fn lower_string_list(lines: &[String]) -> Vec<StatBlock> {
     lines
         .iter()
-        .map(|line| strip_tags(line))
-        .filter(|line| !line.trim().is_empty())
-        .map(|text| StatBlock::Text { text })
+        .map(|line| render_inline(line))
+        .filter(|spans| spans_non_empty(spans))
+        .map(|spans| StatBlock::Text { spans })
         .collect()
 }
 
@@ -1444,6 +1610,36 @@ mod tests {
         }
     ]}"#;
 
+    // Fluff (lore) fixtures. `fluff-index.json` maps source → file (like index.json).
+    // Goblin Warrior's prose wraps in a section named after it (the common shape, to
+    // exercise the redundant-lead-in unwrap) and references a spell (cross-link in
+    // lore). Skeleton Knight's fluff `_copy`s Skeleton's, exercising fluff inheritance.
+    const FLUFF_INDEX: &str =
+        r#"{"XMM": "fluff-bestiary-xmm.json", "MM": "fluff-bestiary-mm.json"}"#;
+
+    const FLUFF_XMM: &str = r#"{ "monsterFluff": [
+        {
+            "name": "Goblin Warrior", "source": "XMM",
+            "entries": [
+                {"type": "section", "name": "Goblin Warrior", "entries": [
+                    "Goblins are small, black-hearted humanoids that lair in despoiled places.",
+                    "Their shamans cast {@spell Fireball|XPHB} to deadly effect."
+                ]}
+            ]
+        }
+    ]}"#;
+
+    const FLUFF_MM: &str = r#"{ "monsterFluff": [
+        {
+            "name": "Skeleton", "source": "MM",
+            "entries": ["Skeletons are animated bones that obey their creator."]
+        },
+        {
+            "name": "Skeleton Knight", "source": "MM",
+            "_copy": {"name": "Skeleton", "source": "MM"}
+        }
+    ]}"#;
+
     fn import_fixture(files: &[(&str, &str)], index: &str, groups: Option<&str>) -> ImportSummary {
         static COUNTER: AtomicUsize = AtomicUsize::new(0);
         let n = COUNTER.fetch_add(1, Ordering::Relaxed);
@@ -1465,7 +1661,14 @@ mod tests {
 
     fn all() -> ImportSummary {
         import_fixture(
-            &[("bestiary-xmm.json", XMM), ("bestiary-mm.json", MM)],
+            &[
+                ("bestiary-xmm.json", XMM),
+                ("bestiary-mm.json", MM),
+                // Fluff is read from these files in the same dir via `fluff-index.json`.
+                ("fluff-index.json", FLUFF_INDEX),
+                ("fluff-bestiary-xmm.json", FLUFF_XMM),
+                ("fluff-bestiary-mm.json", FLUFF_MM),
+            ],
             r#"{"XMM": "bestiary-xmm.json", "MM": "bestiary-mm.json"}"#,
             Some(GROUPS),
         )
@@ -1626,11 +1829,22 @@ mod tests {
             .iter()
             .find(|s| s.title == "Regional Effects")
             .expect("Regional Effects from legendary group");
-        // Intro prose + the bulleted named effect (tag stripped).
-        assert!(regional.intro.iter().any(|b| matches!(
-            b,
-            StatBlock::Bullets { items } if items[0].starts_with("All-Seeing.") && items[0].contains("Clairvoyance")
-        )));
+        // Intro prose + the bulleted named effect; the `{@spell}` reference lowered
+        // to a clickable link span while the surrounding prose stayed plain text.
+        assert!(regional.intro.iter().any(|b| match b {
+            StatBlock::Bullets { items } => {
+                let text = items[0].iter().map(Span::text).collect::<String>();
+                let links_clairvoyance = items[0].iter().any(|span| {
+                    matches!(
+                        span,
+                        Span::Link { label, command }
+                            if label == "Clairvoyance" && command == "spell Clairvoyance"
+                    )
+                });
+                text.starts_with("All-Seeing.") && links_clairvoyance
+            }
+            _ => false,
+        }));
         // And the monster keeps its own Legendary Actions + Traits.
         assert!(lich.sections.iter().any(|s| s.title == "Legendary Actions"));
         assert!(lich.sections.iter().any(|s| s.title == "Traits"));
@@ -1661,6 +1875,51 @@ mod tests {
             text.iter()
                 .any(|t| t == "3rd Level (3 slots): fireball, fly")
         );
+    }
+
+    #[test]
+    fn fluff_attaches_lore_and_unwraps_redundant_section() {
+        let summary = all();
+        let goblin = find(&summary.monsters, "Goblin Warrior");
+        assert!(!goblin.lore.is_empty(), "goblin should have lore");
+        let lore: Vec<String> = goblin.lore.iter().map(StatBlock::to_text).collect();
+        // The wrapping section named "Goblin Warrior" is unwrapped — the first lore
+        // line is prose, not a redundant "Goblin Warrior." lead-in.
+        assert_ne!(lore.first().map(String::as_str), Some("Goblin Warrior."));
+        assert!(
+            lore.iter().any(|l| l.contains("black-hearted humanoids")),
+            "lore prose missing: {lore:?}"
+        );
+        // A `{@spell}` reference inside lore lowered to a clickable link span.
+        let has_spell_link = goblin.lore.iter().any(|block| {
+            match block {
+            StatBlock::Text { spans } => spans.iter().any(|span| matches!(
+                span,
+                Span::Link { label, command } if label == "Fireball" && command == "spell Fireball"
+            )),
+            _ => false,
+        }
+        });
+        assert!(has_spell_link, "spell cross-link missing from lore");
+    }
+
+    #[test]
+    fn fluff_copy_inherits_base_lore() {
+        let summary = all();
+        // Skeleton Knight's fluff `_copy`s Skeleton's, so it inherits that prose.
+        let knight = find(&summary.monsters, "Skeleton Knight");
+        let lore: Vec<String> = knight.lore.iter().map(StatBlock::to_text).collect();
+        assert!(
+            lore.iter().any(|l| l.contains("animated bones")),
+            "fluff _copy should inherit base lore, got {lore:?}"
+        );
+    }
+
+    #[test]
+    fn monster_without_fluff_has_empty_lore() {
+        let summary = all();
+        // The Mage has no fluff entry in the fixture → no lore section.
+        assert!(find(&summary.monsters, "Mage").lore.is_empty());
     }
 
     #[test]
@@ -1733,6 +1992,31 @@ mod tests {
         // — some adventure NPC stat blocks omit them; the card just drops the row.)
         let mut slugs = std::collections::HashSet::new();
         let mut missing_ac = 0usize;
+        let mut with_lore = 0usize;
+        let mut links = 0usize;
+        // Any rendered block must be free of residual `{@` markup — stat blocks AND lore.
+        let assert_clean = |block: &StatBlock, name: &str| {
+            assert!(
+                !block.to_text().contains("{@"),
+                "unstripped tag in {name}: {}",
+                block.to_text()
+            );
+        };
+        // Count cross-link spans across a block's prose/bullets.
+        let count_links = |block: &StatBlock| -> usize {
+            match block {
+                StatBlock::Text { spans } => spans
+                    .iter()
+                    .filter(|s| matches!(s, Span::Link { .. }))
+                    .count(),
+                StatBlock::Bullets { items } => items
+                    .iter()
+                    .flatten()
+                    .filter(|s| matches!(s, Span::Link { .. }))
+                    .count(),
+                StatBlock::Table { .. } => 0,
+            }
+        };
         for monster in monsters {
             assert!(!monster.name.is_empty(), "a monster has an empty name");
             assert!(!monster.slug.is_empty(), "{} has empty slug", monster.name);
@@ -1751,25 +2035,33 @@ mod tests {
             );
             for section in &monster.sections {
                 for block in &section.intro {
-                    assert!(
-                        !block.to_text().contains("{@"),
-                        "unstripped tag in {}",
-                        monster.name
-                    );
+                    assert_clean(block, &monster.name);
+                    links += count_links(block);
                 }
                 for ability in &section.abilities {
                     for block in &ability.body {
-                        assert!(
-                            !block.to_text().contains("{@"),
-                            "unstripped tag in {}: {}",
-                            monster.name,
-                            block.to_text()
-                        );
+                        assert_clean(block, &monster.name);
+                        links += count_links(block);
                     }
                 }
             }
+            if !monster.lore.is_empty() {
+                with_lore += 1;
+            }
+            for block in &monster.lore {
+                assert_clean(block, &monster.name);
+                links += count_links(block);
+            }
         }
         println!("{missing_ac} monsters have no AC (incomplete adventure stat blocks)");
+        println!("{with_lore} monsters carry fluff lore; {links} clickable cross-links total");
+        // Fluff is broad (≈hundreds of canonical monsters) and cross-links pervade
+        // spell lists / lore, so both should be substantial on the real dataset.
+        assert!(
+            with_lore > 200,
+            "expected many monsters with lore, got {with_lore}"
+        );
+        assert!(links > 1000, "expected many cross-links, got {links}");
         let goblin = find(monsters, "Goblin Warrior");
         println!("goblin: {} | {} | {}", goblin.ac, goblin.cr, goblin.speed);
     }

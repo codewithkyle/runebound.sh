@@ -520,6 +520,40 @@ pub async fn count_monsters(pool: &SqlitePool) -> Result<i64> {
     Ok(row.try_get("n").unwrap_or(0))
 }
 
+/// Search the monster index with optional name / creature-type substring filters
+/// and an inclusive `cr_sort` band, ordered by CR then name. Backs `monster --cr
+/// <range> --type <kind>`. `None` name/type means "unconstrained"; pass `0.0` /
+/// `f64::MAX` for an open CR bound. Reuses the macro-generated `row_to_monster`.
+pub async fn search_monsters_filtered(
+    pool: &SqlitePool,
+    name: Option<&str>,
+    creature_type: Option<&str>,
+    cr_min: f64,
+    cr_max: f64,
+    limit: i64,
+) -> Result<Vec<MonsterRow>> {
+    let name_pat = name.map(crate::db_macros::like_contains);
+    let type_pat = creature_type.map(crate::db_macros::like_contains);
+    let rows = sqlx::query(
+        "SELECT id, slug, name, cr, cr_sort, creature_type, size, source, created_at, updated_at \
+         FROM monsters \
+         WHERE (?1 IS NULL OR lower(name) LIKE ?1 ESCAPE '\\') \
+           AND (?2 IS NULL OR lower(creature_type) LIKE ?2 ESCAPE '\\') \
+           AND cr_sort >= ?3 AND cr_sort <= ?4 \
+         ORDER BY cr_sort ASC, name COLLATE NOCASE ASC, id ASC \
+         LIMIT ?5",
+    )
+    .bind(name_pat)
+    .bind(type_pat)
+    .bind(cr_min)
+    .bind(cr_max)
+    .bind(limit)
+    .fetch_all(pool)
+    .await
+    .context("failed to search monsters with filters")?;
+    rows.into_iter().map(row_to_monster).collect()
+}
+
 pub async fn init_database() -> Result<Database> {
     let path = default_database_path()?;
     init_database_at_path(&path).await
@@ -1326,6 +1360,67 @@ mod tests {
         assert_eq!(count_monsters(pool).await.expect("count"), 1);
         clear_monsters(pool).await.expect("clear");
         assert_eq!(count_monsters(pool).await.expect("count"), 0);
+    }
+
+    #[tokio::test]
+    async fn filtered_search_by_cr_and_type() {
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let make = |slug: &str, name: &str, cr_sort: f64, kind: &str| MonsterRow {
+            id: slug.to_string(),
+            slug: slug.to_string(),
+            name: name.to_string(),
+            cr: format!("{cr_sort}"),
+            cr_sort,
+            creature_type: kind.to_string(),
+            size: "Medium".to_string(),
+            source: "XMM".to_string(),
+            created_at: "2026-06-20T00:00:00Z".to_string(),
+            updated_at: "2026-06-20T00:00:00Z".to_string(),
+        };
+        for row in [
+            make("imp", "Imp", 1.0, "Fiend (Devil)"),
+            make("barbed-devil", "Barbed Devil", 5.0, "Fiend (Devil)"),
+            make(
+                "adult-red-dragon",
+                "Adult Red Dragon",
+                17.0,
+                "Dragon (Chromatic)",
+            ),
+            make("goblin", "Goblin", 0.25, "Fey (Goblinoid)"),
+        ] {
+            upsert_monster(pool, &row).await.expect("upsert");
+        }
+
+        // Type filter alone (case-insensitive substring), ordered by CR ascending.
+        let fiends = search_monsters_filtered(pool, None, Some("fiend"), 0.0, f64::MAX, 50)
+            .await
+            .expect("search");
+        assert_eq!(
+            fiends.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(),
+            vec!["Imp", "Barbed Devil"]
+        );
+
+        // CR band narrows it; type + CR compose.
+        let mid = search_monsters_filtered(pool, None, Some("fiend"), 2.0, 10.0, 50)
+            .await
+            .expect("search");
+        assert_eq!(mid.len(), 1);
+        assert_eq!(mid[0].name, "Barbed Devil");
+
+        // CR band alone spans types.
+        let high = search_monsters_filtered(pool, None, None, 10.0, f64::MAX, 50)
+            .await
+            .expect("search");
+        assert_eq!(high.len(), 1);
+        assert_eq!(high[0].name, "Adult Red Dragon");
+
+        // Name fragment composes with filters too.
+        let named = search_monsters_filtered(pool, Some("devil"), Some("fiend"), 0.0, f64::MAX, 50)
+            .await
+            .expect("search");
+        assert_eq!(named.len(), 1);
+        assert_eq!(named[0].name, "Barbed Devil");
     }
 
     #[tokio::test]

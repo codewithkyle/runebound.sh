@@ -110,7 +110,7 @@ impl MonsterStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use runebound_models::monsters::{StatAbility, StatBlock, StatSection};
+    use runebound_models::monsters::{Span, StatAbility, StatBlock, StatSection};
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn temp_root() -> PathBuf {
@@ -149,10 +149,13 @@ mod tests {
                 abilities: vec![StatAbility {
                     name: Some("Scimitar".to_string()),
                     body: vec![StatBlock::Text {
-                        text: "Melee Attack Roll: +4.".to_string(),
+                        spans: vec![Span::Text {
+                            text: "Melee Attack Roll: +4.".to_string(),
+                        }],
                     }],
                 }],
             }],
+            lore: Vec::new(),
         }
     }
 

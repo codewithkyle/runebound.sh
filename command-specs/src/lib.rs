@@ -1288,6 +1288,7 @@ pub fn command_manifest() -> CommandManifest {
                 examples: vec![
                     "monster goblin".to_string(),
                     "monster Adult Red Dragon".to_string(),
+                    "monster --type dragon --cr 10-17".to_string(),
                     "Goblin Warrior".to_string(),
                 ],
                 subcommands: vec![SubcommandSpec {
@@ -1296,7 +1297,25 @@ pub fn command_manifest() -> CommandManifest {
                     options: Vec::new(),
                     examples: vec!["monster help".to_string()],
                 }],
-                options: Vec::new(),
+                options: vec![
+                    OptionSpec {
+                        name: "--cr".to_string(),
+                        short: None,
+                        takes_value: true,
+                        value_hint: Some(ValueHint::Text),
+                        summary: "Filter by challenge rating: a value (5, 1/4) or range (10-17)"
+                            .to_string(),
+                        completion: CompletionHint::None,
+                    },
+                    OptionSpec {
+                        name: "--type".to_string(),
+                        short: None,
+                        takes_value: true,
+                        value_hint: Some(ValueHint::Text),
+                        summary: "Filter by creature type (dragon, fiend, undead, …)".to_string(),
+                        completion: CompletionHint::None,
+                    },
+                ],
                 // Takes a free-form monster name (like `spell`), so it must not
                 // require a subcommand or `monster goblin` would be rejected.
                 requires_subcommand: false,

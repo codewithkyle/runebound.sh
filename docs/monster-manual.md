@@ -192,9 +192,9 @@ so extending the **shared** `strip_tags` is safe — verify by re-running the sp
 Keep this in the one well-tested `strip_tags`/`render_tag` seam. Add monster-shape cases to the
 existing `strip_tags_handles_every_tag_shape` test (or a sibling test) so the spell cases stay green.
 
-> **Phase 2 (optional):** convert `{@spell fireball}` / `{@creature goblin}` into clickable
-> `InlineNode::CommandRef { command: "spell fireball" / "monster goblin" }` so stat blocks
-> cross-link into the spellbook and bestiary. The model already supports inline nodes.
+> **Phase 2:** ✅ **Shipped 2026-06-20** — `{@spell fireball}` / `{@creature goblin}` now lower to
+> clickable `InlineNode::CommandRef { command: "spell fireball" / "monster goblin" }` via the
+> `render_inline` seam (returns a typed `Span` run instead of a flat string). See §12.
 
 ---
 
@@ -494,8 +494,25 @@ Each milestone compiles + tests green before the next (mirrors the spellbook ord
   `RawMonster` deserialization. The full dataset now resolves **all 1141** `_copy` variants (0 left
   unresolved), growing the canonical corpus from ~2575 to **~3668**. The `<$…$>` variable resolver
   is omitted (0 occurrences in the data). Import reports the resolved/skipped counts (§6b).
-- **Clickable cross-links** — `{@spell …}`/`{@creature …}`/`{@item …}` → `InlineNode::CommandRef`
-  so stat blocks link into the spellbook and bestiary (§3).
-- **Fluff** — lore prose + artwork from `fluff-bestiary-*.json`.
-- **Filters / encounter tooling** — search by CR/type/environment, a monster list view, an
-  encounter or initiative builder. The imported set is lookup-only by design.
+- **Clickable cross-links** — ✅ **Shipped 2026-06-20**. `{@spell …}` / `{@creature …}` markup now
+  lowers to clickable `InlineNode::CommandRef` (`spell <name>` / `monster <name>`) so stat blocks,
+  spell lists, and lair/regional bullets cross-link into the spellbook and bestiary. Implemented as
+  a typed `Span` run on `StatBlock` (`runebound-models/src/monsters.rs`) produced by the new
+  `render_inline` seam beside `strip_tags` (`core/src/spell_import.rs`); the tag scanner is now
+  brace-depth-aware so nested wrapper tags (`{@note … {@cult …} …}`, `{@i}`/`{@b}`) resolve
+  correctly — a latent `strip_tags` bug that also affected spells. Real dataset: ~12,000 links.
+  (`{@item …}` stays plain text — there is no item lookup command to target.)
+- **Fluff** — ✅ **Shipped 2026-06-20** (prose). Lore from `fluff-bestiary-*.json` is loaded via
+  `fluff-index.json`, its `_copy` inheritance resolved with the same copy engine (≈1100 entries),
+  and lowered into a trailing **Lore** card section (2623 of 3668 monsters carry lore). **Artwork
+  is intentionally deferred** — fluff images are internal 5etools paths (`bestiary/XMM/…​.webp`) and
+  the frontend `Image` block resolves only logical asset keys baked into the build, not external
+  files; surfacing artwork needs an asset-copy + key-mapping story of its own.
+- **Filters** — ✅ **Shipped 2026-06-20**. `monster --type <kind> --cr <value|range>` (e.g.
+  `monster --type dragon --cr 10-17`) runs a filtered search over the `cr_sort`/`creature_type`
+  index columns and renders a clickable results list. CR accepts a number (`5`), fraction (`1/4`),
+  or inclusive range (`10-17`); filters compose with a name fragment. `core::db::search_monsters_filtered`
+  → `MonsterRepository::search_filtered` → `monster_commands::monster_filtered`.
+- **Encounter tooling** — still deferred (a monster list/browse view, an encounter builder, an
+  initiative/HP tracker). This is a separate, larger feature beyond the lookup-only core; revisit
+  with its own design doc once the desired UX is pinned down.

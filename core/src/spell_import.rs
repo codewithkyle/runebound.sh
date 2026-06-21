@@ -13,6 +13,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+use runebound_models::monsters::Span;
 use runebound_models::spells::{Spell, SpellBlock};
 use serde::Deserialize;
 
@@ -616,9 +617,8 @@ pub fn strip_tags(input: &str) -> String {
         if chars[i] == '{'
             && i + 1 < chars.len()
             && chars[i + 1] == '@'
-            && let Some(close) = (i + 2..chars.len()).position(|j| chars[j] == '}')
+            && let Some(close) = matching_brace(&chars, i)
         {
-            let close = i + 2 + close;
             let inner: String = chars[i + 2..close].iter().collect();
             out.push_str(&render_tag(&inner));
             i = close + 1;
@@ -630,9 +630,143 @@ pub fn strip_tags(input: &str) -> String {
     out
 }
 
+/// Index of the `}` that closes the `{` at `start`, tracking nested `{…}` so a
+/// wrapper tag like `{@note See the {@cult …} entry.}` matches as one tag (not
+/// closed early at the inner `}`). `None` if the braces never balance.
+fn matching_brace(chars: &[char], start: usize) -> Option<usize> {
+    let mut depth = 0usize;
+    for (offset, ch) in chars[start..].iter().enumerate() {
+        match ch {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(start + offset);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Rich-text wrapper tags carry recursively-rendered content (no `name|source`
+/// args) — `{@i …}`, `{@b …}`, `{@note …}`, … — so their body is stripped/linked
+/// recursively rather than split on `|`.
+fn is_wrapper_tag(tag: &str) -> bool {
+    matches!(
+        tag,
+        "i" | "italic"
+            | "b"
+            | "bold"
+            | "u"
+            | "underline"
+            | "s"
+            | "strike"
+            | "note"
+            | "highlight"
+            | "comic"
+            | "code"
+            | "kbd"
+            | "sub"
+            | "sup"
+    )
+}
+
+/// Like [`strip_tags`], but preserves cross-links: `{@spell …}` / `{@creature …}`
+/// lower to clickable [`Span::Link`]s (targeting `spell <name>` / `monster <name>`),
+/// while every other tag and all literal text collapse into [`Span::Text`] runs.
+/// Adjacent text is merged, so a tag-free string yields a single `Text` span.
+///
+/// This shares [`render_tag`] with [`strip_tags`], so a link's visible label is
+/// exactly the text `strip_tags` would have shown — only the click target is new.
+pub fn render_inline(input: &str) -> Vec<Span> {
+    let chars: Vec<char> = input.chars().collect();
+    let mut spans: Vec<Span> = Vec::new();
+    let mut buf = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '{'
+            && i + 1 < chars.len()
+            && chars[i + 1] == '@'
+            && let Some(close) = matching_brace(&chars, i)
+        {
+            let inner: String = chars[i + 2..close].iter().collect();
+            let (tag, rest) = inner.split_once(' ').unwrap_or((inner.as_str(), ""));
+            match tag_link(&inner) {
+                Some((label, command)) => {
+                    flush(&mut spans, &mut buf);
+                    spans.push(Span::Link { label, command });
+                }
+                // A wrapper tag (`{@i …}`, `{@note … {@spell …} …}`) recurses so
+                // any nested cross-links inside it survive as links.
+                None if is_wrapper_tag(&tag.to_ascii_lowercase()) => {
+                    flush(&mut spans, &mut buf);
+                    spans.extend(render_inline(rest));
+                }
+                // Any other tag → its display text joins the running text run.
+                None => buf.push_str(&render_tag(&inner)),
+            }
+            i = close + 1;
+            continue;
+        }
+        buf.push(chars[i]);
+        i += 1;
+    }
+    flush(&mut spans, &mut buf);
+    coalesce_spans(spans)
+}
+
+/// Flush the pending text buffer into `spans` as one `Text` span (no-op if empty).
+fn flush(spans: &mut Vec<Span>, buf: &mut String) {
+    if !buf.is_empty() {
+        spans.push(Span::Text {
+            text: std::mem::take(buf),
+        });
+    }
+}
+
+/// Merge consecutive `Text` spans (a wrapper-tag recursion can leave adjacent runs).
+fn coalesce_spans(spans: Vec<Span>) -> Vec<Span> {
+    let mut out: Vec<Span> = Vec::with_capacity(spans.len());
+    for span in spans {
+        match (out.last_mut(), span) {
+            (Some(Span::Text { text: prev }), Span::Text { text }) => prev.push_str(&text),
+            (_, span) => out.push(span),
+        }
+    }
+    out
+}
+
+/// If `inner` is a cross-linkable tag, return its `(visible label, command)`. The
+/// label is the tag's normal display text (what [`strip_tags`] shows); the command
+/// targets the canonical name — the FIRST `|`-segment — so
+/// `{@creature Goblin|XMM|goblins}` links the displayed word "goblins" to
+/// `monster Goblin`. Only `spell` and `creature` map to commands we have
+/// (`spell`/`monster`); every other tag returns `None` and stays plain text.
+fn tag_link(inner: &str) -> Option<(String, String)> {
+    let (tag, rest) = inner.split_once(' ').unwrap_or((inner, ""));
+    let target = rest.split('|').next().unwrap_or("").trim();
+    if target.is_empty() {
+        return None;
+    }
+    let command = match tag.to_ascii_lowercase().as_str() {
+        "spell" => format!("spell {target}"),
+        "creature" => format!("monster {target}"),
+        _ => return None,
+    };
+    Some((render_tag(inner), command))
+}
+
 fn render_tag(inner: &str) -> String {
     let (tag, rest) = inner.split_once(' ').unwrap_or((inner, ""));
     let tag_lower = tag.to_ascii_lowercase();
+
+    // Rich-text wrapper tags carry recursively-rendered content (no `|`-args):
+    // `{@note See the {@cult …} entry.}` → "See the … entry.".
+    if is_wrapper_tag(&tag_lower) {
+        return strip_tags(rest);
+    }
 
     // Monster stat-block tags that render a fixed phrase regardless of arguments,
     // including the no-argument ones (handled *before* the empty-`rest` guard
@@ -662,6 +796,10 @@ fn render_tag(inner: &str) -> String {
         "hit" => return render_hit(segments[0].trim()),
         // `{@actSave dex}` → "Dexterity Saving Throw:".
         "actsave" => return format!("{} Saving Throw:", full_ability(segments[0].trim())),
+        // `{@filter Mountain|bestiary|environment=mountain}` → "Mountain" (the
+        // visible label is the FIRST segment, not the last as the generic rule
+        // assumes — the trailing segments are filter query params). Common in fluff.
+        "filter" => return segments[0].trim().to_string(),
         _ => {}
     }
     let display = if segments.len() >= 3 {
@@ -669,7 +807,8 @@ fn render_tag(inner: &str) -> String {
     } else {
         segments[0]
     };
-    display.trim().to_string()
+    // Recurse: a display segment can itself hold a nested tag (rare, but real).
+    strip_tags(display.trim())
 }
 
 /// `{@hit 4}` → "+4"; a value that already carries a sign is kept verbatim.
@@ -834,6 +973,85 @@ mod tests {
                 "{@atkr m} {@hit 4}, reach 5 ft. {@h}5 ({@damage 1d6 + 2}) Slashing damage."
             ),
             "Melee Attack Roll: +4, reach 5 ft. Hit: 5 (1d6 + 2) Slashing damage."
+        );
+        // `{@filter}` (common in fluff) shows its first segment, not the query params.
+        assert_eq!(
+            strip_tags("found in {@filter Mountains|bestiary|environment=mountain}"),
+            "found in Mountains"
+        );
+        // Nested wrapper tags: the outer `{@note …}` must match its OWN closing
+        // brace (not the inner tag's), and the inner reference still resolves.
+        assert_eq!(
+            strip_tags("{@note See the {@cult Cult of Baphomet|MPMM} entry.}"),
+            "See the Cult of Baphomet entry."
+        );
+        assert_eq!(
+            strip_tags("an {@i italic {@b bold}} word"),
+            "an italic bold word"
+        );
+    }
+
+    #[test]
+    fn render_inline_keeps_spell_and_creature_links() {
+        // `{@spell}` → a Link to the spellbook; surrounding text stays plain and merges.
+        assert_eq!(
+            render_inline("The lich casts {@spell Fireball|XPHB} at will."),
+            vec![
+                Span::Text {
+                    text: "The lich casts ".to_string()
+                },
+                Span::Link {
+                    label: "Fireball".to_string(),
+                    command: "spell Fireball".to_string()
+                },
+                Span::Text {
+                    text: " at will.".to_string()
+                },
+            ]
+        );
+        // `{@creature}` → a Link to the bestiary; a 3-segment tag shows the display
+        // word but targets the canonical creature name (the first segment).
+        assert_eq!(
+            render_inline("summons {@creature Goblin Boss|XMM|goblin bosses}"),
+            vec![
+                Span::Text {
+                    text: "summons ".to_string()
+                },
+                Span::Link {
+                    label: "goblin bosses".to_string(),
+                    command: "monster Goblin Boss".to_string()
+                },
+            ]
+        );
+        // Non-link tags collapse into the text run; a tag-free string is one span.
+        assert_eq!(
+            render_inline("deals {@damage 8d6} fire damage"),
+            vec![Span::Text {
+                text: "deals 8d6 fire damage".to_string()
+            }]
+        );
+        assert_eq!(
+            render_inline("plain prose"),
+            vec![Span::Text {
+                text: "plain prose".to_string()
+            }]
+        );
+        // A link nested inside a wrapper tag survives as a link; surrounding text
+        // merges into single runs on each side.
+        assert_eq!(
+            render_inline("{@note The lich casts {@spell Fireball|XPHB} here.}"),
+            vec![
+                Span::Text {
+                    text: "The lich casts ".to_string()
+                },
+                Span::Link {
+                    label: "Fireball".to_string(),
+                    command: "spell Fireball".to_string()
+                },
+                Span::Text {
+                    text: " here.".to_string()
+                },
+            ]
         );
     }
 

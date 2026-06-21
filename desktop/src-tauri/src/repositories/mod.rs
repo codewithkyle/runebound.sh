@@ -878,6 +878,17 @@ pub trait MonsterRepository: Send + Sync {
         query: &str,
         limit: i64,
     ) -> Result<Vec<db::MonsterRow>, String>;
+    /// Filtered search backing `monster --cr <range> --type <kind>`: optional name /
+    /// creature-type substrings + an inclusive `cr_sort` band, ordered by CR then name.
+    async fn search_filtered(
+        &self,
+        database: &Database,
+        name: Option<&str>,
+        creature_type: Option<&str>,
+        cr_min: f64,
+        cr_max: f64,
+        limit: i64,
+    ) -> Result<Vec<db::MonsterRow>, String>;
     async fn count(&self, database: &Database) -> Result<i64, String>;
     async fn clear_tx(&self, tx: &mut DbTransaction<'_>) -> Result<(), String>;
     async fn upsert_tx(
@@ -900,6 +911,27 @@ impl MonsterRepository for ProdMonsterRepository {
         core_db::search_monsters_by_name(&database.pool, query, limit)
             .await
             .map_err(|e| e.to_string())
+    }
+
+    async fn search_filtered(
+        &self,
+        database: &Database,
+        name: Option<&str>,
+        creature_type: Option<&str>,
+        cr_min: f64,
+        cr_max: f64,
+        limit: i64,
+    ) -> Result<Vec<db::MonsterRow>, String> {
+        core_db::search_monsters_filtered(
+            &database.pool,
+            name,
+            creature_type,
+            cr_min,
+            cr_max,
+            limit,
+        )
+        .await
+        .map_err(|e| e.to_string())
     }
 
     async fn count(&self, database: &Database) -> Result<i64, String> {

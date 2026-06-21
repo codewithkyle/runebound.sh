@@ -14,8 +14,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::output::{
-    OutputBlock, OutputDoc, code_block, doc, emphasis, entity_card_full, entity_row, heading, list,
-    paragraph_text, paragraph_with_inlines, strong, text_node,
+    InlineNode, OutputBlock, OutputDoc, code_block, command_ref, doc, emphasis, entity_card_full,
+    entity_row, heading, list, paragraph_with_inlines, strong, text_node,
 };
 
 /// A converted, render-ready monster stat block. All `{@tag}` markup already
@@ -48,6 +48,12 @@ pub struct Monster {
     /// Trait / action / bonus-action / reaction / legendary / lair / regional
     /// sections, in render order. Empty sections are dropped during conversion.
     pub sections: Vec<StatSection>,
+    /// Lore prose from `fluff-bestiary-*.json`, lowered like the stat-block
+    /// sections and rendered under a trailing "Lore" heading. Empty when the
+    /// monster has no fluff. Artwork is intentionally omitted — the frontend
+    /// resolves only built-in asset keys, not external 5etools image files.
+    #[serde(default)]
+    pub lore: Vec<StatBlock>,
 }
 
 /// One titled group of stat-block abilities ("Traits", "Actions", "Legendary
@@ -72,17 +78,48 @@ pub struct StatAbility {
     pub body: Vec<StatBlock>,
 }
 
+/// A run of stat-block prose: plain text, or a clickable cross-link into the
+/// spellbook / bestiary. Produced during import — `{@spell …}` / `{@creature …}`
+/// markup lowers to a [`Span::Link`]; everything else lowers to [`Span::Text`].
+/// [`monster_card`] maps each `Link` to an [`crate::output::InlineNode::CommandRef`]
+/// and each `Text` to a plain inline.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Span {
+    /// Plain, non-interactive text.
+    Text { text: String },
+    /// A clickable cross-link: `label` is the visible text, `command` is the
+    /// command run on click (e.g. `"spell Fireball"`, `"monster Goblin"`).
+    Link { label: String, command: String },
+}
+
+impl Span {
+    /// The visible text of this span (its label), ignoring any link target — the
+    /// source for plain-text fallbacks and tests.
+    pub fn text(&self) -> &str {
+        match self {
+            Span::Text { text } | Span::Link { label: text, .. } => text,
+        }
+    }
+}
+
+/// Flatten a span run to its plain text (links degrade to their visible label).
+fn spans_text(spans: &[Span]) -> String {
+    spans.iter().map(Span::text).collect()
+}
+
 /// Render-ready body element — the monster analog of [`crate::spells::SpellBlock`],
 /// deliberately flat (no recursive nesting) so the whole `Monster` serializes
 /// cleanly to TOML. It is `SpellBlock` minus `Heading` (subsection titles become a
-/// [`StatAbility::name`] instead).
+/// [`StatAbility::name`] instead). Prose and bullets carry [`Span`]s so cross-links
+/// survive; table cells stay plain text (stat-block tables rarely cross-link).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum StatBlock {
-    /// A paragraph of prose.
-    Text { text: String },
-    /// A bulleted list; each item is already a single flattened line.
-    Bullets { items: Vec<String> },
+    /// A paragraph of prose, as a run of text + cross-link spans.
+    Text { spans: Vec<Span> },
+    /// A bulleted list; each item is one already-flattened line of spans.
+    Bullets { items: Vec<Vec<Span>> },
     /// A small table, rendered as a fixed-width code block (there is no
     /// `OutputBlock::Table`); stat-block tables are tiny, so this reads fine.
     Table {
@@ -95,8 +132,12 @@ impl StatBlock {
     /// The plain-text content of this block — used by plain-text fallbacks and tests.
     pub fn to_text(&self) -> String {
         match self {
-            StatBlock::Text { text } => text.clone(),
-            StatBlock::Bullets { items } => items.join("\n"),
+            StatBlock::Text { spans } => spans_text(spans),
+            StatBlock::Bullets { items } => items
+                .iter()
+                .map(|item| spans_text(item))
+                .collect::<Vec<_>>()
+                .join("\n"),
             StatBlock::Table { headers, rows } => {
                 let mut lines = vec![headers.join(" | ")];
                 for row in rows {
@@ -126,6 +167,13 @@ pub fn monster_card(monster: &Monster) -> OutputDoc {
         }
         for ability in &section.abilities {
             push_stat_ability(&mut body, ability);
+        }
+    }
+    // Fluff lore, when imported, renders as a final titled section above the footer.
+    if !monster.lore.is_empty() {
+        body.push(heading(3, "Lore"));
+        for block in &monster.lore {
+            push_stat_block(&mut body, block);
         }
     }
     body.push(paragraph_with_inlines(vec![emphasis(format!(
@@ -209,12 +257,12 @@ fn format_modifier(score: i16) -> String {
 fn push_stat_ability(out: &mut Vec<OutputBlock>, ability: &StatAbility) {
     let mut blocks = ability.body.iter();
     match (&ability.name, blocks.next()) {
-        // Name + a leading prose line → "**Name.** body" as one paragraph.
-        (Some(name), Some(StatBlock::Text { text })) => {
-            out.push(paragraph_with_inlines(vec![
-                strong(format!("{name}.")),
-                text_node(format!(" {text}")),
-            ]));
+        // Name + a leading prose line → "**Name.** body" as one paragraph, the
+        // body spans (links and all) following the bold name inline.
+        (Some(name), Some(StatBlock::Text { spans })) => {
+            let mut inlines = vec![strong(format!("{name}.")), text_node(" ")];
+            inlines.extend(spans_to_inlines(spans));
+            out.push(paragraph_with_inlines(inlines));
         }
         // Name but the first block is a list/table → the name on its own line.
         (Some(name), Some(first)) => {
@@ -234,17 +282,26 @@ fn push_stat_ability(out: &mut Vec<OutputBlock>, ability: &StatAbility) {
 
 fn push_stat_block(out: &mut Vec<OutputBlock>, block: &StatBlock) {
     match block {
-        StatBlock::Text { text } => out.push(paragraph_text(text.clone())),
+        StatBlock::Text { spans } => out.push(paragraph_with_inlines(spans_to_inlines(spans))),
         StatBlock::Bullets { items } => out.push(list(
-            items
-                .iter()
-                .map(|item| vec![text_node(item.clone())])
-                .collect(),
+            items.iter().map(|item| spans_to_inlines(item)).collect(),
         )),
         StatBlock::Table { headers, rows } => {
             out.push(code_block(None::<String>, render_table(headers, rows)))
         }
     }
+}
+
+/// Map stat-block spans to output inlines: a [`Span::Link`] becomes a clickable
+/// `command_ref`, a [`Span::Text`] a plain text node.
+fn spans_to_inlines(spans: &[Span]) -> Vec<InlineNode> {
+    spans
+        .iter()
+        .map(|span| match span {
+            Span::Text { text } => text_node(text.clone()),
+            Span::Link { label, command } => command_ref(label.clone(), command.clone()),
+        })
+        .collect()
 }
 
 /// Render a tiny table as aligned fixed-width text for a `Code` block (the monster
@@ -324,12 +381,15 @@ mod tests {
                 abilities: vec![StatAbility {
                     name: Some("Scimitar".to_string()),
                     body: vec![StatBlock::Text {
-                        text:
-                            "Melee Attack Roll: +4, reach 5 ft. Hit: 5 (1d6 + 2) Slashing damage."
-                                .to_string(),
+                        spans: vec![Span::Text {
+                            text:
+                                "Melee Attack Roll: +4, reach 5 ft. Hit: 5 (1d6 + 2) Slashing damage."
+                                    .to_string(),
+                        }],
                     }],
                 }],
             }],
+            lore: Vec::new(),
         }
     }
 
@@ -466,13 +526,27 @@ mod tests {
         original.sections.push(StatSection {
             title: "Regional Effects".to_string(),
             intro: vec![StatBlock::Text {
-                text: "The region is warped:".to_string(),
+                spans: vec![Span::Text {
+                    text: "The region is warped:".to_string(),
+                }],
             }],
             abilities: vec![StatAbility {
                 name: None,
                 body: vec![
+                    // A bullet carrying a cross-link span must survive the round-trip.
                     StatBlock::Bullets {
-                        items: vec!["All-Seeing. The lich sees far.".to_string()],
+                        items: vec![vec![
+                            Span::Text {
+                                text: "All-Seeing. The lich casts ".to_string(),
+                            },
+                            Span::Link {
+                                label: "Clairvoyance".to_string(),
+                                command: "spell Clairvoyance".to_string(),
+                            },
+                            Span::Text {
+                                text: ".".to_string(),
+                            },
+                        ]],
                     },
                     StatBlock::Table {
                         headers: vec!["d6".to_string(), "Effect".to_string()],
@@ -481,8 +555,65 @@ mod tests {
                 ],
             }],
         });
+        // Lore (fluff) is also part of the stored card payload.
+        original.lore = vec![StatBlock::Text {
+            spans: vec![Span::Text {
+                text: "Goblins are small, black-hearted humanoids.".to_string(),
+            }],
+        }];
         let encoded = toml::to_string_pretty(&original).expect("serialize monster to toml");
         let decoded: Monster = toml::from_str(&encoded).expect("parse monster from toml");
         assert_eq!(decoded, original, "toml round-trip changed the monster");
+    }
+
+    #[test]
+    fn link_spans_render_as_clickable_command_refs() {
+        use crate::output::InlineNode;
+        let mut goblin = goblin();
+        // A creature cross-link inside an action body should reach the card as a
+        // clickable command_ref targeting the bestiary lookup.
+        goblin.sections[0].abilities[0].body = vec![StatBlock::Text {
+            spans: vec![
+                Span::Text {
+                    text: "Summons a ".to_string(),
+                },
+                Span::Link {
+                    label: "Goblin Boss".to_string(),
+                    command: "monster Goblin Boss".to_string(),
+                },
+                Span::Text {
+                    text: ".".to_string(),
+                },
+            ],
+        }];
+        let doc = monster_card(&goblin);
+        let (_, _, _, body) = card(&doc);
+        let has_link = body.iter().any(|block| match block {
+            OutputBlock::Paragraph { inlines } => inlines.iter().any(|node| {
+                matches!(node, InlineNode::CommandRef { label, command }
+                    if label == "Goblin Boss" && command == "monster Goblin Boss")
+            }),
+            _ => false,
+        });
+        assert!(
+            has_link,
+            "creature cross-link should render as a command_ref"
+        );
+    }
+
+    #[test]
+    fn lore_renders_under_a_trailing_heading() {
+        let mut goblin = goblin();
+        goblin.lore = vec![StatBlock::Text {
+            spans: vec![Span::Text {
+                text: "Goblins infest the wild places of the world.".to_string(),
+            }],
+        }];
+        let plain = monster_card(&goblin).to_plain_text();
+        assert!(plain.contains("### Lore"), "lore heading missing:\n{plain}");
+        assert!(
+            plain.contains("Goblins infest the wild places"),
+            "lore prose missing:\n{plain}"
+        );
     }
 }
