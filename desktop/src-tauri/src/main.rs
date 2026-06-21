@@ -22,11 +22,12 @@ use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
 use crate::repositories::{
     DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
-    GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
-    ProdDocumentRepository, ProdDungeonRepository, ProdEventRepository, ProdFactionRepository,
-    ProdGenerationRepository, ProdGodRepository, ProdItemRepository, ProdLocationRepository,
-    ProdNpcRepository, ProdSoftDeleteRepository, ProdSpellRepository, ProdVaultRepository,
-    SoftDeleteRepository, SpellRepository, VaultRepository,
+    GenerationRepository, GodRepository, ItemRepository, LocationRepository, MonsterRepository,
+    NpcRepository, ProdDocumentRepository, ProdDungeonRepository, ProdEventRepository,
+    ProdFactionRepository, ProdGenerationRepository, ProdGodRepository, ProdItemRepository,
+    ProdLocationRepository, ProdMonsterRepository, ProdNpcRepository, ProdSoftDeleteRepository,
+    ProdSpellRepository, ProdVaultRepository, SoftDeleteRepository, SpellRepository,
+    VaultRepository,
 };
 use crate::services::suggestions::{CommandSuggestion, SuggestionService};
 use crate::wizards::build_default_wizard_registry;
@@ -160,6 +161,7 @@ fn main() {
     let generation_repo: Arc<dyn GenerationRepository> = Arc::new(ProdGenerationRepository);
     let soft_delete_repo: Arc<dyn SoftDeleteRepository> = Arc::new(ProdSoftDeleteRepository);
     let spell_repo: Arc<dyn SpellRepository> = Arc::new(ProdSpellRepository);
+    let monster_repo: Arc<dyn MonsterRepository> = Arc::new(ProdMonsterRepository);
 
     let command_service = dnd_core::service::CommandService::new();
 
@@ -182,6 +184,7 @@ fn main() {
         generation_repo: generation_repo.clone(),
         soft_delete_repo: soft_delete_repo.clone(),
         spell_repo: spell_repo.clone(),
+        monster_repo: monster_repo.clone(),
         domains,
         wizards,
         wizard_session: Mutex::new(crate::wizards::WizardSession::default()),

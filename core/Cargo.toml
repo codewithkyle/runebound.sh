@@ -10,6 +10,7 @@ chrono.workspace = true
 command-handler = { path = "../command-handler" }
 command-specs = { path = "../command-specs" }
 dirs.workspace = true
+regex = "1"
 reqwest.workspace = true
 runebound-models = { path = "../runebound-models" }
 wizard = { path = "../wizard" }

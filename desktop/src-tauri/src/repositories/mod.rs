@@ -5,7 +5,7 @@ use dnd_core::vault::Vault;
 pub mod db {
     pub use dnd_core::db::{
         Database, DbTransaction, DungeonRow, EventRow, FactionRow, GodRow, ItemRow, LocationRow,
-        NpcRow, SoftDeleteRow, SpellRow,
+        MonsterRow, NpcRow, SoftDeleteRow, SpellRow,
     };
 }
 
@@ -861,6 +861,97 @@ impl SpellRepository for ProdSpellRepository {
         row: &db::SpellRow,
     ) -> Result<(), String> {
         core_db::upsert_spell(&mut **tx, row)
+            .await
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// The imported monster library: a read-only search index over the canonical TOML
+/// monster store. Lookups search here for a slug, then load the card from the
+/// store; import/boot replace the whole table in one transaction (`clear_tx` +
+/// `upsert_tx`). Mirrors [`SpellRepository`].
+#[async_trait]
+pub trait MonsterRepository: Send + Sync {
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::MonsterRow>, String>;
+    /// Filtered search backing `monster --cr <range> --type <kind>`: optional name /
+    /// creature-type substrings + an inclusive `cr_sort` band, ordered by CR then name.
+    async fn search_filtered(
+        &self,
+        database: &Database,
+        name: Option<&str>,
+        creature_type: Option<&str>,
+        cr_min: f64,
+        cr_max: f64,
+        limit: i64,
+    ) -> Result<Vec<db::MonsterRow>, String>;
+    async fn count(&self, database: &Database) -> Result<i64, String>;
+    async fn clear_tx(&self, tx: &mut DbTransaction<'_>) -> Result<(), String>;
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::MonsterRow,
+    ) -> Result<(), String>;
+}
+
+pub struct ProdMonsterRepository;
+
+#[async_trait]
+impl MonsterRepository for ProdMonsterRepository {
+    async fn search_by_name(
+        &self,
+        database: &Database,
+        query: &str,
+        limit: i64,
+    ) -> Result<Vec<db::MonsterRow>, String> {
+        core_db::search_monsters_by_name(&database.pool, query, limit)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn search_filtered(
+        &self,
+        database: &Database,
+        name: Option<&str>,
+        creature_type: Option<&str>,
+        cr_min: f64,
+        cr_max: f64,
+        limit: i64,
+    ) -> Result<Vec<db::MonsterRow>, String> {
+        core_db::search_monsters_filtered(
+            &database.pool,
+            name,
+            creature_type,
+            cr_min,
+            cr_max,
+            limit,
+        )
+        .await
+        .map_err(|e| e.to_string())
+    }
+
+    async fn count(&self, database: &Database) -> Result<i64, String> {
+        core_db::count_monsters(&database.pool)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn clear_tx(&self, tx: &mut DbTransaction<'_>) -> Result<(), String> {
+        core_db::clear_monsters(&mut **tx)
+            .await
+            .map_err(|e| e.to_string())
+    }
+
+    async fn upsert_tx(
+        &self,
+        tx: &mut DbTransaction<'_>,
+        row: &db::MonsterRow,
+    ) -> Result<(), String> {
+        core_db::upsert_monster(&mut **tx, row)
             .await
             .map_err(|e| e.to_string())
     }

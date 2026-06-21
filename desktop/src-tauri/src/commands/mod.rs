@@ -2,6 +2,7 @@ pub mod calendar_commands;
 pub mod create_commands;
 pub mod date_commands;
 pub mod entity_commands;
+pub mod monster_commands;
 pub mod moon_commands;
 pub mod publish_commands;
 pub mod setup_commands;
@@ -103,6 +104,8 @@ fn build_desktop_handler_registry() -> HandlerRegistry<DesktopHandler> {
     registry.register(publish_handler_entry());
     registry.register(spell_handler_entry());
     registry.register(spellbook_handler_entry());
+    registry.register(monster_handler_entry());
+    registry.register(bestiary_handler_entry());
     registry
 }
 
@@ -473,6 +476,26 @@ pub fn spellbook_handler_entry() -> HandlerEntry<DesktopHandler> {
         metadata_for("spellbook"),
         DesktopHandler::new(|invocation| {
             Box::pin(async move { spell_commands::handle_spellbook(invocation).await })
+        }),
+    )
+}
+
+pub fn monster_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "monster",
+        metadata_for("monster"),
+        DesktopHandler::new(|invocation| {
+            Box::pin(async move { monster_commands::handle_monster(invocation).await })
+        }),
+    )
+}
+
+pub fn bestiary_handler_entry() -> HandlerEntry<DesktopHandler> {
+    HandlerEntry::new(
+        "bestiary",
+        metadata_for("bestiary"),
+        DesktopHandler::new(|invocation| {
+            Box::pin(async move { monster_commands::handle_bestiary(invocation).await })
         }),
     )
 }
