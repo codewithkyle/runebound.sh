@@ -213,10 +213,17 @@ async fn bestiary_import(trimmed: &str, invocation: DesktopHandlerInvocation<'_>
     let count = summary.monsters.len();
     let headline = format!("Imported {count} monsters.");
     let mut document = doc().with_block(status(StatusTone::Success, headline.clone()));
-    // Never silently drop the `_copy` variants — report the skipped count.
+    // Surface how many derived (`_copy`) stat blocks were materialized.
+    if summary.resolved_copy > 0 {
+        document = document.with_block(paragraph_text(format!(
+            "Resolved {} variant monsters from their base stat blocks.",
+            summary.resolved_copy
+        )));
+    }
+    // A copy whose base could not be found is dropped — never silently.
     if summary.skipped_copy > 0 {
         document = document.with_block(paragraph_text(format!(
-            "Skipped {} variant monsters (derived stat blocks not yet supported).",
+            "Skipped {} variant monsters (base stat block not found).",
             summary.skipped_copy
         )));
     }

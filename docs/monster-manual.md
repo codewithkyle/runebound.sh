@@ -488,11 +488,12 @@ Each milestone compiles + tests green before the next (mirrors the spellbook ord
 
 ## 12. Deferred / Phase 2 (explicitly out of scope for v1)
 
-- **`_copy` resolution** — port 5etools' `_applyCopy`/`_mod` engine (modes `appendArr`,
-  `replaceArr`, `insertArr`, `removeArr`, `appendStr`, `replace`, plus `_preserve` and
-  `template.json` templating) to recover the 1141 skipped variant monsters. This is the single
-  largest follow-up. Until then, the import **reports** the skipped count (§6b) so coverage is
-  never silently capped.
+- **`_copy` resolution** — ✅ **Shipped 2026-06-20** (`core/src/monster_copy.rs`). A faithful port
+  of 5etools' `copyApplier` (`js/utils.js`), scoped to the 21 `_mod` modes the real data actually
+  uses plus `template.json` templating and `_preserve`. Runs as a `Value` → `Value` pre-pass before
+  `RawMonster` deserialization. The full dataset now resolves **all 1141** `_copy` variants (0 left
+  unresolved), growing the canonical corpus from ~2575 to **~3668**. The `<$…$>` variable resolver
+  is omitted (0 occurrences in the data). Import reports the resolved/skipped counts (§6b).
 - **Clickable cross-links** — `{@spell …}`/`{@creature …}`/`{@item …}` → `InlineNode::CommandRef`
   so stat blocks link into the spellbook and bestiary (§3).
 - **Fluff** — lore prose + artwork from `fluff-bestiary-*.json`.

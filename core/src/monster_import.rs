@@ -26,13 +26,16 @@ use runebound_models::monsters::{Monster, StatAbility, StatBlock, StatSection};
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::monster_copy::resolve_copies;
 use crate::spell_import::{slugify, strip_tags};
 
-/// The outcome of an import: the canonical monsters plus the count of `_copy`
-/// variants that were skipped (surfaced to the user so coverage is explicit).
+/// The outcome of an import: the canonical monsters plus how many `_copy` variants
+/// were resolved (Phase 2 materializes them) vs. dropped because their base could
+/// not be found. Both are surfaced to the user so coverage is explicit.
 #[derive(Debug, Clone)]
 pub struct ImportSummary {
     pub monsters: Vec<Monster>,
+    pub resolved_copy: usize,
     pub skipped_copy: usize,
 }
 
@@ -42,10 +45,20 @@ pub struct ImportSummary {
 // reserved-word and underscore-prefixed keys are renamed explicitly.
 // ---------------------------------------------------------------------------
 
+/// A bestiary file as untyped values — the `_copy` engine works at this layer, so we
+/// keep monsters as [`Value`] until after inheritance is resolved.
 #[derive(Debug, Deserialize)]
-struct RawFile {
+struct RawValueFile {
     #[serde(default)]
-    monster: Vec<RawMonster>,
+    monster: Vec<Value>,
+}
+
+/// `template.json`'s monster templates, used by `_copy._templates`.
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RawTemplateFile {
+    #[serde(default)]
+    monster_template: Vec<Value>,
 }
 
 /// Deserialize a field that may be explicitly `null` in the source as its default.
@@ -64,11 +77,8 @@ where
 struct RawMonster {
     name: String,
     source: String,
-    /// Presence marks a `_copy`-derived variant (a base monster + `_mod` edits).
-    /// We only check whether it exists; resolving it is Phase 2.
-    #[serde(rename = "_copy", default)]
-    copy: Option<Value>,
-    /// Presence marks a superseded entry (its canonical reprint is elsewhere).
+    /// Presence marks a superseded entry (its canonical reprint is elsewhere). `_copy`
+    /// itself is resolved upstream by [`crate::monster_copy`], so it never reaches here.
     #[serde(default)]
     reprinted_as: Option<Value>,
     #[serde(default, deserialize_with = "null_default")]
@@ -261,18 +271,30 @@ pub fn import_monsters_from_dir(dir: &Path) -> Result<ImportSummary> {
     let index: BTreeMap<String, String> = serde_json::from_str(&index_raw)
         .with_context(|| format!("failed to parse {}", index_path.display()))?;
 
-    let mut raw_monsters: Vec<RawMonster> = Vec::new();
+    // Load every monster as a raw JSON value first, so the `_copy` engine can merge
+    // bases across sources before we commit to the typed `RawMonster` shape.
+    let mut raw_values: Vec<Value> = Vec::new();
     for filename in index.values() {
         let path = bestiary_dir.join(filename);
         let raw = std::fs::read_to_string(&path)
             .with_context(|| format!("failed to read bestiary file {}", path.display()))?;
-        let file: RawFile = serde_json::from_str(&raw)
+        let file: RawValueFile = serde_json::from_str(&raw)
             .with_context(|| format!("failed to parse bestiary file {}", path.display()))?;
-        raw_monsters.extend(file.monster);
+        raw_values.extend(file.monster);
     }
 
+    // Phase 2: resolve `_copy` inheritance (base fill + `_mod` edits + templates)
+    // rather than skipping the derived variants.
+    let templates = load_templates(&bestiary_dir)?;
+    let resolution = resolve_copies(raw_values, templates);
+    let raw_monsters: Vec<RawMonster> = resolution
+        .monsters
+        .into_iter()
+        .filter_map(|value| serde_json::from_value(value).ok())
+        .collect();
+
     let legendary_groups = load_legendary_groups(&bestiary_dir)?;
-    let (canonical, skipped_copy) = dedup_to_canonical(raw_monsters);
+    let canonical = dedup_to_canonical(raw_monsters);
     let mut monsters: Vec<Monster> = canonical
         .iter()
         .map(|raw| convert_monster(raw, &legendary_groups))
@@ -285,7 +307,8 @@ pub fn import_monsters_from_dir(dir: &Path) -> Result<ImportSummary> {
     });
     Ok(ImportSummary {
         monsters,
-        skipped_copy,
+        resolved_copy: resolution.resolved_copy,
+        skipped_copy: resolution.skipped_copy,
     })
 }
 
@@ -324,17 +347,27 @@ fn load_legendary_groups(bestiary_dir: &Path) -> Result<Vec<RawLegendaryGroup>> 
     Ok(file.legendary_group)
 }
 
-/// Reduce the full corpus to the 2024-canonical set: skip `_copy` variants
-/// (counting them), drop reprinted entries, then keep one entry per name,
-/// preferring the 2024 Monster Manual (`XMM`).
-fn dedup_to_canonical(raw: Vec<RawMonster>) -> (Vec<RawMonster>, usize) {
-    let mut skipped_copy = 0usize;
+/// Load `template.json`'s `monsterTemplate` array (raw values) from the bestiary dir,
+/// if present. Templates are bundles of `_mod`/`_root` edits applied via
+/// `_copy._templates`; a missing file just means no template-based copies resolve.
+fn load_templates(bestiary_dir: &Path) -> Result<Vec<Value>> {
+    let path = bestiary_dir.join("template.json");
+    if !path.is_file() {
+        return Ok(Vec::new());
+    }
+    let raw = std::fs::read_to_string(&path)
+        .with_context(|| format!("failed to read {}", path.display()))?;
+    let file: RawTemplateFile = serde_json::from_str(&raw)
+        .with_context(|| format!("failed to parse {}", path.display()))?;
+    Ok(file.monster_template)
+}
+
+/// Reduce the resolved corpus to the 2024-canonical set: drop reprinted entries,
+/// then keep one entry per name, preferring the 2024 Monster Manual (`XMM`). `_copy`
+/// variants have already been materialized by the copy engine, so none remain here.
+fn dedup_to_canonical(raw: Vec<RawMonster>) -> Vec<RawMonster> {
     let mut by_name: BTreeMap<String, RawMonster> = BTreeMap::new();
     for monster in raw {
-        if monster.copy.is_some() {
-            skipped_copy += 1; // a `_copy`-derived variant; resolving it is Phase 2
-            continue;
-        }
         if monster.reprinted_as.is_some() {
             continue; // superseded; the canonical reprint appears under its own source
         }
@@ -350,7 +383,7 @@ fn dedup_to_canonical(raw: Vec<RawMonster>) -> (Vec<RawMonster>, usize) {
             }
         }
     }
-    (by_name.into_values().collect(), skipped_copy)
+    by_name.into_values().collect()
 }
 
 /// On a slug collision (named creatures recur across adventures far more than
@@ -1377,9 +1410,25 @@ mod tests {
             ]
         },
         {
+            "name": "Skeleton", "source": "MM", "page": 272,
+            "size": ["M"], "type": "undead", "alignment": ["L", "E"],
+            "ac": [13], "hp": {"average": 13, "formula": "2d8 + 4"}, "speed": {"walk": 30},
+            "str": 10, "dex": 14, "con": 15, "int": 6, "wis": 8, "cha": 5,
+            "vulnerable": ["bludgeoning"], "cr": "1/4",
+            "action": [
+                {"name": "Shortsword", "entries": ["{@atk mw} {@hit 4} to hit. {@h}5 ({@damage 1d6 + 2}) Piercing damage."]}
+            ]
+        },
+        {
             "name": "Skeleton Knight", "source": "MM", "page": 200,
-            "_copy": {"name": "Skeleton", "source": "MM"},
-            "size": ["M"], "type": "undead", "cr": "1"
+            "_copy": {"name": "Skeleton", "source": "MM",
+                "_mod": {"action": {"mode": "appendArr",
+                    "items": {"name": "Longsword", "entries": ["{@atk mw} {@hit 5} to hit. {@h}7 ({@damage 1d10 + 2}) Slashing damage."]}}}},
+            "cr": "1"
+        },
+        {
+            "name": "Lost Wanderer", "source": "MM",
+            "_copy": {"name": "Nonexistent Base", "source": "MM"}
         }
     ]}"#;
 
@@ -1432,12 +1481,40 @@ mod tests {
     }
 
     #[test]
-    fn skips_copy_and_counts_them() {
+    fn resolves_copy_variant_through_pipeline() {
         let summary = all();
-        assert_eq!(summary.skipped_copy, 1, "Skeleton Knight has _copy");
+        // Skeleton Knight is a `_copy` of Skeleton (+ an appended action) and now
+        // materializes instead of being skipped.
+        assert_eq!(summary.resolved_copy, 1, "Skeleton Knight should resolve");
+        let knight = find(&summary.monsters, "Skeleton Knight");
+        // Inherited defensive stats from the base.
+        assert_eq!(knight.size, "Medium");
+        assert_eq!(knight.creature_type, "Undead");
+        assert_eq!(knight.hp, "13 (2d8 + 4)");
+        // Own CR override wins over the base's.
+        assert_eq!(knight.cr, "1 (XP 200; PB +2)");
+        // The base's action survives and the `_mod` appended a second one.
+        let actions = knight
+            .sections
+            .iter()
+            .find(|s| s.title == "Actions")
+            .expect("Actions section");
+        let names: Vec<_> = actions
+            .abilities
+            .iter()
+            .filter_map(|a| a.name.as_deref())
+            .collect();
+        assert_eq!(names, vec!["Shortsword", "Longsword"]);
+    }
+
+    #[test]
+    fn skips_copy_with_missing_base() {
+        let summary = all();
+        // Lost Wanderer copies a base that does not exist → dropped + counted.
+        assert_eq!(summary.skipped_copy, 1, "Lost Wanderer's base is missing");
         assert!(
-            !summary.monsters.iter().any(|m| m.name == "Skeleton Knight"),
-            "a _copy monster must not be imported in v1"
+            !summary.monsters.iter().any(|m| m.name == "Lost Wanderer"),
+            "a copy with no resolvable base must not be imported"
         );
     }
 
@@ -1633,18 +1710,22 @@ mod tests {
         let summary = import_monsters_from_dir(Path::new(&dir)).expect("import real dataset");
         let monsters = &summary.monsters;
         println!(
-            "imported {} monsters, skipped {} _copy variants",
+            "imported {} monsters ({} resolved _copy variants, {} skipped for missing base)",
             monsters.len(),
+            summary.resolved_copy,
             summary.skipped_copy
         );
+        // Phase 2 materializes the ~1100 `_copy` variants, so the canonical corpus
+        // grows from ~2575 (v1, copies skipped) to the low thousands.
         assert!(
-            (2400..=2700).contains(&monsters.len()),
-            "expected ~2575 canonical monsters, got {}",
+            (3200..=4000).contains(&monsters.len()),
+            "expected ~3500 canonical monsters with copies resolved, got {}",
             monsters.len()
         );
         assert!(
-            summary.skipped_copy > 500,
-            "expected many skipped _copy variants"
+            summary.resolved_copy > 900,
+            "expected most _copy variants to resolve, got {}",
+            summary.resolved_copy
         );
 
         // Invariants: every monster has a name + a unique slug, and no residual
