@@ -10,7 +10,8 @@
 - Structured output (`output_doc`) is preferred; plain text (`output`) is compatibility fallback.
 - Commands are split by execution target (the authoritative list is each `CommandSpec`'s `execution` field in `command-specs/src/lib.rs` — treat the lists below as a guide, not a source of truth):
   - Core: `status`, `config`, `help`, `exit`, `setup`, `model`, `ping`
-  - Desktop: `create`, `start`, `npc`, `location`, `faction`, `item`, `event`, `god`, `dungeon`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `continue`, `back`, `publish`, `clear`, `history`, `calendar`, `date`, `moon`, `+`, `-`
+  - Desktop: `create`, `start`, `npc`, `location`, `faction`, `item`, `event`, `god`, `dungeon`, `load`, `show`, `preview`, `delete`, `undo`, `save`, `reroll`, `cancel`, `continue`, `back`, `publish`, `clear`, `history`, `spell`, `spellbook`, `monster`, `bestiary`, `calendar`, `date`, `moon`, `+`, `-`
+  - `spell`/`monster` are reference-library lookups and `spellbook`/`bestiary` their importers (see §14); a bare spell/monster name also resolves via the router fallback (§3)
 - `help` is registered in **both** registries: the desktop entry overrides core so the help index can reflect the open entity editor (see `docs/command-contexts.md`).
 - Router remains dispatch-only (`desktop/src-tauri/src/router.rs`).
 
@@ -61,7 +62,7 @@ If command shape changes without manifest changes, UX consistency breaks.
 
 - Core dispatch: `core/src/command.rs` registry.
 - Desktop dispatch: `desktop/src-tauri/src/commands/mod.rs` registry via `router.rs` (tried before the core registry; a root in both registries lets the desktop handler override core).
-- Unknown desktop roots may fall back to entity resolution for load/show/preview behavior.
+- **Bare-name fallback:** a token typed with no recognized command root is resolved in `router.rs` in **entity → spell → monster** precedence (first hit wins), so typing an entity name loads/shows it, and a bare spell/monster name renders its reference card. The order lives in `BARE_NAME_PRECEDENCE` and is pinned by a test.
 - **Wizards bypass the registry:** while a wizard is active (including onboarding — `setup`/`setup-vault`/`setup-llm`/`setup-model`), input is intercepted by `try_execute_active_wizard` before dispatch, so step answers (menu numbers, paths, `save`, `cancel`) are handled by the active step, not by desktop handlers. Onboarding's launchers (`start setup`, `setup vault|llm|model`, `model`) start the wizard the same way. See `docs/command-contexts.md §4`.
 
 ---
@@ -108,8 +109,7 @@ When adding a new entity, update `EntityKind`, schemas, command handlers, and su
 ### Clickability
 
 - Actionable command text should be clickable.
-- Preferred path: backend emits `InlineNode::CommandRef`.
-- Fallback path: `markdown.ts` heuristics.
+- The only path: the backend emits `InlineNode::CommandRef`. There is **no** heuristic fallback — the frontend never parses prose. A response with no `command_ref` is simply not clickable; `buildEntryDoc` (`desktop/src/output/entry-doc.ts`) wraps non-doc text verbatim. See `docs/render.md`.
 - **Wizard prompts get clickability by construction:** build every step prompt with the `wizard` crate's `prompt.rs` helpers (`wizard_menu`/`action_row`/`choice_lines`), which render each `WizardChoice` as a `command_ref`. Never hand-build a wizard prompt with back-tick text — that was the dungeon-flow clickability regression.
 
 For any new command, ensure at least one explicit `command_ref` path exists in guidance output.
@@ -346,14 +346,50 @@ publish help
 
 ---
 
-## 14. Related Docs
+## 14. Spellbook and Bestiary (Reference Libraries)
+
+`spell`/`monster` look up imported reference cards; `spellbook`/`bestiary` import the data. These are **read-only reference libraries** (architecture §5, `docs/feature-development.md` §8), not editable entities — there is no create/save/reroll. Cards are imported in bulk from the user's own local copy of [5e.tools](https://5e.tools/), stored as canonical per-card TOML, and projected into a SQLite search table (rebuilt on import, self-healed at boot).
+
+### Lookup
+
+```
+spell <name>            # render a spell card (e.g. spell fireball)
+monster <name>          # render a monster stat block (e.g. monster goblin)
+monster --type <kind> --cr <range> [name]   # clickable filtered results list
+```
+
+- The name is free-form (`requires_subcommand: false`); a bare name also resolves via the router fallback (§3), so `Fireball` works without the `spell` prefix.
+- `monster` filters: `--cr` accepts a single rating (`5`, `1/4`) or an inclusive range (`10-17`, `1/4-2`); `--type` matches the creature type. A name fragment may be combined with filters (`monster red dragon --cr 5`). Filtered results render as a clickable list capped at 100 matches.
+- Imported text keeps cross-links: `{@spell …}` / `{@creature …}` markup renders as clickable `command_ref`s targeting `spell <name>` / `monster <name>` (see `docs/render.md` §4).
+- `spell help` / `monster help` show usage. A stray `monster import` is redirected to `bestiary import`.
+
+### Import
+
+```
+spellbook import [path]   # build the spell library
+bestiary import [path]    # build the monster library
+```
+
+- With no `path`, a native folder picker opens. The argument is a 5etools repo root or its `data/spells` / `data/bestiary` directory; `~` is expanded.
+- Import is a **full replace** (clear + repopulate both the TOML store and the search table). `bestiary import` also reports how many derived (`_copy`) stat blocks were resolved or skipped.
+- `spellbook help` / `bestiary help` show usage.
+
+### Storage
+
+- Canonical cards: `~/.config/runebound.sh/spells/<slug>.toml`, `~/.config/runebound.sh/monsters/<slug>.toml`.
+- The SQLite search table is a rebuildable projection of those files; deleting `app.db` self-heals from the store at boot.
+
+---
+
+## 15. Related Docs
 
 - `docs/command-contexts.md` for input contexts, command availability, parser semantics, and setup-wizard dispatch
 - `docs/architecture.md` for module boundaries and extension strategy
 - `docs/render.md` for output and renderer contracts
 - `docs/feature-development.md` for end-to-end feature build playbooks
+- `docs/spellbook.md` and `docs/monster-manual.md` for the reference-library features (`spell`/`spellbook`, `monster`/`bestiary`)
 
 ---
 
-*Last updated: 2026-06-17*  
+*Last updated: 2026-06-21*  
 *Update this doc whenever command UX contracts or command flow rules change.*

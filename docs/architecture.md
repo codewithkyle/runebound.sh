@@ -84,8 +84,8 @@ desktop/src-tauri/src/
 |- app_state.rs             # AppState, EditorSession single-draft `Option<DraftEnvelope>` slot
 |- utils.rs                 # shared desktop helpers (tone/topology normalization, …)
 |- commands/
-|  |- mod.rs                # registry construction + entity_handler_entry + shared response helpers
-|  |- create_commands.rs    # create npc|location|faction|item|event|god (+ launches the dungeon/location wizards)
+|  |- mod.rs                # registry construction + entity_handler_entry + shared response helpers (also registers clear/history)
+|  |- create_commands.rs    # create npc|location|faction|item|event|god (+ launches the dungeon/location/faction wizards)
 |  |- entity_commands.rs    # generic per-kind verb dispatch (dispatch_entity_command: show|rename|set|travel|reroll|save|cancel) + load|show|preview|delete|undo
 |  |- system_commands.rs    # active-kind save|reroll|cancel + the desktop help override
 |  |- calendar_commands.rs  # calendar import
@@ -93,7 +93,9 @@ desktop/src-tauri/src/
 |  |- time_delta_commands.rs# +/- relative time deltas
 |  |- moon_commands.rs      # moon phases
 |  |- publish_commands.rs   # publish entity markdown to the vault
-|  `- setup_commands.rs     # setup verbosity/help + native vault folder picker
+|  |- setup_commands.rs     # setup verbosity/help + native vault folder picker
+|  |- spell_commands.rs     # spell <name> lookup + spellbook import (reference library, §5)
+|  `- monster_commands.rs   # monster <name> lookup (+ --cr/--type filters) + bestiary import (reference library, §5)
 |- entities/
 |  |- mod.rs                # module exports
 |  |- kind.rs               # EntityKind + helpers
@@ -105,7 +107,9 @@ desktop/src-tauri/src/
 |- wizards/                 # binds the `wizard` engine crate to AppState
 |  |- mod.rs                # impl WizardHost for AppState + build_default_wizard_registry() + re-exports
 |  |- dungeon.rs            # the dungeon wizard (linear steps, impl Wizard<AppState>)
-|  `- location.rs           # the location wizard (branching create-location flow, impl Wizard<AppState>)
+|  |- location.rs           # the location wizard (branching create-location flow, impl Wizard<AppState>)
+|  |- faction.rs            # the faction wizard (branching; links liege/patron/allies/rivals, impl Wizard<AppState>)
+|  `- entity_link.rs        # shared "link an existing entity" step helpers (typeahead + match/load), reused by the branching wizards
 |- repositories/
 |  `- mod.rs                # repository traits + Prod* implementations
 `- services/
@@ -121,6 +125,8 @@ desktop/src-tauri/src/
    |- entity_admin.rs       # resolve/load/delete/undo/ensure helpers
    |- suggestions.rs        # autocomplete and reference suggestions
    |- vault_sync.rs         # startup vault -> db sync
+   |- spell_library.rs      # spell reference library: import + boot DB projection (CardStore<Spell>; §5)
+   |- bestiary_library.rs   # monster reference library: import + boot DB projection (CardStore<Monster>; §5)
    |- publish.rs            # entity frontmatter -> Obsidian markdown rendering
    |- ollama_chat.rs        # shared Ollama /api/chat plumbing (generation + reroll)
    |- mention_extraction.rs # Tier-2 LLM link generation for unknown entities
@@ -148,7 +154,7 @@ This setup keeps command modules small and makes onboarding new entity types a m
 
 Multi-step *wizards* (guided flows like `create dungeon` that ask a sequence of questions before producing an artifact) use the same additive, registry-backed pattern as entities — deliberately mirrored so the two read the same way. A wizard is **declarative data plus one trait impl**; the plumbing (dispatch, navigation verbs, clickable prompts, autocomplete context, the spinner signal) lives once and never changes per wizard.
 
-The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs` + `wizards/location.rs` are the concrete desktop wizards. This split is what lets core/CLI reuse the same engine — onboarding runs on it via `core/src/onboarding_wizard.rs`.
+The engine itself is the standalone **`wizard` crate**, host-agnostic and generic over a host type `H: WizardHost` (the host owns the registry + live session and is the context passed to steps). The desktop binds it to `AppState`: `wizards/mod.rs` holds `impl WizardHost for AppState`, the re-exports, and `build_default_wizard_registry()`, and `wizards/dungeon.rs`, `wizards/location.rs`, and `wizards/faction.rs` are the concrete desktop wizards (`wizards/entity_link.rs` holds the shared link-picker step helpers the branching wizards reuse). This split is what lets core/CLI reuse the same engine — onboarding runs on it via `core/src/onboarding_wizard.rs`.
 
 | Entity domain (one-shot create) | Wizard (multi-step flow) |
 |---|---|
@@ -170,7 +176,7 @@ Key pieces (all in the `wizard` crate unless noted):
 - **Clickability by construction** (`prompt.rs`): the sanctioned prompt builders (`wizard_menu`, `action_row`, `choice_lines`) render every `WizardChoice` as a `command_ref`, so an author *cannot* emit a non-clickable choice.
 - **Autocomplete for free**: `resolve_input_context` returns `InputContext::Wizard(id)` while a wizard is active; the suggestion service then early-returns `active_step_suggestions`, which combines the step's `suggest()` (per-step tokens + staged args) with the always-available global verbs (`back`/`cancel`/`help`). The step owns the whole command surface, so only the commands valid *here* are offered.
 
-The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the simplest reference implementation — a linear sequence of steps. The location wizard (`wizards/location.rs`) is the reference for a *branching* flow: step 1 picks the `kind_type`, which routes to one of several branches (settlement/site/hideout/guildhall/custom) via `WizardTransition::Goto`. See §9D for the "Add a New Wizard" playbook.
+The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the simplest reference implementation — a linear sequence of steps. The location wizard (`wizards/location.rs`) is the reference for a *branching* flow: step 1 picks the `kind_type`, which routes to one of several branches (settlement/site/hideout/guildhall/custom) via `WizardTransition::Goto` (the faction wizard, `wizards/faction.rs`, is a second branching example). See §9D for the "Add a New Wizard" playbook.
 
 ### Combining the two: a kind can be wizard-created *and* entity-edited
 
@@ -192,7 +198,7 @@ If you build a kind that needs both, follow §9D for the wizard and §9C for the
 
 ## 5. Reference Library Architecture
 
-A third first-class pattern sits beside entity domains and wizards (§4): an **imported, read-only reference library**. Spells (`docs/spellbook.md`) and monsters (`docs/monster-manual.md`) are the two live examples. Unlike entities, these are never user-edited or AI-generated — they are bulk-imported from the user's own local 5etools data, rendered, and looked up. Do **not** fold them into `EntityKind`/`EntityDomain`; that machinery is for editable, AI-generated drafts and does not fit read-only reference data.
+A third first-class pattern sits beside entity domains and wizards (§4): an **imported, read-only reference library**. Spells (`docs/spellbook.md`) and monsters (`docs/monster-manual.md`) are the two live examples (`spell`/`spellbook`, `monster`/`bestiary`). Unlike entities, these are never user-edited or AI-generated — they are bulk-imported from the user's own local 5etools data, rendered, and looked up. Do **not** fold them into `EntityKind`/`EntityDomain`; that machinery is for editable, AI-generated drafts and does not fit read-only reference data.
 
 **Two-layer store (canonical TOML card + SQLite search projection).** The source of truth is a per-card TOML file — one `<root>/<slug>.toml` holding the full render-ready payload (`runebound_models::spells::Spell`, `…::monsters::Monster`). The SQLite table (`spells`/`monsters`) is a *rebuildable projection* carrying only the searchable columns (name, level/CR, type, source). A lookup searches the DB for the slug, then loads the full card from the store. The shared store primitive is **`CardStore<T>`** (`core/src/card_store.rs`): generic over the local `Card` trait (`NOUN`, `slug()`, `store_root()`), implemented once for `Spell` and `Monster`. Re-import is a full replace — `CardStore::clear()`, save each card, then re-project the DB.
 
@@ -202,7 +208,7 @@ A third first-class pattern sits beside entity domains and wizards (§4): an **i
 
 **Router bare-name fallback.** A bare name typed with no command root (e.g. `Fireball`) is resolved in `desktop/src-tauri/src/router.rs` in **entity → spell → monster** precedence — first hit wins, so a saved entity beats a spell and a spell beats a monster on a name collision. The order lives in one named list (`BARE_NAME_PRECEDENCE`) pinned by a test so a reorder can't change it silently. The suggestion service mirrors this with parallel spell/monster typeahead loops (`services/suggestions.rs`, gated by `spell_search_context` / `monster_search_context`).
 
-**When to reach for this** (vs §4): read-only data that is *imported in bulk and never user-edited or AI-generated*. If the user creates/edits it one at a time → entity domain. If creation is a guided multi-step flow → wizard. If it is an external dataset rendered for lookup → a reference library (this section). The worked examples are `docs/spellbook.md` and `docs/monster-manual.md`.
+**When to reach for this** (vs §4): read-only data that is *imported in bulk and never user-edited or AI-generated*. If the user creates/edits it one at a time → entity domain. If creation is a guided multi-step flow → wizard. If it is an external dataset rendered for lookup → a reference library (this section). The worked examples are `docs/spellbook.md` and `docs/monster-manual.md`; the generic build steps are in `docs/feature-development.md` §8 (Playbook G). The live code is `commands/{spell,monster}_commands.rs`, `services/{spell_library,bestiary_library}.rs`, `core/src/card_store.rs`, and `core/src/{spell,monster}_import.rs`.
 
 ---
 
@@ -270,10 +276,10 @@ Use command modules for command syntax and user-facing response behavior. Use se
 
 When introducing new domain concepts used by both backend and frontend:
 
-1. Add Rust model in `runebound-models/src/*`
-2. Ensure `build.rs` exports TS type
-3. Regenerate via `cargo build -p runebound-models`
-4. Consume generated TS model in frontend
+1. Add Rust model in `runebound-models/src/*` (derive `TS`)
+2. Add it to the generator list in `runebound-models/tests/ts_models.rs` (or `desktop/src-tauri/src/services/ts_export.rs` for command-manifest/suggestion/boot types)
+3. Regenerate via `UPDATE_MODELS=1 cargo test -p runebound-models` (and the desktop test for manifest/boot types) — the test is both generator and drift guard; there is no `build.rs`
+4. Consume the generated TS model in the frontend
 
 Do not define parallel, hand-rolled TS interfaces for model concepts already in `runebound-models`.
 
