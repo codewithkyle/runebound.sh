@@ -690,6 +690,11 @@ fn monster_search_context(trimmed: &str, manifest: &CommandManifest) -> Option<(
         if rest.trim() == "help" {
             return None;
         }
+        // A `--cr` / `--type` filter query resolves to a clickable results list on
+        // submit, not a name typeahead — don't search names for the literal flag text.
+        if rest.split_whitespace().any(|token| token.starts_with("--")) {
+            return None;
+        }
         return Some((trimmed["monster ".len()..].trim().to_string(), true));
     }
     if lowered == "monster" {
@@ -995,8 +1000,9 @@ mod tests {
         ActiveReferenceQuery, SuggestionHelperText, VaultReferenceEntry,
         build_active_reroll_suggestions, build_command_suggestions,
         build_entity_field_argument_suggestions, build_reference_suggestions_from_entries,
-        entity_kind_for_root, extract_active_reference_query, find_command,
-        npc_travel_location_query, wizard_choices_to_suggestions,
+        entity_kind_for_root, extract_active_reference_query, find_command, monster_search_context,
+        npc_travel_location_query, spell_search_context, starts_with_known_command_root,
+        wizard_choices_to_suggestions,
     };
     use crate::entities::EntityKind;
     use crate::services::vault_ref::extract_prompt_reference_keys;
@@ -1556,5 +1562,89 @@ mod tests {
                 .any(|suggestion| suggestion.completion == "dungeon reroll premise "),
             "missing premise scalar reroll suggestion"
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Spell / monster typeahead context — the gating decision behind the
+    // spell/monster suggestion loops in `build_suggestions`. `use_root_prefix`
+    // (the `bool`) selects the completion form: `true` → `spell <name>` /
+    // `monster <name>`, `false` → the bare name (resolved via the router fallback).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn spell_context_explicit_root_searches_and_prefixes() {
+        let manifest = command_manifest::command_manifest();
+        // `spell fire` searches "fire" and completes back to `spell <name>`.
+        assert_eq!(
+            spell_search_context("spell fire", &manifest),
+            Some(("fire".to_string(), true))
+        );
+    }
+
+    #[test]
+    fn spell_context_bare_name_falls_back_but_not_for_command_roots() {
+        let manifest = command_manifest::command_manifest();
+        // A bare fragment that isn't a command root surfaces spells with a bare
+        // completion (the router resolves it on submit).
+        assert_eq!(
+            spell_search_context("fireba", &manifest),
+            Some(("fireba".to_string(), false))
+        );
+        // ...but a known command root never triggers the bare-name fallback.
+        assert_eq!(spell_search_context("npc envoy", &manifest), None);
+    }
+
+    #[test]
+    fn spell_context_excludes_help_and_bare_root() {
+        let manifest = command_manifest::command_manifest();
+        assert_eq!(spell_search_context("spell", &manifest), None);
+        assert_eq!(spell_search_context("spell help", &manifest), None);
+    }
+
+    #[test]
+    fn monster_context_explicit_root_searches_and_prefixes() {
+        let manifest = command_manifest::command_manifest();
+        assert_eq!(
+            monster_search_context("monster gob", &manifest),
+            Some(("gob".to_string(), true))
+        );
+    }
+
+    #[test]
+    fn monster_context_bare_name_falls_back_but_not_for_command_roots() {
+        let manifest = command_manifest::command_manifest();
+        assert_eq!(
+            monster_search_context("gobl", &manifest),
+            Some(("gobl".to_string(), false))
+        );
+        assert_eq!(monster_search_context("date set", &manifest), None);
+    }
+
+    #[test]
+    fn monster_context_excludes_help_bare_root_and_filter_queries() {
+        let manifest = command_manifest::command_manifest();
+        assert_eq!(monster_search_context("monster", &manifest), None);
+        assert_eq!(monster_search_context("monster help", &manifest), None);
+        // A `--cr` / `--type` filter query is a submit-time list, not name
+        // typeahead — even when a name fragment precedes the flags.
+        assert_eq!(
+            monster_search_context("monster --type dragon --cr 10-17", &manifest),
+            None
+        );
+        assert_eq!(
+            monster_search_context("monster red dragon --cr 5", &manifest),
+            None
+        );
+    }
+
+    #[test]
+    fn known_command_roots_gate_the_bare_name_fallbacks() {
+        // The shared gate behind both bare-name fallbacks: a registered root
+        // (entity or reference command) is never treated as a free-form name.
+        let manifest = command_manifest::command_manifest();
+        assert!(starts_with_known_command_root("npc envoy", &manifest));
+        assert!(starts_with_known_command_root("spell fireball", &manifest));
+        assert!(starts_with_known_command_root("monster goblin", &manifest));
+        assert!(!starts_with_known_command_root("fireball", &manifest));
     }
 }

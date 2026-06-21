@@ -8,9 +8,11 @@
 
 use std::path::PathBuf;
 
-use dnd_core::monster_store::MonsterStore;
-use dnd_core::spell_import::slugify;
-use runebound_models::monsters::monster_card;
+use dnd_core::card_store::CardStore;
+use dnd_core::fivetools_markup::slugify;
+use dnd_core::monster_import::cr_token_to_sort;
+use dnd_core::strings::capitalize;
+use runebound_models::monsters::{Monster, monster_card};
 use runebound_models::{
     CommandResponse, InlineNode, OutputDoc, StatusTone, command_ref, doc, heading, list,
     paragraph_text, paragraph_with_inlines, status, text_node,
@@ -162,30 +164,12 @@ fn parse_cr_range(value: &str) -> Result<(f64, f64), String> {
         )
     };
     if let Some((lo, hi)) = value.split_once('-') {
-        let lo = parse_cr_token(lo).ok_or_else(invalid)?;
-        let hi = parse_cr_token(hi).ok_or_else(invalid)?;
+        let lo = cr_token_to_sort(lo).ok_or_else(invalid)?;
+        let hi = cr_token_to_sort(hi).ok_or_else(invalid)?;
         Ok((lo.min(hi), lo.max(hi)))
     } else {
-        let cr = parse_cr_token(value).ok_or_else(invalid)?;
+        let cr = cr_token_to_sort(value).ok_or_else(invalid)?;
         Ok((cr, cr))
-    }
-}
-
-/// One CR token to its numeric value (the fractions match `cr_sort`'s mapping).
-fn parse_cr_token(token: &str) -> Option<f64> {
-    match token.trim() {
-        "1/8" => Some(0.125),
-        "1/4" => Some(0.25),
-        "1/2" => Some(0.5),
-        other => other.parse::<f64>().ok(),
-    }
-}
-
-fn capitalize(text: &str) -> String {
-    let mut chars = text.chars();
-    match chars.next() {
-        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
-        None => String::new(),
     }
 }
 
@@ -259,12 +243,9 @@ pub async fn resolve_monster_doc(
         return Ok(None);
     }
 
-    let store = MonsterStore::new().map_err(|err| err.to_string())?;
+    let store = CardStore::<Monster>::new().map_err(|err| err.to_string())?;
     // Fast path: a typed name slugifies straight to the stored card.
-    if let Some(monster) = store
-        .load_monster(&slugify(query))
-        .map_err(|err| err.to_string())?
-    {
+    if let Some(monster) = store.load(&slugify(query)).map_err(|err| err.to_string())? {
         return Ok(Some(monster_card(&monster)));
     }
     // Otherwise recover the slug via a DB name search (handles partial/odd input).
@@ -273,9 +254,7 @@ pub async fn resolve_monster_doc(
         .search_by_name(state.database().as_ref(), query, 1)
         .await?;
     if let Some(row) = rows.into_iter().next()
-        && let Some(monster) = store
-            .load_monster(&row.slug)
-            .map_err(|err| err.to_string())?
+        && let Some(monster) = store.load(&row.slug).map_err(|err| err.to_string())?
     {
         return Ok(Some(monster_card(&monster)));
     }

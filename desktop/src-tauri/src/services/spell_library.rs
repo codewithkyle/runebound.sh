@@ -1,16 +1,16 @@
 //! Import + projection orchestration for the spell library.
 //!
 //! Mirrors [`crate::services::vault_sync`] for spells: the canonical TOML spell
-//! store ([`SpellStore`]) is the source of truth, the SQLite `spells` table is a
-//! rebuildable search projection. Import is a full replace (clear + repopulate both
+//! store ([`CardStore<Spell>`]) is the source of truth, the SQLite `spells` table is
+//! a rebuildable search projection. Import is a full replace (clear + repopulate both
 //! layers); boot re-projects the store into the DB so a deleted `app.db` self-heals.
 
 use std::path::Path;
 
+use dnd_core::card_store::CardStore;
 use dnd_core::db::SpellRow;
 use dnd_core::npc::now_timestamp;
 use dnd_core::spell_import::import_spells_from_dir;
-use dnd_core::spell_store::SpellStore;
 use runebound_models::spells::Spell;
 
 use crate::app_state::AppState;
@@ -32,10 +32,10 @@ impl SpellLibraryService {
         // Replace the canonical TOML store (also blocking file IO).
         let store_spells = spells.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let store = SpellStore::new().map_err(|err| err.to_string())?;
+            let store = CardStore::<Spell>::new().map_err(|err| err.to_string())?;
             store.clear().map_err(|err| err.to_string())?;
             for spell in &store_spells {
-                store.save_spell(spell).map_err(|err| err.to_string())?;
+                store.save(spell).map_err(|err| err.to_string())?;
             }
             Ok(())
         })
@@ -51,8 +51,8 @@ impl SpellLibraryService {
     /// store is empty or the DB already matches it (the common case).
     pub async fn project_store_into_db(&self, state: &AppState) -> Result<(), String> {
         let spells = tokio::task::spawn_blocking(|| -> Result<Vec<Spell>, String> {
-            let store = SpellStore::new().map_err(|err| err.to_string())?;
-            store.list_spells().map_err(|err| err.to_string())
+            let store = CardStore::<Spell>::new().map_err(|err| err.to_string())?;
+            store.list().map_err(|err| err.to_string())
         })
         .await
         .map_err(|err| err.to_string())??;

@@ -21,9 +21,12 @@
 //! [`RawMonster`]: crate::monster_import
 
 use std::collections::{HashMap, HashSet};
+use std::sync::LazyLock;
 
 use regex::Regex;
 use serde_json::{Map, Value, json};
+
+use crate::strings::title_case;
 
 /// The props a `_mod` keyed by `"*"` fans out across (5etools `COPY_ENTRY_PROPS`).
 const COPY_ENTRY_PROPS: &[&str] = &[
@@ -688,14 +691,20 @@ fn mod_scalar_prop(copy_to: &mut Value, prop: Option<&str>, mod_info: &Value, mu
     }
 }
 
+/// Static `{@hit N}` / `{@dc N}` matchers for [`mod_scalar_add_tag`] — built once
+/// rather than rebuilt on every mod application.
+static HIT_TAG_RE: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"\{@hit ([-+]?\d+)\}").unwrap());
+static DC_TAG_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"\{@dc (\d+)(?:\|[^}]+)?\}").unwrap());
+
 /// `scalarAddHit` / `scalarAddDc`: bump every `{@hit N}` / `{@dc N}` in the targeted
 /// entries by the scalar (used by half-dragon and similar templates).
 fn mod_scalar_add_tag(copy_to: &mut Value, prop: Option<&str>, mod_info: &Value, tag: &str) {
     let Some(prop) = prop else { return };
     let scalar = mod_info.get("scalar").and_then(Value::as_i64).unwrap_or(0);
-    let re = match tag {
-        "hit" => Regex::new(r"\{@hit ([-+]?\d+)\}").unwrap(),
-        _ => Regex::new(r"\{@dc (\d+)(?:\|[^}]+)?\}").unwrap(),
+    let re: &Regex = match tag {
+        "hit" => &HIT_TAG_RE,
+        _ => &DC_TAG_RE,
     };
     let tag = tag.to_string();
     let replacer = move |s: &str| -> String {
@@ -724,7 +733,11 @@ fn mod_add_senses(copy_to: &mut Value, mod_info: &Value) {
             continue;
         };
         let range = sense.get("range").and_then(Value::as_i64).unwrap_or(0);
-        let kind_re = Regex::new(&format!(r"(?i){}\s+(\d+)", regex::escape(kind))).unwrap();
+        // `kind` is `regex::escape`d so this can't actually fail, but route the only
+        // input-derived regex through `.ok()` rather than `.unwrap()` regardless.
+        let Ok(kind_re) = Regex::new(&format!(r"(?i){}\s+(\d+)", regex::escape(kind))) else {
+            continue;
+        };
         let mut found = false;
         for existing in arr.iter_mut() {
             let Some(text) = existing.as_str() else {
@@ -1040,7 +1053,9 @@ fn mod_scalar_mult_xp(copy_to: &mut Value, mod_info: &Value) {
         if floor {
             out.floor() as i64
         } else {
-            out as i64
+            // 5etools rounds (half-up) here; XP is non-negative so `round` matches
+            // `Math.round`. Truncating would shave a point off the rare fractional case.
+            out.round() as i64
         }
     };
     let Some(cr) = copy_to.as_object_mut().and_then(|obj| obj.get_mut("cr")) else {
@@ -1319,14 +1334,6 @@ fn signed(value: i64) -> String {
         format!("+{value}")
     } else {
         value.to_string()
-    }
-}
-
-fn title_case(word: &str) -> String {
-    let mut chars = word.chars();
-    match chars.next() {
-        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
-        None => String::new(),
     }
 }
 
@@ -1721,5 +1728,242 @@ mod tests {
                 .get("legendaryGroup")
                 .is_some()
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // C1 — malformed input degrades to a no-op/skip, never a panic. This is the
+    // whole reason this module exists (it parses evolving 3rd-party data), so the
+    // headline property gets explicit coverage.
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn non_object_copy_is_skipped_not_panicked() {
+        // `_copy` should be `{name, source}`; a bare string can't name a base.
+        let base = json!({"name": "Wolf", "source": "MM", "cr": "1/4"});
+        let bad = json!({"name": "Dire Wolf", "source": "X", "_copy": "Wolf"});
+        let resolution = resolve(vec![base, bad], vec![]);
+        assert_eq!(resolution.resolved_copy, 0);
+        assert_eq!(resolution.skipped_copy, 1);
+        // The base still passes through untouched.
+        assert_eq!(by_name(&resolution, "Wolf")["cr"], json!("1/4"));
+    }
+
+    #[test]
+    fn string_mod_info_is_ignored() {
+        // A `_mod` value that is a bare string (not a modInfo object or "remove").
+        let base = json!({
+            "name": "Orc", "source": "MM",
+            "trait": [{"name": "Aggressive", "entries": ["Charges."]}]
+        });
+        let copy = json!({
+            "name": "Orc Variant", "source": "X",
+            "_copy": {"name": "Orc", "source": "MM", "_mod": {"trait": "garbage"}}
+        });
+        let resolution = resolve(vec![base, copy], vec![]);
+        // The inherited trait survives the unparseable mod.
+        assert_eq!(
+            by_name(&resolution, "Orc Variant")["trait"][0]["name"],
+            json!("Aggressive")
+        );
+    }
+
+    #[test]
+    fn scalar_names_for_removearr_is_a_noop() {
+        // `names` should be a string/array; a scalar matches nothing rather than panicking.
+        let base = json!({
+            "name": "Orc", "source": "MM",
+            "action": [{"name": "Greataxe", "entries": ["Swing."]}]
+        });
+        let copy = json!({
+            "name": "Orc Two", "source": "X",
+            "_copy": {"name": "Orc", "source": "MM",
+                      "_mod": {"action": {"mode": "removeArr", "names": 7}}}
+        });
+        let resolution = resolve(vec![base, copy], vec![]);
+        assert_eq!(
+            by_name(&resolution, "Orc Two")["action"][0]["name"],
+            json!("Greataxe")
+        );
+    }
+
+    #[test]
+    fn out_of_range_and_negative_insert_indices_are_clamped() {
+        let base = json!({
+            "name": "Knight", "source": "MM",
+            "action": [{"name": "Sword", "entries": ["Cut."]}]
+        });
+        let copy = json!({
+            "name": "Knight Plus", "source": "X",
+            "_copy": {"name": "Knight", "source": "MM", "_mod": {"action": [
+                {"mode": "insertArr", "index": 99, "items": {"name": "Bow", "entries": ["Shoot."]}},
+                {"mode": "insertArr", "index": -5, "items": {"name": "Dagger", "entries": ["Stab."]}}
+            ]}}
+        });
+        let resolution = resolve(vec![base, copy], vec![]);
+        let actions = by_name(&resolution, "Knight Plus")["action"]
+            .as_array()
+            .unwrap();
+        // Both wild indices clamp to the end; nothing is lost or duplicated.
+        assert_eq!(actions.len(), 3);
+        assert_eq!(actions[0]["name"], json!("Sword"));
+        assert!(actions.iter().any(|a| a["name"] == json!("Bow")));
+        assert!(actions.iter().any(|a| a["name"] == json!("Dagger")));
+    }
+
+    #[test]
+    fn array_mod_on_a_non_array_prop_is_a_noop() {
+        // `appendArr` onto a string-typed prop: there is no array to push into.
+        let base = json!({"name": "Imp", "source": "MM", "alignment": "lawful evil"});
+        let copy = json!({
+            "name": "Imp Variant", "source": "X",
+            "_copy": {"name": "Imp", "source": "MM",
+                      "_mod": {"alignment": {"mode": "appendArr", "items": ["chaotic"]}}}
+        });
+        let resolution = resolve(vec![base, copy], vec![]);
+        // The scalar prop is neither clobbered nor wrapped into an array.
+        assert_eq!(
+            by_name(&resolution, "Imp Variant")["alignment"],
+            json!("lawful evil")
+        );
+    }
+
+    // -----------------------------------------------------------------------
+    // C2 — happy-path coverage for the `_mod` modes the existing tests skipped
+    // (the ones with the trickiest arithmetic / string / path logic).
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn scalar_mult_xp_scales_a_string_cr_into_a_cr_xp_object() {
+        let base = json!({"name": "Bear", "source": "MM", "cr": "5"});
+        let copy = json!({
+            "name": "Dire Bear", "source": "X",
+            "_copy": {"name": "Bear", "source": "MM",
+                      "_mod": {"_": {"mode": "scalarMultXp", "scalar": 2}}}
+        });
+        let bear = by_name(&resolve(vec![base, copy], vec![]), "Dire Bear").clone();
+        // CR 5 → XP 1800; ×2 → 3600, carried as a `{cr, xp}` object.
+        assert_eq!(bear["cr"]["cr"], json!("5"));
+        assert_eq!(bear["cr"]["xp"], json!(3600));
+    }
+
+    #[test]
+    fn scalar_mult_xp_rounds_half_up_not_truncates() {
+        // CR 0 → XP 10; ×0.25 → 2.5, which rounds to 3 (truncation would give 2).
+        let base = json!({"name": "Mote", "source": "MM", "cr": "0"});
+        let copy = json!({
+            "name": "Half Mote", "source": "X",
+            "_copy": {"name": "Mote", "source": "MM",
+                      "_mod": {"_": {"mode": "scalarMultXp", "scalar": 0.25}}}
+        });
+        let mote = by_name(&resolve(vec![base, copy], vec![]), "Half Mote").clone();
+        assert_eq!(mote["cr"]["xp"], json!(3));
+    }
+
+    #[test]
+    fn max_size_clamps_the_size_list_to_the_cap() {
+        let base = json!({"name": "Slime", "source": "MM", "size": ["M", "L"]});
+        let copy = json!({
+            "name": "Small Slime", "source": "X",
+            "_copy": {"name": "Slime", "source": "MM",
+                      "_mod": {"_": {"mode": "maxSize", "max": "M"}}}
+        });
+        let slime = by_name(&resolve(vec![base, copy], vec![]), "Small Slime").clone();
+        // L (above the M cap) is dropped; M is kept.
+        assert_eq!(slime["size"], json!(["M"]));
+    }
+
+    #[test]
+    fn remove_spells_drops_named_spells_from_a_level() {
+        let base = json!({
+            "name": "Caster", "source": "MM",
+            "spellcasting": [{"name": "Spellcasting", "spells": {
+                "3": {"slots": 3, "spells": ["{@spell fireball}", "{@spell counterspell}"]}
+            }}]
+        });
+        let copy = json!({
+            "name": "Lesser Caster", "source": "X",
+            "_copy": {"name": "Caster", "source": "MM", "_mod": {"_": {
+                "mode": "removeSpells", "spells": {"3": ["{@spell fireball}"]}
+            }}}
+        });
+        let caster = by_name(&resolve(vec![base, copy], vec![]), "Lesser Caster").clone();
+        let l3 = caster["spellcasting"][0]["spells"]["3"]["spells"]
+            .as_array()
+            .unwrap();
+        assert!(!l3.iter().any(|s| s.as_str() == Some("{@spell fireball}")));
+        assert!(
+            l3.iter()
+                .any(|s| s.as_str() == Some("{@spell counterspell}"))
+        );
+    }
+
+    #[test]
+    fn set_prop_writes_a_multi_segment_path_creating_intermediates() {
+        let base = json!({"name": "Thing", "source": "MM"});
+        let copy = json!({
+            "name": "Nested Thing", "source": "X",
+            "_copy": {"name": "Thing", "source": "MM", "_mod": {"_": {
+                "mode": "setProp", "prop": "foo.bar.baz", "value": 7
+            }}}
+        });
+        let thing = by_name(&resolve(vec![base, copy], vec![]), "Nested Thing").clone();
+        assert_eq!(thing["foo"]["bar"]["baz"], json!(7));
+    }
+
+    #[test]
+    fn prefix_suffix_string_prop_wraps_an_existing_string() {
+        let base = json!({"name": "Brute", "source": "MM", "alignment": "lawful evil"});
+        let copy = json!({
+            "name": "Worse Brute", "source": "X",
+            "_copy": {"name": "Brute", "source": "MM", "_mod": {"alignment": {
+                "mode": "prefixSuffixStringProp", "prefix": "very ", "suffix": "!"
+            }}}
+        });
+        let brute = by_name(&resolve(vec![base, copy], vec![]), "Worse Brute").clone();
+        assert_eq!(brute["alignment"], json!("very lawful evil!"));
+    }
+
+    #[test]
+    fn scalar_add_hit_and_dc_bump_inline_tags() {
+        let base = json!({
+            "name": "Striker", "source": "MM",
+            "action": [{"name": "Slam", "entries": ["{@hit 5} to hit; save {@dc 13}."]}]
+        });
+        let copy = json!({
+            "name": "Bigger Striker", "source": "X",
+            "_copy": {"name": "Striker", "source": "MM", "_mod": {"action": [
+                {"mode": "scalarAddHit", "scalar": 2},
+                {"mode": "scalarAddDc", "scalar": 1}
+            ]}}
+        });
+        let entry =
+            by_name(&resolve(vec![base, copy], vec![]), "Bigger Striker")["action"][0]["entries"]
+                [0]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert_eq!(entry, "{@hit 7} to hit; save {@dc 14}.");
+    }
+
+    #[test]
+    fn replace_txt_two_digit_group_falls_back_to_one_digit() {
+        // `$12` with only group 1 present: use group 1, then leave "2" literal
+        // (the JS two-digit→one-digit fallback in expand_replacement).
+        let base = json!({
+            "name": "Mage", "source": "MM",
+            "trait": [{"name": "About", "entries": ["A mage."]}]
+        });
+        let copy = json!({
+            "name": "Goblin Boss", "source": "X",
+            "_copy": {"name": "Mage", "source": "MM", "_mod": {"trait": {
+                "mode": "replaceTxt", "replace": "(mage)", "with": "$12rat"
+            }}}
+        });
+        let entry =
+            by_name(&resolve(vec![base, copy], vec![]), "Goblin Boss")["trait"][0]["entries"][0]
+                .as_str()
+                .unwrap()
+                .to_string();
+        assert_eq!(entry, "A mage2rat.");
     }
 }

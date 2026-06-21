@@ -272,6 +272,51 @@ pub fn code(text: impl Into<String>) -> InlineNode {
     InlineNode::Code { text: text.into() }
 }
 
+/// Render a tiny table as aligned fixed-width text for a [`code_block`]. There is no
+/// `OutputBlock::Table`; spell/monster reference tables are small, so this reads fine.
+/// Column widths count characters (not bytes), matching how `format!` pads strings,
+/// so multi-byte cells still align.
+pub fn render_table(headers: &[String], rows: &[Vec<String>]) -> String {
+    fn cell(row: &[String], i: usize) -> &str {
+        row.get(i).map(String::as_str).unwrap_or("")
+    }
+    let col_count = headers
+        .len()
+        .max(rows.iter().map(|row| row.len()).max().unwrap_or(0));
+    let mut widths = vec![0usize; col_count];
+    for (i, width) in widths.iter_mut().enumerate() {
+        *width = headers.get(i).map(|h| h.chars().count()).unwrap_or(0);
+        for row in rows {
+            *width = (*width).max(cell(row, i).chars().count());
+        }
+    }
+    let fmt_row = |row: &[String]| {
+        (0..col_count)
+            .map(|i| format!("{:<width$}", cell(row, i), width = widths[i]))
+            .collect::<Vec<_>>()
+            .join("  ")
+            .trim_end()
+            .to_string()
+    };
+    let mut lines = Vec::new();
+    if !headers.is_empty() {
+        lines.push(fmt_row(headers));
+        lines.push(
+            widths
+                .iter()
+                .map(|w| "-".repeat(*w))
+                .collect::<Vec<_>>()
+                .join("  ")
+                .trim_end()
+                .to_string(),
+        );
+    }
+    for row in rows {
+        lines.push(fmt_row(row));
+    }
+    lines.join("\n")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -14,9 +14,9 @@
 //! - **Legendary groups** (`legendarygroups.json`) are resolved by `(name, source)`
 //!   to append a monster's Lair Actions / Regional Effects sections.
 //!
-//! Inline `{@tag}` markup is lowered by [`crate::spell_import::strip_tags`], which
-//! is the single shared seam for that and already understands the monster
-//! attack/save/recharge tags.
+//! Inline `{@tag}` markup is lowered by [`crate::fivetools_markup`] (`strip_tags` /
+//! `render_inline`), the single shared seam for that — it already understands the
+//! monster attack/save/recharge tags.
 
 use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
@@ -26,8 +26,9 @@ use runebound_models::monsters::{Monster, Span, StatAbility, StatBlock, StatSect
 use serde::Deserialize;
 use serde_json::Value;
 
+use crate::fivetools_markup::{render_inline, slugify, spans_non_empty, strip_tags};
 use crate::monster_copy::resolve_copies;
-use crate::spell_import::{render_inline, slugify, strip_tags};
+use crate::strings::{capitalize, title_case};
 
 /// The outcome of an import: the canonical monsters plus how many `_copy` variants
 /// were resolved (Phase 2 materializes them) vs. dropped because their base could
@@ -1205,7 +1206,8 @@ fn format_cr(value: &Value) -> String {
 }
 
 /// Numeric CR for sort ordering ("1/4" → 0.25). Public so the search-index
-/// projection can store it.
+/// projection can store it. Operates on the raw JSON CR (string / number / `{cr}`
+/// object); display/CLI callers want [`cr_token_to_sort`] instead.
 pub fn cr_to_sort(value: &Value) -> f64 {
     let base = match value {
         Value::String(text) => text.clone(),
@@ -1217,11 +1219,19 @@ pub fn cr_to_sort(value: &Value) -> f64 {
             .unwrap_or_default(),
         _ => String::new(),
     };
-    match base.as_str() {
-        "1/8" => 0.125,
-        "1/4" => 0.25,
-        "1/2" => 0.5,
-        other => other.parse().unwrap_or(0.0),
+    cr_token_to_sort(&base).unwrap_or(0.0)
+}
+
+/// One CR token to its numeric sort value ("1/4" → `Some(0.25)`). The single
+/// fraction table shared by [`cr_to_sort`] (raw JSON) and the desktop display/CLI
+/// callers (a formatted "1/4 (XP 50…)" string or a `--cr` filter token). Returns
+/// `None` for an unparseable token so callers can surface a clear error.
+pub fn cr_token_to_sort(token: &str) -> Option<f64> {
+    match token.trim() {
+        "1/8" => Some(0.125),
+        "1/4" => Some(0.25),
+        "1/2" => Some(0.5),
+        other => other.parse::<f64>().ok(),
     }
 }
 
@@ -1428,11 +1438,6 @@ fn coalesce(spans: Vec<Span>) -> Vec<Span> {
     out
 }
 
-/// Whether a span run has any visible (non-whitespace) text.
-fn spans_non_empty(spans: &[Span]) -> bool {
-    spans.iter().any(|span| !span.text().trim().is_empty())
-}
-
 fn cell_to_string(value: &Value) -> String {
     match value {
         Value::String(text) => strip_tags(text),
@@ -1457,18 +1462,6 @@ fn lower_string_list(lines: &[String]) -> Vec<StatBlock> {
 // ---------------------------------------------------------------------------
 // Small string helpers
 // ---------------------------------------------------------------------------
-
-fn title_case(word: &str) -> String {
-    let mut chars = word.chars();
-    match chars.next() {
-        Some(first) => first.to_ascii_uppercase().to_string() + chars.as_str(),
-        None => String::new(),
-    }
-}
-
-fn capitalize(text: &str) -> String {
-    title_case(text)
-}
 
 fn title_case_words(text: &str) -> String {
     text.split_whitespace()

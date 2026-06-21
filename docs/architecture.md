@@ -170,7 +170,7 @@ Key pieces (all in the `wizard` crate unless noted):
 - **Clickability by construction** (`prompt.rs`): the sanctioned prompt builders (`wizard_menu`, `action_row`, `choice_lines`) render every `WizardChoice` as a `command_ref`, so an author *cannot* emit a non-clickable choice.
 - **Autocomplete for free**: `resolve_input_context` returns `InputContext::Wizard(id)` while a wizard is active; the suggestion service then early-returns `active_step_suggestions`, which combines the step's `suggest()` (per-step tokens + staged args) with the always-available global verbs (`back`/`cancel`/`help`). The step owns the whole command surface, so only the commands valid *here* are offered.
 
-The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the simplest reference implementation — a linear sequence of steps. The location wizard (`wizards/location.rs`) is the reference for a *branching* flow: step 1 picks the `kind_type`, which routes to one of several branches (settlement/site/hideout/guildhall/custom) via `WizardTransition::Goto`. See §8D for the "Add a New Wizard" playbook.
+The dungeon wizard (desktop `wizards/dungeon.rs`, `impl Wizard<AppState>`) is the simplest reference implementation — a linear sequence of steps. The location wizard (`wizards/location.rs`) is the reference for a *branching* flow: step 1 picks the `kind_type`, which routes to one of several branches (settlement/site/hideout/guildhall/custom) via `WizardTransition::Goto`. See §9D for the "Add a New Wizard" playbook.
 
 ### Combining the two: a kind can be wizard-created *and* entity-edited
 
@@ -188,9 +188,25 @@ The wizard and entity-domain patterns are **complementary, not mutually exclusiv
 | Creation is a single prompt, result is editable afterward | Entity domain only (e.g. `create npc`) |
 | Creation needs a guided sequence **and** the result stays editable | **Both** — a `Wizard` for the create path whose `finalize()` opens an `EntityDomain` draft for the edit path (the dungeon model) |
 
-If you build a kind that needs both, follow §8D for the wizard and §8C for the entity domain, and have the wizard's `finalize()` call the same `editor.set_<kind>(draft)` hand-off the create handler would.
+If you build a kind that needs both, follow §9D for the wizard and §9C for the entity domain, and have the wizard's `finalize()` call the same `editor.set_<kind>(draft)` hand-off the create handler would.
 
-## 5. Command Manifest and Metadata Rules
+## 5. Reference Library Architecture
+
+A third first-class pattern sits beside entity domains and wizards (§4): an **imported, read-only reference library**. Spells (`docs/spellbook.md`) and monsters (`docs/monster-manual.md`) are the two live examples. Unlike entities, these are never user-edited or AI-generated — they are bulk-imported from the user's own local 5etools data, rendered, and looked up. Do **not** fold them into `EntityKind`/`EntityDomain`; that machinery is for editable, AI-generated drafts and does not fit read-only reference data.
+
+**Two-layer store (canonical TOML card + SQLite search projection).** The source of truth is a per-card TOML file — one `<root>/<slug>.toml` holding the full render-ready payload (`runebound_models::spells::Spell`, `…::monsters::Monster`). The SQLite table (`spells`/`monsters`) is a *rebuildable projection* carrying only the searchable columns (name, level/CR, type, source). A lookup searches the DB for the slug, then loads the full card from the store. The shared store primitive is **`CardStore<T>`** (`core/src/card_store.rs`): generic over the local `Card` trait (`NOUN`, `slug()`, `store_root()`), implemented once for `Spell` and `Monster`. Re-import is a full replace — `CardStore::clear()`, save each card, then re-project the DB.
+
+**Boot re-projection self-heal.** Each library has a `*LibraryService` (`desktop/src-tauri/src/services/{spell_library,bestiary_library}.rs`) that orchestrates import and projection. `project_store_into_db` runs at boot: when the DB is empty/stale but the TOML store has cards, it re-projects, so a deleted `app.db` recovers from the store with no re-import. It no-ops when the store is empty or the DB count already matches the store (the single-writer common case).
+
+**Read-only repository shape.** The DB tables use the same `impl_entity_table!` macro as entities (`core/src/db.rs`) but expose only `search*` / `find` / `count` / `upsert_tx` / `clear_tx` — no editable-entity surface (no soft-delete, undo, or per-row user mutation). The library is replaced wholesale on import, never edited row by row.
+
+**Router bare-name fallback.** A bare name typed with no command root (e.g. `Fireball`) is resolved in `desktop/src-tauri/src/router.rs` in **entity → spell → monster** precedence — first hit wins, so a saved entity beats a spell and a spell beats a monster on a name collision. The order lives in one named list (`BARE_NAME_PRECEDENCE`) pinned by a test so a reorder can't change it silently. The suggestion service mirrors this with parallel spell/monster typeahead loops (`services/suggestions.rs`, gated by `spell_search_context` / `monster_search_context`).
+
+**When to reach for this** (vs §4): read-only data that is *imported in bulk and never user-edited or AI-generated*. If the user creates/edits it one at a time → entity domain. If creation is a guided multi-step flow → wizard. If it is an external dataset rendered for lookup → a reference library (this section). The worked examples are `docs/spellbook.md` and `docs/monster-manual.md`.
+
+---
+
+## 6. Command Manifest and Metadata Rules
 
 The manifest in `command-specs/src/lib.rs` is the single source of truth for:
 
@@ -214,7 +230,7 @@ If you rename or add command tokens without updating manifest entries, help/auto
 
 ---
 
-## 6. Repository and Service Boundaries
+## 7. Repository and Service Boundaries
 
 ### Repository Rules
 
@@ -242,7 +258,7 @@ Use command modules for command syntax and user-facing response behavior. Use se
 
 ---
 
-## 7. Shared Models and Contracts
+## 8. Shared Models and Contracts
 
 `runebound-models` is the cross-layer contract for:
 
@@ -263,7 +279,7 @@ Do not define parallel, hand-rolled TS interfaces for model concepts already in 
 
 ---
 
-## 8. Extension Playbooks
+## 9. Extension Playbooks
 
 ### A) Add New Top-Level Command
 
@@ -304,7 +320,7 @@ the ~250–550 hand-written lines it used to cost. No per-field branching.
    `services/ai_generation/<kind>.rs` slice for the create path (the `*Seed` DTO, a
    `generate_<kind>_seed` that calls the shared `run_seed_attempts` loop, a
    `<KIND>_GEN_SAMPLING` const in `engine.rs`, and `mod <kind>;` in
-   `ai_generation/mod.rs` — see §6). Then one `impl_entity_persistence!` and one
+   `ai_generation/mod.rs` — see §7). Then one `impl_entity_persistence!` and one
    `impl_entity_soft_delete!` declaration, plus the reroll spec entries;
    `vault_sync`'s `*_row_from_frontmatter` projects the canonical store row.
 6. **Draft slot + command**: add the `DraftEnvelope::<Entity>` variant (the editor is
@@ -338,7 +354,7 @@ The only edits outside `wizards/<name>.rs` are the one registry line and the lau
 
 ---
 
-## 9. Anti-Patterns
+## 10. Anti-Patterns
 
 | Anti-Pattern | Why It Is Wrong | Correct Approach |
 |---|---|---|
@@ -351,11 +367,11 @@ The only edits outside `wizards/<name>.rs` are the one registry line and the lau
 | Relying on context to "block" a command from running | Contexts only filter help/autocomplete, not execution | Guard inside the handler if a command must be refused |
 | New command left on the `_ => Default` availability arm | Silently hidden in every editor context | Add an explicit `command_availability` arm |
 | A bespoke per-flow interceptor in `main.rs` for a multi-step flow | Re-creates the dungeon-flow drift (no context, no typeahead, hand-built prompts) | Register a `Wizard`; the generic route, context, and clickable prompts come for free (§4) |
-| Re-inlining the seed retry loop or putting a new kind's generation in an existing `ai_generation` file | Re-monolithizes the file the split just broke up | New kind = a new `ai_generation/<kind>.rs` slice that calls the shared `run_seed_attempts` (§6, §8C) |
+| Re-inlining the seed retry loop or putting a new kind's generation in an existing `ai_generation` file | Re-monolithizes the file the split just broke up | New kind = a new `ai_generation/<kind>.rs` slice that calls the shared `run_seed_attempts` (§7, §9C) |
 
 ---
 
-## 10. Known Friction Points
+## 11. Known Friction Points
 
 The v0.5.0 cleanup (archived at `docs/archive/cleanup-0.5.0.md`) resolved the friction
 points this section used to list:
@@ -368,7 +384,7 @@ points this section used to list:
   (`impl_entity_table!`, `impl_entity_persistence!`, `impl_entity_soft_delete!`), so a new
   entity is one declaration per layer rather than hundreds of lines (P5.2/5.5/5.6/5.7).
 - **Explicit type branches per entity** — driven by `ALL_ENTITY_KINDS` + the schema; see
-  the (now short) §8.C playbook.
+  the (now short) §9.C playbook.
 
 Also closed by the cleanup: the markdown-heuristic clickability and dual help/text
 renderers (now one backend-authored `OutputDoc` + `to_plain_text`, P3/P7.2); the
@@ -394,7 +410,7 @@ not the fan-out.
 
 ---
 
-## 11. Feature Development Checklist
+## 12. Feature Development Checklist
 
 Before merging any feature that changes commands/entities:
 
@@ -411,7 +427,7 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-## 12. Related Docs
+## 13. Related Docs
 
 - `docs/command-contexts.md` for command contexts, availability, parser semantics, and the setup-wizard dispatch route
 - `docs/cli.md` for command UX contracts and command implementation checklist
@@ -420,5 +436,5 @@ Before merging any feature that changes commands/entities:
 
 ---
 
-*Last updated: 2026-06-20*  
+*Last updated: 2026-06-21*  
 *If this document drifts from the codebase, update it in the same PR as the architecture change.*

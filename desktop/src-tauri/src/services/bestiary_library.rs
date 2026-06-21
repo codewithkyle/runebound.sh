@@ -1,16 +1,16 @@
 //! Import + projection orchestration for the monster library.
 //!
 //! Mirrors [`crate::services::spell_library`] for monsters: the canonical TOML
-//! monster store ([`MonsterStore`]) is the source of truth, the SQLite `monsters`
-//! table is a rebuildable search projection. Import is a full replace (clear +
+//! monster store ([`CardStore<Monster>`]) is the source of truth, the SQLite
+//! `monsters` table is a rebuildable search projection. Import is a full replace (clear +
 //! repopulate both layers); boot re-projects the store into the DB so a deleted
 //! `app.db` self-heals.
 
 use std::path::Path;
 
+use dnd_core::card_store::CardStore;
 use dnd_core::db::MonsterRow;
-use dnd_core::monster_import::{ImportSummary, import_monsters_from_dir};
-use dnd_core::monster_store::MonsterStore;
+use dnd_core::monster_import::{ImportSummary, cr_token_to_sort, import_monsters_from_dir};
 use dnd_core::npc::now_timestamp;
 use runebound_models::monsters::Monster;
 
@@ -37,10 +37,10 @@ impl BestiaryLibraryService {
         // Replace the canonical TOML store (also blocking file IO).
         let store_monsters = summary.monsters.clone();
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            let store = MonsterStore::new().map_err(|err| err.to_string())?;
+            let store = CardStore::<Monster>::new().map_err(|err| err.to_string())?;
             store.clear().map_err(|err| err.to_string())?;
             for monster in &store_monsters {
-                store.save_monster(monster).map_err(|err| err.to_string())?;
+                store.save(monster).map_err(|err| err.to_string())?;
             }
             Ok(())
         })
@@ -56,8 +56,8 @@ impl BestiaryLibraryService {
     /// store is empty or the DB already matches it (the common case).
     pub async fn project_store_into_db(&self, state: &AppState) -> Result<(), String> {
         let monsters = tokio::task::spawn_blocking(|| -> Result<Vec<Monster>, String> {
-            let store = MonsterStore::new().map_err(|err| err.to_string())?;
-            store.list_monsters().map_err(|err| err.to_string())
+            let store = CardStore::<Monster>::new().map_err(|err| err.to_string())?;
+            store.list().map_err(|err| err.to_string())
         })
         .await
         .map_err(|err| err.to_string())??;
@@ -109,14 +109,10 @@ fn monster_row(monster: &Monster, timestamp: &str) -> MonsterRow {
 }
 
 /// Numeric CR for ordering, parsed from the leading token of the display string
-/// ("1/4 (XP 50; PB +2)" → 0.25). The display `cr` always begins with the raw CR.
+/// ("1/4 (XP 50; PB +2)" → 0.25). The display `cr` always begins with the raw CR;
+/// the fraction table itself lives once in [`cr_token_to_sort`].
 fn cr_sort(display_cr: &str) -> f64 {
-    match display_cr.split_whitespace().next().unwrap_or("") {
-        "1/8" => 0.125,
-        "1/4" => 0.25,
-        "1/2" => 0.5,
-        other => other.parse().unwrap_or(0.0),
-    }
+    cr_token_to_sort(display_cr.split_whitespace().next().unwrap_or("")).unwrap_or(0.0)
 }
 
 #[cfg(test)]

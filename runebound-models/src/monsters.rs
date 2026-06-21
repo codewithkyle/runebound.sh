@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::output::{
     InlineNode, OutputBlock, OutputDoc, code_block, command_ref, doc, emphasis, entity_card_full,
-    entity_row, heading, list, paragraph_with_inlines, strong, text_node,
+    entity_row, heading, list, paragraph_with_inlines, render_table, strong, text_node,
 };
 
 /// A converted, render-ready monster stat block. All `{@tag}` markup already
@@ -292,9 +292,10 @@ fn push_stat_block(out: &mut Vec<OutputBlock>, block: &StatBlock) {
     }
 }
 
-/// Map stat-block spans to output inlines: a [`Span::Link`] becomes a clickable
-/// `command_ref`, a [`Span::Text`] a plain text node.
-fn spans_to_inlines(spans: &[Span]) -> Vec<InlineNode> {
+/// Map card-content spans to output inlines: a [`Span::Link`] becomes a clickable
+/// `command_ref`, a [`Span::Text`] a plain text node. Shared with [`crate::spells`]
+/// so spell and monster cards lower cross-links the same way.
+pub(crate) fn spans_to_inlines(spans: &[Span]) -> Vec<InlineNode> {
     spans
         .iter()
         .map(|span| match span {
@@ -302,50 +303,6 @@ fn spans_to_inlines(spans: &[Span]) -> Vec<InlineNode> {
             Span::Link { label, command } => command_ref(label.clone(), command.clone()),
         })
         .collect()
-}
-
-/// Render a tiny table as aligned fixed-width text for a `Code` block (the monster
-/// twin of `spells::render_table`; stat-block tables are small enough that this
-/// reads cleanly).
-fn render_table(headers: &[String], rows: &[Vec<String>]) -> String {
-    fn cell(row: &[String], i: usize) -> &str {
-        row.get(i).map(String::as_str).unwrap_or("")
-    }
-    let col_count = headers
-        .len()
-        .max(rows.iter().map(|row| row.len()).max().unwrap_or(0));
-    let mut widths = vec![0usize; col_count];
-    for (i, width) in widths.iter_mut().enumerate() {
-        *width = headers.get(i).map(|h| h.len()).unwrap_or(0);
-        for row in rows {
-            *width = (*width).max(cell(row, i).len());
-        }
-    }
-    let fmt_row = |row: &[String]| {
-        (0..col_count)
-            .map(|i| format!("{:<width$}", cell(row, i), width = widths[i]))
-            .collect::<Vec<_>>()
-            .join("  ")
-            .trim_end()
-            .to_string()
-    };
-    let mut lines = Vec::new();
-    if !headers.is_empty() {
-        lines.push(fmt_row(headers));
-        lines.push(
-            widths
-                .iter()
-                .map(|w| "-".repeat(*w))
-                .collect::<Vec<_>>()
-                .join("  ")
-                .trim_end()
-                .to_string(),
-        );
-    }
-    for row in rows {
-        lines.push(fmt_row(row));
-    }
-    lines.join("\n")
 }
 
 #[cfg(test)]

@@ -7,9 +7,9 @@
 
 use std::path::PathBuf;
 
-use dnd_core::spell_import::slugify;
-use dnd_core::spell_store::SpellStore;
-use runebound_models::spells::spell_card;
+use dnd_core::card_store::CardStore;
+use dnd_core::fivetools_markup::slugify;
+use runebound_models::spells::{Spell, spell_card};
 use runebound_models::{
     CommandResponse, OutputDoc, StatusTone, command_ref, doc, heading, paragraph_text,
     paragraph_with_inlines, status, text_node,
@@ -56,12 +56,9 @@ pub async fn resolve_spell_doc(state: &AppState, query: &str) -> Result<Option<O
         return Ok(None);
     }
 
-    let store = SpellStore::new().map_err(|err| err.to_string())?;
+    let store = CardStore::<Spell>::new().map_err(|err| err.to_string())?;
     // Fast path: a typed name slugifies straight to the stored card.
-    if let Some(spell) = store
-        .load_spell(&slugify(query))
-        .map_err(|err| err.to_string())?
-    {
+    if let Some(spell) = store.load(&slugify(query)).map_err(|err| err.to_string())? {
         return Ok(Some(spell_card(&spell)));
     }
     // Otherwise recover the slug via a DB name search (handles partial/odd input).
@@ -70,7 +67,7 @@ pub async fn resolve_spell_doc(state: &AppState, query: &str) -> Result<Option<O
         .search_by_name(state.database().as_ref(), query, 1)
         .await?;
     if let Some(row) = rows.into_iter().next()
-        && let Some(spell) = store.load_spell(&row.slug).map_err(|err| err.to_string())?
+        && let Some(spell) = store.load(&row.slug).map_err(|err| err.to_string())?
     {
         return Ok(Some(spell_card(&spell)));
     }
