@@ -1283,6 +1283,60 @@ pub fn command_manifest() -> CommandManifest {
                 show_in_autocomplete: true,
             },
             CommandSpec {
+                name: "monster".to_string(),
+                summary: "Look up a monster and render its stat block".to_string(),
+                examples: vec![
+                    "monster goblin".to_string(),
+                    "monster Adult Red Dragon".to_string(),
+                    "Goblin Warrior".to_string(),
+                ],
+                subcommands: vec![SubcommandSpec {
+                    name: "help".to_string(),
+                    summary: "Show monster command help".to_string(),
+                    options: Vec::new(),
+                    examples: vec!["monster help".to_string()],
+                }],
+                options: Vec::new(),
+                // Takes a free-form monster name (like `spell`), so it must not
+                // require a subcommand or `monster goblin` would be rejected.
+                requires_subcommand: false,
+                canonical_help_command: Some("monster help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
+                name: "bestiary".to_string(),
+                summary: "Import the monster library from a local 5etools copy".to_string(),
+                examples: vec![
+                    "bestiary import".to_string(),
+                    "bestiary import ~/5etools-src".to_string(),
+                ],
+                subcommands: vec![
+                    SubcommandSpec {
+                        name: "import".to_string(),
+                        summary: "Import monsters from a 5etools data directory (opens a folder \
+                                  picker when no path is given)"
+                            .to_string(),
+                        options: Vec::new(),
+                        examples: vec![
+                            "bestiary import".to_string(),
+                            "bestiary import ~/5etools-src".to_string(),
+                        ],
+                    },
+                    SubcommandSpec {
+                        name: "help".to_string(),
+                        summary: "Show bestiary command help".to_string(),
+                        options: Vec::new(),
+                        examples: vec!["bestiary help".to_string()],
+                    },
+                ],
+                options: Vec::new(),
+                requires_subcommand: true,
+                canonical_help_command: Some("bestiary help".to_string()),
+                execution: CommandExecution::Desktop,
+                show_in_autocomplete: true,
+            },
+            CommandSpec {
                 name: "publish".to_string(),
                 summary: "Render an entity's markdown into the Obsidian vault".to_string(),
                 examples: vec![
@@ -1590,6 +1644,8 @@ mod tests {
             "ping",
             "spell",
             "spellbook",
+            "monster",
+            "bestiary",
         ]
         .into_iter()
         .collect();

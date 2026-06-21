@@ -5,6 +5,7 @@ use tauri::State;
 
 use crate::app_state::AppState;
 use crate::commands::entity_commands::build_load_response;
+use crate::commands::monster_commands::resolve_monster_doc;
 use crate::commands::spell_commands::resolve_spell_doc;
 use crate::commands::{
     DesktopHandlerInvocation, desktop_handler_registry, ok_response, ok_response_with_doc,
@@ -57,6 +58,15 @@ pub(crate) async fn dispatch_desktop_command(
         // Bare spell name (e.g. "Fireball"): render its card. Entities are resolved
         // first above, so a saved entity wins on a name collision.
         if let Some(card) = resolve_spell_doc(state.inner(), trimmed).await? {
+            return Ok(Some(ok_response_with_doc(
+                card.to_plain_text(),
+                Some(card),
+                None,
+            )));
+        }
+        // Bare monster name (e.g. "Goblin Warrior"): render its stat block. Resolved
+        // last — precedence is entity → spell → monster (first hit wins).
+        if let Some(card) = resolve_monster_doc(state.inner(), trimmed).await? {
             return Ok(Some(ok_response_with_doc(
                 card.to_plain_text(),
                 Some(card),

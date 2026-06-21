@@ -10,8 +10,8 @@ use runebound_models::{
 use crate::entities::{EntityDomainRegistry, EntityKind};
 use crate::repositories::{
     Database, DocumentRepository, DungeonRepository, EventRepository, FactionRepository,
-    GenerationRepository, GodRepository, ItemRepository, LocationRepository, NpcRepository,
-    SoftDeleteRepository, SpellRepository, VaultRepository,
+    GenerationRepository, GodRepository, ItemRepository, LocationRepository, MonsterRepository,
+    NpcRepository, SoftDeleteRepository, SpellRepository, VaultRepository,
 };
 use crate::wizards::{WizardRegistry, WizardSession};
 
@@ -453,6 +453,7 @@ pub(crate) struct AppState {
     pub(crate) generation_repo: Arc<dyn GenerationRepository>,
     pub(crate) soft_delete_repo: Arc<dyn SoftDeleteRepository>,
     pub(crate) spell_repo: Arc<dyn SpellRepository>,
+    pub(crate) monster_repo: Arc<dyn MonsterRepository>,
     pub(crate) domains: Arc<EntityDomainRegistry>,
     /// Registry of multi-step wizards, mirroring `domains`. Adding a wizard is one
     /// line in `build_default_wizard_registry()`.
@@ -519,6 +520,10 @@ impl AppState {
 
     pub(crate) fn spell_repo(&self) -> Arc<dyn SpellRepository> {
         self.spell_repo.clone()
+    }
+
+    pub(crate) fn monster_repo(&self) -> Arc<dyn MonsterRepository> {
+        self.monster_repo.clone()
     }
 
     pub(crate) fn domains(&self) -> Arc<EntityDomainRegistry> {

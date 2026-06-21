@@ -197,6 +197,21 @@ pub struct SpellRow {
 }
 
 #[derive(Debug, Clone)]
+pub struct MonsterRow {
+    pub id: String,
+    pub slug: String,
+    pub name: String,
+    pub cr: String,
+    /// Numeric CR for ordering ("1/4" -> 0.25).
+    pub cr_sort: f64,
+    pub creature_type: String,
+    pub size: String,
+    pub source: String,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
+#[derive(Debug, Clone)]
 pub struct SoftDeleteRow {
     pub id: i64,
     pub entity_type: String,
@@ -453,6 +468,55 @@ pub async fn count_spells(pool: &SqlitePool) -> Result<i64> {
         .fetch_one(pool)
         .await
         .context("failed to count spells")?;
+    Ok(row.try_get("n").unwrap_or(0))
+}
+
+// Monsters are a read-only reference library imported from the user's own 5etools
+// copy (like spells): no `vault_path`, replaced wholesale on re-import (see
+// `clear_monsters`). The generated `search_monsters_by_name` is the LIKE-based
+// typeahead — ~2575 rows, no FTS5 needed.
+impl_entity_table! {
+    table: "monsters",
+    row: MonsterRow,
+    upsert: upsert_monster,
+    find_by_id: find_monster_by_id,
+    find_by_slug: find_monster_by_slug,
+    find_by_name_or_slug: find_monster_by_name_or_slug,
+    list: list_monsters,
+    search_by_name: search_monsters_by_name,
+    delete_by_id: delete_monster_by_id,
+    row_to: row_to_monster,
+    columns: [
+        strict slug,
+        strict name,
+        strict cr,
+        strict cr_sort,
+        strict creature_type,
+        strict size,
+        strict source,
+    ],
+}
+
+/// Remove every monster row. Executor-generic so a re-import can clear + repopulate
+/// the table in one transaction (the canonical TOML store is the source of truth).
+pub async fn clear_monsters<'e, E>(executor: E) -> Result<()>
+where
+    E: sqlx::Executor<'e, Database = sqlx::Sqlite>,
+{
+    sqlx::query("DELETE FROM monsters")
+        .execute(executor)
+        .await
+        .context("failed to clear monsters")?;
+    Ok(())
+}
+
+/// Count of imported monsters — drives the import summary and the "did you run
+/// bestiary import?" empty-library hint.
+pub async fn count_monsters(pool: &SqlitePool) -> Result<i64> {
+    let row = sqlx::query("SELECT COUNT(*) AS n FROM monsters")
+        .fetch_one(pool)
+        .await
+        .context("failed to count monsters")?;
     Ok(row.try_get("n").unwrap_or(0))
 }
 
@@ -1224,6 +1288,44 @@ mod tests {
             .expect("present");
         assert_eq!(found.id, "evt_1");
         assert_eq!(found.body, "The sun failed to rise for a tenday.");
+    }
+
+    #[tokio::test]
+    async fn monster_round_trips_and_searches() {
+        // Validates the 0021 migration column names against the generated CRUD
+        // (a typo would be a runtime SQL error) and the REAL `cr_sort` column.
+        let database = temp_db().await;
+        let pool = &database.pool;
+        let monster = MonsterRow {
+            id: "goblin-warrior".to_string(),
+            slug: "goblin-warrior".to_string(),
+            name: "Goblin Warrior".to_string(),
+            cr: "1/4 (XP 50; PB +2)".to_string(),
+            cr_sort: 0.25,
+            creature_type: "Fey (Goblinoid)".to_string(),
+            size: "Small".to_string(),
+            source: "XMM".to_string(),
+            created_at: "2026-06-20T00:00:00Z".to_string(),
+            updated_at: "2026-06-20T00:00:00Z".to_string(),
+        };
+        upsert_monster(pool, &monster).await.expect("upsert");
+
+        let found = find_monster_by_slug(pool, "goblin-warrior")
+            .await
+            .expect("query")
+            .expect("present");
+        assert_eq!(found.name, "Goblin Warrior");
+        assert_eq!(found.cr_sort, 0.25);
+        assert_eq!(found.creature_type, "Fey (Goblinoid)");
+
+        // The LIKE typeahead + count + clear used by the import path.
+        let hits = search_monsters_by_name(pool, "gob", 6)
+            .await
+            .expect("search");
+        assert_eq!(hits.len(), 1);
+        assert_eq!(count_monsters(pool).await.expect("count"), 1);
+        clear_monsters(pool).await.expect("clear");
+        assert_eq!(count_monsters(pool).await.expect("count"), 0);
     }
 
     #[tokio::test]

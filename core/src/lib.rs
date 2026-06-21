@@ -7,6 +7,8 @@ pub mod db;
 mod db_macros;
 pub mod entity_store;
 pub mod health;
+pub mod monster_import;
+pub mod monster_store;
 pub mod npc;
 pub mod onboarding_wizard;
 pub mod output;

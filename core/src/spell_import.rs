@@ -632,12 +632,37 @@ pub fn strip_tags(input: &str) -> String {
 
 fn render_tag(inner: &str) -> String {
     let (tag, rest) = inner.split_once(' ').unwrap_or((inner, ""));
+    let tag_lower = tag.to_ascii_lowercase();
+
+    // Monster stat-block tags that render a fixed phrase regardless of arguments,
+    // including the no-argument ones (handled *before* the empty-`rest` guard
+    // below). These tag names never appear in spell text, so extending the single
+    // shared `strip_tags` seam is safe — the spell cases stay green.
+    match tag_lower.as_str() {
+        "h" => return "Hit: ".to_string(),
+        "actsavefail" => return "Failure:".to_string(),
+        "actsavesuccess" => return "Success:".to_string(),
+        "actsavesuccessorfail" => return "Failure or Success:".to_string(),
+        "acttrigger" => return "Trigger:".to_string(),
+        "actresponse" => return "Response:".to_string(),
+        "hityourspellattack" => return "your spell attack modifier".to_string(),
+        "recharge" => return render_recharge(rest),
+        "atk" => return render_attack(rest, AttackStyle::Weapon2014),
+        "atkr" => return render_attack(rest, AttackStyle::Roll2024),
+        _ => {}
+    }
+
     if rest.is_empty() {
         return String::new();
     }
     let segments: Vec<&str> = rest.split('|').collect();
-    if tag.eq_ignore_ascii_case("dc") {
-        return format!("DC {}", segments[0].trim());
+    match tag_lower.as_str() {
+        "dc" => return format!("DC {}", segments[0].trim()),
+        // Attack bonus: prepend a `+` unless the value already carries a sign.
+        "hit" => return render_hit(segments[0].trim()),
+        // `{@actSave dex}` → "Dexterity Saving Throw:".
+        "actsave" => return format!("{} Saving Throw:", full_ability(segments[0].trim())),
+        _ => {}
     }
     let display = if segments.len() >= 3 {
         segments[segments.len() - 1]
@@ -645,6 +670,84 @@ fn render_tag(inner: &str) -> String {
         segments[0]
     };
     display.trim().to_string()
+}
+
+/// `{@hit 4}` → "+4"; a value that already carries a sign is kept verbatim.
+fn render_hit(value: &str) -> String {
+    if value.starts_with('+') || value.starts_with('-') {
+        value.to_string()
+    } else {
+        format!("+{value}")
+    }
+}
+
+/// `{@recharge}` / `{@recharge 6}` → "(Recharge 6)"; `{@recharge 5}` →
+/// "(Recharge 5-6)" (recharges on a d6 roll of N or higher).
+fn render_recharge(rest: &str) -> String {
+    let n: u32 = rest.trim().parse().unwrap_or(6);
+    if n >= 6 {
+        "(Recharge 6)".to_string()
+    } else {
+        format!("(Recharge {n}-6)")
+    }
+}
+
+/// Whether an attack tag is the 2014 weapon/spell form (`{@atk mw}`) or the 2024
+/// attack-roll form (`{@atkr m}`).
+enum AttackStyle {
+    Weapon2014,
+    Roll2024,
+}
+
+/// Render `{@atk mw,rw}` → "Melee or Ranged Weapon Attack:" and
+/// `{@atkr m,r}` → "Melee or Ranged Attack Roll:". Each comma-separated part is a
+/// range char (`m`/`r`) optionally followed by a kind char (`w`/`s`).
+fn render_attack(spec: &str, style: AttackStyle) -> String {
+    let mut ranges: Vec<&str> = Vec::new();
+    let mut kind = "";
+    for part in spec.split(',') {
+        let mut chars = part.trim().chars();
+        match chars.next() {
+            Some('m' | 'M') => push_unique(&mut ranges, "Melee"),
+            Some('r' | 'R') => push_unique(&mut ranges, "Ranged"),
+            _ => {}
+        }
+        if let Some(second) = chars.next() {
+            kind = match second {
+                'w' | 'W' => "Weapon ",
+                's' | 'S' => "Spell ",
+                _ => kind,
+            };
+        }
+    }
+    let ranges = if ranges.is_empty() {
+        "Melee".to_string()
+    } else {
+        ranges.join(" or ")
+    };
+    match style {
+        AttackStyle::Roll2024 => format!("{ranges} Attack Roll:"),
+        AttackStyle::Weapon2014 => format!("{ranges} {kind}Attack:"),
+    }
+}
+
+fn push_unique<'a>(values: &mut Vec<&'a str>, item: &'a str) {
+    if !values.contains(&item) {
+        values.push(item);
+    }
+}
+
+/// Expand a 3-letter ability abbreviation to its full name (for `{@actSave dex}`).
+fn full_ability(abbr: &str) -> &'static str {
+    match abbr.to_ascii_lowercase().as_str() {
+        "str" => "Strength",
+        "dex" => "Dexterity",
+        "con" => "Constitution",
+        "int" => "Intelligence",
+        "wis" => "Wisdom",
+        "cha" => "Charisma",
+        _ => "Special",
+    }
 }
 
 /// Kebab-case a spell name into its slug — the primary key shared by the TOML
@@ -699,6 +802,39 @@ mod tests {
             "increases by 1d6 for each slot"
         );
         assert_eq!(strip_tags("no tags here"), "no tags here");
+    }
+
+    #[test]
+    fn strip_tags_handles_monster_stat_block_tags() {
+        // Attack lines (2024 + 2014 forms).
+        assert_eq!(strip_tags("{@atkr m}"), "Melee Attack Roll:");
+        assert_eq!(strip_tags("{@atkr m,r}"), "Melee or Ranged Attack Roll:");
+        assert_eq!(strip_tags("{@atk mw}"), "Melee Weapon Attack:");
+        assert_eq!(strip_tags("{@atk mw,rw}"), "Melee or Ranged Weapon Attack:");
+        // Hit bonus + the "Hit:" lead-in.
+        assert_eq!(strip_tags("{@hit 4}"), "+4");
+        assert_eq!(strip_tags("{@hit -1}"), "-1");
+        assert_eq!(strip_tags("{@h}5 damage"), "Hit: 5 damage");
+        // Saving throws + outcomes.
+        assert_eq!(
+            strip_tags("{@actSave dex} {@dc 21}"),
+            "Dexterity Saving Throw: DC 21"
+        );
+        assert_eq!(strip_tags("{@actSaveFail} 59 damage"), "Failure: 59 damage");
+        assert_eq!(strip_tags("{@actSaveSuccess} Half"), "Success: Half");
+        // Recharge (in an action name).
+        assert_eq!(
+            strip_tags("Fire Breath {@recharge 5}"),
+            "Fire Breath (Recharge 5-6)"
+        );
+        assert_eq!(strip_tags("Breath {@recharge}"), "Breath (Recharge 6)");
+        // A full goblin attack line lowers cleanly.
+        assert_eq!(
+            strip_tags(
+                "{@atkr m} {@hit 4}, reach 5 ft. {@h}5 ({@damage 1d6 + 2}) Slashing damage."
+            ),
+            "Melee Attack Roll: +4, reach 5 ft. Hit: 5 (1d6 + 2) Slashing damage."
+        );
     }
 
     // --- conversion fixtures (real XPHB shapes) --------------------------

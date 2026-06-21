@@ -177,6 +177,29 @@ impl SuggestionService {
             }
         }
 
+        // Monster typeahead: under the explicit `monster <fragment>` root, and as a
+        // bare-name fallback so typing `gob` surfaces Goblin Warrior next to spells.
+        if let Some((monster_query, use_root_prefix)) = monster_search_context(trimmed, &manifest)
+            && !monster_query.is_empty()
+        {
+            let rows = state
+                .monster_repo()
+                .search_by_name(state.database().as_ref(), &monster_query, 6)
+                .await?;
+            for row in rows {
+                let completion = if use_root_prefix {
+                    format!("monster {}", row.name)
+                } else {
+                    row.name.clone()
+                };
+                suggestions.push(CommandSuggestion {
+                    label: row.name,
+                    completion,
+                    helper_text: Some(SuggestionHelperText::Monster),
+                });
+            }
+        }
+
         if is_npc && let Some(location_query) = npc_travel_location_query(trimmed) {
             let location_names = search_location_names(state, location_query, Some(8)).await?;
             for location_name in location_names {
@@ -230,6 +253,7 @@ pub enum SuggestionHelperText {
     Dungeon,
     Reference,
     Spell,
+    Monster,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -649,6 +673,29 @@ fn spell_search_context(trimmed: &str, manifest: &CommandManifest) -> Option<(St
         return None; // the root suggestion handles bare `spell`
     }
     // Bare fragment with no known command root: surface spells next to entities.
+    if !starts_with_known_command_root(trimmed, manifest) {
+        return Some((trimmed.to_string(), false));
+    }
+    None
+}
+
+/// Decide whether (and how) to surface monster typeahead for `trimmed`. The twin of
+/// [`spell_search_context`]: with `use_root_prefix`, completions are `monster
+/// <name>` (the explicit `monster <fragment>` lookup); without it, the bare name
+/// (the no-prefix fallback). `None` skips monster search entirely.
+fn monster_search_context(trimmed: &str, manifest: &CommandManifest) -> Option<(String, bool)> {
+    let lowered = trimmed.to_ascii_lowercase();
+    // Explicit `monster <fragment>` lookup — but not `monster help` or the bare root.
+    if let Some(rest) = lowered.strip_prefix("monster ") {
+        if rest.trim() == "help" {
+            return None;
+        }
+        return Some((trimmed["monster ".len()..].trim().to_string(), true));
+    }
+    if lowered == "monster" {
+        return None; // the root suggestion handles bare `monster`
+    }
+    // Bare fragment with no known command root: surface monsters next to entities.
     if !starts_with_known_command_root(trimmed, manifest) {
         return Some((trimmed.to_string(), false));
     }
