@@ -357,7 +357,7 @@ const CONTROL_LABELS: [&str; 4] = [
 const CONTROL_VALUES: [&str; 4] = [
     "a noble house or lord",
     "a faction, council, or guild",
-    "a free city",
+    "no central government — a lawless, frontier-style free city where rival factions, gangs, and ward-bosses each control their own districts, but no single council, guild, lord, or ruler governs the city as a whole",
     "independent or contested rule",
 ];
 

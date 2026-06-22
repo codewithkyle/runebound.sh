@@ -139,7 +139,7 @@ fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: Location
                 )
             };
             format!(
-                "You generate one usable D&D settlement seed (a {kind}) for a game master. Return only JSON with fields name, visual_description, history_background, exports, tone, authority, danger_level, current_tension. This settlement is controlled by {control}; the authority field must reflect that. Its natural resources are: {resources}.{exports_clause}{geo} danger_level must be one of: {danger}.{leash}",
+                "You generate one usable D&D settlement seed (a {kind}) for a game master. Return only JSON with fields name, visual_description, history_background, exports, tone, authority, danger_level, current_tension. This settlement's power structure: {control}. The authority field must describe exactly that power structure — including any absence of central rule — and must not invent a governing body that the power structure rules out. Its natural resources are: {resources}.{exports_clause}{geo} danger_level must be one of: {danger}.{leash}",
                 danger = LOCATION_DANGER_LEVELS.join(", "),
                 leash = LOCATION_PROSE_LEASH,
             )
@@ -269,7 +269,7 @@ pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String 
             if let Some(faction) = opt_clause(&inputs.faction_name) {
                 parts.push(format!("Controlled by @factions/{faction}."));
             } else if let Some(control) = opt_clause(&inputs.control) {
-                parts.push(format!("Controlled by: {control}."));
+                parts.push(format!("Power structure: {control}."));
             }
             if let Some(resources) = opt_clause(&inputs.resources) {
                 parts.push(format!("Natural resources: {resources}."));
