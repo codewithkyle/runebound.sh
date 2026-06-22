@@ -359,7 +359,7 @@ impl WizardStep<AppState> for PowerSpecificsStep {
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         optional_text_prompt(
             "Create Faction — Houses — Specifics",
-            "Name the resource, route, or holding (e.g. \"the only bridge over the Ironwash\", \"silver and salt\").",
+            "Name the resource, route, or holding.",
         )
     }
 
@@ -622,7 +622,7 @@ impl WizardStep<AppState> for ControlSpecificsStep {
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         optional_text_prompt(
             "Create Faction — Establishment — Specifics",
-            "Refine what they control (e.g. \"iron, bronze, and steel smithing\").",
+            "Refine what they control.",
         )
     }
 
@@ -752,7 +752,7 @@ impl WizardStep<AppState> for MandateSpecificsStep {
     fn prompt(&self, _data: &WizardData) -> OutputDoc {
         optional_text_prompt(
             "Create Faction — Religion — Specifics",
-            "Sharpen what the god demands (e.g. \"midwinter blood offerings to ensure the harvest\").",
+            "Sharpen what the god demands.",
         )
     }
 
