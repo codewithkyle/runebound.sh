@@ -240,6 +240,9 @@ fn reach_phrase(token: &str) -> &'static str {
 #[derive(Debug, Clone, Default)]
 pub struct FactionWizardInputs {
     pub kind_type: String,
+    /// Optional GM-supplied name. When set, generation uses it verbatim and tells the
+    /// model to keep the prose consistent with it; when None, the model invents one.
+    pub name: Option<String>,
     // Houses
     pub power_base: Option<String>,
     pub power_specifics: Option<String>,
@@ -396,6 +399,12 @@ fn wizard_faction_system_prompt(inputs: &FactionWizardInputs, category: FactionC
         ));
     }
 
+    if let Some(name) = opt_clause(&inputs.name) {
+        prompt.push_str(&format!(
+            " The game master has already named this faction \"{name}\"; use that exact name in the name field and refer to it by that name throughout the prose."
+        ));
+    }
+
     prompt
 }
 
@@ -432,6 +441,9 @@ fn wizard_faction_schema(_category: FactionCategory) -> serde_json::Value {
 pub(crate) fn build_faction_wizard_user_prompt(inputs: &FactionWizardInputs) -> String {
     let kind = &inputs.kind_type;
     let mut parts = vec![format!("Create a {kind}.")];
+    if let Some(name) = opt_clause(&inputs.name) {
+        parts.push(format!("Name: {name}."));
+    }
     match faction_category(kind) {
         Some(FactionCategory::Houses) => {
             if let Some(power) = opt_clause(&inputs.power_base) {
@@ -689,6 +701,7 @@ impl AiGenerationService {
         // Locked answers copied out for the (synchronous) accept closure.
         let kind_type = inputs.kind_type.clone();
         let want_lock = opt_clause(&inputs.want).map(str::to_string);
+        let name_lock = opt_clause(&inputs.name).map(str::to_string);
 
         let seed = run_seed_attempts(
             &client,
@@ -723,6 +736,13 @@ impl AiGenerationService {
                 // the model's inference, then replaces it); skipped → the model's stands.
                 if let Some(want) = &want_lock {
                     seed.want = want.clone();
+                }
+                // A GM-supplied name is used verbatim and bypasses the recent-name dedup:
+                // it is fixed across every attempt (so the dedup loop could never satisfy
+                // it), and the GM chose it deliberately.
+                if let Some(name) = &name_lock {
+                    seed.name = name.clone();
+                    return SeedStep::Accept(seed);
                 }
                 let normalized_name = seed.name.to_ascii_lowercase();
                 if enforce_unique_name
@@ -976,5 +996,28 @@ mod tests {
         assert!(prompt.contains("Hold the only bridge over the Ironwash"));
         // The Great House brand colors the visible face.
         assert!(prompt.contains("known above all for ancient lineage"));
+    }
+
+    #[test]
+    fn faction_name_is_directed_when_given_and_absent_when_skipped() {
+        // A GM-supplied name is fed to the model (and restated in the user prompt),
+        // regardless of category.
+        let named = FactionWizardInputs {
+            kind_type: "guild".to_string(),
+            name: Some("The Gilded Ledger".to_string()),
+            ..Default::default()
+        };
+        let system = wizard_faction_system_prompt(&named, FactionCategory::Establishments);
+        assert!(system.contains("already named this faction \"The Gilded Ledger\""));
+        assert!(build_faction_wizard_user_prompt(&named).contains("Name: The Gilded Ledger."));
+
+        // Skipped (no name) → the model invents one; no name directive leaks in.
+        let unnamed = FactionWizardInputs {
+            kind_type: "guild".to_string(),
+            ..Default::default()
+        };
+        let system = wizard_faction_system_prompt(&unnamed, FactionCategory::Establishments);
+        assert!(!system.contains("already named this faction"));
+        assert!(!build_faction_wizard_user_prompt(&unnamed).contains("Name:"));
     }
 }

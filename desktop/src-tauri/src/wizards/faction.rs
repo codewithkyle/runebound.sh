@@ -54,6 +54,7 @@ use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 // `Goto`/`enter_*` target is one of these consts) guarantees no route dangles.
 
 const STEP_CATEGORY: &str = "category";
+const STEP_NAME: &str = "name";
 const STEP_HOUSES_LAYER: &str = "houses_layer";
 const STEP_POWER_BASE: &str = "power_base";
 const STEP_POWER_SPECIFICS: &str = "power_specifics";
@@ -95,6 +96,10 @@ struct FactionWizardData {
     // Routing. `kind_type` (one of the 9) is set at the layer/kind step; the category
     // it rolls up into is derived from it (D2), never stored separately.
     kind_type: String,
+
+    /// Optional GM-supplied name (asked first, before category). When set, generation
+    /// uses it verbatim and skips the recent-name dedup; when None, the model invents one.
+    name: Option<String>,
 
     // Houses
     power_base: Option<String>,
@@ -163,6 +168,7 @@ impl FactionWizardData {
     fn as_inputs(&self) -> FactionWizardInputs {
         FactionWizardInputs {
             kind_type: self.kind_type.clone(),
+            name: self.name.clone(),
             power_base: self.power_base.clone(),
             power_specifics: self.power_specifics.clone(),
             brand: self.brand.clone(),
@@ -180,6 +186,53 @@ impl FactionWizardData {
             // The generate step's extra detail doubles as the reroll hint.
             hint: self.detail.clone(),
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Step 0 — name (optional, applies to every faction)
+// ---------------------------------------------------------------------------
+
+/// Optional name step. GMs often already have a name in mind; if they type one it is used
+/// verbatim (and the model is told to keep the prose consistent with it), and skipping is
+/// the signal that tells the model to invent one. Asked first, before the category, so it
+/// applies uniformly to every faction. Mirrors the location wizard's name step.
+struct NameStep;
+
+#[async_trait]
+impl WizardStep<AppState> for NameStep {
+    fn id(&self) -> &'static str {
+        STEP_NAME
+    }
+
+    fn summary(&self) -> &'static str {
+        "Optional: type the faction's name, or skip to let the model generate one."
+    }
+
+    fn prompt(&self, _data: &WizardData) -> OutputDoc {
+        doc()
+            .with_block(heading(2, "Create Faction — Name"))
+            .with_block(paragraph_with_inlines(vec![
+                text_node("Do you already have a name for this faction? Type it, or "),
+                command_ref("skip", "skip"),
+                text_node(" to let the model generate one."),
+            ]))
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        vec![skip_choice("Let the model generate a name")]
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        _state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        // `optional_text` maps empty/`skip` to None — the "let the model name it" signal —
+        // and trims an entered name. Next is the category router.
+        faction_data_mut(d).name = optional_text(input);
+        Ok(WizardTransition::Next)
     }
 }
 
@@ -1274,6 +1327,8 @@ impl FactionWizard {
     pub fn new() -> Self {
         Self {
             steps: vec![
+                // Optional name first (applies to every faction), then the category router.
+                Arc::new(NameStep),
                 Arc::new(CategoryStep),
                 // Houses
                 Arc::new(HouseLayerStep),
@@ -1829,7 +1884,8 @@ mod tests {
         // asserting the declared set equals the registered set proves no route can dangle
         // (the engine errors on an unknown `Goto` only at runtime — this catches it in CI,
         // code-review H2/M3).
-        const ALL_STEP_IDS: [&str; 19] = [
+        const ALL_STEP_IDS: [&str; 20] = [
+            STEP_NAME,
             STEP_CATEGORY,
             STEP_HOUSES_LAYER,
             STEP_POWER_BASE,
