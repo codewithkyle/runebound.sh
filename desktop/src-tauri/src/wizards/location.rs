@@ -51,6 +51,7 @@ use wizard::{Wizard, WizardChoice, WizardData, WizardStep, WizardTransition};
 // matches on — only `MODE_GUILDHALL` below doubles as a routing key that isn't a step.
 
 const STEP_KIND: &str = "kind";
+const STEP_NAME: &str = "name";
 const STEP_CONTROL: &str = "control";
 const STEP_RESOURCES: &str = "resources";
 const STEP_EXPORT_MODE: &str = "export_mode";
@@ -103,7 +104,11 @@ struct LocationWizardData {
     /// custom-entry sub-screen and the flag cannot bleed into another step (H3).
     awaiting_custom_kind: bool,
 
-    // Settlement (Q-A…Q-D)
+    // Settlement (Q-A0…Q-D)
+    /// Optional GM-supplied name (Q-A0). When set, generation uses it verbatim and skips
+    /// the recent-name dedup; when None, the model invents one. Asked only on the
+    /// settlement branch today, but the field and prompt handling are kind-agnostic.
+    name: Option<String>,
     control: Option<String>,
     resources: Option<String>,
     export_mode: Option<String>,
@@ -183,6 +188,7 @@ impl LocationWizardData {
         LocationWizardInputs {
             kind_type: self.kind_type.clone(),
             kind_custom: self.kind_custom.clone(),
+            name: self.name.clone(),
             control: self.control.clone(),
             resources: self.resources.clone(),
             export_mode: self.export_mode.clone(),
@@ -330,7 +336,7 @@ impl WizardStep<AppState> for KindStep {
         let kind = menu[n - 1];
         location_data_mut(d).kind_type = kind.to_string();
         match kind {
-            "hamlet" | "town" | "city" => Ok(WizardTransition::Goto(STEP_CONTROL)),
+            "hamlet" | "town" | "city" => Ok(WizardTransition::Goto(STEP_NAME)),
             "ruin" | "landmark" | "wilderness" => Ok(WizardTransition::Goto(STEP_SITE_FOCUS)),
             "hideout" => Ok(WizardTransition::Goto(STEP_BASE_OWNER)),
             // A guildhall is a faction's public HQ, so it opens straight on the
@@ -342,8 +348,50 @@ impl WizardStep<AppState> for KindStep {
 }
 
 // ---------------------------------------------------------------------------
-// Settlement branch (Q-A…Q-D)
+// Settlement branch (Q-A0…Q-D)
 // ---------------------------------------------------------------------------
+
+/// Optional name step (Q-A0). GMs often already have a name for a place; if they type
+/// one it is used verbatim (and the model is told to keep the prose consistent with it),
+/// and skipping is the signal that tells the model to invent one.
+struct NameStep;
+
+#[async_trait]
+impl WizardStep<AppState> for NameStep {
+    fn id(&self) -> &'static str {
+        STEP_NAME
+    }
+
+    fn summary(&self) -> &'static str {
+        "Optional: type the settlement's name, or skip to let the model generate one."
+    }
+
+    fn prompt(&self, _data: &WizardData) -> OutputDoc {
+        doc()
+            .with_block(heading(2, "Create Location — Settlement — Name"))
+            .with_block(paragraph_with_inlines(vec![
+                text_node("Do you already have a name for this place? Type it, or "),
+                command_ref("skip", "skip"),
+                text_node(" to let the model generate one."),
+            ]))
+    }
+
+    fn choices(&self, _data: &WizardData) -> Vec<WizardChoice> {
+        vec![skip_choice("Let the model generate a name")]
+    }
+
+    async fn accept(
+        &self,
+        input: &str,
+        d: &mut WizardData,
+        _state: &AppState,
+    ) -> Result<WizardTransition, String> {
+        // `optional_text` maps empty/`skip` to None — exactly the "let the model name it"
+        // signal — and trims an entered name.
+        location_data_mut(d).name = optional_text(input);
+        Ok(WizardTransition::Next)
+    }
+}
 
 const CONTROL_LABELS: [&str; 4] = [
     "noble house / lord",
@@ -1288,6 +1336,7 @@ impl LocationWizard {
             steps: vec![
                 Arc::new(KindStep),
                 // Settlement
+                Arc::new(NameStep),
                 Arc::new(ControlStep),
                 Arc::new(ResourcesStep),
                 Arc::new(ExportModeStep),
@@ -1974,8 +2023,9 @@ mod tests {
         // The single id registry. Every `Goto`/`enter_*` target is one of these consts, so
         // declared == registered proves no route dangles (engine errors on an unknown
         // `Goto` only at runtime — this catches it in CI, code-review H2/M3).
-        const ALL_STEP_IDS: [&str; 19] = [
+        const ALL_STEP_IDS: [&str; 20] = [
             STEP_KIND,
+            STEP_NAME,
             STEP_CONTROL,
             STEP_RESOURCES,
             STEP_EXPORT_MODE,
@@ -2026,7 +2076,8 @@ mod tests {
                 .position(|s| s.id() == id)
                 .unwrap_or_else(|| panic!("step {id} not registered"))
         };
-        // Settlement: control → resources → export_mode → geography_settlement.
+        // Settlement: name → control → resources → export_mode → geography_settlement.
+        assert_eq!(idx(STEP_CONTROL), idx(STEP_NAME) + 1);
         assert_eq!(idx(STEP_RESOURCES), idx(STEP_CONTROL) + 1);
         assert_eq!(idx(STEP_EXPORT_MODE), idx(STEP_RESOURCES) + 1);
         assert_eq!(idx(STEP_GEOGRAPHY_SETTLEMENT), idx(STEP_EXPORT_MODE) + 1);

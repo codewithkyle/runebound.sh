@@ -66,6 +66,9 @@ pub fn location_dir_for_kind(base: &str, kind_type: &str) -> String {
 pub struct LocationWizardInputs {
     pub kind_type: String,
     pub kind_custom: Option<String>,
+    /// Optional GM-supplied name. When set, generation uses it verbatim and tells the
+    /// model to keep the prose consistent with it; when None, the model invents one.
+    pub name: Option<String>,
     // Settlement (Q-A…Q-D)
     pub control: Option<String>,
     pub resources: Option<String>,
@@ -106,6 +109,18 @@ fn geography_clause(geography: &Option<String>) -> String {
     }
 }
 
+/// The name directive: when the GM has already named the place, the model must reuse that
+/// exact name and keep the prose consistent with it (the name is also enforced verbatim
+/// after generation). Empty when no name was given, so the model invents one.
+fn name_clause(name: &Option<String>) -> String {
+    match opt_clause(name) {
+        Some(n) => format!(
+            " The game master has already named this location \"{n}\"; use that exact name in the name field and refer to the place by that name throughout the prose."
+        ),
+        None => String::new(),
+    }
+}
+
 /// The fixed-vs-unspecified danger directive for Site/Hideout. The level itself is
 /// injected after generation; the prompt only asks the model to write its *source*.
 fn locked_danger_clause(danger: &Option<String>) -> String {
@@ -125,7 +140,7 @@ const LOCATION_PROSE_LEASH: &str = " visual_description must be 1-3 sentences, h
 fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: LocationBranch) -> String {
     let kind = &inputs.kind_type;
     let geo = geography_clause(&inputs.geography);
-    match branch {
+    let base = match branch {
         LocationBranch::Settlement => {
             let control = opt_clause(&inputs.control).unwrap_or("a single ruler or house");
             let resources = opt_clause(&inputs.resources)
@@ -199,7 +214,10 @@ fn wizard_location_system_prompt(inputs: &LocationWizardInputs, branch: Location
                 leash = LOCATION_PROSE_LEASH,
             )
         }
-    }
+    };
+    // The name directive applies to every branch (only the settlement branch asks for a
+    // name today, so `inputs.name` is None elsewhere and this appends nothing).
+    format!("{base}{}", name_clause(&inputs.name))
 }
 
 fn wizard_location_schema(branch: LocationBranch) -> serde_json::Value {
@@ -260,6 +278,9 @@ fn wizard_location_schema(branch: LocationBranch) -> serde_json::Value {
 pub(crate) fn build_wizard_user_prompt(inputs: &LocationWizardInputs) -> String {
     let kind = &inputs.kind_type;
     let mut parts = vec![format!("Create a {kind}.")];
+    if let Some(name) = opt_clause(&inputs.name) {
+        parts.push(format!("Name: {name}."));
+    }
     match location_branch(kind) {
         LocationBranch::Settlement => {
             // A linked faction is emitted as `@factions/<name>` so its vault metadata
@@ -536,6 +557,7 @@ impl AiGenerationService {
         let kind_custom = inputs.kind_custom.clone();
         let danger_lock = inputs.danger_lock.clone();
         let faction_name = inputs.faction_name.clone();
+        let provided_name = inputs.name.clone();
 
         let seed = run_seed_attempts(
             &client,
@@ -604,6 +626,14 @@ impl AiGenerationService {
                 // A linked faction is the known house; force authority to its name.
                 if let Some(name) = &faction_name {
                     seed.authority = name.clone();
+                }
+
+                // A GM-supplied name is used verbatim and bypasses the recent-name dedup:
+                // it is fixed across every attempt (so the loop could never satisfy the
+                // dedup), and the GM chose it deliberately.
+                if let Some(name) = &provided_name {
+                    seed.name = name.clone();
+                    return SeedStep::Accept(seed);
                 }
 
                 let normalized_name = seed.name.to_ascii_lowercase();
@@ -705,6 +735,28 @@ mod tests {
         let prompt = build_wizard_user_prompt(&archetype);
         assert!(prompt.contains("Power structure: a noble house or lord."));
         assert!(!prompt.contains("@factions/"));
+    }
+
+    #[test]
+    fn settlement_name_is_directed_when_given_and_absent_when_skipped() {
+        // A GM-supplied name is fed to the model (and restated in the user prompt).
+        let named = LocationWizardInputs {
+            kind_type: "town".to_string(),
+            name: Some("Mirecairn".to_string()),
+            ..Default::default()
+        };
+        let system = wizard_location_system_prompt(&named, LocationBranch::Settlement);
+        assert!(system.contains("already named this location \"Mirecairn\""));
+        assert!(build_wizard_user_prompt(&named).contains("Name: Mirecairn."));
+
+        // Skipped (no name) → the model invents one; no name directive leaks in.
+        let unnamed = LocationWizardInputs {
+            kind_type: "town".to_string(),
+            ..Default::default()
+        };
+        let system = wizard_location_system_prompt(&unnamed, LocationBranch::Settlement);
+        assert!(!system.contains("already named this location"));
+        assert!(!build_wizard_user_prompt(&unnamed).contains("Name:"));
     }
     #[test]
     fn settlement_none_export_mode_asks_for_an_empty_exports_list() {
