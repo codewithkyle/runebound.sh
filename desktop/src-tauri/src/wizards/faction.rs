@@ -73,8 +73,11 @@ const STEP_RELATION_PICK: &str = "relation_pick";
 const STEP_NPC_PICK: &str = "npc_pick";
 const STEP_GOD_PICK: &str = "god_pick";
 
-/// The faction picker's single-value modes (mandatory liege vs optional patron).
+/// The faction picker's single-value modes: a mandatory liege (major/minor vassal), an
+/// optional liege for a free-agent individual lord, and an optional patron
+/// (establishments/religion).
 const MODE_LIEGE: &str = "liege";
+const MODE_LORD_LIEGE: &str = "lord_liege";
 const MODE_PATRON: &str = "patron";
 /// The relation picker's repeatable modes (allies first, then it flips to rivals).
 const MODE_ALLIES: &str = "allies";
@@ -243,7 +246,7 @@ const HOUSE_LAYER_LABELS: [&str; 4] = [
     "great house (apex; answers to no one)",
     "major vassal (a powerful sworn house)",
     "minor vassal (a lesser sworn house)",
-    "individual lord (a single sworn holding)",
+    "individual lord (a self-made free agent; liege optional)",
 ];
 const HOUSE_LAYER_VALUES: [&str; 4] = [
     "great_house",
@@ -374,13 +377,19 @@ impl WizardStep<AppState> for PowerSpecificsStep {
         state: &AppState,
     ) -> Result<WizardTransition, String> {
         faction_data_mut(d).power_specifics = optional_text(input);
-        if power_specifics_next_is_brand(&faction_data(d).kind_type) {
+        let kind_type = faction_data(d).kind_type.clone();
+        if power_specifics_next_is_brand(&kind_type) {
             // Re-entering brand (e.g. after a `back`) must start on the menu, not a stale
             // custom-entry screen — `back` rolls back the cursor, not the accumulator (H3).
             faction_data_mut(d).awaiting_custom_brand = false;
             Ok(WizardTransition::Goto(STEP_BRAND))
+        } else if kind_type == "individual_lord" {
+            // An individual lord is a free agent who built its own holding, so its liege
+            // link is optional: skipping leaves it with no liege and no loyalty (straight
+            // to ambition), unlike a major/minor vassal whose liege is mandatory.
+            enter_faction_pick(d, state, MODE_LORD_LIEGE).await
         } else {
-            // Vassal / lord: who are they sworn to? (mandatory liege picker)
+            // Major / minor vassal: who are they sworn to? (mandatory liege picker)
             enter_faction_pick(d, state, MODE_LIEGE).await
         }
     }
@@ -911,8 +920,10 @@ impl WizardStep<AppState> for GenerateStep {
 // ---------------------------------------------------------------------------
 
 /// The single-value faction picker, parameterized by `link_return` (mirrors location's
-/// `FactionLinkStep`). It serves two link points (spec §5.3):
-/// - **liege** (houses vassal/lord): mandatory, free-typed name accepted → loyalty.
+/// `FactionLinkStep`). It serves three link points (spec §5.3):
+/// - **liege** (houses major/minor vassal): mandatory, free-typed name accepted → loyalty.
+/// - **lord_liege** (houses individual lord): optional — a free-agent lord may name an
+///   overlord (→ loyalty) or skip it (no liege/loyalty → ambition).
 /// - **patron** (establishments/religion): optional grounding → ambition.
 ///
 /// The repeatable allies/rivals flow lives in [`RelationPickStep`] so this step never has
@@ -921,6 +932,13 @@ struct FactionPickStep;
 
 fn faction_pick_mode(data: &FactionWizardData) -> &'static str {
     data.link_return.unwrap_or(MODE_PATRON)
+}
+
+/// Whether this picker mode lets the GM skip the link. The mandatory liege (major/minor
+/// vassal) must be answered; the optional patron and the free-agent individual lord's
+/// liege may both be left blank.
+fn pick_mode_optional(mode: &str) -> bool {
+    mode == MODE_PATRON || mode == MODE_LORD_LIEGE
 }
 
 #[async_trait]
@@ -934,12 +952,21 @@ impl WizardStep<AppState> for FactionPickStep {
     }
 
     fn prompt(&self, data: &WizardData) -> OutputDoc {
-        if faction_pick_mode(faction_data(data)) == MODE_LIEGE {
+        let mode = faction_pick_mode(faction_data(data));
+        if mode == MODE_LIEGE {
             doc()
                 .with_block(heading(2, "Create Faction — Liege"))
                 .with_block(paragraph_text(
                     "Who is this house sworn to? Start typing to select a Great House, or type a new name (required).",
                 ))
+        } else if mode == MODE_LORD_LIEGE {
+            doc()
+                .with_block(heading(2, "Create Faction — Liege (optional)"))
+                .with_block(paragraph_with_inlines(vec![
+                    text_node("Optional: is this lord sworn to a house? Type to search, or "),
+                    command_ref("skip", "skip"),
+                    text_node(" — an individual lord is a free agent by default."),
+                ]))
         } else {
             doc()
                 .with_block(heading(2, "Create Faction — Patron / Charter"))
@@ -954,19 +981,24 @@ impl WizardStep<AppState> for FactionPickStep {
     }
 
     fn choices(&self, data: &WizardData) -> Vec<WizardChoice> {
-        // Liege is mandatory (typeahead-driven, no listed action); patron may be skipped.
-        if faction_pick_mode(faction_data(data)) == MODE_LIEGE {
-            Vec::new()
-        } else {
+        // A mandatory liege (major/minor vassal) is typeahead-driven with no listed action;
+        // the optional pickers (free-agent lord's liege, patron) each offer a `skip`.
+        let mode = faction_pick_mode(faction_data(data));
+        if mode == MODE_LORD_LIEGE {
+            vec![skip_choice("No liege; this lord is a free agent")]
+        } else if pick_mode_optional(mode) {
             vec![skip_choice("No patron; leave it open")]
+        } else {
+            Vec::new()
         }
     }
 
     fn suggest(&self, input: &str, data: &WizardData) -> Vec<WizardChoice> {
         let d = faction_data(data);
         let mut out = entity_suggestions(&d.factions, input);
-        // Liege is mandatory, so it offers no trailing action; patron offers `skip`.
-        if faction_pick_mode(d) == MODE_PATRON {
+        // A mandatory liege offers no trailing action; the optional pickers (patron and
+        // the free-agent lord's liege) offer `skip`.
+        if pick_mode_optional(faction_pick_mode(d)) {
             let query = input.trim().to_ascii_lowercase();
             if query.is_empty() || "skip".starts_with(&query) {
                 out.push(WizardChoice::new("skip", "skip"));
@@ -982,7 +1014,9 @@ impl WizardStep<AppState> for FactionPickStep {
         _state: &AppState,
     ) -> Result<WizardTransition, String> {
         let trimmed = input.trim();
-        if faction_pick_mode(faction_data(d)) == MODE_LIEGE {
+        let mode = faction_pick_mode(faction_data(d));
+
+        if mode == MODE_LIEGE {
             if trimmed.is_empty() {
                 // Mandatory: re-prompt rather than advancing without a liege.
                 return Ok(WizardTransition::Stay);
@@ -991,9 +1025,11 @@ impl WizardStep<AppState> for FactionPickStep {
             faction_data_mut(d).liege = Some(name);
             return Ok(WizardTransition::Goto(STEP_LOYALTY_TYPE));
         }
-        // Patron (optional grounding): resolve the owned name first, then take a single
-        // `_mut` borrow — no re-borrow dance (code-review L2).
-        let patron = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
+
+        // Optional pickers (patron, free-agent lord's liege): empty or `skip` leaves the
+        // link open. Resolve the owned name first, then take a single `_mut` borrow — no
+        // re-borrow dance (code-review L2).
+        let linked = if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("skip") {
             None
         } else {
             Some(resolve_link_name(
@@ -1002,7 +1038,21 @@ impl WizardStep<AppState> for FactionPickStep {
                 "factions",
             )?)
         };
-        faction_data_mut(d).patron = patron;
+
+        if mode == MODE_LORD_LIEGE {
+            // A named overlord carries a loyalty bond, exactly like a vassal's liege; a
+            // skip leaves the lord a free agent (no liege, no loyalty) → straight to ambition.
+            let has_liege = linked.is_some();
+            faction_data_mut(d).liege = linked;
+            return Ok(WizardTransition::Goto(if has_liege {
+                STEP_LOYALTY_TYPE
+            } else {
+                STEP_AMBITION
+            }));
+        }
+
+        // Patron (optional grounding).
+        faction_data_mut(d).patron = linked;
         Ok(WizardTransition::Goto(STEP_AMBITION))
     }
 }
@@ -1536,6 +1586,33 @@ mod tests {
         for vassal in ["major_vassal", "minor_vassal", "individual_lord"] {
             assert!(!power_specifics_next_is_brand(vassal));
         }
+    }
+
+    #[test]
+    fn only_mandatory_liege_forbids_skip() {
+        // A major/minor vassal's liege is mandatory; an individual lord's liege and a
+        // patron are both optional (so the picker exposes a `skip` for them).
+        assert!(!pick_mode_optional(MODE_LIEGE));
+        assert!(pick_mode_optional(MODE_LORD_LIEGE));
+        assert!(pick_mode_optional(MODE_PATRON));
+    }
+
+    #[test]
+    fn lord_liege_mode_offers_free_agent_skip() {
+        let data = pick_data(MODE_LORD_LIEGE, &[("House Vaurel", "house-vaurel")]);
+        let choice_tokens: Vec<String> = FactionPickStep
+            .choices(&data)
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        assert!(choice_tokens.contains(&"skip".to_string()));
+        let suggest_tokens: Vec<String> = FactionPickStep
+            .suggest("", &data)
+            .into_iter()
+            .map(|choice| choice.token)
+            .collect();
+        assert!(suggest_tokens.contains(&"House Vaurel".to_string()));
+        assert!(suggest_tokens.contains(&"skip".to_string()));
     }
 
     #[test]

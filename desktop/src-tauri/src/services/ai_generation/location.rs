@@ -703,7 +703,7 @@ mod tests {
             ..Default::default()
         };
         let prompt = build_wizard_user_prompt(&archetype);
-        assert!(prompt.contains("Controlled by: a noble house or lord."));
+        assert!(prompt.contains("Power structure: a noble house or lord."));
         assert!(!prompt.contains("@factions/"));
     }
     #[test]

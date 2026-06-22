@@ -295,6 +295,13 @@ fn wizard_faction_system_prompt(inputs: &FactionWizardInputs, category: FactionC
                 prompt.push_str(
                     " As a Great House it sits at the apex and answers to no one; it cannot directly assault its peers — it moves through proxies, vassals, and leverage. Scale sphere_of_influence to a realm-spanning house.",
                 );
+            } else if kind == "individual_lord" && opt_clause(&inputs.liege).is_none() {
+                // A free-agent individual lord built its own holding and is sworn to no
+                // house, so it must not be handed a liege. (A lord the GM *did* link to an
+                // overlord has `liege` set and falls through to the sworn branch below.)
+                prompt.push_str(
+                    " It is a self-made individual lord and a free agent — sworn to no house and answering to no liege or overlord; do not invent one. Scale sphere_of_influence to a single independent holding, smaller than a Great House.",
+                );
             } else {
                 let liege = opt_clause(&inputs.liege).unwrap_or("its liege");
                 prompt.push_str(&format!(" It is sworn to {liege}."));
