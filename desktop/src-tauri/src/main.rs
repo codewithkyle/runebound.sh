@@ -17,6 +17,7 @@ use dnd_core::command_manifest::CommandManifest;
 use dnd_core::command_parse::{normalize_command_input, parse_command_input};
 use dnd_core::db;
 use tokio::sync::Mutex;
+use tokio_util::sync::CancellationToken;
 
 use crate::app_state::{AppState, EditorSession};
 use crate::entities::build_default_registry;
@@ -41,8 +42,30 @@ async fn suggest_command_input(
     service.build_suggestions(input, state.inner()).await
 }
 
+/// Cancellable wrapper around [`run_command_inner`]: it arms a per-command cancellation
+/// token in `AppState`, runs the dispatch under `tokio::select!`, and lets a concurrent
+/// [`cancel_generation`] abort it (CTRL+C during a slow LLM generation). When the token
+/// fires, `select!` drops the dispatch future, which drops the in-flight reqwest request.
 #[tauri::command]
 async fn run_command(
+    input: String,
+    state: tauri::State<'_, AppState>,
+    app_handle: tauri::AppHandle,
+) -> Result<CommandResponse, String> {
+    let cancel = CancellationToken::new();
+    *state.active_cancel.lock().unwrap() = Some(cancel.clone());
+    let outcome = tokio::select! {
+        biased;
+        () = cancel.cancelled() => Err("Generation cancelled.".to_string()),
+        result = run_command_inner(input, state.clone(), app_handle) => result,
+    };
+    // This command has settled; disarm so a later CTRL+C can't fire a stale token. The
+    // frontend serializes commands, so no other `run_command` can be in flight here.
+    *state.active_cancel.lock().unwrap() = None;
+    outcome
+}
+
+async fn run_command_inner(
     input: String,
     state: tauri::State<'_, AppState>,
     app_handle: tauri::AppHandle,
@@ -128,6 +151,18 @@ async fn run_command(
     Ok(service.execute_line(&normalized_input).await)
 }
 
+/// Abort the command currently in flight, if any, by firing its cancellation token.
+/// Invoked by the frontend when the user presses CTRL+C during a generation. A no-op
+/// when nothing is running (the token slot is empty). Runs concurrently with the pending
+/// `run_command` because Tauri dispatches each `invoke` as its own task.
+#[tauri::command]
+async fn cancel_generation(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    if let Some(token) = state.active_cancel.lock().unwrap().as_ref() {
+        token.cancel();
+    }
+    Ok(())
+}
+
 #[tauri::command]
 fn get_command_manifest() -> CommandManifest {
     dnd_core::command_manifest::command_manifest()
@@ -190,6 +225,7 @@ fn main() {
         wizard_session: Mutex::new(crate::wizards::WizardSession::default()),
         boot_ollama_health: Mutex::new(None),
         app_handle: std::sync::Mutex::new(None),
+        active_cancel: std::sync::Mutex::new(None),
     };
 
     // Startup cleanup (vault sync / soft-delete reaping) now runs as the
@@ -208,6 +244,7 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             run_command,
+            cancel_generation,
             suggest_command_input,
             get_command_manifest,
             exit_app,

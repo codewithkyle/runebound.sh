@@ -92,6 +92,9 @@ export default function App() {
   ]);
   const [command, setCommand] = createSignal("");
   const [running, setRunning] = createSignal(false);
+  // Set when the user presses CTRL+C during an in-flight command so the result handler
+  // renders a neutral "cancelled" outcome instead of a hard error. Reset per command.
+  const [cancelRequested, setCancelRequested] = createSignal(false);
   const [activeSuggestionIndex, setActiveSuggestionIndex] = createSignal(0);
   const [suggestionsDismissed, setSuggestionsDismissed] = createSignal(false);
   const [commandHistory, setCommandHistory] = createSignal<string[]>([]);
@@ -365,6 +368,7 @@ export default function App() {
         }, 100)
       : null;
 
+    setCancelRequested(false);
     setRunning(true);
     try {
       const response = await invoke<CommandResponse>("run_command", { input: raw });
@@ -400,15 +404,25 @@ export default function App() {
         appendEntry(isHardError ? "error" : "output", errorText, rendered.outputDoc);
       }
     } catch (error) {
-      if (spinnerId !== null) {
-        updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
+      // A CTRL+C cancellation rejects the invoke with the backend's "Generation
+      // cancelled." error; render it neutrally rather than as a hard failure.
+      if (cancelRequested()) {
+        if (spinnerId !== null) {
+          updateEntry(spinnerId, "spinner", `CANCELLED ${spinnerLabel}`);
+        }
+        appendEntry("output", "Generation cancelled.");
+      } else {
+        if (spinnerId !== null) {
+          updateEntry(spinnerId, "spinner", `FAILED ${spinnerLabel}`);
+        }
+        appendEntry("error", `invoke error: ${String(error)}`);
       }
-      appendEntry("error", `invoke error: ${String(error)}`);
     } finally {
       if (spinnerTimer !== null) {
         window.clearInterval(spinnerTimer);
       }
       setRunning(false);
+      setCancelRequested(false);
     }
   };
 
@@ -422,6 +436,17 @@ export default function App() {
     setSuggestionsDismissed(false);
     setActiveSuggestionIndex(0);
     inputRef?.focus();
+  };
+
+  // CTRL+C while a command is running: ask the backend to abort the in-flight command
+  // (chiefly a slow LLM generation). `cancelRequested` flips the result handler to a
+  // neutral "cancelled" outcome; the backend drops the request and returns immediately.
+  const cancelRunningCommand = () => {
+    if (!running() || cancelRequested()) {
+      return;
+    }
+    setCancelRequested(true);
+    void invoke("cancel_generation");
   };
 
   const submitCommand = async () => {
@@ -601,7 +626,12 @@ export default function App() {
       const ctrlOrMeta = event.ctrlKey || event.metaKey;
 
       if (ctrlOrMeta && event.key.toLowerCase() === "c") {
-        if (command()) {
+        // While a command is in flight, CTRL+C cancels it (the input is empty/disabled
+        // then, so there is nothing to copy or clear). Otherwise it clears the input line.
+        if (running()) {
+          event.preventDefault();
+          cancelRunningCommand();
+        } else if (command()) {
           event.preventDefault();
           clearCommand();
         }

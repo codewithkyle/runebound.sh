@@ -467,6 +467,12 @@ pub(crate) struct AppState {
     /// native folder picker (`WizardHost::perform_native`). A `std::sync::Mutex`
     /// (never held across `.await`) so the handle can be set after construction.
     pub(crate) app_handle: std::sync::Mutex<Option<tauri::AppHandle>>,
+    /// Cancellation token for the command currently in flight, if any. `run_command`
+    /// arms it on entry and clears it on exit; a concurrent `cancel_generation`
+    /// invocation (CTRL+C in the UI) fires it to abort a slow command — chiefly a long
+    /// LLM generation. A `std::sync::Mutex` (only locked to swap the token, never held
+    /// across `.await`).
+    pub(crate) active_cancel: std::sync::Mutex<Option<tokio_util::sync::CancellationToken>>,
 }
 
 impl AppState {
